@@ -1,0 +1,267 @@
+diff --git a/src/IConfigOptions.ts b/src/IConfigOptions.ts
+index 67b7515eac6148a40bdd927691df286cc22d3e96..8b88a18075c6f18e0785202ef5b8bb2c9e82e9ba 100644
+--- a/src/IConfigOptions.ts
++++ b/src/IConfigOptions.ts
+@@ -117,7 +117,6 @@ export interface IConfigOptions {
+         obey_asserted_identity?: boolean; // MSC3086
+     };
+     element_call: {
+-        url?: string;
+         guest_spa_url?: string;
+         use_exclusively?: boolean;
+         participant_limit?: number;
+diff --git a/src/SdkConfig.ts b/src/SdkConfig.ts
+index a41b890b19ef726e0f24e9f67abc81f1e28a05a4..9576aa209e4d4dac20db5e71b6fcd44f970323f0 100644
+--- a/src/SdkConfig.ts
++++ b/src/SdkConfig.ts
+@@ -30,7 +30,6 @@ export const DEFAULTS: DeepReadonly<IConfigOptions> = {
+         preferred_domain: "meet.element.io",
+     },
+     element_call: {
+-        url: "https://call.element.io",
+         use_exclusively: false,
+         participant_limit: 8,
+         brand: "Element Call",
+diff --git a/src/components/views/dialogs/DevtoolsDialog.tsx b/src/components/views/dialogs/DevtoolsDialog.tsx
+index d5755ec61ecbf3d54c718c22173d10482e2b35a4..494b175e4f72e5418d946b14f14bfdc8c1b6e5cf 100644
+--- a/src/components/views/dialogs/DevtoolsDialog.tsx
++++ b/src/components/views/dialogs/DevtoolsDialog.tsx
+@@ -25,6 +25,7 @@ import ServerInfo from "./devtools/ServerInfo";
+ import CopyableText from "../elements/CopyableText";
+ import RoomNotifications from "./devtools/RoomNotifications";
+ import { Crypto } from "./devtools/Crypto";
++import SettingsField from "../elements/SettingsField.tsx";
+ 
+ enum Category {
+     Room,
+@@ -101,6 +102,7 @@ const DevtoolsDialog: React.FC<IProps> = ({ roomId, threadRootId, onFinished })
+                     <SettingsFlag name="developerMode" level={SettingLevel.ACCOUNT} />
+                     <SettingsFlag name="showHiddenEventsInTimeline" level={SettingLevel.DEVICE} />
+                     <SettingsFlag name="enableWidgetScreenshots" level={SettingLevel.ACCOUNT} />
++                    <SettingsField settingKey="Developer.elementCallUrl" level={SettingLevel.DEVICE} />
+                 </div>
+             </BaseTool>
+         );
+diff --git a/src/components/views/elements/SettingsField.tsx b/src/components/views/elements/SettingsField.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d46b5b0f32caa19346c29cb2a6d0b36f7a67cb37
+--- /dev/null
++++ b/src/components/views/elements/SettingsField.tsx
+@@ -0,0 +1,59 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React, { type ChangeEvent, type JSX, useCallback, useState } from "react";
++import { EditInPlace } from "@vector-im/compound-web";
++
++import SettingsStore from "../../../settings/SettingsStore";
++import { _t } from "../../../languageHandler";
++import { type SettingLevel } from "../../../settings/SettingLevel";
++import { type StringSettingKey } from "../../../settings/Settings";
++
++interface Props {
++    settingKey: StringSettingKey;
++    level: SettingLevel;
++    roomId?: string; // for per-room settings
++    label?: string;
++    isExplicit?: boolean;
++    onChange?(value: string): void;
++}
++
++const SettingsField = ({ settingKey, level, roomId, isExplicit, label, onChange: _onSave }: Props): JSX.Element => {
++    const settingsValue = SettingsStore.getValueAt(level, settingKey, roomId, isExplicit);
++    const [value, setValue] = useState(settingsValue);
++    const [busy, setBusy] = useState(false);
++
++    const onChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
++        setValue(e.target.value);
++    }, []);
++    const onCancel = useCallback(() => {
++        setValue(settingsValue);
++    }, [settingsValue]);
++    const onSave = useCallback(async () => {
++        setBusy(true);
++        await SettingsStore.setValue(settingKey, roomId ?? null, level, value);
++        setBusy(false);
++        _onSave?.(value);
++    }, [level, roomId, settingKey, value, _onSave]);
++
++    return (
++        <EditInPlace
++            label={label ?? SettingsStore.getDisplayName(settingKey, level) ?? ""}
++            value={value}
++            saveButtonLabel={_t("common|save")}
++            cancelButtonLabel={_t("common|cancel")}
++            savedLabel={_t("common|saved")}
++            savingLabel={_t("common|updating")}
++            onChange={onChange}
++            onCancel={onCancel}
++            onSave={onSave}
++            disabled={busy}
++        />
++    );
++};
++
++export default SettingsField;
+diff --git a/src/models/Call.ts b/src/models/Call.ts
+index 3497dc01c6c7eb8de7297474b4ef72435be38242..60ff2b2ffa62544b1ade04fe65c6d0f00812cd5e 100644
+--- a/src/models/Call.ts
++++ b/src/models/Call.ts
+@@ -32,7 +32,6 @@ import {
+ 
+ import type EventEmitter from "events";
+ import type { IApp } from "../stores/WidgetStore";
+-import SdkConfig, { DEFAULTS } from "../SdkConfig";
+ import SettingsStore from "../settings/SettingsStore";
+ import MediaDeviceHandler, { MediaDeviceKindEnum } from "../MediaDeviceHandler";
+ import { timeout } from "../utils/promise";
+@@ -43,12 +42,13 @@ import WidgetStore from "../stores/WidgetStore";
+ import { WidgetMessagingStore, WidgetMessagingStoreEvent } from "../stores/widgets/WidgetMessagingStore";
+ import ActiveWidgetStore, { ActiveWidgetStoreEvent } from "../stores/ActiveWidgetStore";
+ import { getCurrentLanguage } from "../languageHandler";
+-import { PosthogAnalytics } from "../PosthogAnalytics";
++import { Anonymity, PosthogAnalytics } from "../PosthogAnalytics";
+ import { UPDATE_EVENT } from "../stores/AsyncStore";
+ import { getJoinedNonFunctionalMembers } from "../utils/room/getJoinedNonFunctionalMembers";
+ import { isVideoRoom } from "../utils/video-rooms";
+ import { FontWatcher } from "../settings/watchers/FontWatcher";
+ import { type JitsiCallMemberContent, JitsiCallMemberEventType } from "../call-types";
++import SdkConfig from "../SdkConfig.ts";
+ 
+ const TIMEOUT_MS = 16000;
+ 
+@@ -676,14 +676,12 @@ export class ElementCall extends Call {
+     }
+ 
+     private static generateWidgetUrl(client: MatrixClient, roomId: string): URL {
+-        const accountAnalyticsData = client.getAccountData(PosthogAnalytics.ANALYTICS_EVENT_TYPE);
+-        // The analyticsID is passed directly to element call (EC) since this codepath is only for EC and no other widget.
+-        // We really don't want the same analyticID's for the EC and EW posthog instances (Data on posthog should be limited/anonymized as much as possible).
+-        // This is prohibited in EC where a hashed version of the analyticsID is used for the actual posthog identification.
+-        // We can pass the raw EW analyticsID here since we need to trust EC with not sending sensitive data to posthog (EC has access to more sensible data than the analyticsID e.g. the username)
+-        const analyticsID: string = accountAnalyticsData?.getContent().pseudonymousAnalyticsOptIn
+-            ? accountAnalyticsData?.getContent().id
+-            : "";
++        const baseUrl = window.location.href;
++        let url = new URL("./widgets/element-call/index.html#", baseUrl); // this strips hash fragment from baseUrl
++
++        const elementCallUrl = SettingsStore.getValue("Developer.elementCallUrl");
++        if (elementCallUrl) url = new URL(elementCallUrl);
++
+         // Splice together the Element Call URL for this call
+         const params = new URLSearchParams({
+             embed: "true", // We're embedding EC within another application
+@@ -700,12 +698,44 @@ export class ElementCall extends Call {
+             lang: getCurrentLanguage().replace("_", "-"),
+             fontScale: (FontWatcher.getRootFontSize() / FontWatcher.getBrowserDefaultFontSize()).toString(),
+             theme: "$org.matrix.msc2873.client_theme",
+-            analyticsID,
+         });
+ 
+-        if (SettingsStore.getValue("fallbackICEServerAllowed")) params.append("allowIceFallback", "true");
+-        if (SettingsStore.getValue("feature_allow_screen_share_only_mode"))
++        const rageshakeSubmitUrl = SdkConfig.get("bug_report_endpoint_url");
++        if (rageshakeSubmitUrl) {
++            params.append("rageshakeSubmitUrl", rageshakeSubmitUrl);
++        }
++
++        const posthogConfig = SdkConfig.get("posthog");
++        if (posthogConfig && PosthogAnalytics.instance.getAnonymity() !== Anonymity.Disabled) {
++            const accountAnalyticsData = client.getAccountData(PosthogAnalytics.ANALYTICS_EVENT_TYPE)?.getContent();
++            // The analyticsID is passed directly to element call (EC) since this codepath is only for EC and no other widget.
++            // We really don't want the same analyticID's for the EC and EW posthog instances (Data on posthog should be limited/anonymized as much as possible).
++            // This is prohibited in EC where a hashed version of the analyticsID is used for the actual posthog identification.
++            // We can pass the raw EW analyticsID here since we need to trust EC with not sending sensitive data to posthog (EC has access to more sensible data than the analyticsID e.g. the username)
++            const analyticsID: string = accountAnalyticsData?.pseudonymousAnalyticsOptIn
++                ? accountAnalyticsData?.id
++                : "";
++
++            params.append("analyticsID", analyticsID); // Legacy, deprecated in favour of posthogUserId
++            params.append("posthogUserId", analyticsID);
++            params.append("posthogApiHost", posthogConfig.api_host);
++            params.append("posthogApiKey", posthogConfig.project_api_key);
++
++            // We gate passing sentry behind analytics consent as EC shares data automatically without user-consent,
++            // unlike EW where data is shared upon an intentional user action (rageshake).
++            const sentryConfig = SdkConfig.get("sentry");
++            if (sentryConfig) {
++                params.append("sentryDsn", sentryConfig.dsn);
++                params.append("sentryEnvironment", sentryConfig.environment ?? "");
++            }
++        }
++
++        if (SettingsStore.getValue("fallbackICEServerAllowed")) {
++            params.append("allowIceFallback", "true");
++        }
++        if (SettingsStore.getValue("feature_allow_screen_share_only_mode")) {
+             params.append("allowVoipWithNoMedia", "true");
++        }
+ 
+         // Set custom fonts
+         if (SettingsStore.getValue("useSystemFont")) {
+@@ -720,8 +750,6 @@ export class ElementCall extends Call {
+                 .forEach((font) => params.append("font", font));
+         }
+ 
+-        const url = new URL(SdkConfig.get("element_call").url ?? DEFAULTS.element_call.url!);
+-        url.pathname = "/room";
+         const replacedUrl = params.toString().replace(/%24/g, "$");
+         url.hash = `#?${replacedUrl}`;
+         return url;
+diff --git a/src/settings/Settings.tsx b/src/settings/Settings.tsx
+index 439b0c112f5ed5d3a0e9d4982b2f5c15b42cac2f..2e4450bb243a8d65d4e19120972b8eab65b0e570 100644
+--- a/src/settings/Settings.tsx
++++ b/src/settings/Settings.tsx
+@@ -344,11 +344,13 @@ export interface Settings {
+     "Electron.alwaysShowMenuBar": IBaseSetting<boolean>;
+     "Electron.showTrayIcon": IBaseSetting<boolean>;
+     "Electron.enableHardwareAcceleration": IBaseSetting<boolean>;
++    "Developer.elementCallUrl": IBaseSetting<string>;
+ }
+ 
+ export type SettingKey = keyof Settings;
+ export type FeatureSettingKey = Assignable<Settings, IFeature>;
+ export type BooleanSettingKey = Assignable<Settings, IBaseSetting<boolean>> | FeatureSettingKey;
++export type StringSettingKey = Assignable<Settings, IBaseSetting<string>>;
+ 
+ export const SETTINGS: Settings = {
+     "feature_video_rooms": {
+@@ -1359,4 +1361,10 @@ export const SETTINGS: Settings = {
+         displayName: _td("settings|preferences|enable_hardware_acceleration"),
+         default: true,
+     },
++
++    "Developer.elementCallUrl": {
++        supportedLevels: [SettingLevel.DEVICE],
++        displayName: _td("devtools|settings|elementCallUrl"),
++        default: "",
++    },
+ };
+diff --git a/src/stores/widgets/StopGapWidgetDriver.ts b/src/stores/widgets/StopGapWidgetDriver.ts
+index 988cbae8f84443a514a2d55bbf600aa1e84867c4..31d1d6edac7a2fd67a22a0834ad1265df587bf18 100644
+--- a/src/stores/widgets/StopGapWidgetDriver.ts
++++ b/src/stores/widgets/StopGapWidgetDriver.ts
+@@ -48,7 +48,6 @@ import {
+     WidgetLifecycle,
+ } from "@matrix-org/react-sdk-module-api/lib/lifecycles/WidgetLifecycle";
+ 
+-import SdkConfig, { DEFAULTS } from "../../SdkConfig";
+ import { iterableDiff, iterableIntersection } from "../../utils/iterables";
+ import { MatrixClientPeg } from "../../MatrixClientPeg";
+ import Modal from "../../Modal";
+@@ -116,10 +115,7 @@ export class StopGapWidgetDriver extends WidgetDriver {
+             // Auto-approve the legacy visibility capability. We send it regardless of capability.
+             // Widgets don't technically need to request this capability, but Scalar still does.
+             this.allowedCapabilities.add("visibility");
+-        } else if (
+-            virtual &&
+-            new URL(SdkConfig.get("element_call").url ?? DEFAULTS.element_call.url!).origin === this.forWidget.origin
+-        ) {
++        } else if (virtual && WidgetType.CALL.matches(this.forWidget.type) && forWidgetKind === WidgetKind.Room) {
+             // This is a trusted Element Call widget that we control
+             this.allowedCapabilities.add(MatrixCapabilities.AlwaysOnScreen);
+             this.allowedCapabilities.add(MatrixCapabilities.MSC3846TurnServers);

@@ -1,0 +1,653 @@
+diff --git a/_patch_tests.py b/_patch_tests.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..14f8e612aa2a5a523a99ab0f336c7664b23f22b9
+--- /dev/null
++++ b/_patch_tests.py
+@@ -0,0 +1,216 @@
++#!/usr/bin/env python3
++"""
++Patch test files for M03 compatibility.
++This script removes or comments out tests that use APIs not available in M03.
++"""
++
++import re
++import os
++import sys
++
++def comment_out_entire_file(filepath, reason):
++    """Comment out an entire file by adding skip marker."""
++    if not os.path.exists(filepath):
++        print(f"File not found: {filepath}")
++        return
++
++    with open(filepath, 'r') as f:
++        lines = f.readlines()
++
++    with open(filepath, 'w') as f:
++        f.write(f"# [ENV-PATCH] {reason}\n")
++        f.write("# This file is skipped because it imports modules not available in M03\n")
++        f.write("import pytest\n")
++        f.write("pytestmark = pytest.mark.skip(reason='[ENV-PATCH] Entire file skipped - imports unavailable in M03')\n\n")
++        for line in lines:
++            if line.strip():
++                f.write(f"# {line}")
++            else:
++                f.write(line)
++
++    print(f"Commented out entire file: {filepath}")
++
++
++def patch_file(filepath, patches):
++    """Apply patches to a file."""
++    if not os.path.exists(filepath):
++        print(f"File not found: {filepath}")
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    original = content
++
++    for patch in patches:
++        if patch['type'] == 'remove_import':
++            # Remove import lines
++            pattern = re.compile(patch['pattern'], re.MULTILINE)
++            content = pattern.sub('', content)
++
++        elif patch['type'] == 'skip_test':
++            # Add @pytest.mark.skip decorator before a test function
++            test_name = patch['test_name']
++            reason = patch.get('reason', 'API not available in M03')
++            pattern = re.compile(rf'^(def {test_name}\()', re.MULTILINE)
++            replacement = f'@pytest.mark.skip(reason="[ENV-PATCH] {reason}")\n\\1'
++            content = pattern.sub(replacement, content)
++
++        elif patch['type'] == 'replace_line':
++            # Replace a specific line pattern
++            pattern = re.compile(patch['pattern'], re.MULTILINE)
++            content = pattern.sub(patch['replacement'], content)
++
++        elif patch['type'] == 'comment_usage':
++            # Comment out all lines using a specific identifier
++            pattern = re.compile(patch['pattern'])
++            lines = content.split('\n')
++            new_lines = []
++            for line in lines:
++                if pattern.search(line) and not line.strip().startswith('#'):
++                    new_lines.append(f"# [ENV-PATCH] {line}")
++                else:
++                    new_lines.append(line)
++            content = '\n'.join(new_lines)
++
++    if content != original:
++        with open(filepath, 'w') as f:
++            f.write(content)
++        print(f"Patched: {filepath}")
++    else:
++        print(f"No changes: {filepath}")
++
++
++def patch_end_state():
++    """Apply patches for END state - all milestone features available."""
++    base_path = '/testbed'
++
++    # Files that need to be entirely skipped because they import non-existent modules
++    files_to_skip = [
++        ('sklearn/utils/tests/test_tags.py', 'get_tags function not available in M03'),
++        ('sklearn/utils/tests/test_unique.py', 'sklearn.utils._unique module not available in M03'),
++        ('sklearn/utils/tests/test_cython_blas.py', 'ColMajor/NoTrans not available in M03'),
++        ('sklearn/utils/tests/test_array_api.py', '_count_nonzero not available in M03'),
++        ('sklearn/utils/tests/test_testing.py', 'assert_docstring_consistency not available in M03'),
++        ('sklearn/utils/tests/test_estimator_checks.py', 'get_tags/default_tags not available in M03'),
++        ('sklearn/utils/tests/test_validation.py', 'get_tags not available in M03'),
++        ('sklearn/tests/test_common.py', 'get_tags not available in M03'),
++        ('sklearn/tests/test_docstring_parameters.py', 'assert_docstring_consistency not available in M03'),
++        ('sklearn/tree/tests/test_tree.py', '_build_pruned_tree_py not available in M03'),
++        ('sklearn/model_selection/tests/test_search.py', '_yield_masked_array_for_each_param not available in M03'),
++        ('sklearn/metrics/tests/test_dist_metrics.py', 'DEPRECATED_METRICS not available'),
++        ('sklearn/cluster/tests/test_hierarchical.py', 'Imports from test_dist_metrics'),
++        ('sklearn/cluster/tests/test_k_means.py', 'get_tags/_test_common not available'),
++        ('sklearn/decomposition/tests/test_pca.py', 'get_tags/_test_common not available'),
++        ('sklearn/feature_selection/tests/test_base.py', 'get_tags/_test_common not available'),
++        ('sklearn/feature_selection/tests/test_rfe.py', 'get_tags/_test_common not available'),
++        ('sklearn/inspection/tests/test_partial_dependence.py', 'get_tags/_test_common not available'),
++        ('sklearn/linear_model/tests/test_ridge.py', 'get_tags/_test_common not available'),
++        ('sklearn/metrics/tests/test_pairwise_distances_reduction.py', 'get_tags/_test_common not available'),
++        ('sklearn/model_selection/tests/test_successive_halving.py', 'get_tags/_test_common not available'),
++        ('sklearn/model_selection/tests/test_validation.py', 'get_tags/_test_common not available'),
++        ('sklearn/neighbors/tests/test_nca.py', 'get_tags/_test_common not available'),
++        ('sklearn/neighbors/tests/test_neighbors.py', 'get_tags/_test_common not available'),
++        ('sklearn/preprocessing/tests/test_data.py', 'get_tags/_test_common not available'),
++        ('sklearn/semi_supervised/tests/test_self_training.py', 'get_tags/_test_common not available'),
++    ]
++
++    for filepath, reason in files_to_skip:
++        comment_out_entire_file(f'{base_path}/{filepath}', reason)
++
++    # Patch sklearn/tests/test_base.py for END state
++    patch_file(f'{base_path}/sklearn/tests/test_base.py', [
++        {'type': 'remove_import', 'pattern': r'^from sklearn\.utils\.validation import _check_n_features, validate_data\n'},
++        {'type': 'skip_test', 'test_name': 'test_n_features_in_validation', 'reason': '_check_n_features not available in M03'},
++        {'type': 'skip_test', 'test_name': 'test_n_features_in_no_validation', 'reason': '_check_n_features not available in M03'},
++        {'type': 'skip_test', 'test_name': 'test_feature_names_in', 'reason': 'validate_data not available in M03'},
++        {'type': 'skip_test', 'test_name': 'test_validate_data_skip_check_array', 'reason': 'validate_data not available in M03'},
++        {'type': 'skip_test', 'test_name': 'test_validate_data_cast_to_ndarray', 'reason': 'validate_data not available in M03'},
++    ])
++
++    # Patch sklearn/tests/test_pipeline.py
++    patch_file(f'{base_path}/sklearn/tests/test_pipeline.py', [
++        {'type': 'replace_line',
++         'pattern': r'^from sklearn\.utils\.validation import _check_feature_names, check_is_fitted$',
++         'replacement': 'from sklearn.utils.validation import check_is_fitted'},
++        {'type': 'comment_usage', 'pattern': r'_check_feature_names'},
++    ])
++
++
++def patch_start_state():
++    """Apply patches for START state - milestone features NOT available yet."""
++    base_path = '/testbed'
++
++    # Same files as END state need to be skipped
++    files_to_skip = [
++        ('sklearn/utils/tests/test_tags.py', 'get_tags function not available in M03'),
++        ('sklearn/utils/tests/test_unique.py', 'sklearn.utils._unique module not available in M03'),
++        ('sklearn/utils/tests/test_cython_blas.py', 'ColMajor/NoTrans not available in M03'),
++        ('sklearn/utils/tests/test_array_api.py', '_count_nonzero not available in M03'),
++        ('sklearn/utils/tests/test_testing.py', 'assert_docstring_consistency not available in M03'),
++        ('sklearn/utils/tests/test_estimator_checks.py', 'get_tags/default_tags not available in M03'),
++        ('sklearn/utils/tests/test_validation.py', 'get_tags not available in M03'),
++        ('sklearn/tests/test_common.py', 'get_tags not available in M03'),
++        ('sklearn/tests/test_docstring_parameters.py', 'assert_docstring_consistency not available in M03'),
++        ('sklearn/tree/tests/test_tree.py', '_build_pruned_tree_py not available in M03'),
++        ('sklearn/model_selection/tests/test_search.py', '_yield_masked_array_for_each_param not available in M03'),
++        ('sklearn/metrics/tests/test_dist_metrics.py', 'DEPRECATED_METRICS not available'),
++        ('sklearn/cluster/tests/test_hierarchical.py', 'Imports from test_dist_metrics'),
++        ('sklearn/cluster/tests/test_k_means.py', 'get_tags/_test_common not available'),
++        ('sklearn/decomposition/tests/test_pca.py', 'get_tags/_test_common not available'),
++        ('sklearn/feature_selection/tests/test_base.py', 'get_tags/_test_common not available'),
++        ('sklearn/feature_selection/tests/test_rfe.py', 'get_tags/_test_common not available'),
++        ('sklearn/inspection/tests/test_partial_dependence.py', 'get_tags/_test_common not available'),
++        ('sklearn/linear_model/tests/test_ridge.py', 'get_tags/_test_common not available'),
++        ('sklearn/metrics/tests/test_pairwise_distances_reduction.py', 'get_tags/_test_common not available'),
++        ('sklearn/model_selection/tests/test_successive_halving.py', 'get_tags/_test_common not available'),
++        ('sklearn/model_selection/tests/test_validation.py', 'get_tags/_test_common not available'),
++        ('sklearn/neighbors/tests/test_nca.py', 'get_tags/_test_common not available'),
++        ('sklearn/neighbors/tests/test_neighbors.py', 'get_tags/_test_common not available'),
++        ('sklearn/preprocessing/tests/test_data.py', 'get_tags/_test_common not available'),
++        ('sklearn/semi_supervised/tests/test_self_training.py', 'get_tags/_test_common not available'),
++    ]
++
++    for filepath, reason in files_to_skip:
++        comment_out_entire_file(f'{base_path}/{filepath}', reason)
++
++    # Patch sklearn/tests/test_base.py for START state
++    # Remove is_clusterer and is_regressor imports since they're milestone additions
++    patch_file(f'{base_path}/sklearn/tests/test_base.py', [
++        {'type': 'remove_import', 'pattern': r'^from sklearn\.utils\.validation import _check_n_features, validate_data\n'},
++        # Remove milestone-specific imports (is_clusterer, is_regressor)
++        {'type': 'replace_line',
++         'pattern': r'^from sklearn\.base import \(\n    BaseEstimator,\n    OutlierMixin,\n    TransformerMixin,\n    clone,\n    is_classifier,\n    is_clusterer,\n    is_regressor,\n\)',
++         'replacement': 'from sklearn.base import (\n    BaseEstimator,\n    OutlierMixin,\n    TransformerMixin,\n    clone,\n    is_classifier,\n)'},
++        # Skip tests for milestone features
++        {'type': 'skip_test', 'test_name': 'test_is_clusterer', 'reason': 'is_clusterer not available at START state'},
++        {'type': 'skip_test', 'test_name': 'test_is_regressor', 'reason': 'is_regressor tests added at END state'},
++        {'type': 'skip_test', 'test_name': 'test_n_features_in_validation', 'reason': '_check_n_features not available'},
++        {'type': 'skip_test', 'test_name': 'test_n_features_in_no_validation', 'reason': '_check_n_features not available'},
++        {'type': 'skip_test', 'test_name': 'test_feature_names_in', 'reason': 'validate_data not available'},
++        {'type': 'skip_test', 'test_name': 'test_validate_data_skip_check_array', 'reason': 'validate_data not available'},
++        {'type': 'skip_test', 'test_name': 'test_validate_data_cast_to_ndarray', 'reason': 'validate_data not available'},
++    ])
++
++    # Patch sklearn/tests/test_pipeline.py
++    patch_file(f'{base_path}/sklearn/tests/test_pipeline.py', [
++        {'type': 'replace_line',
++         'pattern': r'^from sklearn\.utils\.validation import _check_feature_names, check_is_fitted$',
++         'replacement': 'from sklearn.utils.validation import check_is_fitted'},
++        {'type': 'comment_usage', 'pattern': r'_check_feature_names'},
++        # Skip tests for pipeline fitted check (milestone commit 4dfbfb9)
++        {'type': 'skip_test', 'test_name': 'test_pipeline_warns_not_fitted', 'reason': 'Pipeline fitted check not available at START state'},
++    ])
++
++
++def main():
++    if len(sys.argv) > 1 and sys.argv[1] == 'start':
++        print("Patching for START state...")
++        patch_start_state()
++    else:
++        print("Patching for END state...")
++        patch_end_state()
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/sklearn/base.py b/sklearn/base.py
+index 29b946c2ad7db564e20bdff2f316123a509c7fec..48b9081b8ade390391bf5129d0c925cfaf2fc5da 100644
+--- a/sklearn/base.py
++++ b/sklearn/base.py
+@@ -1374,13 +1374,17 @@ def is_classifier(estimator):
+     Examples
+     --------
+     >>> from sklearn.base import is_classifier
++    >>> from sklearn.cluster import KMeans
+     >>> from sklearn.svm import SVC, SVR
+     >>> classifier = SVC()
+     >>> regressor = SVR()
++    >>> kmeans = KMeans()
+     >>> is_classifier(classifier)
+     True
+     >>> is_classifier(regressor)
+     False
++    >>> is_classifier(kmeans)
++    False
+     """
+     return getattr(estimator, "_estimator_type", None) == "classifier"
+ 
+@@ -1401,17 +1405,54 @@ def is_regressor(estimator):
+     Examples
+     --------
+     >>> from sklearn.base import is_regressor
++    >>> from sklearn.cluster import KMeans
+     >>> from sklearn.svm import SVC, SVR
+     >>> classifier = SVC()
+     >>> regressor = SVR()
++    >>> kmeans = KMeans()
+     >>> is_regressor(classifier)
+     False
+     >>> is_regressor(regressor)
+     True
++    >>> is_regressor(kmeans)
++    False
+     """
+     return getattr(estimator, "_estimator_type", None) == "regressor"
+ 
+ 
++def is_clusterer(estimator):
++    """Return True if the given estimator is (probably) a clusterer.
++
++    .. versionadded:: 1.6
++
++    Parameters
++    ----------
++    estimator : object
++        Estimator object to test.
++
++    Returns
++    -------
++    out : bool
++        True if estimator is a clusterer and False otherwise.
++
++    Examples
++    --------
++    >>> from sklearn.base import is_clusterer
++    >>> from sklearn.cluster import KMeans
++    >>> from sklearn.svm import SVC, SVR
++    >>> classifier = SVC()
++    >>> regressor = SVR()
++    >>> kmeans = KMeans()
++    >>> is_clusterer(classifier)
++    False
++    >>> is_clusterer(regressor)
++    False
++    >>> is_clusterer(kmeans)
++    True
++    """
++    return getattr(estimator, "_estimator_type", None) == "clusterer"
++
++
+ def is_outlier_detector(estimator):
+     """Return True if the given estimator is (probably) an outlier detector.
+ 
+diff --git a/sklearn/pipeline.py b/sklearn/pipeline.py
+index 47faefcfd56ff3e671973cd3ac08581c5f7885a0..17c8e89dbf328ed85f9cee4f4ca1d0d6d15b419a 100644
+--- a/sklearn/pipeline.py
++++ b/sklearn/pipeline.py
+@@ -3,7 +3,9 @@
+ # Authors: The scikit-learn developers
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
++import warnings
+ from collections import Counter, defaultdict
++from contextlib import contextmanager
+ from itertools import chain, islice
+ 
+ import numpy as np
+@@ -37,6 +39,33 @@ from .utils.validation import check_is_fitted, check_memory
+ __all__ = ["Pipeline", "FeatureUnion", "make_pipeline", "make_union"]
+ 
+ 
++@contextmanager
++def _raise_or_warn_if_not_fitted(estimator):
++    """A context manager to make sure a NotFittedError is raised, if a sub-estimator
++    raises the error.
++
++    Otherwise, we raise a warning if the pipeline is not fitted, with the deprecation.
++
++    TODO(1.8): remove this context manager and replace with check_is_fitted.
++    """
++    try:
++        yield
++    except NotFittedError as exc:
++        raise NotFittedError("Pipeline is not fitted yet.") from exc
++
++    # we only get here if the above didn't raise
++    try:
++        check_is_fitted(estimator)
++    except NotFittedError:
++        warnings.warn(
++            "This Pipeline instance is not fitted yet. Call 'fit' with "
++            "appropriate arguments before using other methods such as transform, "
++            "predict, etc. This will raise an error in 1.8 instead of the current "
++            "warning.",
++            FutureWarning,
++        )
++
++
+ def _final_estimator_has(attr):
+     """Check that final_estimator has `attr`.
+ 
+@@ -589,18 +618,22 @@ class Pipeline(_BaseComposition):
+         y_pred : ndarray
+             Result of calling `predict` on the final estimator.
+         """
+-        Xt = X
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            Xt = X
+ 
+-        if not _routing_enabled():
+-            for _, name, transform in self._iter(with_final=False):
+-                Xt = transform.transform(Xt)
+-            return self.steps[-1][1].predict(Xt, **params)
++            if not _routing_enabled():
++                for _, name, transform in self._iter(with_final=False):
++                    Xt = transform.transform(Xt)
++                return self.steps[-1][1].predict(Xt, **params)
+ 
+-        # metadata routing enabled
+-        routed_params = process_routing(self, "predict", **params)
+-        for _, name, transform in self._iter(with_final=False):
+-            Xt = transform.transform(Xt, **routed_params[name].transform)
+-        return self.steps[-1][1].predict(Xt, **routed_params[self.steps[-1][0]].predict)
++            # metadata routing enabled
++            routed_params = process_routing(self, "predict", **params)
++            for _, name, transform in self._iter(with_final=False):
++                Xt = transform.transform(Xt, **routed_params[name].transform)
++            return self.steps[-1][1].predict(
++                Xt, **routed_params[self.steps[-1][0]].predict
++            )
+ 
+     @available_if(_final_estimator_has("fit_predict"))
+     @_fit_context(
+@@ -709,20 +742,22 @@ class Pipeline(_BaseComposition):
+         y_proba : ndarray of shape (n_samples, n_classes)
+             Result of calling `predict_proba` on the final estimator.
+         """
+-        Xt = X
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            Xt = X
++
++            if not _routing_enabled():
++                for _, name, transform in self._iter(with_final=False):
++                    Xt = transform.transform(Xt)
++                return self.steps[-1][1].predict_proba(Xt, **params)
+ 
+-        if not _routing_enabled():
++            # metadata routing enabled
++            routed_params = process_routing(self, "predict_proba", **params)
+             for _, name, transform in self._iter(with_final=False):
+-                Xt = transform.transform(Xt)
+-            return self.steps[-1][1].predict_proba(Xt, **params)
+-
+-        # metadata routing enabled
+-        routed_params = process_routing(self, "predict_proba", **params)
+-        for _, name, transform in self._iter(with_final=False):
+-            Xt = transform.transform(Xt, **routed_params[name].transform)
+-        return self.steps[-1][1].predict_proba(
+-            Xt, **routed_params[self.steps[-1][0]].predict_proba
+-        )
++                Xt = transform.transform(Xt, **routed_params[name].transform)
++            return self.steps[-1][1].predict_proba(
++                Xt, **routed_params[self.steps[-1][0]].predict_proba
++            )
+ 
+     @available_if(_final_estimator_has("decision_function"))
+     def decision_function(self, X, **params):
+@@ -754,20 +789,23 @@ class Pipeline(_BaseComposition):
+         y_score : ndarray of shape (n_samples, n_classes)
+             Result of calling `decision_function` on the final estimator.
+         """
+-        _raise_for_params(params, self, "decision_function")
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            _raise_for_params(params, self, "decision_function")
+ 
+-        # not branching here since params is only available if
+-        # enable_metadata_routing=True
+-        routed_params = process_routing(self, "decision_function", **params)
++            # not branching here since params is only available if
++            # enable_metadata_routing=True
++            routed_params = process_routing(self, "decision_function", **params)
+ 
+-        Xt = X
+-        for _, name, transform in self._iter(with_final=False):
+-            Xt = transform.transform(
+-                Xt, **routed_params.get(name, {}).get("transform", {})
++            Xt = X
++            for _, name, transform in self._iter(with_final=False):
++                Xt = transform.transform(
++                    Xt, **routed_params.get(name, {}).get("transform", {})
++                )
++            return self.steps[-1][1].decision_function(
++                Xt,
++                **routed_params.get(self.steps[-1][0], {}).get("decision_function", {}),
+             )
+-        return self.steps[-1][1].decision_function(
+-            Xt, **routed_params.get(self.steps[-1][0], {}).get("decision_function", {})
+-        )
+ 
+     @available_if(_final_estimator_has("score_samples"))
+     def score_samples(self, X):
+@@ -789,10 +827,12 @@ class Pipeline(_BaseComposition):
+         y_score : ndarray of shape (n_samples,)
+             Result of calling `score_samples` on the final estimator.
+         """
+-        Xt = X
+-        for _, _, transformer in self._iter(with_final=False):
+-            Xt = transformer.transform(Xt)
+-        return self.steps[-1][1].score_samples(Xt)
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            Xt = X
++            for _, _, transformer in self._iter(with_final=False):
++                Xt = transformer.transform(Xt)
++            return self.steps[-1][1].score_samples(Xt)
+ 
+     @available_if(_final_estimator_has("predict_log_proba"))
+     def predict_log_proba(self, X, **params):
+@@ -836,20 +876,22 @@ class Pipeline(_BaseComposition):
+         y_log_proba : ndarray of shape (n_samples, n_classes)
+             Result of calling `predict_log_proba` on the final estimator.
+         """
+-        Xt = X
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            Xt = X
+ 
+-        if not _routing_enabled():
++            if not _routing_enabled():
++                for _, name, transform in self._iter(with_final=False):
++                    Xt = transform.transform(Xt)
++                return self.steps[-1][1].predict_log_proba(Xt, **params)
++
++            # metadata routing enabled
++            routed_params = process_routing(self, "predict_log_proba", **params)
+             for _, name, transform in self._iter(with_final=False):
+-                Xt = transform.transform(Xt)
+-            return self.steps[-1][1].predict_log_proba(Xt, **params)
+-
+-        # metadata routing enabled
+-        routed_params = process_routing(self, "predict_log_proba", **params)
+-        for _, name, transform in self._iter(with_final=False):
+-            Xt = transform.transform(Xt, **routed_params[name].transform)
+-        return self.steps[-1][1].predict_log_proba(
+-            Xt, **routed_params[self.steps[-1][0]].predict_log_proba
+-        )
++                Xt = transform.transform(Xt, **routed_params[name].transform)
++            return self.steps[-1][1].predict_log_proba(
++                Xt, **routed_params[self.steps[-1][0]].predict_log_proba
++            )
+ 
+     def _can_transform(self):
+         return self._final_estimator == "passthrough" or hasattr(
+@@ -889,15 +931,17 @@ class Pipeline(_BaseComposition):
+         Xt : ndarray of shape (n_samples, n_transformed_features)
+             Transformed data.
+         """
+-        _raise_for_params(params, self, "transform")
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            _raise_for_params(params, self, "transform")
+ 
+-        # not branching here since params is only available if
+-        # enable_metadata_routing=True
+-        routed_params = process_routing(self, "transform", **params)
+-        Xt = X
+-        for _, name, transform in self._iter():
+-            Xt = transform.transform(Xt, **routed_params[name].transform)
+-        return Xt
++            # not branching here since params is only available if
++            # enable_metadata_routing=True
++            routed_params = process_routing(self, "transform", **params)
++            Xt = X
++            for _, name, transform in self._iter():
++                Xt = transform.transform(Xt, **routed_params[name].transform)
++            return Xt
+ 
+     def _can_inverse_transform(self):
+         return all(hasattr(t, "inverse_transform") for _, _, t in self._iter())
+@@ -941,17 +985,21 @@ class Pipeline(_BaseComposition):
+             Inverse transformed data, that is, data in the original feature
+             space.
+         """
+-        _raise_for_params(params, self, "inverse_transform")
+-
+-        X = _deprecate_Xt_in_inverse_transform(X, Xt)
+-
+-        # we don't have to branch here, since params is only non-empty if
+-        # enable_metadata_routing=True.
+-        routed_params = process_routing(self, "inverse_transform", **params)
+-        reverse_iter = reversed(list(self._iter()))
+-        for _, name, transform in reverse_iter:
+-            X = transform.inverse_transform(X, **routed_params[name].inverse_transform)
+-        return X
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            _raise_for_params(params, self, "inverse_transform")
++
++            X = _deprecate_Xt_in_inverse_transform(X, Xt)
++
++            # we don't have to branch here, since params is only non-empty if
++            # enable_metadata_routing=True.
++            routed_params = process_routing(self, "inverse_transform", **params)
++            reverse_iter = reversed(list(self._iter()))
++            for _, name, transform in reverse_iter:
++                X = transform.inverse_transform(
++                    X, **routed_params[name].inverse_transform
++                )
++            return X
+ 
+     @available_if(_final_estimator_has("score"))
+     def score(self, X, y=None, sample_weight=None, **params):
+@@ -990,24 +1038,28 @@ class Pipeline(_BaseComposition):
+         score : float
+             Result of calling `score` on the final estimator.
+         """
+-        Xt = X
+-        if not _routing_enabled():
+-            for _, name, transform in self._iter(with_final=False):
+-                Xt = transform.transform(Xt)
+-            score_params = {}
+-            if sample_weight is not None:
+-                score_params["sample_weight"] = sample_weight
+-            return self.steps[-1][1].score(Xt, y, **score_params)
+-
+-        # metadata routing is enabled.
+-        routed_params = process_routing(
+-            self, "score", sample_weight=sample_weight, **params
+-        )
++        # TODO(1.8): Remove the context manager and use check_is_fitted(self)
++        with _raise_or_warn_if_not_fitted(self):
++            Xt = X
++            if not _routing_enabled():
++                for _, name, transform in self._iter(with_final=False):
++                    Xt = transform.transform(Xt)
++                score_params = {}
++                if sample_weight is not None:
++                    score_params["sample_weight"] = sample_weight
++                return self.steps[-1][1].score(Xt, y, **score_params)
++
++            # metadata routing is enabled.
++            routed_params = process_routing(
++                self, "score", sample_weight=sample_weight, **params
++            )
+ 
+-        Xt = X
+-        for _, name, transform in self._iter(with_final=False):
+-            Xt = transform.transform(Xt, **routed_params[name].transform)
+-        return self.steps[-1][1].score(Xt, y, **routed_params[self.steps[-1][0]].score)
++            Xt = X
++            for _, name, transform in self._iter(with_final=False):
++                Xt = transform.transform(Xt, **routed_params[name].transform)
++            return self.steps[-1][1].score(
++                Xt, y, **routed_params[self.steps[-1][0]].score
++            )
+ 
+     @property
+     def classes_(self):
+@@ -1073,23 +1125,41 @@ class Pipeline(_BaseComposition):
+     @property
+     def n_features_in_(self):
+         """Number of features seen during first step `fit` method."""
+-        # delegate to first step (which will call _check_is_fitted)
++        # delegate to first step (which will call check_is_fitted)
+         return self.steps[0][1].n_features_in_
+ 
+     @property
+     def feature_names_in_(self):
+         """Names of features seen during first step `fit` method."""
+-        # delegate to first step (which will call _check_is_fitted)
++        # delegate to first step (which will call check_is_fitted)
+         return self.steps[0][1].feature_names_in_
+ 
+     def __sklearn_is_fitted__(self):
+-        """Indicate whether pipeline has been fit."""
++        """Indicate whether pipeline has been fit.
++
++        This is done by checking whether the last non-`passthrough` step of the
++        pipeline is fitted.
++
++        An empty pipeline is considered fitted.
++        """
++
++        # First find the last step that is not 'passthrough'
++        last_step = None
++        for _, estimator in reversed(self.steps):
++            if estimator != "passthrough":
++                last_step = estimator
++                break
++
++        if last_step is None:
++            # All steps are 'passthrough', so the pipeline is considered fitted
++            return True
++
+         try:
+             # check if the last step of the pipeline is fitted
+             # we only check the last step since if the last step is fit, it
+             # means the previous steps should also be fit. This is faster than
+             # checking if every step of the pipeline is fit.
+-            check_is_fitted(self.steps[-1][1])
++            check_is_fitted(last_step)
+             return True
+         except NotFittedError:
+             return False

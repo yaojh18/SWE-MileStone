@@ -1,0 +1,136 @@
+diff --git a/core/proc/signals.go b/core/proc/signals.go
+index bbc41ce5fa79c22f7c83a331bccd307ce0cb4a8f..b8996cbaa9fd4821595848f7173dcb4950b2de67 100644
+--- a/core/proc/signals.go
++++ b/core/proc/signals.go
+@@ -31,10 +31,7 @@ func init() {
+ 				dumpGoroutines(fileCreator{})
+ 			case syscall.SIGUSR2:
+ 				profiler := StartProfile()
+-				go func() {
+-					<-time.After(profileDuration)
+-					profiler.Stop()
+-				}()
++				time.AfterFunc(profileDuration, profiler.Stop)
+ 			case syscall.SIGTERM:
+ 				stopOnSignal()
+ 				gracefulStop(signals, syscall.SIGTERM)
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 49434c83adf08716aaba2508e7a3e30e00c7b62a..c4dfa00ba7323f273d89ca00f0c1067a0b4cc97c 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -51,7 +51,7 @@ func (sg *ServiceGroup) Add(service Service) {
+ // Also, quitting this method will close the logx output.
+ func (sg *ServiceGroup) Start() {
+ 	proc.AddShutdownListener(func() {
+-		logx.Info("Shutting down service in group")
++		logx.Info("Shutting down services in group")
+ 		sg.stopOnce()
+ 	})
+ 
+diff --git a/core/trace/agent.go b/core/trace/agent.go
+index 2a2e8c3726160d02b7dee782cacbaff8be43af3f..a14e4973dd0b86af1ba3072db5a5430faf222c5d 100644
+--- a/core/trace/agent.go
++++ b/core/trace/agent.go
+@@ -7,7 +7,6 @@ import (
+ 	"os"
+ 	"sync"
+ 
+-	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+@@ -30,36 +29,36 @@ const (
+ )
+ 
+ var (
+-	agents = make(map[string]lang.PlaceholderType)
+-	lock   sync.Mutex
+-	tp     *sdktrace.TracerProvider
++	once           sync.Once
++	tp             *sdktrace.TracerProvider
++	shutdownOnceFn = sync.OnceFunc(func() {
++		if tp != nil {
++			_ = tp.Shutdown(context.Background())
++		}
++	})
+ )
+ 
+ // StartAgent starts an opentelemetry agent.
++// It uses sync.Once to ensure the agent is initialized only once,
++// similar to prometheus.StartAgent and logx.SetUp.
++// This prevents multiple ServiceConf.SetUp() calls from reinitializing
++// the global tracer provider when running multiple servers (e.g., REST + RPC)
++// in the same process.
+ func StartAgent(c Config) {
+ 	if c.Disabled {
+ 		return
+ 	}
+ 
+-	lock.Lock()
+-	defer lock.Unlock()
+-
+-	_, ok := agents[c.Endpoint]
+-	if ok {
+-		return
+-	}
+-
+-	// if error happens, let later calls run.
+-	if err := startAgent(c); err != nil {
+-		return
+-	}
+-
+-	agents[c.Endpoint] = lang.Placeholder
++	once.Do(func() {
++		if err := startAgent(c); err != nil {
++			logx.Error(err)
++		}
++	})
+ }
+ 
+ // StopAgent shuts down the span processors in the order they were registered.
+ func StopAgent() {
+-	_ = tp.Shutdown(context.Background())
++	shutdownOnceFn()
+ }
+ 
+ func createExporter(c Config) (sdktrace.SpanExporter, error) {
+@@ -91,9 +90,12 @@ func createExporter(c Config) (sdktrace.SpanExporter, error) {
+ 	case kindOtlpHttp:
+ 		// Not support flexible configuration now.
+ 		opts := []otlptracehttp.Option{
+-			otlptracehttp.WithInsecure(),
+ 			otlptracehttp.WithEndpoint(c.Endpoint),
+ 		}
++
++		if !c.OtlpHttpSecure {
++			opts = append(opts, otlptracehttp.WithInsecure())
++		}
+ 		if len(c.OtlpHeaders) > 0 {
+ 			opts = append(opts, otlptracehttp.WithHeaders(c.OtlpHeaders))
+ 		}
+diff --git a/core/trace/config.go b/core/trace/config.go
+index 5880d0397fcd6aceb04b765aaba6d4e8f1653e62..5ab4ae58fd0e02adca438edcc131ceadbfe24f0d 100644
+--- a/core/trace/config.go
++++ b/core/trace/config.go
+@@ -17,6 +17,8 @@ type Config struct {
+ 	// For example
+ 	// /v1/traces
+ 	OtlpHttpPath string `json:",optional"`
++	// OtlpHttpSecure represents the scheme to use for OTLP HTTP transport.
++	OtlpHttpSecure bool `json:",optional"`
+ 	// Disabled indicates whether StartAgent starts the agent.
+ 	Disabled bool `json:",optional"`
+ }
+diff --git a/rest/handler/maxconnshandler.go b/rest/handler/maxconnshandler.go
+index 4bbccadd08adec4ccf7776275553a6776bafb5d4..78ed68a49dfae758336f44c7421d94e23a37978c 100644
+--- a/rest/handler/maxconnshandler.go
++++ b/rest/handler/maxconnshandler.go
+@@ -23,7 +23,7 @@ func MaxConnsHandler(n int) func(http.Handler) http.Handler {
+ 			if latch.TryBorrow() {
+ 				defer func() {
+ 					if err := latch.Return(); err != nil {
+-						logx.Error(err)
++						logx.WithContext(r.Context()).Error(err)
+ 					}
+ 				}()
+ 

@@ -1,0 +1,1290 @@
+diff --git a/sklearn/compose/tests/test_column_transformer.py b/sklearn/compose/tests/test_column_transformer.py
+index 704236def45b6362eac068412d155a00133fca92..db53beff73e88ea6f66403e8b160b98b16256142 100644
+--- a/sklearn/compose/tests/test_column_transformer.py
++++ b/sklearn/compose/tests/test_column_transformer.py
+@@ -2465,10 +2465,11 @@ def test_remainder_set_output():
+     assert isinstance(out, np.ndarray)
+ 
+ 
++# TODO(1.6): replace the warning by a ValueError exception
+ def test_transform_pd_na():
+     """Check behavior when a tranformer's output contains pandas.NA
+ 
+-    It should raise an error unless the output config is set to 'pandas'.
++    It should emit a warning unless the output config is set to 'pandas'.
+     """
+     pd = pytest.importorskip("pandas")
+     if not hasattr(pd, "Float64Dtype"):
+@@ -2483,18 +2484,19 @@ def test_transform_pd_na():
+         warnings.simplefilter("error")
+         ct.fit_transform(df)
+     df = df.convert_dtypes()
+-
+     # Error with extension dtype and pd.NA
+-    with pytest.raises(ValueError, match=r"set_output\(transform='pandas'\)"):
++    with pytest.warns(FutureWarning, match=r"set_output\(transform='pandas'\)"):
++        ct.fit_transform(df)
++    # No warning when output is set to pandas
++    with warnings.catch_warnings():
++        warnings.simplefilter("error")
++        ct.set_output(transform="pandas")
+         ct.fit_transform(df)
+-
+-    # No error when output is set to pandas
+-    ct.set_output(transform="pandas")
+-    ct.fit_transform(df)
+     ct.set_output(transform="default")
+-
+-    # No error when there are no pd.NA
+-    ct.fit_transform(df.fillna(-1.0))
++    # No warning when there are no pd.NA
++    with warnings.catch_warnings():
++        warnings.simplefilter("error")
++        ct.fit_transform(df.fillna(-1.0))
+ 
+ 
+ def test_dataframe_different_dataframe_libraries():
+diff --git a/sklearn/datasets/tests/test_samples_generator.py b/sklearn/datasets/tests/test_samples_generator.py
+index f4bc6384f763f8de2de8e1a751534e0f699b652c..a2524fd7561fee83577e5591262bc4f6ebb5a170 100644
+--- a/sklearn/datasets/tests/test_samples_generator.py
++++ b/sklearn/datasets/tests/test_samples_generator.py
+@@ -552,6 +552,26 @@ def test_make_sparse_spd_matrix(norm_diag, sparse_format, global_random_seed):
+         assert_array_almost_equal(Xarr.diagonal(), np.ones(n_dim))
+ 
+ 
++# TODO(1.6): remove
++def test_make_sparse_spd_matrix_deprecation_warning():
++    """Check the message for future deprecation."""
++    warn_msg = "dim was deprecated in version 1.4"
++    with pytest.warns(FutureWarning, match=warn_msg):
++        make_sparse_spd_matrix(
++            dim=1,
++        )
++
++    error_msg = "`dim` and `n_dim` cannot be both specified"
++    with pytest.raises(ValueError, match=error_msg):
++        make_sparse_spd_matrix(
++            dim=1,
++            n_dim=1,
++        )
++
++    X = make_sparse_spd_matrix()
++    assert X.shape[1] == 1
++
++
+ @pytest.mark.parametrize("hole", [False, True])
+ def test_make_swiss_roll(hole):
+     X, t = make_swiss_roll(n_samples=5, noise=0.0, random_state=0, hole=hole)
+diff --git a/sklearn/decomposition/tests/test_incremental_pca.py b/sklearn/decomposition/tests/test_incremental_pca.py
+index e12be7337cbb38335594c7d31b1227ed5e40defc..50ddf39b04503a32c57e08be29f9cdf60367d4c1 100644
+--- a/sklearn/decomposition/tests/test_incremental_pca.py
++++ b/sklearn/decomposition/tests/test_incremental_pca.py
+@@ -139,13 +139,14 @@ def test_incremental_pca_validation():
+     ):
+         IncrementalPCA(n_components, batch_size=10).fit(X)
+ 
+-    # Test that n_components is also <= n_samples in first call to partial fit.
++    # Tests that n_components is also <= n_samples.
+     n_components = 3
+     with pytest.raises(
+         ValueError,
+         match=(
+-            f"n_components={n_components} must be less or equal to the batch "
+-            f"number of samples {n_samples} for the first partial_fit call."
++            "n_components={} must be"
++            " less or equal to the batch number of"
++            " samples {}".format(n_components, n_samples)
+         ),
+     ):
+         IncrementalPCA(n_components=n_components).partial_fit(X)
+@@ -232,27 +233,6 @@ def test_incremental_pca_batch_signs():
+         assert_almost_equal(np.sign(i), np.sign(j), decimal=6)
+ 
+ 
+-def test_incremental_pca_partial_fit_small_batch():
+-    # Test that there is no minimum batch size after the first partial_fit
+-    # Non-regression test
+-    rng = np.random.RandomState(1999)
+-    n, p = 50, 3
+-    X = rng.randn(n, p)  # spherical data
+-    X[:, 1] *= 0.00001  # make middle component relatively small
+-    X += [5, 4, 3]  # make a large mean
+-
+-    n_components = p
+-    pipca = IncrementalPCA(n_components=n_components)
+-    pipca.partial_fit(X[:n_components])
+-    for idx in range(n_components, n):
+-        pipca.partial_fit(X[idx : idx + 1])
+-
+-    pca = PCA(n_components=n_components)
+-    pca.fit(X)
+-
+-    assert_allclose(pca.components_, pipca.components_, atol=1e-3)
+-
+-
+ def test_incremental_pca_batch_values():
+     # Test that components_ values are stable over batch sizes.
+     rng = np.random.RandomState(1999)
+diff --git a/sklearn/feature_selection/tests/test_rfe.py b/sklearn/feature_selection/tests/test_rfe.py
+index ae11de2fadf59ae888e22338b8843fb238f99dc3..74c716054cb705e48e2cdd8bf7125ec134ae88c3 100644
+--- a/sklearn/feature_selection/tests/test_rfe.py
++++ b/sklearn/feature_selection/tests/test_rfe.py
+@@ -9,7 +9,7 @@ import pytest
+ from joblib import parallel_backend
+ from numpy.testing import assert_allclose, assert_array_almost_equal, assert_array_equal
+ 
+-from sklearn.base import BaseEstimator, ClassifierMixin, is_classifier
++from sklearn.base import BaseEstimator, ClassifierMixin
+ from sklearn.compose import TransformedTargetRegressor
+ from sklearn.cross_decomposition import CCA, PLSCanonical, PLSRegression
+ from sklearn.datasets import load_iris, make_classification, make_friedman1
+@@ -23,11 +23,12 @@ from sklearn.pipeline import make_pipeline
+ from sklearn.preprocessing import StandardScaler
+ from sklearn.svm import SVC, SVR, LinearSVR
+ from sklearn.utils import check_random_state
++from sklearn.utils._tags import default_tags
+ from sklearn.utils._testing import ignore_warnings
+ from sklearn.utils.fixes import CSR_CONTAINERS
+ 
+ 
+-class MockClassifier(ClassifierMixin, BaseEstimator):
++class MockClassifier(ClassifierMixin):
+     """
+     Dummy classifier to test recursive feature elimination
+     """
+@@ -58,7 +59,7 @@ class MockClassifier(ClassifierMixin, BaseEstimator):
+         return self
+ 
+     def __sklearn_tags__(self):
+-        tags = super().__sklearn_tags__()
++        tags = default_tags(self)
+         tags.input_tags.allow_nan = True
+         return tags
+ 
+@@ -325,7 +326,7 @@ def test_rfecv_cv_results_size(global_random_seed):
+ 
+ def test_rfe_estimator_tags():
+     rfe = RFE(SVC(kernel="linear"))
+-    assert is_classifier(rfe)
++    assert rfe._estimator_type == "classifier"
+     # make sure that cross-validation is stratified
+     iris = load_iris()
+     score = cross_val_score(rfe, iris.data, iris.target)
+diff --git a/sklearn/inspection/_plot/tests/test_boundary_decision_display.py b/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
+index d0aabbbb15db936031a9627a8a1fb16f2f1fdcba..b6767cbe72857376e5be82167710b2fa09e106c2 100644
+--- a/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
++++ b/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
+@@ -334,7 +334,7 @@ def test_decision_boundary_display_regressor(pyplot, response_method, plot_metho
+ def test_error_bad_response(pyplot, response_method, msg):
+     """Check errors for bad response."""
+ 
+-    class MyClassifier(ClassifierMixin, BaseEstimator):
++    class MyClassifier(BaseEstimator, ClassifierMixin):
+         def fit(self, X, y):
+             self.fitted_ = True
+             self.classes_ = [0, 1]
+diff --git a/sklearn/linear_model/tests/test_sgd.py b/sklearn/linear_model/tests/test_sgd.py
+index c902de2d6648089e7655cd061308dfeec90bd8a2..6f53d2826cc114a7de80c23fff20c82d25514810 100644
+--- a/sklearn/linear_model/tests/test_sgd.py
++++ b/sklearn/linear_model/tests/test_sgd.py
+@@ -20,7 +20,6 @@ from sklearn.model_selection import (
+ from sklearn.pipeline import make_pipeline
+ from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler, scale
+ from sklearn.svm import OneClassSVM
+-from sklearn.utils import get_tags
+ from sklearn.utils._testing import (
+     assert_allclose,
+     assert_almost_equal,
+@@ -2171,12 +2170,3 @@ def test_passive_aggressive_deprecated_average(Estimator):
+     est = Estimator(average=0)
+     with pytest.warns(FutureWarning, match="average=0"):
+         est.fit(X, Y)
+-
+-
+-def test_sgd_one_class_svm_estimator_type():
+-    """Check that SGDOneClassSVM has the correct estimator type.
+-
+-    Non-regression test for if the mixin was not on the left.
+-    """
+-    sgd_ocsvm = SGDOneClassSVM()
+-    assert get_tags(sgd_ocsvm).estimator_type == "outlier_detector"
+diff --git a/sklearn/metrics/_plot/tests/test_common_curve_display.py b/sklearn/metrics/_plot/tests/test_common_curve_display.py
+index 0014a73055e411af5f3dfb0fe2ec5325bcf53516..7fe0f0fc6fa7f52ef8afffb9d0cfc17135d515dc 100644
+--- a/sklearn/metrics/_plot/tests/test_common_curve_display.py
++++ b/sklearn/metrics/_plot/tests/test_common_curve_display.py
+@@ -1,7 +1,7 @@
+ import numpy as np
+ import pytest
+ 
+-from sklearn.base import BaseEstimator, ClassifierMixin, clone
++from sklearn.base import ClassifierMixin, clone
+ from sklearn.calibration import CalibrationDisplay
+ from sklearn.compose import make_column_transformer
+ from sklearn.datasets import load_iris
+@@ -121,7 +121,7 @@ def test_display_curve_error_no_response(
+     is not defined for the given trained classifier."""
+     X, y = data_binary
+ 
+-    class MyClassifier(ClassifierMixin, BaseEstimator):
++    class MyClassifier(ClassifierMixin):
+         def fit(self, X, y):
+             self.classes_ = [0, 1]
+             return self
+diff --git a/sklearn/metrics/tests/test_pairwise.py b/sklearn/metrics/tests/test_pairwise.py
+index 96f9ec256e8004e1c93e7ab232b3a52aea304c89..f93dbcd6d8288739e6fa1365839e34945dc6838c 100644
+--- a/sklearn/metrics/tests/test_pairwise.py
++++ b/sklearn/metrics/tests/test_pairwise.py
+@@ -1582,33 +1582,6 @@ def test_numeric_pairwise_distances_datatypes(metric, global_dtype, y_is_x):
+     assert_allclose(dist, expected_dist)
+ 
+ 
+-@pytest.mark.parametrize(
+-    "pairwise_distances_func",
+-    [pairwise_distances, pairwise_distances_argmin, pairwise_distances_argmin_min],
+-)
+-def test_nan_euclidean_support(pairwise_distances_func):
+-    """Check that `nan_euclidean` is lenient with `nan` values."""
+-
+-    X = [[0, 1], [1, np.nan], [2, 3], [3, 5]]
+-    output = pairwise_distances_func(X, X, metric="nan_euclidean")
+-
+-    assert not np.isnan(output).any()
+-
+-
+-def test_nan_euclidean_constant_input_argmin():
+-    """Check that the behavior of constant input is the same in the case of
+-    full of nan vector and full of zero vector.
+-    """
+-
+-    X_nan = [[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan]]
+-    argmin_nan = pairwise_distances_argmin(X_nan, X_nan, metric="nan_euclidean")
+-
+-    X_const = [[0, 0], [0, 0], [0, 0]]
+-    argmin_const = pairwise_distances_argmin(X_const, X_const, metric="nan_euclidean")
+-
+-    assert_allclose(argmin_nan, argmin_const)
+-
+-
+ @pytest.mark.parametrize(
+     "X,Y,expected_distance",
+     [
+diff --git a/sklearn/metrics/tests/test_score_objects.py b/sklearn/metrics/tests/test_score_objects.py
+index 66bf521e43ec5ceb43bf3f6f4da41b2f3c5e6c21..58d6561d566db48a0122fd8e5e00c899e35e8723 100644
+--- a/sklearn/metrics/tests/test_score_objects.py
++++ b/sklearn/metrics/tests/test_score_objects.py
+@@ -3,6 +3,7 @@ import pickle
+ import warnings
+ from copy import deepcopy
+ from functools import partial
++from unittest.mock import Mock
+ 
+ import joblib
+ import numpy as np
+@@ -10,7 +11,7 @@ import pytest
+ from numpy.testing import assert_allclose
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator, ClassifierMixin
++from sklearn.base import BaseEstimator
+ from sklearn.cluster import KMeans
+ from sklearn.datasets import (
+     load_diabetes,
+@@ -184,7 +185,7 @@ class EstimatorWithFit(BaseEstimator):
+         return self
+ 
+ 
+-class EstimatorWithFitAndScore(BaseEstimator):
++class EstimatorWithFitAndScore:
+     """Dummy estimator to test scoring validators"""
+ 
+     def fit(self, X, y):
+@@ -194,7 +195,7 @@ class EstimatorWithFitAndScore(BaseEstimator):
+         return 1.0
+ 
+ 
+-class EstimatorWithFitAndPredict(BaseEstimator):
++class EstimatorWithFitAndPredict:
+     """Dummy estimator to test scoring validators"""
+ 
+     def fit(self, X, y):
+@@ -747,41 +748,37 @@ def test_multimetric_scorer_calls_method_once(
+     expected_decision_func_count,
+ ):
+     X, y = np.array([[1], [1], [0], [0], [0]]), np.array([0, 1, 1, 1, 0])
+-    pos_proba = np.random.rand(X.shape[0])
+-    proba = np.c_[1 - pos_proba, pos_proba]
+-
+-    class MyClassifier(ClassifierMixin, BaseEstimator):
+-        def __init__(self):
+-            self._expected_predict_count = 0
+-            self._expected_predict_proba_count = 0
+-            self._expected_decision_function_count = 0
+ 
+-        def fit(self, X, y):
+-            self.classes_ = np.unique(y)
+-            return self
+-
+-        def predict(self, X):
+-            self._expected_predict_count += 1
+-            return y
++    mock_est = Mock()
++    mock_est._estimator_type = "classifier"
++    fit_func = Mock(return_value=mock_est, name="fit")
++    fit_func.__name__ = "fit"
++    predict_func = Mock(return_value=y, name="predict")
++    predict_func.__name__ = "predict"
+ 
+-        def predict_proba(self, X):
+-            self._expected_predict_proba_count += 1
+-            return proba
+-
+-        def decision_function(self, X):
+-            self._expected_decision_function_count += 1
+-            return pos_proba
++    pos_proba = np.random.rand(X.shape[0])
++    proba = np.c_[1 - pos_proba, pos_proba]
++    predict_proba_func = Mock(return_value=proba, name="predict_proba")
++    predict_proba_func.__name__ = "predict_proba"
++    decision_function_func = Mock(return_value=pos_proba, name="decision_function")
++    decision_function_func.__name__ = "decision_function"
++
++    mock_est.fit = fit_func
++    mock_est.predict = predict_func
++    mock_est.predict_proba = predict_proba_func
++    mock_est.decision_function = decision_function_func
++    # add the classes that would be found during fit
++    mock_est.classes_ = np.array([0, 1])
+ 
+-    mock_est = MyClassifier().fit(X, y)
+     scorer_dict = _check_multimetric_scoring(LogisticRegression(), scorers)
+     multi_scorer = _MultimetricScorer(scorers=scorer_dict)
+     results = multi_scorer(mock_est, X, y)
+ 
+     assert set(scorers) == set(results)  # compare dict keys
+ 
+-    assert mock_est._expected_predict_count == expected_predict_count
+-    assert mock_est._expected_predict_proba_count == expected_predict_proba_count
+-    assert mock_est._expected_decision_function_count == expected_decision_func_count
++    assert predict_func.call_count == expected_predict_count
++    assert predict_proba_func.call_count == expected_predict_proba_count
++    assert decision_function_func.call_count == expected_decision_func_count
+ 
+ 
+ @pytest.mark.parametrize(
+diff --git a/sklearn/model_selection/tests/test_classification_threshold.py b/sklearn/model_selection/tests/test_classification_threshold.py
+index 1ba4dcea369748622d366df0477e3b7911873593..12d2f20e26c4c0cb30087fd846c2da106c2f4f3c 100644
+--- a/sklearn/model_selection/tests/test_classification_threshold.py
++++ b/sklearn/model_selection/tests/test_classification_threshold.py
+@@ -2,7 +2,7 @@ import numpy as np
+ import pytest
+ 
+ from sklearn import config_context
+-from sklearn.base import clone
++from sklearn.base import BaseEstimator, ClassifierMixin, clone
+ from sklearn.datasets import (
+     load_breast_cancer,
+     load_iris,
+@@ -593,26 +593,41 @@ def test_fixed_threshold_classifier_metadata_routing():
+     assert_allclose(classifier_default_threshold.estimator_.coef_, classifier.coef_)
+ 
+ 
+-@pytest.mark.parametrize(
+-    "method", ["predict_proba", "decision_function", "predict", "predict_log_proba"]
+-)
+-def test_fixed_threshold_classifier_fitted_estimator(method):
+-    """Check that if the underlying estimator is already fitted, no fit is required."""
+-    X, y = make_classification(random_state=0)
+-    classifier = LogisticRegression().fit(X, y)
+-    fixed_threshold_classifier = FixedThresholdClassifier(estimator=classifier)
+-    # This should not raise an error
+-    getattr(fixed_threshold_classifier, method)(X)
++class ClassifierLoggingFit(ClassifierMixin, BaseEstimator):
++    """Classifier that logs the number of `fit` calls."""
++
++    def __init__(self, fit_calls=0):
++        self.fit_calls = fit_calls
++
++    def fit(self, X, y, **fit_params):
++        self.fit_calls += 1
++        self.is_fitted_ = True
++        return self
++
++    def predict_proba(self, X):
++        return np.ones((X.shape[0], 2), np.float64)  # pragma: nocover
+ 
+ 
+-def test_fixed_threshold_classifier_classes_():
+-    """Check that the classes_ attribute is properly set."""
++def test_fixed_threshold_classifier_prefit():
++    """Check the behaviour of the `FixedThresholdClassifier` with the `prefit`
++    parameter."""
+     X, y = make_classification(random_state=0)
+-    with pytest.raises(
+-        AttributeError, match="The underlying estimator is not fitted yet."
+-    ):
+-        FixedThresholdClassifier(estimator=LogisticRegression()).classes_
+ 
+-    classifier = LogisticRegression().fit(X, y)
+-    fixed_threshold_classifier = FixedThresholdClassifier(estimator=classifier)
+-    assert_array_equal(fixed_threshold_classifier.classes_, classifier.classes_)
++    estimator = ClassifierLoggingFit()
++    model = FixedThresholdClassifier(estimator=estimator, prefit=True)
++    with pytest.raises(NotFittedError):
++        model.fit(X, y)
++
++    # check that we don't clone the classifier when `prefit=True`.
++    estimator.fit(X, y)
++    model.fit(X, y)
++    assert estimator.fit_calls == 1
++    assert model.estimator_ is estimator
++
++    # check that we clone the classifier when `prefit=False`.
++    estimator = ClassifierLoggingFit()
++    model = FixedThresholdClassifier(estimator=estimator, prefit=False)
++    model.fit(X, y)
++    assert estimator.fit_calls == 0
++    assert model.estimator_.fit_calls == 1
++    assert model.estimator_ is not estimator
+diff --git a/sklearn/model_selection/tests/test_search.py b/sklearn/model_selection/tests/test_search.py
+index 5313e5d28a1a7c6e1123cb2819a1fe808a181a57..c0442906d99de264a1502dd0f1e9e329ddae1c19 100644
+--- a/sklearn/model_selection/tests/test_search.py
++++ b/sklearn/model_selection/tests/test_search.py
+@@ -100,7 +100,7 @@ from sklearn.utils.validation import _num_samples
+ 
+ # Neither of the following two estimators inherit from BaseEstimator,
+ # to test hyperparameter search on user-defined classifiers.
+-class MockClassifier(ClassifierMixin, BaseEstimator):
++class MockClassifier:
+     """Dummy classifier to test the parameter search algorithms"""
+ 
+     def __init__(self, foo_param=0):
+@@ -213,7 +213,7 @@ def test_parameter_grid():
+ def test_grid_search():
+     # Test that the best estimator contains the right value for foo_param
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
+     # make sure it selects the smallest parameter in case of ties
+     old_stdout = sys.stdout
+     sys.stdout = StringIO()
+@@ -383,11 +383,11 @@ def test_classes__property():
+ def test_trivial_cv_results_attr():
+     # Test search over a "grid" with only one point.
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1]}, cv=2)
++    grid_search = GridSearchCV(clf, {"foo_param": [1]}, cv=3)
+     grid_search.fit(X, y)
+     assert hasattr(grid_search, "cv_results_")
+ 
+-    random_search = RandomizedSearchCV(clf, {"foo_param": [0]}, n_iter=1, cv=2)
++    random_search = RandomizedSearchCV(clf, {"foo_param": [0]}, n_iter=1, cv=3)
+     random_search.fit(X, y)
+     assert hasattr(grid_search, "cv_results_")
+ 
+@@ -396,7 +396,7 @@ def test_no_refit():
+     # Test that GSCV can be used for model selection alone without refitting
+     clf = MockClassifier()
+     for scoring in [None, ["accuracy", "precision"]]:
+-        grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=False, cv=2)
++        grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=False, cv=3)
+         grid_search.fit(X, y)
+         assert (
+             not hasattr(grid_search, "best_estimator_")
+@@ -463,7 +463,7 @@ def test_grid_search_when_param_grid_includes_range():
+     # Test that the best estimator contains the right value for foo_param
+     clf = MockClassifier()
+     grid_search = None
+-    grid_search = GridSearchCV(clf, {"foo_param": range(1, 4)}, cv=2)
++    grid_search = GridSearchCV(clf, {"foo_param": range(1, 4)}, cv=3)
+     grid_search.fit(X, y)
+     assert grid_search.best_estimator_.foo_param == 2
+ 
+@@ -1496,13 +1496,13 @@ def test_grid_search_correct_score_results():
+ def test_pickle():
+     # Test that a fit search can be pickled
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=True, cv=2)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=True, cv=3)
+     grid_search.fit(X, y)
+     grid_search_pickled = pickle.loads(pickle.dumps(grid_search))
+     assert_array_almost_equal(grid_search.predict(X), grid_search_pickled.predict(X))
+ 
+     random_search = RandomizedSearchCV(
+-        clf, {"foo_param": [1, 2, 3]}, refit=True, n_iter=3, cv=2
++        clf, {"foo_param": [1, 2, 3]}, refit=True, n_iter=3, cv=3
+     )
+     random_search.fit(X, y)
+     random_search_pickled = pickle.loads(pickle.dumps(random_search))
+@@ -1901,7 +1901,7 @@ def test_grid_search_cv_splits_consistency():
+ 
+ def test_transform_inverse_transform_round_trip():
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
+ 
+     grid_search.fit(X, y)
+     X_round_trip = grid_search.inverse_transform(grid_search.transform(X))
+@@ -2571,7 +2571,7 @@ def test_search_html_repr():
+ @pytest.mark.parametrize("SearchCV", [GridSearchCV, RandomizedSearchCV])
+ def test_inverse_transform_Xt_deprecation(SearchCV):
+     clf = MockClassifier()
+-    search = SearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
++    search = SearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
+ 
+     X2 = search.fit(X, y).transform(X)
+ 
+diff --git a/sklearn/model_selection/tests/test_validation.py b/sklearn/model_selection/tests/test_validation.py
+index 2d579772b1fbeb08b9a00bdc694e403490d2eb53..81f716ed88516176377c5a4a6204e4d5bb4581a1 100644
+--- a/sklearn/model_selection/tests/test_validation.py
++++ b/sklearn/model_selection/tests/test_validation.py
+@@ -14,7 +14,7 @@ import pytest
+ from scipy.sparse import issparse
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator, ClassifierMixin, clone
++from sklearn.base import BaseEstimator, clone
+ from sklearn.cluster import KMeans
+ from sklearn.datasets import (
+     load_diabetes,
+@@ -186,7 +186,7 @@ class MockEstimatorWithSingleFitCallAllowed(MockEstimatorWithParameter):
+         raise NotImplementedError
+ 
+ 
+-class MockClassifier(ClassifierMixin, BaseEstimator):
++class MockClassifier:
+     """Dummy classifier to test the cross-validation"""
+ 
+     def __init__(self, a=0, allow_nd=False):
+@@ -254,7 +254,7 @@ class MockClassifier(ClassifierMixin, BaseEstimator):
+                 P.shape[0],
+                 P.shape[1],
+             )
+-        self.classes_ = np.unique(y)
++        self.fitted_ = True
+         return self
+ 
+     def predict(self, T):
+@@ -274,11 +274,11 @@ class MockClassifier(ClassifierMixin, BaseEstimator):
+ 
+ # XXX: use 2D array, since 1D X is being detected as a single sample in
+ # check_consistent_length
+-X = np.ones((15, 2))
+-y = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 6])
++X = np.ones((10, 2))
++y = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
+ # The number of samples per class needs to be > n_splits,
+ # for StratifiedKFold(n_splits=3)
+-y2 = np.array([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3])
++y2 = np.array([1, 1, 1, 2, 2, 2, 3, 3, 3, 3])
+ P = np.eye(5)
+ 
+ 
+@@ -694,7 +694,7 @@ def test_cross_val_score_fit_params(coo_container):
+     n_classes = len(np.unique(y))
+ 
+     W_sparse = coo_container(
+-        (np.array([1]), (np.array([1]), np.array([0]))), shape=(15, 1)
++        (np.array([1]), (np.array([1]), np.array([0]))), shape=(10, 1)
+     )
+     P_sparse = coo_container(np.eye(5))
+ 
+@@ -720,7 +720,7 @@ def test_cross_val_score_fit_params(coo_container):
+         "dummy_obj": DUMMY_OBJ,
+         "callback": assert_fit_params,
+     }
+-    cross_val_score(clf, X, y2, params=fit_params)
++    cross_val_score(clf, X, y, params=fit_params)
+ 
+ 
+ def test_cross_val_score_score_func():
+diff --git a/sklearn/neighbors/tests/test_neighbors.py b/sklearn/neighbors/tests/test_neighbors.py
+index c9fb85fec990829483b2c9a2549197a8079cd1bd..9622e85c397184c07d5d10d47e0dc01a15f4b909 100644
+--- a/sklearn/neighbors/tests/test_neighbors.py
++++ b/sklearn/neighbors/tests/test_neighbors.py
+@@ -2337,38 +2337,6 @@ def test_regressor_predict_on_arraylikes():
+     assert_allclose(est.predict([[0, 2.5]]), [6])
+ 
+ 
+-@pytest.mark.parametrize(
+-    "Estimator, params",
+-    [
+-        (neighbors.KNeighborsClassifier, {"n_neighbors": 2}),
+-        (neighbors.KNeighborsRegressor, {"n_neighbors": 2}),
+-        (neighbors.RadiusNeighborsRegressor, {}),
+-        (neighbors.RadiusNeighborsClassifier, {}),
+-        (neighbors.KNeighborsTransformer, {"n_neighbors": 2}),
+-        (neighbors.RadiusNeighborsTransformer, {"radius": 1.5}),
+-        (neighbors.LocalOutlierFactor, {"n_neighbors": 1}),
+-    ],
+-)
+-def test_nan_euclidean_support(Estimator, params):
+-    """Check that the different neighbor estimators are lenient towards `nan`
+-    values if using `metric="nan_euclidean"`.
+-    """
+-
+-    X = [[0, 1], [1, np.nan], [2, 3], [3, 5]]
+-    y = [0, 0, 1, 1]
+-
+-    params.update({"metric": "nan_euclidean"})
+-    estimator = Estimator().set_params(**params).fit(X, y)
+-
+-    for response_method in ("kneighbors", "predict", "transform", "fit_predict"):
+-        if hasattr(estimator, response_method):
+-            output = getattr(estimator, response_method)(X)
+-            if hasattr(output, "toarray"):
+-                assert not np.isnan(output.data).any()
+-            else:
+-                assert not np.isnan(output).any()
+-
+-
+ def test_predict_dataframe():
+     """Check that KNN predict works with dataframes
+ 
+diff --git a/sklearn/tests/test_base.py b/sklearn/tests/test_base.py
+index b65baa78802bc4ec81e7194f42fddec282eeafd5..e23c347708b1f86fbd7582105a1127dc0bb7ede1 100644
+--- a/sklearn/tests/test_base.py
++++ b/sklearn/tests/test_base.py
+@@ -19,12 +19,10 @@ from sklearn.base import (
+     clone,
+     is_classifier,
+     is_clusterer,
+-    is_outlier_detector,
+     is_regressor,
+ )
+ from sklearn.cluster import KMeans
+ from sklearn.decomposition import PCA
+-from sklearn.ensemble import IsolationForest
+ from sklearn.exceptions import InconsistentVersionWarning
+ from sklearn.model_selection import GridSearchCV
+ from sklearn.pipeline import Pipeline
+@@ -268,21 +266,6 @@ def test_get_params():
+         test.set_params(a__a=2)
+ 
+ 
+-# TODO(1.8): Remove this test when the deprecation is removed
+-def test_is_estimator_type_class():
+-    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
+-        assert is_classifier(SVC)
+-
+-    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
+-        assert is_regressor(SVR)
+-
+-    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
+-        assert is_clusterer(KMeans)
+-
+-    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
+-        assert is_outlier_detector(IsolationForest)
+-
+-
+ @pytest.mark.parametrize(
+     "estimator, expected_result",
+     [
+diff --git a/sklearn/tests/test_calibration.py b/sklearn/tests/test_calibration.py
+index 6e5900e4fa4a66c3febe945ece31cf35d6fdd861..d80c7094525f9cc33dd32c2405ab9a2f65c7af15 100644
+--- a/sklearn/tests/test_calibration.py
++++ b/sklearn/tests/test_calibration.py
+@@ -5,7 +5,7 @@ import numpy as np
+ import pytest
+ from numpy.testing import assert_allclose
+ 
+-from sklearn.base import BaseEstimator, ClassifierMixin, clone
++from sklearn.base import BaseEstimator, clone
+ from sklearn.calibration import (
+     CalibratedClassifierCV,
+     CalibrationDisplay,
+@@ -503,9 +503,11 @@ def test_calibration_accepts_ndarray(X):
+     """Test that calibration accepts n-dimensional arrays as input"""
+     y = [1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0]
+ 
+-    class MockTensorClassifier(ClassifierMixin, BaseEstimator):
++    class MockTensorClassifier(BaseEstimator):
+         """A toy estimator that accepts tensor inputs"""
+ 
++        _estimator_type = "classifier"
++
+         def fit(self, X, y):
+             self.classes_ = np.unique(y)
+             return self
+diff --git a/sklearn/tests/test_common.py b/sklearn/tests/test_common.py
+index 455234adfad5bc22e49be8ea6d94a1cfaa320a07..a985f6a02289a2f044763c1ff67fad6093b5bf47 100644
+--- a/sklearn/tests/test_common.py
++++ b/sklearn/tests/test_common.py
+@@ -35,14 +35,7 @@ from sklearn.preprocessing import (
+     StandardScaler,
+ )
+ from sklearn.utils import all_estimators
+-from sklearn.utils._tags import (
+-    ClassifierTags,
+-    InputTags,
+-    RegressorTags,
+-    TargetTags,
+-    TransformerTags,
+-    get_tags,
+-)
++from sklearn.utils._tags import get_tags
+ from sklearn.utils._test_common.instance_generator import (
+     _get_check_estimator_ids,
+     _tested_estimators,
+@@ -224,49 +217,29 @@ def test_class_support_removed():
+ )
+ def test_valid_tag_types(estimator):
+     """Check that estimator tags are valid."""
++    from dataclasses import fields
++
++    from ..utils._tags import default_tags
++
++    def check_field_types(tags, defaults):
++        if tags is None:
++            return
++        tags_fields = fields(tags)
++        for field in tags_fields:
++            correct_tags = type(getattr(defaults, field.name))
++            if field.name == "_xfail_checks":
++                # _xfail_checks can be a dictionary
++                correct_tags = (correct_tags, dict)
++            assert isinstance(getattr(tags, field.name), correct_tags)
++
+     tags = get_tags(estimator)
+-    assert isinstance(tags.estimator_type, (str, type(None)))
+-    assert isinstance(tags.target_tags, TargetTags)
+-    assert isinstance(tags.classifier_tags, (ClassifierTags, type(None)))
+-    assert isinstance(tags.regressor_tags, (RegressorTags, type(None)))
+-    assert isinstance(tags.transformer_tags, (TransformerTags, type(None)))
+-    assert isinstance(tags.input_tags, InputTags)
+-    assert isinstance(tags.array_api_support, bool)
+-    assert isinstance(tags.no_validation, bool)
+-    assert isinstance(tags.non_deterministic, bool)
+-    assert isinstance(tags.requires_fit, bool)
+-    assert isinstance(tags._skip_test, bool)
+-    assert isinstance(tags._xfail_checks, dict)
+-
+-    assert isinstance(tags.target_tags.required, bool)
+-    assert isinstance(tags.target_tags.one_d_labels, bool)
+-    assert isinstance(tags.target_tags.two_d_labels, bool)
+-    assert isinstance(tags.target_tags.positive_only, bool)
+-    assert isinstance(tags.target_tags.multi_output, bool)
+-    assert isinstance(tags.target_tags.single_output, bool)
+-
+-    assert isinstance(tags.input_tags.pairwise, bool)
+-    assert isinstance(tags.input_tags.allow_nan, bool)
+-    assert isinstance(tags.input_tags.sparse, bool)
+-    assert isinstance(tags.input_tags.categorical, bool)
+-    assert isinstance(tags.input_tags.string, bool)
+-    assert isinstance(tags.input_tags.dict, bool)
+-    assert isinstance(tags.input_tags.one_d_array, bool)
+-    assert isinstance(tags.input_tags.two_d_array, bool)
+-    assert isinstance(tags.input_tags.three_d_array, bool)
+-    assert isinstance(tags.input_tags.positive_only, bool)
+-
+-    if tags.classifier_tags is not None:
+-        assert isinstance(tags.classifier_tags.poor_score, bool)
+-        assert isinstance(tags.classifier_tags.multi_class, bool)
+-        assert isinstance(tags.classifier_tags.multi_label, bool)
+-
+-    if tags.regressor_tags is not None:
+-        assert isinstance(tags.regressor_tags.poor_score, bool)
+-        assert isinstance(tags.regressor_tags.multi_label, bool)
+-
+-    if tags.transformer_tags is not None:
+-        assert isinstance(tags.transformer_tags.preserves_dtype, list)
++    defaults = default_tags(estimator)
++    check_field_types(tags, defaults)
++    check_field_types(tags.input_tags, defaults.input_tags)
++    check_field_types(tags.target_tags, defaults.target_tags)
++    check_field_types(tags.classifier_tags, defaults.classifier_tags)
++    check_field_types(tags.regressor_tags, defaults.regressor_tags)
++    check_field_types(tags.transformer_tags, defaults.transformer_tags)
+ 
+ 
+ def _estimators_that_predict_in_fit():
+diff --git a/sklearn/tests/test_docstring_parameters.py b/sklearn/tests/test_docstring_parameters.py
+index f3a6ba999f7f6a1fe46ca85648ae686fb87c8e38..6d44a3546f1ea7b222f4541ac08291f331450f72 100644
+--- a/sklearn/tests/test_docstring_parameters.py
++++ b/sklearn/tests/test_docstring_parameters.py
+@@ -177,6 +177,9 @@ def _construct_sparse_coder(Estimator):
+ 
+ 
+ @pytest.mark.filterwarnings("ignore::sklearn.exceptions.ConvergenceWarning")
++# TODO(1.6): remove "@pytest.mark.filterwarnings" as SAMME.R will be removed
++# and substituted with the SAMME algorithm as a default
++@pytest.mark.filterwarnings("ignore:The SAMME.R algorithm")
+ @pytest.mark.parametrize("name, Estimator", all_estimators())
+ def test_fit_docstring_attributes(name, Estimator):
+     pytest.importorskip("numpydoc")
+@@ -200,9 +203,6 @@ def test_fit_docstring_attributes(name, Estimator):
+         est = _construct_compose_pipeline_instance(Estimator)
+     elif Estimator.__name__ == "SparseCoder":
+         est = _construct_sparse_coder(Estimator)
+-    elif Estimator.__name__ == "FrozenEstimator":
+-        X, y = make_classification(n_samples=20, n_features=5, random_state=0)
+-        est = Estimator(LogisticRegression().fit(X, y))
+     else:
+         # TODO(devtools): use _tested_estimators instead of all_estimators in the
+         # decorator
+@@ -225,6 +225,10 @@ def test_fit_docstring_attributes(name, Estimator):
+         # default raises an error, perplexity must be less than n_samples
+         est.set_params(perplexity=2)
+ 
++    # TODO(1.6): remove (avoid FutureWarning)
++    if Estimator.__name__ in ("NMF", "MiniBatchNMF"):
++        est.set_params(n_components="auto")
++
+     # Low max iter to speed up tests: we are only interested in checking the existence
+     # of fitted attributes. This should be invariant to whether it has converged or not.
+     if "max_iter" in est.get_params():
+diff --git a/sklearn/tests/test_metaestimators.py b/sklearn/tests/test_metaestimators.py
+index 214fc75a683642a33c81320e709c94fbd7a78bd1..faec281d090ddc55d5dc866feb6a8ac2be0e9a1c 100644
+--- a/sklearn/tests/test_metaestimators.py
++++ b/sklearn/tests/test_metaestimators.py
+@@ -1,7 +1,6 @@
+ """Common tests for metaestimators"""
+ 
+ import functools
+-from contextlib import suppress
+ from inspect import signature
+ 
+ import numpy as np
+@@ -19,8 +18,7 @@ from sklearn.pipeline import Pipeline, make_pipeline
+ from sklearn.preprocessing import MaxAbsScaler, StandardScaler
+ from sklearn.semi_supervised import SelfTrainingClassifier
+ from sklearn.utils import all_estimators
+-from sklearn.utils._test_common.instance_generator import _construct_instances
+-from sklearn.utils._testing import SkipTest, set_random_state
++from sklearn.utils._testing import set_random_state
+ from sklearn.utils.estimator_checks import (
+     _enforce_estimator_tags_X,
+     _enforce_estimator_tags_y,
+@@ -199,79 +197,60 @@ def test_metaestimator_delegation():
+             )
+ 
+ 
+-def _get_instance_with_pipeline(meta_estimator, init_params):
+-    """Given a single meta-estimator instance, generate an instance with a pipeline"""
+-    if {"estimator", "base_estimator", "regressor"} & init_params:
+-        if is_regressor(meta_estimator):
+-            estimator = make_pipeline(TfidfVectorizer(), Ridge())
+-            param_grid = {"ridge__alpha": [0.1, 1.0]}
+-        else:
+-            estimator = make_pipeline(TfidfVectorizer(), LogisticRegression())
+-            param_grid = {"logisticregression__C": [0.1, 1.0]}
+-
+-        if init_params.intersection(
+-            {"param_grid", "param_distributions"}
+-        ):  # SearchCV estimators
+-            extra_params = {"n_iter": 2} if "n_iter" in init_params else {}
+-            return type(meta_estimator)(estimator, param_grid, **extra_params)
+-        else:
+-            return type(meta_estimator)(estimator)
+-
+-    if "transformer_list" in init_params:
+-        # FeatureUnion
+-        transformer_list = [
+-            ("trans1", make_pipeline(TfidfVectorizer(), MaxAbsScaler())),
+-            (
+-                "trans2",
+-                make_pipeline(TfidfVectorizer(), StandardScaler(with_mean=False)),
+-            ),
+-        ]
+-        return type(meta_estimator)(transformer_list)
+-
+-    if "estimators" in init_params:
+-        # stacking, voting
+-        if is_regressor(meta_estimator):
+-            estimator = [
+-                ("est1", make_pipeline(TfidfVectorizer(), Ridge(alpha=0.1))),
+-                ("est2", make_pipeline(TfidfVectorizer(), Ridge(alpha=1))),
+-            ]
+-        else:
+-            estimator = [
+-                (
+-                    "est1",
+-                    make_pipeline(TfidfVectorizer(), LogisticRegression(C=0.1)),
+-                ),
+-                ("est2", make_pipeline(TfidfVectorizer(), LogisticRegression(C=1))),
+-            ]
+-        return type(meta_estimator)(estimator)
+-
+-
+ def _generate_meta_estimator_instances_with_pipeline():
+     """Generate instances of meta-estimators fed with a pipeline
+ 
+     Are considered meta-estimators all estimators accepting one of "estimator",
+     "base_estimator" or "estimators".
+     """
+-    print("estimators: ", len(all_estimators()))
+     for _, Estimator in sorted(all_estimators()):
+         sig = set(signature(Estimator).parameters)
+ 
+-        print("\n", Estimator.__name__, sig)
+-        if not sig.intersection(
+-            {
+-                "estimator",
+-                "base_estimator",
+-                "regressor",
+-                "transformer_list",
+-                "estimators",
+-            }
+-        ):
+-            continue
++        if "estimator" in sig or "base_estimator" in sig or "regressor" in sig:
++            if is_regressor(Estimator):
++                estimator = make_pipeline(TfidfVectorizer(), Ridge())
++                param_grid = {"ridge__alpha": [0.1, 1.0]}
++            else:
++                estimator = make_pipeline(TfidfVectorizer(), LogisticRegression())
++                param_grid = {"logisticregression__C": [0.1, 1.0]}
++
++            if "param_grid" in sig or "param_distributions" in sig:
++                # SearchCV estimators
++                extra_params = {"n_iter": 2} if "n_iter" in sig else {}
++                yield Estimator(estimator, param_grid, **extra_params)
++            else:
++                yield Estimator(estimator)
++
++        elif "transformer_list" in sig:
++            # FeatureUnion
++            transformer_list = [
++                ("trans1", make_pipeline(TfidfVectorizer(), MaxAbsScaler())),
++                (
++                    "trans2",
++                    make_pipeline(TfidfVectorizer(), StandardScaler(with_mean=False)),
++                ),
++            ]
++            yield Estimator(transformer_list)
++
++        elif "estimators" in sig:
++            # stacking, voting
++            if is_regressor(Estimator):
++                estimator = [
++                    ("est1", make_pipeline(TfidfVectorizer(), Ridge(alpha=0.1))),
++                    ("est2", make_pipeline(TfidfVectorizer(), Ridge(alpha=1))),
++                ]
++            else:
++                estimator = [
++                    (
++                        "est1",
++                        make_pipeline(TfidfVectorizer(), LogisticRegression(C=0.1)),
++                    ),
++                    ("est2", make_pipeline(TfidfVectorizer(), LogisticRegression(C=1))),
++                ]
++            yield Estimator(estimator)
+ 
+-        with suppress(SkipTest):
+-            for meta_estimator in _construct_instances(Estimator):
+-                print(meta_estimator)
+-                yield _get_instance_with_pipeline(meta_estimator, sig)
++        else:
++            continue
+ 
+ 
+ # TODO: remove data validation for the following estimators
+diff --git a/sklearn/tests/test_metaestimators_metadata_routing.py b/sklearn/tests/test_metaestimators_metadata_routing.py
+index b733f4d119f5edfc42677dd0714edea2190c0890..7117c27e32e428bd7e945feebd98c3380b60d753 100644
+--- a/sklearn/tests/test_metaestimators_metadata_routing.py
++++ b/sklearn/tests/test_metaestimators_metadata_routing.py
+@@ -5,7 +5,7 @@ import numpy as np
+ import pytest
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator, is_classifier
++from sklearn.base import is_classifier
+ from sklearn.calibration import CalibratedClassifierCV
+ from sklearn.compose import TransformedTargetRegressor
+ from sklearn.covariance import GraphicalLassoCV
+@@ -551,13 +551,13 @@ def get_init_args(metaestimator_info, sub_estimator_consumes):
+     )
+ 
+ 
+-def set_requests(obj, *, method_mapping, methods, metadata_name, value=True):
++def set_requests(estimator, *, method_mapping, methods, metadata_name, value=True):
+     """Call `set_{method}_request` on a list of methods from the sub-estimator.
+ 
+     Parameters
+     ----------
+-    obj : BaseEstimator
+-        The object for which `set_{method}_request` methods are called.
++    estimator : BaseEstimator
++        The estimator for which `set_{method}_request` methods are called.
+ 
+     method_mapping : dict
+         The method mapping in the form of `{caller: [callee, ...]}`.
+@@ -577,13 +577,9 @@ def set_requests(obj, *, method_mapping, methods, metadata_name, value=True):
+     """
+     for caller in methods:
+         for callee in method_mapping.get(caller, [caller]):
+-            set_request_for_method = getattr(obj, f"set_{callee}_request")
++            set_request_for_method = getattr(estimator, f"set_{callee}_request")
+             set_request_for_method(**{metadata_name: value})
+-            if (
+-                isinstance(obj, BaseEstimator)
+-                and is_classifier(obj)
+-                and callee == "partial_fit"
+-            ):
++            if is_classifier(estimator) and callee == "partial_fit":
+                 set_request_for_method(classes=True)
+ 
+ 
+diff --git a/sklearn/tests/test_pipeline.py b/sklearn/tests/test_pipeline.py
+index d425c00f114a2b07a3aecf3065032955e4134bb4..1a876e050f4f4cec656cbb3e38b0bce6f1605120 100644
+--- a/sklearn/tests/test_pipeline.py
++++ b/sklearn/tests/test_pipeline.py
+@@ -71,7 +71,7 @@ JUNK_FOOD_DOCS = (
+ )
+ 
+ 
+-class NoFit(BaseEstimator):
++class NoFit:
+     """Small class to test parameter dispatching."""
+ 
+     def __init__(self, a=None, b=None):
+@@ -80,7 +80,7 @@ class NoFit(BaseEstimator):
+ 
+ 
+ class NoTrans(NoFit):
+-    def fit(self, X, y=None):
++    def fit(self, X, y):
+         return self
+ 
+     def get_params(self, deep=False):
+@@ -91,7 +91,7 @@ class NoTrans(NoFit):
+         return self
+ 
+ 
+-class NoInvTransf(TransformerMixin, NoTrans):
++class NoInvTransf(NoTrans):
+     def transform(self, X):
+         return X
+ 
+@@ -105,19 +105,19 @@ class Transf(NoInvTransf):
+ 
+ 
+ class TransfFitParams(Transf):
+-    def fit(self, X, y=None, **fit_params):
++    def fit(self, X, y, **fit_params):
+         self.fit_params = fit_params
+         return self
+ 
+ 
+-class Mult(TransformerMixin, BaseEstimator):
++class Mult(BaseEstimator):
+     def __init__(self, mult=1):
+         self.mult = mult
+ 
+     def __sklearn_is_fitted__(self):
+         return True
+ 
+-    def fit(self, X, y=None):
++    def fit(self, X, y):
+         return self
+ 
+     def transform(self, X):
+diff --git a/sklearn/utils/tests/test_estimator_checks.py b/sklearn/utils/tests/test_estimator_checks.py
+index 846ee75a9bbd42c58104136f6179acb691de59dc..29611a853938f8456aca8407a57c491be7eb66c2 100644
+--- a/sklearn/utils/tests/test_estimator_checks.py
++++ b/sklearn/utils/tests/test_estimator_checks.py
+@@ -13,7 +13,7 @@ import numpy as np
+ import scipy.sparse as sp
+ 
+ from sklearn import config_context, get_config
+-from sklearn.base import BaseEstimator, ClassifierMixin, OutlierMixin, TransformerMixin
++from sklearn.base import BaseEstimator, ClassifierMixin, OutlierMixin
+ from sklearn.cluster import MiniBatchKMeans
+ from sklearn.datasets import (
+     load_iris,
+@@ -33,6 +33,7 @@ from sklearn.preprocessing import StandardScaler
+ from sklearn.svm import SVC, NuSVC
+ from sklearn.utils import _array_api, all_estimators, deprecated
+ from sklearn.utils._param_validation import Interval, StrOptions
++from sklearn.utils._tags import default_tags
+ from sklearn.utils._testing import (
+     MinimalClassifier,
+     MinimalRegressor,
+@@ -421,7 +422,7 @@ class LargeSparseNotSupportedClassifier(BaseEstimator):
+         return self
+ 
+ 
+-class SparseTransformer(TransformerMixin, BaseEstimator):
++class SparseTransformer(BaseEstimator):
+     def __init__(self, sparse_container=None):
+         self.sparse_container = sparse_container
+ 
+@@ -1275,18 +1276,18 @@ def test_check_requires_y_none():
+ def test_non_deterministic_estimator_skip_tests():
+     # check estimators with non_deterministic tag set to True
+     # will skip certain tests, refer to issue #22313 for details
+-    for Estimator in [MinimalTransformer, MinimalRegressor, MinimalClassifier]:
+-        all_tests = list(_yield_all_checks(Estimator(), legacy=True))
++    for est in [MinimalTransformer, MinimalRegressor, MinimalClassifier]:
++        all_tests = list(_yield_all_checks(est(), legacy=True))
+         assert check_methods_sample_order_invariance in all_tests
+         assert check_methods_subset_invariance in all_tests
+ 
+-        class MyEstimator(Estimator):
++        class Estimator(est):
+             def __sklearn_tags__(self):
+-                tags = super().__sklearn_tags__()
++                tags = default_tags(self)
+                 tags.non_deterministic = True
+                 return tags
+ 
+-        all_tests = list(_yield_all_checks(MyEstimator(), legacy=True))
++        all_tests = list(_yield_all_checks(Estimator(), legacy=True))
+         assert check_methods_sample_order_invariance not in all_tests
+         assert check_methods_subset_invariance not in all_tests
+ 
+diff --git a/sklearn/utils/tests/test_tags.py b/sklearn/utils/tests/test_tags.py
+index 5768a0d2b6b27b059967f97cb9235c519675fd45..a6dab5078e5ac8ae68bc7ddfc8f0a538ae2c14e9 100644
+--- a/sklearn/utils/tests/test_tags.py
++++ b/sklearn/utils/tests/test_tags.py
+@@ -1,10 +1,6 @@
+ import pytest
+ 
+-from sklearn.base import (
+-    BaseEstimator,
+-    RegressorMixin,
+-    TransformerMixin,
+-)
++from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
+ from sklearn.utils._tags import get_tags
+ 
+ 
+@@ -17,22 +13,13 @@ class ClassifierEstimator:
+     _estimator_type = "classifier"
+ 
+ 
+-class EmptyTransformer(TransformerMixin, BaseEstimator):
+-    pass
+-
+-
+-class EmptyRegressor(RegressorMixin, BaseEstimator):
+-    pass
+-
+-
+-@pytest.mark.filterwarnings("ignore:.*no __sklearn_tags__ attribute.*:FutureWarning")
+ @pytest.mark.parametrize(
+     "estimator, value",
+     [
+         [NoTagsEstimator(), False],
+         [ClassifierEstimator(), True],
+-        [EmptyTransformer(), False],
+-        [EmptyRegressor(), True],
++        [TransformerMixin(), False],
++        [RegressorMixin(), True],
+         [BaseEstimator(), False],
+     ],
+ )
+diff --git a/sklearn/utils/tests/test_validation.py b/sklearn/utils/tests/test_validation.py
+index 5ae5a003d0d0a2fe3c716f4d43c4c62b7c9afe6d..62627ecb1bae8449a9c215febbf5303a35b6e928 100644
+--- a/sklearn/utils/tests/test_validation.py
++++ b/sklearn/utils/tests/test_validation.py
+@@ -67,7 +67,6 @@ from sklearn.utils.validation import (
+     _check_sample_weight,
+     _check_y,
+     _deprecate_positional_args,
+-    _estimator_has,
+     _get_feature_names,
+     _is_fitted,
+     _is_pandas_df,
+@@ -947,7 +946,7 @@ def test_check_is_fitted():
+ 
+ 
+ def test_check_is_fitted_attributes():
+-    class MyEstimator(BaseEstimator):
++    class MyEstimator:
+         def fit(self, X, y):
+             return self
+ 
+@@ -1164,93 +1163,6 @@ def test_check_array_memmap(copy):
+         assert X_checked.flags["WRITEABLE"] == copy
+ 
+ 
+-@pytest.mark.parametrize(
+-    "estimator_name, estimator_value, delegates, expected_result, expected_exception",
+-    [
+-        (
+-            "estimator_",
+-            type("SubEstimator", (), {"attribute_present": True}),
+-            None,  # default delegates - ["estimator_", "estimator"]
+-            True,  # expected_result is True b/c delegate and attribute are present
+-            None,  # expected_exception not relevant for this case
+-        ),
+-        (
+-            "estimator",
+-            type("SubEstimator", (), {"attribute_present": True}),
+-            None,  # default delegates - ["estimator_", "estimator"]
+-            True,  # expected_result is True b/c delegate and attribute are present
+-            None,  # expected_exception not relevant for this case
+-        ),
+-        (
+-            "estimators_",
+-            [
+-                type("SubEstimator", (), {"attribute_present": True})
+-            ],  # list of sub-estimators
+-            ["estimators_"],
+-            True,  # expected_result is True b/c delegate and attribute are present
+-            None,  # expected_exception not relevant for this case
+-        ),
+-        (
+-            "custom_estimator",  # custom estimator attribute name
+-            type("SubEstimator", (), {"attribute_present": True}),
+-            ["custom_estimator"],  # custom delegates
+-            True,  # expected_result is True b/c delegate and attribute are present
+-            None,  # expected_exception not relevant for this case
+-        ),
+-        (
+-            "no_estimator",  # no estimator attribute name
+-            type("SubEstimator", (), {"attribute_present": True}),
+-            None,  # default delegates - ["estimator_", "estimator"]
+-            None,  # expected_result is not relevant for this case
+-            ValueError,  # should raise ValueError b/c no estimator found from delegates
+-        ),
+-        (
+-            "estimator",
+-            type("SubEstimator", (), {"attribute_absent": True}),  # attribute_absent
+-            None,  # default delegates - ["estimator_", "estimator"]
+-            None,  # expected_result is not relevant for this case
+-            AttributeError,  # should raise AttributeError b/c attribute is absent
+-        ),
+-    ],
+-    ids=[
+-        "fitted_estimator_with_default_delegates",
+-        "estimator_with_default_delegates",
+-        "list_of_estimators_with_estimators_",
+-        "custom_estimator_with_custom_delegates",
+-        "no_estimator_with_default_delegates",
+-        "estimator_with_default_delegates_but_absent_attribute",
+-    ],
+-)
+-def test_estimator_has(
+-    estimator_name, estimator_value, delegates, expected_result, expected_exception
+-):
+-    """
+-    Tests the _estimator_has function by verifying:
+-    - Functionality with default and custom delegates.
+-    - Raises ValueError if delegates are missing.
+-    - Raises AttributeError if the specified attribute is missing.
+-    """
+-
+-    # always checks for attribute - "attribute_present"
+-    # ["estimator_", "estimator"] is default value for delegates
+-    if delegates is None:
+-        check = _estimator_has("attribute_present")
+-    else:
+-        check = _estimator_has("attribute_present", delegates=delegates)
+-
+-    class MockEstimator:
+-        pass
+-
+-    a = MockEstimator()
+-    setattr(a, estimator_name, estimator_value)
+-
+-    if expected_exception:
+-        with pytest.raises(expected_exception):
+-            check(a)
+-    else:
+-        assert check(a) == expected_result
+-
+-
+ @pytest.mark.parametrize(
+     "retype",
+     [

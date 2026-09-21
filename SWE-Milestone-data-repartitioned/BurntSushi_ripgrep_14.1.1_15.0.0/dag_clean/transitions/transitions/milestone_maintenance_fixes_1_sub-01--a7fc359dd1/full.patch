@@ -1,0 +1,2888 @@
+diff --git a/crates/core/flags/defs.rs b/crates/core/flags/defs.rs
+index cd7a6c7a42120a1cda058fdb0b54eb8aa1b0ee5a..30f5cdc87f92112782272347a7311bc3fbac9312 100644
+--- a/crates/core/flags/defs.rs
++++ b/crates/core/flags/defs.rs
+@@ -17,7 +17,7 @@ ripgrep. For example, `-E`, `--encoding` and `--no-encoding` all manipulate the
+ same encoding state in ripgrep.
+ */
+ 
+-use std::path::PathBuf;
++use std::{path::PathBuf, sync::LazyLock};
+ 
+ use {anyhow::Context as AnyhowContext, bstr::ByteVec};
+ 
+@@ -751,7 +751,8 @@ the \flag{colors} flag to manually set all color styles to \fBnone\fP:
+     \-\-colors 'path:none' \\
+     \-\-colors 'line:none' \\
+     \-\-colors 'column:none' \\
+-    \-\-colors 'match:none'
++    \-\-colors 'match:none' \\
++    \-\-colors 'highlight:none'
+ .EE
+ .sp
+ "
+@@ -829,21 +830,21 @@ impl Flag for Colors {
+         "Configure color settings and styles."
+     }
+     fn doc_long(&self) -> &'static str {
+-        r"
++        r#"
+ This flag specifies color settings for use in the output. This flag may be
+ provided multiple times. Settings are applied iteratively. Pre-existing color
+ labels are limited to one of eight choices: \fBred\fP, \fBblue\fP, \fBgreen\fP,
+ \fBcyan\fP, \fBmagenta\fP, \fByellow\fP, \fBwhite\fP and \fBblack\fP. Styles
+ are limited to \fBnobold\fP, \fBbold\fP, \fBnointense\fP, \fBintense\fP,
+-\fBnounderline\fP or \fBunderline\fP.
++\fBnounderline\fP, \fBunderline\fP, \fBnoitalic\fP or \fBitalic\fP.
+ .sp
+ The format of the flag is
+ \fB{\fP\fItype\fP\fB}:{\fP\fIattribute\fP\fB}:{\fP\fIvalue\fP\fB}\fP.
+-\fItype\fP should be one of \fBpath\fP, \fBline\fP, \fBcolumn\fP or
+-\fBmatch\fP. \fIattribute\fP can be \fBfg\fP, \fBbg\fP or \fBstyle\fP.
+-\fIvalue\fP is either a color (for \fBfg\fP and \fBbg\fP) or a text style. A
+-special format, \fB{\fP\fItype\fP\fB}:none\fP, will clear all color settings
+-for \fItype\fP.
++\fItype\fP should be one of \fBpath\fP, \fBline\fP, \fBcolumn\fP,
++\fBhighlight\fP or \fBmatch\fP. \fIattribute\fP can be \fBfg\fP, \fBbg\fP or
++\fBstyle\fP. \fIvalue\fP is either a color (for \fBfg\fP and \fBbg\fP) or a
++text style. A special format, \fB{\fP\fItype\fP\fB}:none\fP, will clear all
++color settings for \fItype\fP.
+ .sp
+ For example, the following command will change the match color to magenta and
+ the background color for line numbers to yellow:
+@@ -852,6 +853,17 @@ the background color for line numbers to yellow:
+     rg \-\-colors 'match:fg:magenta' \-\-colors 'line:bg:yellow'
+ .EE
+ .sp
++Another example, the following command will "highlight" the non-matching text
++in matching lines:
++.sp
++.EX
++    rg \-\-colors 'highlight:bg:yellow' \-\-colors 'highlight:fg:black'
++.EE
++.sp
++The "highlight" color type is particularly useful for contrasting matching
++lines with surrounding context printed by the \flag{before-context},
++\flag{after-context}, \flag{context} or \flag{passthru} flags.
++.sp
+ Extended colors can be used for \fIvalue\fP when the tty supports ANSI color
+ sequences. These are specified as either \fIx\fP (256-color) or
+ .IB x , x , x
+@@ -874,7 +886,7 @@ or, equivalently,
+ .sp
+ Note that the \fBintense\fP and \fBnointense\fP styles will have no effect when
+ used alongside these extended color codes.
+-"
++"#
+     }
+ 
+     fn update(&self, v: FlagValue, args: &mut LowArgs) -> anyhow::Result<()> {
+@@ -908,6 +920,24 @@ fn test_colors() {
+             "line:bg:yellow".parse().unwrap()
+         ]
+     );
++
++    let args = parse_low_raw(["--colors", "highlight:bg:240"]).unwrap();
++    assert_eq!(args.colors, vec!["highlight:bg:240".parse().unwrap()]);
++
++    let args = parse_low_raw([
++        "--colors",
++        "match:fg:magenta",
++        "--colors",
++        "highlight:bg:blue",
++    ])
++    .unwrap();
++    assert_eq!(
++        args.colors,
++        vec![
++            "match:fg:magenta".parse().unwrap(),
++            "highlight:bg:blue".parse().unwrap()
++        ]
++    );
+ }
+ 
+ /// --column
+@@ -2752,6 +2782,11 @@ ripgrep.
+ A file or directory is considered hidden if its base name starts with a dot
+ character (\fB.\fP). On operating systems which support a "hidden" file
+ attribute, like Windows, files with this attribute are also considered hidden.
++.sp
++Note that \flag{hidden} will include files and folders like \fB.git\fP
++regardless of \flag{no-ignore-vcs}. To exclude such paths when using
++\flag{hidden}, you must explicitly ignore them using another flag or ignore
++file.
+ "#
+     }
+ 
+@@ -2862,7 +2897,10 @@ impl Flag for HyperlinkFormat {
+         r"Set the format of hyperlinks."
+     }
+     fn doc_long(&self) -> &'static str {
+-        r#"
++        static DOC: LazyLock<String> = LazyLock::new(|| {
++            let mut doc = String::new();
++            doc.push_str(
++                r#"
+ Set the format of hyperlinks to use when printing results. Hyperlinks make
+ certain elements of ripgrep's output, such as file paths, clickable. This
+ generally only works in terminal emulators that support OSC-8 hyperlinks. For
+@@ -2870,10 +2908,23 @@ example, the format \fBfile://{host}{path}\fP will emit an RFC 8089 hyperlink.
+ To see the format that ripgrep is using, pass the \flag{debug} flag.
+ .sp
+ Alternatively, a format string may correspond to one of the following aliases:
+-\fBdefault\fP, \fBnone\fP, \fBfile\fP, \fBgrep+\fP, \fBkitty\fP, \fBmacvim\fP,
+-\fBtextmate\fP, \fBvscode\fP, \fBvscode-insiders\fP, \fBvscodium\fP. The
+-alias will be replaced with a format string that is intended to work for the
+-corresponding application.
++"#,
++            );
++
++            let mut aliases = grep::printer::hyperlink_aliases();
++            aliases.sort_by_key(|alias| {
++                alias.display_priority().unwrap_or(i16::MAX)
++            });
++            for (i, alias) in aliases.iter().enumerate() {
++                doc.push_str(r"\fB");
++                doc.push_str(alias.name());
++                doc.push_str(r"\fP");
++                doc.push_str(if i < aliases.len() - 1 { ", " } else { "." });
++            }
++            doc.push_str(
++                r#"
++The alias will be replaced with a format string that is intended to work for
++the corresponding application.
+ .sp
+ The following variables are available in the format string:
+ .sp
+@@ -2950,7 +3001,24 @@ in the output. To make the path appear, and thus also a hyperlink, use the
+ .sp
+ For more information on hyperlinks in terminal emulators, see:
+ https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+-"#
++"#,
++            );
++            doc
++        });
++        &DOC
++    }
++
++    fn doc_choices(&self) -> &'static [&'static str] {
++        static CHOICES: LazyLock<Vec<String>> = LazyLock::new(|| {
++            let mut aliases = grep::printer::hyperlink_aliases();
++            aliases.sort_by_key(|alias| {
++                alias.display_priority().unwrap_or(i16::MAX)
++            });
++            aliases.iter().map(|alias| alias.name().to_string()).collect()
++        });
++        static BORROWED: LazyLock<Vec<&'static str>> =
++            LazyLock::new(|| CHOICES.iter().map(|name| &**name).collect());
++        &*BORROWED
+     }
+ 
+     fn update(&self, v: FlagValue, args: &mut LowArgs) -> anyhow::Result<()> {
+@@ -4603,11 +4671,15 @@ impl Flag for NoIgnoreVcs {
+     }
+     fn doc_long(&self) -> &'static str {
+         r"
+-When given, filter rules from source control ignore files (e.g., \fB.gitignore\fP)
+-are not respected. By default, ripgrep respects \fBgit\fP's ignore rules for
+-automatic filtering. In some cases, it may not be desirable to respect the
+-source control's ignore rules and instead only respect rules in \fB.ignore\fP
+-or \fB.rgignore\fP.
++When given, filter rules from source control ignore files (e.g.,
++\fB.gitignore\fP) are not respected. By default, ripgrep respects \fBgit\fP's
++ignore rules for automatic filtering. In some cases, it may not be desirable
++to respect the source control's ignore rules and instead only respect rules in
++\fB.ignore\fP or \fB.rgignore\fP.
++.sp
++Note that this flag does not directly affect the filtering of source control
++files or folders that start with a dot (\fB.\fP), like \fB.git\fP. These are
++affected by \flag{hidden} and its related flags instead.
+ .sp
+ This flag implies \flag{no-ignore-parent} for source control ignore files as
+ well.
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index f7e67b17dde7e1e1464ef5f3c1fe7d9b894673ad..fce5e6f57813c08ce3e83d2a77ed2a1df913247c 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -562,7 +562,16 @@ impl HiArgs {
+         wtr: W,
+     ) -> Printer<W> {
+         let summary_kind = if self.quiet {
+-            SummaryKind::Quiet
++            match search_mode {
++                SearchMode::FilesWithMatches
++                | SearchMode::Count
++                | SearchMode::CountMatches
++                | SearchMode::JSON
++                | SearchMode::Standard => SummaryKind::QuietWithMatch,
++                SearchMode::FilesWithoutMatch => {
++                    SummaryKind::QuietWithoutMatch
++                }
++            }
+         } else {
+             match search_mode {
+                 SearchMode::FilesWithMatches => SummaryKind::PathWithMatch,
+diff --git a/crates/core/search.rs b/crates/core/search.rs
+index 672734254dc4322cb001bfb11de358e5cd307ae4..3c973adc137d4b3a24719f685ce3f1b4278d7176 100644
+--- a/crates/core/search.rs
++++ b/crates/core/search.rs
+@@ -41,7 +41,6 @@ impl Default for Config {
+ pub(crate) struct SearchWorkerBuilder {
+     config: Config,
+     command_builder: grep::cli::CommandReaderBuilder,
+-    decomp_builder: grep::cli::DecompressionReaderBuilder,
+ }
+ 
+ impl Default for SearchWorkerBuilder {
+@@ -53,17 +52,10 @@ impl Default for SearchWorkerBuilder {
+ impl SearchWorkerBuilder {
+     /// Create a new builder for configuring and constructing a search worker.
+     pub(crate) fn new() -> SearchWorkerBuilder {
+-        let mut cmd_builder = grep::cli::CommandReaderBuilder::new();
+-        cmd_builder.async_stderr(true);
++        let mut command_builder = grep::cli::CommandReaderBuilder::new();
++        command_builder.async_stderr(true);
+ 
+-        let mut decomp_builder = grep::cli::DecompressionReaderBuilder::new();
+-        decomp_builder.async_stderr(true);
+-
+-        SearchWorkerBuilder {
+-            config: Config::default(),
+-            command_builder: cmd_builder,
+-            decomp_builder,
+-        }
++        SearchWorkerBuilder { config: Config::default(), command_builder }
+     }
+ 
+     /// Create a new search worker using the given searcher, matcher and
+@@ -76,7 +68,12 @@ impl SearchWorkerBuilder {
+     ) -> SearchWorker<W> {
+         let config = self.config.clone();
+         let command_builder = self.command_builder.clone();
+-        let decomp_builder = self.decomp_builder.clone();
++        let decomp_builder = config.search_zip.then(|| {
++            let mut decomp_builder =
++                grep::cli::DecompressionReaderBuilder::new();
++            decomp_builder.async_stderr(true);
++            decomp_builder
++        });
+         SearchWorker {
+             config,
+             command_builder,
+@@ -233,7 +230,11 @@ impl<W: WriteColor> Printer<W> {
+ pub(crate) struct SearchWorker<W> {
+     config: Config,
+     command_builder: grep::cli::CommandReaderBuilder,
+-    decomp_builder: grep::cli::DecompressionReaderBuilder,
++    /// This is `None` when `search_zip` is not enabled, since in this case it
++    /// can never be used. We do this because building the reader can sometimes
++    /// do non-trivial work (like resolving the paths of decompression binaries
++    /// on Windows).
++    decomp_builder: Option<grep::cli::DecompressionReaderBuilder>,
+     matcher: PatternMatcher,
+     searcher: grep::searcher::Searcher,
+     printer: Printer<W>,
+@@ -273,10 +274,9 @@ impl<W: WriteColor> SearchWorker<W> {
+     /// Returns true if and only if the given file path should be
+     /// decompressed before searching.
+     fn should_decompress(&self, path: &Path) -> bool {
+-        if !self.config.search_zip {
+-            return false;
+-        }
+-        self.decomp_builder.get_matcher().has_command(path)
++        self.decomp_builder.as_ref().is_some_and(|decomp_builder| {
++            decomp_builder.get_matcher().has_command(path)
++        })
+     }
+ 
+     /// Returns true if and only if the given file path should be run through
+@@ -328,7 +328,10 @@ impl<W: WriteColor> SearchWorker<W> {
+     /// result. If the given file path isn't recognized as a compressed file,
+     /// then search it without doing any decompression.
+     fn search_decompress(&mut self, path: &Path) -> io::Result<SearchResult> {
+-        let mut rdr = self.decomp_builder.build(path)?;
++        let Some(ref decomp_builder) = self.decomp_builder else {
++            return self.search_path(path);
++        };
++        let mut rdr = decomp_builder.build(path)?;
+         let result = self.search_reader(path, &mut rdr);
+         let close_result = rdr.close();
+         let search_result = result?;
+diff --git a/crates/globset/Cargo.toml b/crates/globset/Cargo.toml
+index 08601759033fc7306842b9c4569b1b765db51749..5321523e95a3065ba8912a9188ef2ada6c95a4b3 100644
+--- a/crates/globset/Cargo.toml
++++ b/crates/globset/Cargo.toml
+@@ -21,6 +21,7 @@ bench = false
+ 
+ [dependencies]
+ aho-corasick = "1.1.1"
++arbitrary = { version = "1.3.2", optional = true, features = ["derive"] }
+ bstr = { version = "1.6.2", default-features = false, features = ["std"] }
+ log = { version = "0.4.20", optional = true }
+ serde = { version = "1.0.188", optional = true }
+@@ -41,6 +42,7 @@ serde_json = "1.0.107"
+ 
+ [features]
+ default = ["log"]
++arbitrary = ["dep:arbitrary"]
+ # DEPRECATED. It is a no-op. SIMD is done automatically through runtime
+ # dispatch.
+ simd-accel = []
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index c25e3f22227d855bc839523c471b30444c6d65f9..8cc7645f46005b21e4c1245fc2ae86ca6cf47815 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -71,7 +71,8 @@ impl MatchStrategy {
+ ///
+ /// It cannot be used directly to match file paths, but it can be converted
+ /// to a regular expression string or a matcher.
+-#[derive(Clone, Debug, Eq)]
++#[derive(Clone, Eq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct Glob {
+     glob: String,
+     re: String,
+@@ -92,6 +93,21 @@ impl std::hash::Hash for Glob {
+     }
+ }
+ 
++impl std::fmt::Debug for Glob {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        if f.alternate() {
++            f.debug_struct("Glob")
++                .field("glob", &self.glob)
++                .field("re", &self.re)
++                .field("opts", &self.opts)
++                .field("tokens", &self.tokens)
++                .finish()
++        } else {
++            f.debug_tuple("Glob").field(&self.glob).finish()
++        }
++    }
++}
++
+ impl std::fmt::Display for Glob {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         self.glob.fmt(f)
+@@ -194,6 +210,7 @@ pub struct GlobBuilder<'a> {
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ struct GlobOptions {
+     /// Whether to match case insensitively.
+     case_insensitive: bool,
+@@ -220,6 +237,7 @@ impl GlobOptions {
+ }
+ 
+ #[derive(Clone, Debug, Default, Eq, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ struct Tokens(Vec<Token>);
+ 
+ impl std::ops::Deref for Tokens {
+@@ -236,6 +254,7 @@ impl std::ops::DerefMut for Tokens {
+ }
+ 
+ #[derive(Clone, Debug, Eq, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ enum Token {
+     Literal(char),
+     Any,
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index ec4729747e39c8beed881c53fd3db2e50c905ae2..b84262c4b5668a7e935b4b6b83a2acb98ad448ee 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -94,6 +94,19 @@ Standard Unix-style glob syntax is supported:
+ 
+ A `GlobBuilder` can be used to prevent wildcards from matching path separators,
+ or to enable case insensitive matching.
++
++# Crate Features
++
++This crate includes optional features that can be enabled if necessary.
++These features are not required but may be useful depending on the use case.
++
++The following features are available:
++
++* **arbitrary** -
++  Enabling this feature introduces a public dependency on the
++  [`arbitrary`](https://crates.io/crates/arbitrary)
++  crate. Namely, it implements the `Arbitrary` trait from that crate for the
++  [`Glob`] type. This feature is disabled by default.
+ */
+ 
+ #![deny(missing_docs)]
+@@ -540,7 +553,23 @@ impl<'a> std::fmt::Debug for Candidate<'a> {
+ impl<'a> Candidate<'a> {
+     /// Create a new candidate for matching from the given path.
+     pub fn new<P: AsRef<Path> + ?Sized>(path: &'a P) -> Candidate<'a> {
+-        let path = normalize_path(Vec::from_path_lossy(path.as_ref()));
++        Self::from_cow(Vec::from_path_lossy(path.as_ref()))
++    }
++
++    /// Create a new candidate for matching from the given path as a sequence
++    /// of bytes.
++    ///
++    /// Generally speaking, this routine expects the bytes to be
++    /// _conventionally_ UTF-8. It is legal for the byte sequence to contain
++    /// invalid UTF-8. However, if the bytes are in some other encoding that
++    /// isn't ASCII compatible (for example, UTF-16), then the results of
++    /// matching are unspecified.
++    pub fn from_bytes<P: AsRef<[u8]> + ?Sized>(path: &'a P) -> Candidate<'a> {
++        Self::from_cow(Cow::Borrowed(path.as_ref()))
++    }
++
++    fn from_cow(path: Cow<'a, [u8]>) -> Candidate<'a> {
++        let path = normalize_path(path);
+         let basename = file_name(&path).unwrap_or(Cow::Borrowed(B("")));
+         let ext = file_name_ext(&basename).unwrap_or(Cow::Borrowed(B("")));
+         Candidate { path, basename, ext }
+diff --git a/crates/printer/src/hyperlink.rs b/crates/printer/src/hyperlink.rs
+deleted file mode 100644
+index ec1fd9211fcd0cc8256030625dbf02fe0d6e348c..0000000000000000000000000000000000000000
+--- a/crates/printer/src/hyperlink.rs
++++ /dev/null
+@@ -1,1009 +0,0 @@
+-use std::{cell::RefCell, io, path::Path, sync::Arc};
+-
+-use {
+-    bstr::ByteSlice,
+-    termcolor::{HyperlinkSpec, WriteColor},
+-};
+-
+-use crate::{hyperlink_aliases, util::DecimalFormatter};
+-
+-/// Hyperlink configuration.
+-///
+-/// This configuration specifies both the [hyperlink format](HyperlinkFormat)
+-/// and an [environment](HyperlinkConfig) for interpolating a subset of
+-/// variables. The specific subset includes variables that are intended to
+-/// be invariant throughout the lifetime of a process, such as a machine's
+-/// hostname.
+-///
+-/// A hyperlink configuration can be provided to printer builders such as
+-/// [`StandardBuilder::hyperlink`](crate::StandardBuilder::hyperlink).
+-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+-pub struct HyperlinkConfig(Arc<HyperlinkConfigInner>);
+-
+-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+-struct HyperlinkConfigInner {
+-    env: HyperlinkEnvironment,
+-    format: HyperlinkFormat,
+-}
+-
+-impl HyperlinkConfig {
+-    /// Create a new configuration from an environment and a format.
+-    pub fn new(
+-        env: HyperlinkEnvironment,
+-        format: HyperlinkFormat,
+-    ) -> HyperlinkConfig {
+-        HyperlinkConfig(Arc::new(HyperlinkConfigInner { env, format }))
+-    }
+-
+-    /// Returns the hyperlink environment in this configuration.
+-    pub(crate) fn environment(&self) -> &HyperlinkEnvironment {
+-        &self.0.env
+-    }
+-
+-    /// Returns the hyperlink format in this configuration.
+-    pub(crate) fn format(&self) -> &HyperlinkFormat {
+-        &self.0.format
+-    }
+-}
+-
+-/// A hyperlink format with variables.
+-///
+-/// This can be created by parsing a string using `HyperlinkFormat::from_str`.
+-///
+-/// The default format is empty. An empty format is valid and effectively
+-/// disables hyperlinks.
+-///
+-/// # Example
+-///
+-/// ```
+-/// use grep_printer::HyperlinkFormat;
+-///
+-/// let fmt = "vscode".parse::<HyperlinkFormat>()?;
+-/// assert_eq!(fmt.to_string(), "vscode://file{path}:{line}:{column}");
+-///
+-/// # Ok::<(), Box<dyn std::error::Error>>(())
+-/// ```
+-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+-pub struct HyperlinkFormat {
+-    parts: Vec<Part>,
+-    is_line_dependent: bool,
+-}
+-
+-impl HyperlinkFormat {
+-    /// Creates an empty hyperlink format.
+-    pub fn empty() -> HyperlinkFormat {
+-        HyperlinkFormat::default()
+-    }
+-
+-    /// Returns true if this format is empty.
+-    pub fn is_empty(&self) -> bool {
+-        self.parts.is_empty()
+-    }
+-
+-    /// Creates a [`HyperlinkConfig`] from this format and the environment
+-    /// given.
+-    pub fn into_config(self, env: HyperlinkEnvironment) -> HyperlinkConfig {
+-        HyperlinkConfig::new(env, self)
+-    }
+-
+-    /// Returns true if the format can produce line-dependent hyperlinks.
+-    pub(crate) fn is_line_dependent(&self) -> bool {
+-        self.is_line_dependent
+-    }
+-}
+-
+-impl std::str::FromStr for HyperlinkFormat {
+-    type Err = HyperlinkFormatError;
+-
+-    fn from_str(s: &str) -> Result<HyperlinkFormat, HyperlinkFormatError> {
+-        use self::HyperlinkFormatErrorKind::*;
+-
+-        #[derive(Debug)]
+-        enum State {
+-            Verbatim,
+-            VerbatimCloseVariable,
+-            OpenVariable,
+-            InVariable,
+-        }
+-
+-        let mut builder = FormatBuilder::new();
+-        let input = match hyperlink_aliases::find(s) {
+-            Some(format) => format,
+-            None => s,
+-        };
+-        let mut name = String::new();
+-        let mut state = State::Verbatim;
+-        let err = |kind| HyperlinkFormatError { kind };
+-        for ch in input.chars() {
+-            state = match state {
+-                State::Verbatim => {
+-                    if ch == '{' {
+-                        State::OpenVariable
+-                    } else if ch == '}' {
+-                        State::VerbatimCloseVariable
+-                    } else {
+-                        builder.append_char(ch);
+-                        State::Verbatim
+-                    }
+-                }
+-                State::VerbatimCloseVariable => {
+-                    if ch == '}' {
+-                        builder.append_char('}');
+-                        State::Verbatim
+-                    } else {
+-                        return Err(err(InvalidCloseVariable));
+-                    }
+-                }
+-                State::OpenVariable => {
+-                    if ch == '{' {
+-                        builder.append_char('{');
+-                        State::Verbatim
+-                    } else {
+-                        name.clear();
+-                        if ch == '}' {
+-                            builder.append_var(&name)?;
+-                            State::Verbatim
+-                        } else {
+-                            name.push(ch);
+-                            State::InVariable
+-                        }
+-                    }
+-                }
+-                State::InVariable => {
+-                    if ch == '}' {
+-                        builder.append_var(&name)?;
+-                        State::Verbatim
+-                    } else {
+-                        name.push(ch);
+-                        State::InVariable
+-                    }
+-                }
+-            };
+-        }
+-        match state {
+-            State::Verbatim => builder.build(),
+-            State::VerbatimCloseVariable => Err(err(InvalidCloseVariable)),
+-            State::OpenVariable | State::InVariable => {
+-                Err(err(UnclosedVariable))
+-            }
+-        }
+-    }
+-}
+-
+-impl std::fmt::Display for HyperlinkFormat {
+-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+-        for part in self.parts.iter() {
+-            part.fmt(f)?;
+-        }
+-        Ok(())
+-    }
+-}
+-
+-/// A static environment for hyperlink interpolation.
+-///
+-/// This environment permits setting the values of variables used in hyperlink
+-/// interpolation that are not expected to change for the lifetime of a program.
+-/// That is, these values are invariant.
+-///
+-/// Currently, this includes the hostname and a WSL distro prefix.
+-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+-pub struct HyperlinkEnvironment {
+-    host: Option<String>,
+-    wsl_prefix: Option<String>,
+-}
+-
+-impl HyperlinkEnvironment {
+-    /// Create a new empty hyperlink environment.
+-    pub fn new() -> HyperlinkEnvironment {
+-        HyperlinkEnvironment::default()
+-    }
+-
+-    /// Set the `{host}` variable, which fills in any hostname components of
+-    /// a hyperlink.
+-    ///
+-    /// One can get the hostname in the current environment via the `hostname`
+-    /// function in the `grep-cli` crate.
+-    pub fn host(&mut self, host: Option<String>) -> &mut HyperlinkEnvironment {
+-        self.host = host;
+-        self
+-    }
+-
+-    /// Set the `{wslprefix}` variable, which contains the WSL distro prefix.
+-    /// An example value is `wsl$/Ubuntu`. The distro name can typically be
+-    /// discovered from the `WSL_DISTRO_NAME` environment variable.
+-    pub fn wsl_prefix(
+-        &mut self,
+-        wsl_prefix: Option<String>,
+-    ) -> &mut HyperlinkEnvironment {
+-        self.wsl_prefix = wsl_prefix;
+-        self
+-    }
+-}
+-
+-/// An error that can occur when parsing a hyperlink format.
+-#[derive(Clone, Debug, Eq, PartialEq)]
+-pub struct HyperlinkFormatError {
+-    kind: HyperlinkFormatErrorKind,
+-}
+-
+-#[derive(Clone, Debug, Eq, PartialEq)]
+-enum HyperlinkFormatErrorKind {
+-    /// This occurs when there are zero variables in the format.
+-    NoVariables,
+-    /// This occurs when the {path} variable is missing.
+-    NoPathVariable,
+-    /// This occurs when the {line} variable is missing, while the {column}
+-    /// variable is present.
+-    NoLineVariable,
+-    /// This occurs when an unknown variable is used.
+-    InvalidVariable(String),
+-    /// The format doesn't start with a valid scheme.
+-    InvalidScheme,
+-    /// This occurs when an unescaped `}` is found without a corresponding
+-    /// `{` preceding it.
+-    InvalidCloseVariable,
+-    /// This occurs when a `{` is found without a corresponding `}` following
+-    /// it.
+-    UnclosedVariable,
+-}
+-
+-impl std::error::Error for HyperlinkFormatError {}
+-
+-impl std::fmt::Display for HyperlinkFormatError {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        use self::HyperlinkFormatErrorKind::*;
+-
+-        match self.kind {
+-            NoVariables => {
+-                let aliases = hyperlink_aliases::iter()
+-                    .map(|(name, _)| name)
+-                    .collect::<Vec<&str>>()
+-                    .join(", ");
+-                write!(
+-                    f,
+-                    "at least a {{path}} variable is required in a \
+-                     hyperlink format, or otherwise use a valid alias: {}",
+-                    aliases,
+-                )
+-            }
+-            NoPathVariable => {
+-                write!(
+-                    f,
+-                    "the {{path}} variable is required in a hyperlink format",
+-                )
+-            }
+-            NoLineVariable => {
+-                write!(
+-                    f,
+-                    "the hyperlink format contains a {{column}} variable, \
+-                     but no {{line}} variable is present",
+-                )
+-            }
+-            InvalidVariable(ref name) => {
+-                write!(
+-                    f,
+-                    "invalid hyperlink format variable: '{name}', choose \
+-                     from: path, line, column, host, wslprefix",
+-                )
+-            }
+-            InvalidScheme => {
+-                write!(
+-                    f,
+-                    "the hyperlink format must start with a valid URL scheme, \
+-                     i.e., [0-9A-Za-z+-.]+:",
+-                )
+-            }
+-            InvalidCloseVariable => {
+-                write!(
+-                    f,
+-                    "unopened variable: found '}}' without a \
+-                     corresponding '{{' preceding it",
+-                )
+-            }
+-            UnclosedVariable => {
+-                write!(
+-                    f,
+-                    "unclosed variable: found '{{' without a \
+-                     corresponding '}}' following it",
+-                )
+-            }
+-        }
+-    }
+-}
+-
+-/// A builder for `HyperlinkFormat`.
+-///
+-/// Once a `HyperlinkFormat` is built, it is immutable.
+-#[derive(Debug)]
+-struct FormatBuilder {
+-    parts: Vec<Part>,
+-}
+-
+-impl FormatBuilder {
+-    /// Creates a new hyperlink format builder.
+-    fn new() -> FormatBuilder {
+-        FormatBuilder { parts: vec![] }
+-    }
+-
+-    /// Appends static text.
+-    fn append_slice(&mut self, text: &[u8]) -> &mut FormatBuilder {
+-        if let Some(Part::Text(contents)) = self.parts.last_mut() {
+-            contents.extend_from_slice(text);
+-        } else if !text.is_empty() {
+-            self.parts.push(Part::Text(text.to_vec()));
+-        }
+-        self
+-    }
+-
+-    /// Appends a single character.
+-    fn append_char(&mut self, ch: char) -> &mut FormatBuilder {
+-        self.append_slice(ch.encode_utf8(&mut [0; 4]).as_bytes())
+-    }
+-
+-    /// Appends a variable with the given name. If the name isn't recognized,
+-    /// then this returns an error.
+-    fn append_var(
+-        &mut self,
+-        name: &str,
+-    ) -> Result<&mut FormatBuilder, HyperlinkFormatError> {
+-        let part = match name {
+-            "host" => Part::Host,
+-            "wslprefix" => Part::WSLPrefix,
+-            "path" => Part::Path,
+-            "line" => Part::Line,
+-            "column" => Part::Column,
+-            unknown => {
+-                let err = HyperlinkFormatError {
+-                    kind: HyperlinkFormatErrorKind::InvalidVariable(
+-                        unknown.to_string(),
+-                    ),
+-                };
+-                return Err(err);
+-            }
+-        };
+-        self.parts.push(part);
+-        Ok(self)
+-    }
+-
+-    /// Builds the format.
+-    fn build(&self) -> Result<HyperlinkFormat, HyperlinkFormatError> {
+-        self.validate()?;
+-        Ok(HyperlinkFormat {
+-            parts: self.parts.clone(),
+-            is_line_dependent: self.parts.contains(&Part::Line),
+-        })
+-    }
+-
+-    /// Validate that the format is well-formed.
+-    fn validate(&self) -> Result<(), HyperlinkFormatError> {
+-        use self::HyperlinkFormatErrorKind::*;
+-
+-        let err = |kind| HyperlinkFormatError { kind };
+-        // An empty format is fine. It just means hyperlink support is
+-        // disabled.
+-        if self.parts.is_empty() {
+-            return Ok(());
+-        }
+-        // If all parts are just text, then there are no variables. It's
+-        // likely a reference to an invalid alias.
+-        if self.parts.iter().all(|p| matches!(*p, Part::Text(_))) {
+-            return Err(err(NoVariables));
+-        }
+-        // Even if we have other variables, no path variable means the
+-        // hyperlink can't possibly work the way it is intended.
+-        if !self.parts.contains(&Part::Path) {
+-            return Err(err(NoPathVariable));
+-        }
+-        // If the {column} variable is used, then we also need a {line}
+-        // variable or else {column} can't possibly work.
+-        if self.parts.contains(&Part::Column)
+-            && !self.parts.contains(&Part::Line)
+-        {
+-            return Err(err(NoLineVariable));
+-        }
+-        self.validate_scheme()
+-    }
+-
+-    /// Validate that the format starts with a valid scheme. Validation is done
+-    /// according to how a scheme is defined in RFC 1738 sections 2.1[1] and
+-    /// 5[2]. In short, a scheme is this:
+-    ///
+-    /// scheme = 1*[ lowalpha | digit | "+" | "-" | "." ]
+-    ///
+-    /// but is case insensitive.
+-    ///
+-    /// [1]: https://datatracker.ietf.org/doc/html/rfc1738#section-2.1
+-    /// [2]: https://datatracker.ietf.org/doc/html/rfc1738#section-5
+-    fn validate_scheme(&self) -> Result<(), HyperlinkFormatError> {
+-        let err_invalid_scheme = HyperlinkFormatError {
+-            kind: HyperlinkFormatErrorKind::InvalidScheme,
+-        };
+-        let Some(Part::Text(ref part)) = self.parts.first() else {
+-            return Err(err_invalid_scheme);
+-        };
+-        let Some(colon) = part.find_byte(b':') else {
+-            return Err(err_invalid_scheme);
+-        };
+-        let scheme = &part[..colon];
+-        if scheme.is_empty() {
+-            return Err(err_invalid_scheme);
+-        }
+-        let is_valid_scheme_char = |byte| match byte {
+-            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'+' | b'-' | b'.' => {
+-                true
+-            }
+-            _ => false,
+-        };
+-        if !scheme.iter().all(|&b| is_valid_scheme_char(b)) {
+-            return Err(err_invalid_scheme);
+-        }
+-        Ok(())
+-    }
+-}
+-
+-/// A hyperlink format part.
+-///
+-/// A sequence of these corresponds to a complete format. (Not all sequences
+-/// are valid.)
+-#[derive(Clone, Debug, Eq, PartialEq)]
+-enum Part {
+-    /// Static text.
+-    ///
+-    /// We use `Vec<u8>` here (and more generally treat a format string as a
+-    /// sequence of bytes) because file paths may be arbitrary bytes. A rare
+-    /// case, but one for which there is no good reason to choke on.
+-    Text(Vec<u8>),
+-    /// Variable for the hostname.
+-    Host,
+-    /// Variable for a WSL path prefix.
+-    WSLPrefix,
+-    /// Variable for the file path.
+-    Path,
+-    /// Variable for the line number.
+-    Line,
+-    /// Variable for the column number.
+-    Column,
+-}
+-
+-impl Part {
+-    /// Interpolate this part using the given `env` and `values`, and write
+-    /// the result of interpolation to the buffer provided.
+-    fn interpolate_to(
+-        &self,
+-        env: &HyperlinkEnvironment,
+-        values: &Values,
+-        dest: &mut Vec<u8>,
+-    ) {
+-        match self {
+-            Part::Text(ref text) => dest.extend_from_slice(text),
+-            Part::Host => dest.extend_from_slice(
+-                env.host.as_ref().map(|s| s.as_bytes()).unwrap_or(b""),
+-            ),
+-            Part::WSLPrefix => dest.extend_from_slice(
+-                env.wsl_prefix.as_ref().map(|s| s.as_bytes()).unwrap_or(b""),
+-            ),
+-            Part::Path => dest.extend_from_slice(&values.path.0),
+-            Part::Line => {
+-                let line = DecimalFormatter::new(values.line.unwrap_or(1));
+-                dest.extend_from_slice(line.as_bytes());
+-            }
+-            Part::Column => {
+-                let column = DecimalFormatter::new(values.column.unwrap_or(1));
+-                dest.extend_from_slice(column.as_bytes());
+-            }
+-        }
+-    }
+-}
+-
+-impl std::fmt::Display for Part {
+-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+-        match self {
+-            Part::Text(text) => write!(f, "{}", String::from_utf8_lossy(text)),
+-            Part::Host => write!(f, "{{host}}"),
+-            Part::WSLPrefix => write!(f, "{{wslprefix}}"),
+-            Part::Path => write!(f, "{{path}}"),
+-            Part::Line => write!(f, "{{line}}"),
+-            Part::Column => write!(f, "{{column}}"),
+-        }
+-    }
+-}
+-
+-/// The values to replace the format variables with.
+-///
+-/// This only consists of values that depend on each path or match printed.
+-/// Values that are invariant throughout the lifetime of the process are set
+-/// via a [`HyperlinkEnvironment`].
+-#[derive(Clone, Debug)]
+-pub(crate) struct Values<'a> {
+-    path: &'a HyperlinkPath,
+-    line: Option<u64>,
+-    column: Option<u64>,
+-}
+-
+-impl<'a> Values<'a> {
+-    /// Creates a new set of values, starting with the path given.
+-    ///
+-    /// Callers may also set the line and column number using the mutator
+-    /// methods.
+-    pub(crate) fn new(path: &'a HyperlinkPath) -> Values<'a> {
+-        Values { path, line: None, column: None }
+-    }
+-
+-    /// Sets the line number for these values.
+-    ///
+-    /// If a line number is not set and a hyperlink format contains a `{line}`
+-    /// variable, then it is interpolated with the value of `1` automatically.
+-    pub(crate) fn line(mut self, line: Option<u64>) -> Values<'a> {
+-        self.line = line;
+-        self
+-    }
+-
+-    /// Sets the column number for these values.
+-    ///
+-    /// If a column number is not set and a hyperlink format contains a
+-    /// `{column}` variable, then it is interpolated with the value of `1`
+-    /// automatically.
+-    pub(crate) fn column(mut self, column: Option<u64>) -> Values<'a> {
+-        self.column = column;
+-        self
+-    }
+-}
+-
+-/// An abstraction for interpolating a hyperlink format with values for every
+-/// variable.
+-///
+-/// Interpolation of variables occurs through two different sources. The
+-/// first is via a `HyperlinkEnvironment` for values that are expected to
+-/// be invariant. This comes from the `HyperlinkConfig` used to build this
+-/// interpolator. The second source is via `Values`, which is provided to
+-/// `Interpolator::begin`. The `Values` contains things like the file path,
+-/// line number and column number.
+-#[derive(Clone, Debug)]
+-pub(crate) struct Interpolator {
+-    config: HyperlinkConfig,
+-    buf: RefCell<Vec<u8>>,
+-}
+-
+-impl Interpolator {
+-    /// Create a new interpolator for the given hyperlink format configuration.
+-    pub(crate) fn new(config: &HyperlinkConfig) -> Interpolator {
+-        Interpolator { config: config.clone(), buf: RefCell::new(vec![]) }
+-    }
+-
+-    /// Start interpolation with the given values by writing a hyperlink
+-    /// to `wtr`. Subsequent writes to `wtr`, until `Interpolator::end` is
+-    /// called, are the label for the hyperlink.
+-    ///
+-    /// This returns an interpolator status which indicates whether the
+-    /// hyperlink was written. It might not be written, for example, if the
+-    /// underlying writer doesn't support hyperlinks or if the hyperlink
+-    /// format is empty. The status should be provided to `Interpolator::end`
+-    /// as an instruction for whether to close the hyperlink or not.
+-    pub(crate) fn begin<W: WriteColor>(
+-        &self,
+-        values: &Values,
+-        mut wtr: W,
+-    ) -> io::Result<InterpolatorStatus> {
+-        if self.config.format().is_empty()
+-            || !wtr.supports_hyperlinks()
+-            || !wtr.supports_color()
+-        {
+-            return Ok(InterpolatorStatus::inactive());
+-        }
+-        let mut buf = self.buf.borrow_mut();
+-        buf.clear();
+-        for part in self.config.format().parts.iter() {
+-            part.interpolate_to(self.config.environment(), values, &mut buf);
+-        }
+-        let spec = HyperlinkSpec::open(&buf);
+-        wtr.set_hyperlink(&spec)?;
+-        Ok(InterpolatorStatus { active: true })
+-    }
+-
+-    /// Writes the correct escape sequences to `wtr` to close any extant
+-    /// hyperlink, marking the end of a hyperlink's label.
+-    ///
+-    /// The status given should be returned from a corresponding
+-    /// `Interpolator::begin` call. Since `begin` may not write a hyperlink
+-    /// (e.g., if the underlying writer doesn't support hyperlinks), it follows
+-    /// that `finish` must not close a hyperlink that was never opened. The
+-    /// status indicates whether the hyperlink was opened or not.
+-    pub(crate) fn finish<W: WriteColor>(
+-        &self,
+-        status: InterpolatorStatus,
+-        mut wtr: W,
+-    ) -> io::Result<()> {
+-        if !status.active {
+-            return Ok(());
+-        }
+-        wtr.set_hyperlink(&HyperlinkSpec::close())
+-    }
+-}
+-
+-/// A status indicating whether a hyperlink was written or not.
+-///
+-/// This is created by `Interpolator::begin` and used by `Interpolator::finish`
+-/// to determine whether a hyperlink was actually opened or not. If it wasn't
+-/// opened, then finishing interpolation is a no-op.
+-#[derive(Debug)]
+-pub(crate) struct InterpolatorStatus {
+-    active: bool,
+-}
+-
+-impl InterpolatorStatus {
+-    /// Create an inactive interpolator status.
+-    #[inline]
+-    pub(crate) fn inactive() -> InterpolatorStatus {
+-        InterpolatorStatus { active: false }
+-    }
+-}
+-
+-/// Represents the `{path}` part of a hyperlink.
+-///
+-/// This is the value to use as-is in the hyperlink, converted from an OS file
+-/// path.
+-#[derive(Clone, Debug)]
+-pub(crate) struct HyperlinkPath(Vec<u8>);
+-
+-impl HyperlinkPath {
+-    /// Returns a hyperlink path from an OS path.
+-    #[cfg(unix)]
+-    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
+-        use std::os::unix::ffi::OsStrExt;
+-
+-        // We canonicalize the path in order to get an absolute version of it
+-        // without any `.` or `..` or superfluous separators. Unfortunately,
+-        // this does also remove symlinks, and in theory, it would be nice to
+-        // retain them. Perhaps even simpler, we could just join the current
+-        // working directory with the path and be done with it. There was
+-        // some discussion about this on PR#2483, and there generally appears
+-        // to be some uncertainty about the extent to which hyperlinks with
+-        // things like `..` in them actually work. So for now, we do the safest
+-        // thing possible even though I think it can result in worse user
+-        // experience. (Because it means the path you click on and the actual
+-        // path that gets followed are different, even though they ostensibly
+-        // refer to the same file.)
+-        //
+-        // There's also the potential issue that path canonicalization is
+-        // expensive since it can touch the file system. That is probably
+-        // less of an issue since hyperlinks are only created when they're
+-        // supported, i.e., when writing to a tty.
+-        //
+-        // [1]: https://github.com/BurntSushi/ripgrep/pull/2483
+-        let path = match original_path.canonicalize() {
+-            Ok(path) => path,
+-            Err(err) => {
+-                log::debug!(
+-                    "hyperlink creation for {:?} failed, error occurred \
+-                     during path canonicalization: {}",
+-                    original_path,
+-                    err,
+-                );
+-                return None;
+-            }
+-        };
+-        let bytes = path.as_os_str().as_bytes();
+-        // This should not be possible since one imagines that canonicalization
+-        // should always return an absolute path. But it doesn't actually
+-        // appear guaranteed by POSIX, so we check whether it's true or not and
+-        // refuse to create a hyperlink from a relative path if it isn't.
+-        if !bytes.starts_with(b"/") {
+-            log::debug!(
+-                "hyperlink creation for {:?} failed, canonicalization \
+-                 returned {:?}, which does not start with a slash",
+-                original_path,
+-                path,
+-            );
+-            return None;
+-        }
+-        Some(HyperlinkPath::encode(bytes))
+-    }
+-
+-    /// Returns a hyperlink path from an OS path.
+-    #[cfg(windows)]
+-    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
+-        // On Windows, Path::canonicalize returns the result of
+-        // GetFinalPathNameByHandleW with VOLUME_NAME_DOS,
+-        // which produces paths such as the following:
+-        //
+-        //   \\?\C:\dir\file.txt           (local path)
+-        //   \\?\UNC\server\dir\file.txt   (network share)
+-        //
+-        // The \\?\ prefix comes from VOLUME_NAME_DOS and is constant.
+-        // It is followed either by the drive letter, or by UNC\
+-        // (universal naming convention), which denotes a network share.
+-        //
+-        // Given that the default URL format on Windows is file://{path}
+-        // we need to return the following from this function:
+-        //
+-        //   /C:/dir/file.txt        (local path)
+-        //   //server/dir/file.txt   (network share)
+-        //
+-        // Which produces the following links:
+-        //
+-        //   file:///C:/dir/file.txt        (local path)
+-        //   file:////server/dir/file.txt   (network share)
+-        //
+-        // This substitutes the {path} variable with the expected value for
+-        // the most common DOS paths, but on the other hand, network paths
+-        // start with a single slash, which may be unexpected. It seems to work
+-        // though?
+-        //
+-        // Note that the following URL syntax also seems to be valid?
+-        //
+-        //   file://server/dir/file.txt
+-        //
+-        // But the initial implementation of this routine went for the format
+-        // above.
+-        //
+-        // Also note that the file://C:/dir/file.txt syntax is not correct,
+-        // even though it often works in practice.
+-        //
+-        // In the end, this choice was confirmed by VSCode, whose format is
+-        //
+-        //   vscode://file{path}:{line}:{column}
+-        //
+-        // and which correctly understands the following URL format for network
+-        // drives:
+-        //
+-        //   vscode://file//server/dir/file.txt:1:1
+-        //
+-        // It doesn't parse any other number of slashes in "file//server" as a
+-        // network path.
+-
+-        const WIN32_NAMESPACE_PREFIX: &str = r"\\?\";
+-        const UNC_PREFIX: &str = r"UNC\";
+-
+-        // As for Unix, we canonicalize the path to make sure we have an
+-        // absolute path.
+-        let path = match original_path.canonicalize() {
+-            Ok(path) => path,
+-            Err(err) => {
+-                log::debug!(
+-                    "hyperlink creation for {:?} failed, error occurred \
+-                     during path canonicalization: {}",
+-                    original_path,
+-                    err,
+-                );
+-                return None;
+-            }
+-        };
+-        // We convert the path to a string for easier manipulation. If it
+-        // wasn't valid UTF-16 (and thus could not be non-lossily transcoded
+-        // to UTF-8), then we just give up. It's not clear we could make
+-        // a meaningful hyperlink from it anyway. And this should be an
+-        // exceptionally rare case.
+-        let mut string = match path.to_str() {
+-            Some(string) => string,
+-            None => {
+-                log::debug!(
+-                    "hyperlink creation for {:?} failed, path is not \
+-                     valid UTF-8",
+-                    original_path,
+-                );
+-                return None;
+-            }
+-        };
+-        // As the comment above says, we expect all canonicalized paths to
+-        // begin with a \\?\. If it doesn't, then something weird is happening
+-        // and we should just give up.
+-        if !string.starts_with(WIN32_NAMESPACE_PREFIX) {
+-            log::debug!(
+-                "hyperlink creation for {:?} failed, canonicalization \
+-                 returned {:?}, which does not start with \\\\?\\",
+-                original_path,
+-                path,
+-            );
+-            return None;
+-        }
+-        string = &string[WIN32_NAMESPACE_PREFIX.len()..];
+-
+-        // And as above, drop the UNC prefix too, but keep the leading slash.
+-        if string.starts_with(UNC_PREFIX) {
+-            string = &string[(UNC_PREFIX.len() - 1)..];
+-        }
+-        // Finally, add a leading slash. In the local file case, this turns
+-        // C:\foo\bar into /C:\foo\bar (and then percent encoding turns it into
+-        // /C:/foo/bar). In the network share case, this turns \share\foo\bar
+-        // into /\share/foo/bar (and then percent encoding turns it into
+-        // //share/foo/bar).
+-        let with_slash = format!("/{string}");
+-        Some(HyperlinkPath::encode(with_slash.as_bytes()))
+-    }
+-
+-    /// For other platforms (not windows, not unix), return None and log a debug message.
+-    #[cfg(not(any(windows, unix)))]
+-    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
+-        log::debug!("hyperlinks are not supported on this platform");
+-        None
+-    }
+-
+-    /// Percent-encodes a path.
+-    ///
+-    /// The alphanumeric ASCII characters and "-", ".", "_", "~" are unreserved
+-    /// as per section 2.3 of RFC 3986 (Uniform Resource Identifier (URI):
+-    /// Generic Syntax), and are not encoded. The other ASCII characters except
+-    /// "/" and ":" are percent-encoded, and "\" is replaced by "/" on Windows.
+-    ///
+-    /// Section 4 of RFC 8089 (The "file" URI Scheme) does not mandate precise
+-    /// encoding requirements for non-ASCII characters, and this implementation
+-    /// leaves them unencoded. On Windows, the UrlCreateFromPathW function does
+-    /// not encode non-ASCII characters. Doing so with UTF-8 encoded paths
+-    /// creates invalid file:// URLs on that platform.
+-    fn encode(input: &[u8]) -> HyperlinkPath {
+-        let mut result = Vec::with_capacity(input.len());
+-        for &byte in input.iter() {
+-            match byte {
+-                b'0'..=b'9'
+-                | b'A'..=b'Z'
+-                | b'a'..=b'z'
+-                | b'/'
+-                | b':'
+-                | b'-'
+-                | b'.'
+-                | b'_'
+-                | b'~'
+-                | 128.. => {
+-                    result.push(byte);
+-                }
+-                #[cfg(windows)]
+-                b'\\' => {
+-                    result.push(b'/');
+-                }
+-                _ => {
+-                    const HEX: &[u8] = b"0123456789ABCDEF";
+-                    result.push(b'%');
+-                    result.push(HEX[(byte >> 4) as usize]);
+-                    result.push(HEX[(byte & 0xF) as usize]);
+-                }
+-            }
+-        }
+-        HyperlinkPath(result)
+-    }
+-}
+-
+-#[cfg(test)]
+-mod tests {
+-    use std::str::FromStr;
+-
+-    use super::*;
+-
+-    #[test]
+-    fn build_format() {
+-        let format = FormatBuilder::new()
+-            .append_slice(b"foo://")
+-            .append_slice(b"bar-")
+-            .append_slice(b"baz")
+-            .append_var("path")
+-            .unwrap()
+-            .build()
+-            .unwrap();
+-
+-        assert_eq!(format.to_string(), "foo://bar-baz{path}");
+-        assert_eq!(format.parts[0], Part::Text(b"foo://bar-baz".to_vec()));
+-        assert!(!format.is_empty());
+-    }
+-
+-    #[test]
+-    fn build_empty_format() {
+-        let format = FormatBuilder::new().build().unwrap();
+-
+-        assert!(format.is_empty());
+-        assert_eq!(format, HyperlinkFormat::empty());
+-        assert_eq!(format, HyperlinkFormat::default());
+-    }
+-
+-    #[test]
+-    fn handle_alias() {
+-        assert!(HyperlinkFormat::from_str("file").is_ok());
+-        assert!(HyperlinkFormat::from_str("none").is_ok());
+-        assert!(HyperlinkFormat::from_str("none").unwrap().is_empty());
+-    }
+-
+-    #[test]
+-    fn parse_format() {
+-        let format = HyperlinkFormat::from_str(
+-            "foo://{host}/bar/{path}:{line}:{column}",
+-        )
+-        .unwrap();
+-
+-        assert_eq!(
+-            format.to_string(),
+-            "foo://{host}/bar/{path}:{line}:{column}"
+-        );
+-        assert_eq!(format.parts.len(), 8);
+-        assert!(format.parts.contains(&Part::Path));
+-        assert!(format.parts.contains(&Part::Line));
+-        assert!(format.parts.contains(&Part::Column));
+-    }
+-
+-    #[test]
+-    fn parse_valid() {
+-        assert!(HyperlinkFormat::from_str("").unwrap().is_empty());
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{path}").unwrap().to_string(),
+-            "foo://{path}"
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{path}/bar").unwrap().to_string(),
+-            "foo://{path}/bar"
+-        );
+-
+-        HyperlinkFormat::from_str("f://{path}").unwrap();
+-        HyperlinkFormat::from_str("f:{path}").unwrap();
+-        HyperlinkFormat::from_str("f-+.:{path}").unwrap();
+-        HyperlinkFormat::from_str("f42:{path}").unwrap();
+-        HyperlinkFormat::from_str("42:{path}").unwrap();
+-        HyperlinkFormat::from_str("+:{path}").unwrap();
+-        HyperlinkFormat::from_str("F42:{path}").unwrap();
+-        HyperlinkFormat::from_str("F42://foo{{bar}}{path}").unwrap();
+-    }
+-
+-    #[test]
+-    fn parse_invalid() {
+-        use super::HyperlinkFormatErrorKind::*;
+-
+-        let err = |kind| HyperlinkFormatError { kind };
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://bar").unwrap_err(),
+-            err(NoVariables),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{line}").unwrap_err(),
+-            err(NoPathVariable),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{path").unwrap_err(),
+-            err(UnclosedVariable),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{path}:{column}").unwrap_err(),
+-            err(NoLineVariable),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("{path}").unwrap_err(),
+-            err(InvalidScheme),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str(":{path}").unwrap_err(),
+-            err(InvalidScheme),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("f*:{path}").unwrap_err(),
+-            err(InvalidScheme),
+-        );
+-
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{bar}").unwrap_err(),
+-            err(InvalidVariable("bar".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{}}bar}").unwrap_err(),
+-            err(InvalidVariable("".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{b}}ar}").unwrap_err(),
+-            err(InvalidVariable("b".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{bar}}}").unwrap_err(),
+-            err(InvalidVariable("bar".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{{bar}").unwrap_err(),
+-            err(InvalidCloseVariable),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{{{bar}").unwrap_err(),
+-            err(InvalidVariable("bar".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{b{{ar}").unwrap_err(),
+-            err(InvalidVariable("b{{ar".to_string())),
+-        );
+-        assert_eq!(
+-            HyperlinkFormat::from_str("foo://{bar{{}").unwrap_err(),
+-            err(InvalidVariable("bar{{".to_string())),
+-        );
+-    }
+-}
+diff --git a/crates/printer/src/hyperlink/aliases.rs b/crates/printer/src/hyperlink/aliases.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..5444d8f1cb18882d2d039c7e60684f3edc22f78b
+--- /dev/null
++++ b/crates/printer/src/hyperlink/aliases.rs
+@@ -0,0 +1,44 @@
++use crate::hyperlink::HyperlinkAlias;
++
++/// Aliases to well-known hyperlink schemes.
++///
++/// These need to be sorted by name.
++pub(super) const HYPERLINK_PATTERN_ALIASES: &[HyperlinkAlias] = &[
++    #[cfg(not(windows))]
++    prioritized_alias(0, "default", "file://{host}{path}"),
++    #[cfg(windows)]
++    prioritized_alias(0, "default", "file://{path}"),
++    alias("file", "file://{host}{path}"),
++    // https://github.com/misaki-web/grepp
++    alias("grep+", "grep+://{path}:{line}"),
++    alias("kitty", "file://{host}{path}#{line}"),
++    // https://macvim.org/docs/gui_mac.txt.html#mvim%3A%2F%2F
++    alias(
++        "macvim",
++        "mvim://open?url=file://{path}&line={line}&column={column}",
++    ),
++    prioritized_alias(1, "none", ""),
++    // https://macromates.com/blog/2007/the-textmate-url-scheme/
++    alias(
++        "textmate",
++        "txmt://open?url=file://{path}&line={line}&column={column}",
++    ),
++    // https://code.visualstudio.com/docs/editor/command-line#_opening-vs-code-with-urls
++    alias("vscode", "vscode://file{path}:{line}:{column}"),
++    alias("vscode-insiders", "vscode-insiders://file{path}:{line}:{column}"),
++    alias("vscodium", "vscodium://file{path}:{line}:{column}"),
++];
++
++/// Creates a [`HyperlinkAlias`].
++const fn alias(name: &'static str, format: &'static str) -> HyperlinkAlias {
++    HyperlinkAlias { name, format, display_priority: None }
++}
++
++/// Creates a [`HyperlinkAlias`] with a display priority.
++const fn prioritized_alias(
++    priority: i16,
++    name: &'static str,
++    format: &'static str,
++) -> HyperlinkAlias {
++    HyperlinkAlias { name, format, display_priority: Some(priority) }
++}
+diff --git a/crates/printer/src/hyperlink/mod.rs b/crates/printer/src/hyperlink/mod.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..7bd1871360cf0ed3d6e91b7052e85ec64c996456
+--- /dev/null
++++ b/crates/printer/src/hyperlink/mod.rs
+@@ -0,0 +1,1159 @@
++use std::{cell::RefCell, io, path::Path, sync::Arc};
++
++use {
++    bstr::ByteSlice,
++    termcolor::{HyperlinkSpec, WriteColor},
++};
++
++use crate::util::DecimalFormatter;
++
++use self::aliases::HYPERLINK_PATTERN_ALIASES;
++
++mod aliases;
++
++/// Hyperlink configuration.
++///
++/// This configuration specifies both the [hyperlink format](HyperlinkFormat)
++/// and an [environment](HyperlinkConfig) for interpolating a subset of
++/// variables. The specific subset includes variables that are intended to
++/// be invariant throughout the lifetime of a process, such as a machine's
++/// hostname.
++///
++/// A hyperlink configuration can be provided to printer builders such as
++/// [`StandardBuilder::hyperlink`](crate::StandardBuilder::hyperlink).
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct HyperlinkConfig(Arc<HyperlinkConfigInner>);
++
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++struct HyperlinkConfigInner {
++    env: HyperlinkEnvironment,
++    format: HyperlinkFormat,
++}
++
++impl HyperlinkConfig {
++    /// Create a new configuration from an environment and a format.
++    pub fn new(
++        env: HyperlinkEnvironment,
++        format: HyperlinkFormat,
++    ) -> HyperlinkConfig {
++        HyperlinkConfig(Arc::new(HyperlinkConfigInner { env, format }))
++    }
++
++    /// Returns the hyperlink environment in this configuration.
++    pub(crate) fn environment(&self) -> &HyperlinkEnvironment {
++        &self.0.env
++    }
++
++    /// Returns the hyperlink format in this configuration.
++    pub(crate) fn format(&self) -> &HyperlinkFormat {
++        &self.0.format
++    }
++}
++
++/// A hyperlink format with variables.
++///
++/// This can be created by parsing a string using `HyperlinkFormat::from_str`.
++///
++/// The default format is empty. An empty format is valid and effectively
++/// disables hyperlinks.
++///
++/// # Example
++///
++/// ```
++/// use grep_printer::HyperlinkFormat;
++///
++/// let fmt = "vscode".parse::<HyperlinkFormat>()?;
++/// assert_eq!(fmt.to_string(), "vscode://file{path}:{line}:{column}");
++///
++/// # Ok::<(), Box<dyn std::error::Error>>(())
++/// ```
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct HyperlinkFormat {
++    parts: Vec<Part>,
++    is_line_dependent: bool,
++}
++
++impl HyperlinkFormat {
++    /// Creates an empty hyperlink format.
++    pub fn empty() -> HyperlinkFormat {
++        HyperlinkFormat::default()
++    }
++
++    /// Returns true if this format is empty.
++    pub fn is_empty(&self) -> bool {
++        self.parts.is_empty()
++    }
++
++    /// Creates a [`HyperlinkConfig`] from this format and the environment
++    /// given.
++    pub fn into_config(self, env: HyperlinkEnvironment) -> HyperlinkConfig {
++        HyperlinkConfig::new(env, self)
++    }
++
++    /// Returns true if the format can produce line-dependent hyperlinks.
++    pub(crate) fn is_line_dependent(&self) -> bool {
++        self.is_line_dependent
++    }
++}
++
++impl std::str::FromStr for HyperlinkFormat {
++    type Err = HyperlinkFormatError;
++
++    fn from_str(s: &str) -> Result<HyperlinkFormat, HyperlinkFormatError> {
++        use self::HyperlinkFormatErrorKind::*;
++
++        #[derive(Debug)]
++        enum State {
++            Verbatim,
++            VerbatimCloseVariable,
++            OpenVariable,
++            InVariable,
++        }
++
++        let mut builder = FormatBuilder::new();
++        let input = match HyperlinkAlias::find(s) {
++            Some(alias) => alias.format(),
++            None => s,
++        };
++        let mut name = String::new();
++        let mut state = State::Verbatim;
++        let err = |kind| HyperlinkFormatError { kind };
++        for ch in input.chars() {
++            state = match state {
++                State::Verbatim => {
++                    if ch == '{' {
++                        State::OpenVariable
++                    } else if ch == '}' {
++                        State::VerbatimCloseVariable
++                    } else {
++                        builder.append_char(ch);
++                        State::Verbatim
++                    }
++                }
++                State::VerbatimCloseVariable => {
++                    if ch == '}' {
++                        builder.append_char('}');
++                        State::Verbatim
++                    } else {
++                        return Err(err(InvalidCloseVariable));
++                    }
++                }
++                State::OpenVariable => {
++                    if ch == '{' {
++                        builder.append_char('{');
++                        State::Verbatim
++                    } else {
++                        name.clear();
++                        if ch == '}' {
++                            builder.append_var(&name)?;
++                            State::Verbatim
++                        } else {
++                            name.push(ch);
++                            State::InVariable
++                        }
++                    }
++                }
++                State::InVariable => {
++                    if ch == '}' {
++                        builder.append_var(&name)?;
++                        State::Verbatim
++                    } else {
++                        name.push(ch);
++                        State::InVariable
++                    }
++                }
++            };
++        }
++        match state {
++            State::Verbatim => builder.build(),
++            State::VerbatimCloseVariable => Err(err(InvalidCloseVariable)),
++            State::OpenVariable | State::InVariable => {
++                Err(err(UnclosedVariable))
++            }
++        }
++    }
++}
++
++impl std::fmt::Display for HyperlinkFormat {
++    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
++        for part in self.parts.iter() {
++            part.fmt(f)?;
++        }
++        Ok(())
++    }
++}
++
++/// An alias for a hyperlink format.
++///
++/// Hyperlink aliases are built-in formats, therefore they hold static values.
++/// Some of their features are usable in const blocks.
++#[derive(Clone, Debug)]
++pub struct HyperlinkAlias {
++    name: &'static str,
++    format: &'static str,
++    display_priority: Option<i16>,
++}
++
++impl HyperlinkAlias {
++    /// Returns the name of the alias.
++    pub const fn name(&self) -> &str {
++        self.name
++    }
++
++    /// Returns the display priority of this alias.
++    ///
++    /// If no priority is set, then `None` is returned.
++    ///
++    /// The display priority is meant to reflect some special status associated
++    /// with an alias. For example, the `default` and `none` aliases have a
++    /// display priority. This is meant to encourage listing them first in
++    /// documentation.
++    ///
++    /// A lower display priority implies the alias should be shown before
++    /// aliases with a higher (or absent) display priority.
++    ///
++    /// Callers cannot rely on any specific display priority value to remain
++    /// stable across semver compatible releases of this crate.
++    pub const fn display_priority(&self) -> Option<i16> {
++        self.display_priority
++    }
++
++    /// Returns the format string of the alias.
++    const fn format(&self) -> &'static str {
++        self.format
++    }
++
++    /// Looks for the hyperlink alias defined by the given name.
++    ///
++    /// If one does not exist, `None` is returned.
++    fn find(name: &str) -> Option<&HyperlinkAlias> {
++        HYPERLINK_PATTERN_ALIASES
++            .binary_search_by_key(&name, |alias| alias.name())
++            .map(|i| &HYPERLINK_PATTERN_ALIASES[i])
++            .ok()
++    }
++}
++
++/// A static environment for hyperlink interpolation.
++///
++/// This environment permits setting the values of variables used in hyperlink
++/// interpolation that are not expected to change for the lifetime of a program.
++/// That is, these values are invariant.
++///
++/// Currently, this includes the hostname and a WSL distro prefix.
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct HyperlinkEnvironment {
++    host: Option<String>,
++    wsl_prefix: Option<String>,
++}
++
++impl HyperlinkEnvironment {
++    /// Create a new empty hyperlink environment.
++    pub fn new() -> HyperlinkEnvironment {
++        HyperlinkEnvironment::default()
++    }
++
++    /// Set the `{host}` variable, which fills in any hostname components of
++    /// a hyperlink.
++    ///
++    /// One can get the hostname in the current environment via the `hostname`
++    /// function in the `grep-cli` crate.
++    pub fn host(&mut self, host: Option<String>) -> &mut HyperlinkEnvironment {
++        self.host = host;
++        self
++    }
++
++    /// Set the `{wslprefix}` variable, which contains the WSL distro prefix.
++    /// An example value is `wsl$/Ubuntu`. The distro name can typically be
++    /// discovered from the `WSL_DISTRO_NAME` environment variable.
++    pub fn wsl_prefix(
++        &mut self,
++        wsl_prefix: Option<String>,
++    ) -> &mut HyperlinkEnvironment {
++        self.wsl_prefix = wsl_prefix;
++        self
++    }
++}
++
++/// An error that can occur when parsing a hyperlink format.
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub struct HyperlinkFormatError {
++    kind: HyperlinkFormatErrorKind,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++enum HyperlinkFormatErrorKind {
++    /// This occurs when there are zero variables in the format.
++    NoVariables,
++    /// This occurs when the {path} variable is missing.
++    NoPathVariable,
++    /// This occurs when the {line} variable is missing, while the {column}
++    /// variable is present.
++    NoLineVariable,
++    /// This occurs when an unknown variable is used.
++    InvalidVariable(String),
++    /// The format doesn't start with a valid scheme.
++    InvalidScheme,
++    /// This occurs when an unescaped `}` is found without a corresponding
++    /// `{` preceding it.
++    InvalidCloseVariable,
++    /// This occurs when a `{` is found without a corresponding `}` following
++    /// it.
++    UnclosedVariable,
++}
++
++impl std::error::Error for HyperlinkFormatError {}
++
++impl std::fmt::Display for HyperlinkFormatError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        use self::HyperlinkFormatErrorKind::*;
++
++        match self.kind {
++            NoVariables => {
++                let mut aliases = hyperlink_aliases();
++                aliases.sort_by_key(|alias| {
++                    alias.display_priority().unwrap_or(i16::MAX)
++                });
++                let names: Vec<&str> =
++                    aliases.iter().map(|alias| alias.name()).collect();
++                write!(
++                    f,
++                    "at least a {{path}} variable is required in a \
++                     hyperlink format, or otherwise use a valid alias: \
++                     {aliases}",
++                    aliases = names.join(", "),
++                )
++            }
++            NoPathVariable => {
++                write!(
++                    f,
++                    "the {{path}} variable is required in a hyperlink format",
++                )
++            }
++            NoLineVariable => {
++                write!(
++                    f,
++                    "the hyperlink format contains a {{column}} variable, \
++                     but no {{line}} variable is present",
++                )
++            }
++            InvalidVariable(ref name) => {
++                write!(
++                    f,
++                    "invalid hyperlink format variable: '{name}', choose \
++                     from: path, line, column, host, wslprefix",
++                )
++            }
++            InvalidScheme => {
++                write!(
++                    f,
++                    "the hyperlink format must start with a valid URL scheme, \
++                     i.e., [0-9A-Za-z+-.]+:",
++                )
++            }
++            InvalidCloseVariable => {
++                write!(
++                    f,
++                    "unopened variable: found '}}' without a \
++                     corresponding '{{' preceding it",
++                )
++            }
++            UnclosedVariable => {
++                write!(
++                    f,
++                    "unclosed variable: found '{{' without a \
++                     corresponding '}}' following it",
++                )
++            }
++        }
++    }
++}
++
++/// A builder for `HyperlinkFormat`.
++///
++/// Once a `HyperlinkFormat` is built, it is immutable.
++#[derive(Debug)]
++struct FormatBuilder {
++    parts: Vec<Part>,
++}
++
++impl FormatBuilder {
++    /// Creates a new hyperlink format builder.
++    fn new() -> FormatBuilder {
++        FormatBuilder { parts: vec![] }
++    }
++
++    /// Appends static text.
++    fn append_slice(&mut self, text: &[u8]) -> &mut FormatBuilder {
++        if let Some(Part::Text(contents)) = self.parts.last_mut() {
++            contents.extend_from_slice(text);
++        } else if !text.is_empty() {
++            self.parts.push(Part::Text(text.to_vec()));
++        }
++        self
++    }
++
++    /// Appends a single character.
++    fn append_char(&mut self, ch: char) -> &mut FormatBuilder {
++        self.append_slice(ch.encode_utf8(&mut [0; 4]).as_bytes())
++    }
++
++    /// Appends a variable with the given name. If the name isn't recognized,
++    /// then this returns an error.
++    fn append_var(
++        &mut self,
++        name: &str,
++    ) -> Result<&mut FormatBuilder, HyperlinkFormatError> {
++        let part = match name {
++            "host" => Part::Host,
++            "wslprefix" => Part::WSLPrefix,
++            "path" => Part::Path,
++            "line" => Part::Line,
++            "column" => Part::Column,
++            unknown => {
++                let err = HyperlinkFormatError {
++                    kind: HyperlinkFormatErrorKind::InvalidVariable(
++                        unknown.to_string(),
++                    ),
++                };
++                return Err(err);
++            }
++        };
++        self.parts.push(part);
++        Ok(self)
++    }
++
++    /// Builds the format.
++    fn build(&self) -> Result<HyperlinkFormat, HyperlinkFormatError> {
++        self.validate()?;
++        Ok(HyperlinkFormat {
++            parts: self.parts.clone(),
++            is_line_dependent: self.parts.contains(&Part::Line),
++        })
++    }
++
++    /// Validate that the format is well-formed.
++    fn validate(&self) -> Result<(), HyperlinkFormatError> {
++        use self::HyperlinkFormatErrorKind::*;
++
++        let err = |kind| HyperlinkFormatError { kind };
++        // An empty format is fine. It just means hyperlink support is
++        // disabled.
++        if self.parts.is_empty() {
++            return Ok(());
++        }
++        // If all parts are just text, then there are no variables. It's
++        // likely a reference to an invalid alias.
++        if self.parts.iter().all(|p| matches!(*p, Part::Text(_))) {
++            return Err(err(NoVariables));
++        }
++        // Even if we have other variables, no path variable means the
++        // hyperlink can't possibly work the way it is intended.
++        if !self.parts.contains(&Part::Path) {
++            return Err(err(NoPathVariable));
++        }
++        // If the {column} variable is used, then we also need a {line}
++        // variable or else {column} can't possibly work.
++        if self.parts.contains(&Part::Column)
++            && !self.parts.contains(&Part::Line)
++        {
++            return Err(err(NoLineVariable));
++        }
++        self.validate_scheme()
++    }
++
++    /// Validate that the format starts with a valid scheme. Validation is done
++    /// according to how a scheme is defined in RFC 1738 sections 2.1[1] and
++    /// 5[2]. In short, a scheme is this:
++    ///
++    /// scheme = 1*[ lowalpha | digit | "+" | "-" | "." ]
++    ///
++    /// but is case insensitive.
++    ///
++    /// [1]: https://datatracker.ietf.org/doc/html/rfc1738#section-2.1
++    /// [2]: https://datatracker.ietf.org/doc/html/rfc1738#section-5
++    fn validate_scheme(&self) -> Result<(), HyperlinkFormatError> {
++        let err_invalid_scheme = HyperlinkFormatError {
++            kind: HyperlinkFormatErrorKind::InvalidScheme,
++        };
++        let Some(Part::Text(ref part)) = self.parts.first() else {
++            return Err(err_invalid_scheme);
++        };
++        let Some(colon) = part.find_byte(b':') else {
++            return Err(err_invalid_scheme);
++        };
++        let scheme = &part[..colon];
++        if scheme.is_empty() {
++            return Err(err_invalid_scheme);
++        }
++        let is_valid_scheme_char = |byte| match byte {
++            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'+' | b'-' | b'.' => {
++                true
++            }
++            _ => false,
++        };
++        if !scheme.iter().all(|&b| is_valid_scheme_char(b)) {
++            return Err(err_invalid_scheme);
++        }
++        Ok(())
++    }
++}
++
++/// A hyperlink format part.
++///
++/// A sequence of these corresponds to a complete format. (Not all sequences
++/// are valid.)
++#[derive(Clone, Debug, Eq, PartialEq)]
++enum Part {
++    /// Static text.
++    ///
++    /// We use `Vec<u8>` here (and more generally treat a format string as a
++    /// sequence of bytes) because file paths may be arbitrary bytes. A rare
++    /// case, but one for which there is no good reason to choke on.
++    Text(Vec<u8>),
++    /// Variable for the hostname.
++    Host,
++    /// Variable for a WSL path prefix.
++    WSLPrefix,
++    /// Variable for the file path.
++    Path,
++    /// Variable for the line number.
++    Line,
++    /// Variable for the column number.
++    Column,
++}
++
++impl Part {
++    /// Interpolate this part using the given `env` and `values`, and write
++    /// the result of interpolation to the buffer provided.
++    fn interpolate_to(
++        &self,
++        env: &HyperlinkEnvironment,
++        values: &Values,
++        dest: &mut Vec<u8>,
++    ) {
++        match self {
++            Part::Text(ref text) => dest.extend_from_slice(text),
++            Part::Host => dest.extend_from_slice(
++                env.host.as_ref().map(|s| s.as_bytes()).unwrap_or(b""),
++            ),
++            Part::WSLPrefix => dest.extend_from_slice(
++                env.wsl_prefix.as_ref().map(|s| s.as_bytes()).unwrap_or(b""),
++            ),
++            Part::Path => dest.extend_from_slice(&values.path.0),
++            Part::Line => {
++                let line = DecimalFormatter::new(values.line.unwrap_or(1));
++                dest.extend_from_slice(line.as_bytes());
++            }
++            Part::Column => {
++                let column = DecimalFormatter::new(values.column.unwrap_or(1));
++                dest.extend_from_slice(column.as_bytes());
++            }
++        }
++    }
++}
++
++impl std::fmt::Display for Part {
++    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
++        match self {
++            Part::Text(text) => write!(f, "{}", String::from_utf8_lossy(text)),
++            Part::Host => write!(f, "{{host}}"),
++            Part::WSLPrefix => write!(f, "{{wslprefix}}"),
++            Part::Path => write!(f, "{{path}}"),
++            Part::Line => write!(f, "{{line}}"),
++            Part::Column => write!(f, "{{column}}"),
++        }
++    }
++}
++
++/// The values to replace the format variables with.
++///
++/// This only consists of values that depend on each path or match printed.
++/// Values that are invariant throughout the lifetime of the process are set
++/// via a [`HyperlinkEnvironment`].
++#[derive(Clone, Debug)]
++pub(crate) struct Values<'a> {
++    path: &'a HyperlinkPath,
++    line: Option<u64>,
++    column: Option<u64>,
++}
++
++impl<'a> Values<'a> {
++    /// Creates a new set of values, starting with the path given.
++    ///
++    /// Callers may also set the line and column number using the mutator
++    /// methods.
++    pub(crate) fn new(path: &'a HyperlinkPath) -> Values<'a> {
++        Values { path, line: None, column: None }
++    }
++
++    /// Sets the line number for these values.
++    ///
++    /// If a line number is not set and a hyperlink format contains a `{line}`
++    /// variable, then it is interpolated with the value of `1` automatically.
++    pub(crate) fn line(mut self, line: Option<u64>) -> Values<'a> {
++        self.line = line;
++        self
++    }
++
++    /// Sets the column number for these values.
++    ///
++    /// If a column number is not set and a hyperlink format contains a
++    /// `{column}` variable, then it is interpolated with the value of `1`
++    /// automatically.
++    pub(crate) fn column(mut self, column: Option<u64>) -> Values<'a> {
++        self.column = column;
++        self
++    }
++}
++
++/// An abstraction for interpolating a hyperlink format with values for every
++/// variable.
++///
++/// Interpolation of variables occurs through two different sources. The
++/// first is via a `HyperlinkEnvironment` for values that are expected to
++/// be invariant. This comes from the `HyperlinkConfig` used to build this
++/// interpolator. The second source is via `Values`, which is provided to
++/// `Interpolator::begin`. The `Values` contains things like the file path,
++/// line number and column number.
++#[derive(Clone, Debug)]
++pub(crate) struct Interpolator {
++    config: HyperlinkConfig,
++    buf: RefCell<Vec<u8>>,
++}
++
++impl Interpolator {
++    /// Create a new interpolator for the given hyperlink format configuration.
++    pub(crate) fn new(config: &HyperlinkConfig) -> Interpolator {
++        Interpolator { config: config.clone(), buf: RefCell::new(vec![]) }
++    }
++
++    /// Start interpolation with the given values by writing a hyperlink
++    /// to `wtr`. Subsequent writes to `wtr`, until `Interpolator::end` is
++    /// called, are the label for the hyperlink.
++    ///
++    /// This returns an interpolator status which indicates whether the
++    /// hyperlink was written. It might not be written, for example, if the
++    /// underlying writer doesn't support hyperlinks or if the hyperlink
++    /// format is empty. The status should be provided to `Interpolator::end`
++    /// as an instruction for whether to close the hyperlink or not.
++    pub(crate) fn begin<W: WriteColor>(
++        &self,
++        values: &Values,
++        mut wtr: W,
++    ) -> io::Result<InterpolatorStatus> {
++        if self.config.format().is_empty()
++            || !wtr.supports_hyperlinks()
++            || !wtr.supports_color()
++        {
++            return Ok(InterpolatorStatus::inactive());
++        }
++        let mut buf = self.buf.borrow_mut();
++        buf.clear();
++        for part in self.config.format().parts.iter() {
++            part.interpolate_to(self.config.environment(), values, &mut buf);
++        }
++        let spec = HyperlinkSpec::open(&buf);
++        wtr.set_hyperlink(&spec)?;
++        Ok(InterpolatorStatus { active: true })
++    }
++
++    /// Writes the correct escape sequences to `wtr` to close any extant
++    /// hyperlink, marking the end of a hyperlink's label.
++    ///
++    /// The status given should be returned from a corresponding
++    /// `Interpolator::begin` call. Since `begin` may not write a hyperlink
++    /// (e.g., if the underlying writer doesn't support hyperlinks), it follows
++    /// that `finish` must not close a hyperlink that was never opened. The
++    /// status indicates whether the hyperlink was opened or not.
++    pub(crate) fn finish<W: WriteColor>(
++        &self,
++        status: InterpolatorStatus,
++        mut wtr: W,
++    ) -> io::Result<()> {
++        if !status.active {
++            return Ok(());
++        }
++        wtr.set_hyperlink(&HyperlinkSpec::close())
++    }
++}
++
++/// A status indicating whether a hyperlink was written or not.
++///
++/// This is created by `Interpolator::begin` and used by `Interpolator::finish`
++/// to determine whether a hyperlink was actually opened or not. If it wasn't
++/// opened, then finishing interpolation is a no-op.
++#[derive(Debug)]
++pub(crate) struct InterpolatorStatus {
++    active: bool,
++}
++
++impl InterpolatorStatus {
++    /// Create an inactive interpolator status.
++    #[inline]
++    pub(crate) fn inactive() -> InterpolatorStatus {
++        InterpolatorStatus { active: false }
++    }
++}
++
++/// Represents the `{path}` part of a hyperlink.
++///
++/// This is the value to use as-is in the hyperlink, converted from an OS file
++/// path.
++#[derive(Clone, Debug)]
++pub(crate) struct HyperlinkPath(Vec<u8>);
++
++impl HyperlinkPath {
++    /// Returns a hyperlink path from an OS path.
++    #[cfg(unix)]
++    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
++        use std::os::unix::ffi::OsStrExt;
++
++        // We canonicalize the path in order to get an absolute version of it
++        // without any `.` or `..` or superfluous separators. Unfortunately,
++        // this does also remove symlinks, and in theory, it would be nice to
++        // retain them. Perhaps even simpler, we could just join the current
++        // working directory with the path and be done with it. There was
++        // some discussion about this on PR#2483, and there generally appears
++        // to be some uncertainty about the extent to which hyperlinks with
++        // things like `..` in them actually work. So for now, we do the safest
++        // thing possible even though I think it can result in worse user
++        // experience. (Because it means the path you click on and the actual
++        // path that gets followed are different, even though they ostensibly
++        // refer to the same file.)
++        //
++        // There's also the potential issue that path canonicalization is
++        // expensive since it can touch the file system. That is probably
++        // less of an issue since hyperlinks are only created when they're
++        // supported, i.e., when writing to a tty.
++        //
++        // [1]: https://github.com/BurntSushi/ripgrep/pull/2483
++        let path = match original_path.canonicalize() {
++            Ok(path) => path,
++            Err(err) => {
++                log::debug!(
++                    "hyperlink creation for {:?} failed, error occurred \
++                     during path canonicalization: {}",
++                    original_path,
++                    err,
++                );
++                return None;
++            }
++        };
++        let bytes = path.as_os_str().as_bytes();
++        // This should not be possible since one imagines that canonicalization
++        // should always return an absolute path. But it doesn't actually
++        // appear guaranteed by POSIX, so we check whether it's true or not and
++        // refuse to create a hyperlink from a relative path if it isn't.
++        if !bytes.starts_with(b"/") {
++            log::debug!(
++                "hyperlink creation for {:?} failed, canonicalization \
++                 returned {:?}, which does not start with a slash",
++                original_path,
++                path,
++            );
++            return None;
++        }
++        Some(HyperlinkPath::encode(bytes))
++    }
++
++    /// Returns a hyperlink path from an OS path.
++    #[cfg(windows)]
++    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
++        // On Windows, we use `std::path::absolute` instead of `Path::canonicalize`
++        // as it can be much faster since it does not touch the file system.
++        // It wraps the [`GetFullPathNameW`][1] API, except for verbatim paths
++        // (those which start with `\\?\`, see [the documentation][2] for details).
++        //
++        // Here, we strip any verbatim path prefixes since we cannot use them
++        // in hyperlinks anyway. This can only happen if the user explicitly
++        // supplies a verbatim path as input, which already needs to be absolute:
++        //
++        //   \\?\C:\dir\file.txt           (local path)
++        //   \\?\UNC\server\dir\file.txt   (network share)
++        //
++        // The `\\?\` prefix is constant for verbatim paths, and can be followed
++        // by `UNC\` (universal naming convention), which denotes a network share.
++        //
++        // Given that the default URL format on Windows is file://{path}
++        // we need to return the following from this function:
++        //
++        //   /C:/dir/file.txt        (local path)
++        //   //server/dir/file.txt   (network share)
++        //
++        // Which produces the following links:
++        //
++        //   file:///C:/dir/file.txt        (local path)
++        //   file:////server/dir/file.txt   (network share)
++        //
++        // This substitutes the {path} variable with the expected value for
++        // the most common DOS paths, but on the other hand, network paths
++        // start with a single slash, which may be unexpected. It seems to work
++        // though?
++        //
++        // Note that the following URL syntax also seems to be valid?
++        //
++        //   file://server/dir/file.txt
++        //
++        // But the initial implementation of this routine went for the format
++        // above.
++        //
++        // Also note that the file://C:/dir/file.txt syntax is not correct,
++        // even though it often works in practice.
++        //
++        // In the end, this choice was confirmed by VSCode, whose format is
++        //
++        //   vscode://file{path}:{line}:{column}
++        //
++        // and which correctly understands the following URL format for network
++        // drives:
++        //
++        //   vscode://file//server/dir/file.txt:1:1
++        //
++        // It doesn't parse any other number of slashes in "file//server" as a
++        // network path.
++        //
++        // [1]: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfullpathnamew
++        // [2]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
++
++        const WIN32_NAMESPACE_PREFIX: &str = r"\\?\";
++        const UNC_PREFIX: &str = r"UNC\";
++
++        let path = match std::path::absolute(original_path) {
++            Ok(path) => path,
++            Err(err) => {
++                log::debug!(
++                    "hyperlink creation for {:?} failed, error occurred \
++                     during conversion to absolute path: {}",
++                    original_path,
++                    err,
++                );
++                return None;
++            }
++        };
++        // We convert the path to a string for easier manipulation. If it
++        // wasn't valid UTF-16 (and thus could not be non-lossily transcoded
++        // to UTF-8), then we just give up. It's not clear we could make
++        // a meaningful hyperlink from it anyway. And this should be an
++        // exceptionally rare case.
++        let mut string = match path.to_str() {
++            Some(string) => string,
++            None => {
++                log::debug!(
++                    "hyperlink creation for {:?} failed, path is not \
++                     valid UTF-8",
++                    original_path,
++                );
++                return None;
++            }
++        };
++
++        // Strip verbatim path prefixes (see the comment above for details).
++        if string.starts_with(WIN32_NAMESPACE_PREFIX) {
++            string = &string[WIN32_NAMESPACE_PREFIX.len()..];
++
++            // Drop the UNC prefix if there is one, but keep the leading slash.
++            if string.starts_with(UNC_PREFIX) {
++                string = &string[(UNC_PREFIX.len() - 1)..];
++            }
++        } else if string.starts_with(r"\\") || string.starts_with(r"//") {
++            // Drop one of the two leading slashes of network paths, it will be added back.
++            string = &string[1..];
++        }
++
++        // Finally, add a leading slash. In the local file case, this turns
++        // C:\foo\bar into /C:\foo\bar (and then percent encoding turns it into
++        // /C:/foo/bar). In the network share case, this turns \share\foo\bar
++        // into /\share/foo/bar (and then percent encoding turns it into
++        // //share/foo/bar).
++        let with_slash = format!("/{string}");
++        Some(HyperlinkPath::encode(with_slash.as_bytes()))
++    }
++
++    /// For other platforms (not windows, not unix), return None and log a debug message.
++    #[cfg(not(any(windows, unix)))]
++    pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
++        log::debug!("hyperlinks are not supported on this platform");
++        None
++    }
++
++    /// Percent-encodes a path.
++    ///
++    /// The alphanumeric ASCII characters and "-", ".", "_", "~" are unreserved
++    /// as per section 2.3 of RFC 3986 (Uniform Resource Identifier (URI):
++    /// Generic Syntax), and are not encoded. The other ASCII characters except
++    /// "/" and ":" are percent-encoded, and "\" is replaced by "/" on Windows.
++    ///
++    /// Section 4 of RFC 8089 (The "file" URI Scheme) does not mandate precise
++    /// encoding requirements for non-ASCII characters, and this implementation
++    /// leaves them unencoded. On Windows, the UrlCreateFromPathW function does
++    /// not encode non-ASCII characters. Doing so with UTF-8 encoded paths
++    /// creates invalid file:// URLs on that platform.
++    fn encode(input: &[u8]) -> HyperlinkPath {
++        let mut result = Vec::with_capacity(input.len());
++        for &byte in input.iter() {
++            match byte {
++                b'0'..=b'9'
++                | b'A'..=b'Z'
++                | b'a'..=b'z'
++                | b'/'
++                | b':'
++                | b'-'
++                | b'.'
++                | b'_'
++                | b'~'
++                | 128.. => {
++                    result.push(byte);
++                }
++                #[cfg(windows)]
++                b'\\' => {
++                    result.push(b'/');
++                }
++                _ => {
++                    const HEX: &[u8] = b"0123456789ABCDEF";
++                    result.push(b'%');
++                    result.push(HEX[(byte >> 4) as usize]);
++                    result.push(HEX[(byte & 0xF) as usize]);
++                }
++            }
++        }
++        HyperlinkPath(result)
++    }
++}
++
++/// Returns the set of hyperlink aliases supported by this crate.
++///
++/// Aliases are supported by the `FromStr` trait implementation of a
++/// [`HyperlinkFormat`]. That is, if an alias is seen, then it is automatically
++/// replaced with the corresponding format. For example, the `vscode` alias
++/// maps to `vscode://file{path}:{line}:{column}`.
++///
++/// This is exposed to allow callers to include hyperlink aliases in
++/// documentation in a way that is guaranteed to match what is actually
++/// supported.
++///
++/// The list returned is guaranteed to be sorted lexicographically
++/// by the alias name. Callers may want to re-sort the list using
++/// [`HyperlinkAlias::display_priority`] via a stable sort when showing the
++/// list to users. This will cause special aliases like `none` and `default` to
++/// appear first.
++pub fn hyperlink_aliases() -> Vec<HyperlinkAlias> {
++    HYPERLINK_PATTERN_ALIASES.iter().cloned().collect()
++}
++
++#[cfg(test)]
++mod tests {
++    use std::str::FromStr;
++
++    use super::*;
++
++    #[test]
++    fn build_format() {
++        let format = FormatBuilder::new()
++            .append_slice(b"foo://")
++            .append_slice(b"bar-")
++            .append_slice(b"baz")
++            .append_var("path")
++            .unwrap()
++            .build()
++            .unwrap();
++
++        assert_eq!(format.to_string(), "foo://bar-baz{path}");
++        assert_eq!(format.parts[0], Part::Text(b"foo://bar-baz".to_vec()));
++        assert!(!format.is_empty());
++    }
++
++    #[test]
++    fn build_empty_format() {
++        let format = FormatBuilder::new().build().unwrap();
++
++        assert!(format.is_empty());
++        assert_eq!(format, HyperlinkFormat::empty());
++        assert_eq!(format, HyperlinkFormat::default());
++    }
++
++    #[test]
++    fn handle_alias() {
++        assert!(HyperlinkFormat::from_str("file").is_ok());
++        assert!(HyperlinkFormat::from_str("none").is_ok());
++        assert!(HyperlinkFormat::from_str("none").unwrap().is_empty());
++    }
++
++    #[test]
++    fn parse_format() {
++        let format = HyperlinkFormat::from_str(
++            "foo://{host}/bar/{path}:{line}:{column}",
++        )
++        .unwrap();
++
++        assert_eq!(
++            format.to_string(),
++            "foo://{host}/bar/{path}:{line}:{column}"
++        );
++        assert_eq!(format.parts.len(), 8);
++        assert!(format.parts.contains(&Part::Path));
++        assert!(format.parts.contains(&Part::Line));
++        assert!(format.parts.contains(&Part::Column));
++    }
++
++    #[test]
++    fn parse_valid() {
++        assert!(HyperlinkFormat::from_str("").unwrap().is_empty());
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{path}").unwrap().to_string(),
++            "foo://{path}"
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{path}/bar").unwrap().to_string(),
++            "foo://{path}/bar"
++        );
++
++        HyperlinkFormat::from_str("f://{path}").unwrap();
++        HyperlinkFormat::from_str("f:{path}").unwrap();
++        HyperlinkFormat::from_str("f-+.:{path}").unwrap();
++        HyperlinkFormat::from_str("f42:{path}").unwrap();
++        HyperlinkFormat::from_str("42:{path}").unwrap();
++        HyperlinkFormat::from_str("+:{path}").unwrap();
++        HyperlinkFormat::from_str("F42:{path}").unwrap();
++        HyperlinkFormat::from_str("F42://foo{{bar}}{path}").unwrap();
++    }
++
++    #[test]
++    fn parse_invalid() {
++        use super::HyperlinkFormatErrorKind::*;
++
++        let err = |kind| HyperlinkFormatError { kind };
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://bar").unwrap_err(),
++            err(NoVariables),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{line}").unwrap_err(),
++            err(NoPathVariable),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{path").unwrap_err(),
++            err(UnclosedVariable),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{path}:{column}").unwrap_err(),
++            err(NoLineVariable),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("{path}").unwrap_err(),
++            err(InvalidScheme),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str(":{path}").unwrap_err(),
++            err(InvalidScheme),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("f*:{path}").unwrap_err(),
++            err(InvalidScheme),
++        );
++
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{bar}").unwrap_err(),
++            err(InvalidVariable("bar".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{}}bar}").unwrap_err(),
++            err(InvalidVariable("".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{b}}ar}").unwrap_err(),
++            err(InvalidVariable("b".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{bar}}}").unwrap_err(),
++            err(InvalidVariable("bar".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{{bar}").unwrap_err(),
++            err(InvalidCloseVariable),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{{{bar}").unwrap_err(),
++            err(InvalidVariable("bar".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{b{{ar}").unwrap_err(),
++            err(InvalidVariable("b{{ar".to_string())),
++        );
++        assert_eq!(
++            HyperlinkFormat::from_str("foo://{bar{{}").unwrap_err(),
++            err(InvalidVariable("bar{{".to_string())),
++        );
++    }
++
++    #[test]
++    #[cfg(windows)]
++    fn convert_to_hyperlink_path() {
++        let convert = |path| {
++            String::from_utf8(
++                HyperlinkPath::from_path(Path::new(path)).unwrap().0,
++            )
++            .unwrap()
++        };
++
++        assert_eq!(convert(r"C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"C:\foo\bar\..\other\baz.txt"),
++            "/C:/foo/other/baz.txt"
++        );
++
++        assert_eq!(convert(r"\\server\dir\file.txt"), "//server/dir/file.txt");
++        assert_eq!(
++            convert(r"\\server\dir\foo\..\other\file.txt"),
++            "//server/dir/other/file.txt"
++        );
++
++        assert_eq!(convert(r"\\?\C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"\\?\UNC\server\dir\file.txt"),
++            "//server/dir/file.txt"
++        );
++    }
++
++    #[test]
++    fn aliases_are_sorted() {
++        let aliases = hyperlink_aliases();
++        let mut prev =
++            aliases.first().expect("aliases should be non-empty").name();
++        for alias in aliases.iter().skip(1) {
++            let name = alias.name();
++            assert!(
++                name > prev,
++                "'{prev}' should come before '{name}' in \
++                 HYPERLINK_PATTERN_ALIASES",
++            );
++            prev = name;
++        }
++    }
++
++    #[test]
++    fn alias_names_are_reasonable() {
++        for alias in hyperlink_aliases() {
++            // There's no hard rule here, but if we want to define an alias
++            // with a name that doesn't pass this assert, then we should
++            // probably flag it as worthy of consideration. For example, we
++            // really do not want to define an alias that contains `{` or `}`,
++            // which might confuse it for a variable.
++            assert!(alias.name().chars().all(|c| c.is_alphanumeric()
++                || c == '+'
++                || c == '-'
++                || c == '.'));
++        }
++    }
++
++    #[test]
++    fn aliases_are_valid_formats() {
++        for alias in hyperlink_aliases() {
++            let (name, format) = (alias.name(), alias.format());
++            assert!(
++                format.parse::<HyperlinkFormat>().is_ok(),
++                "invalid hyperlink alias '{name}': {format}",
++            );
++        }
++    }
++}
+diff --git a/crates/printer/src/hyperlink_aliases.rs b/crates/printer/src/hyperlink_aliases.rs
+deleted file mode 100644
+index 9bad1b862d6dbc06dbdcfd65aa06a4e5dea7a8e5..0000000000000000000000000000000000000000
+--- a/crates/printer/src/hyperlink_aliases.rs
++++ /dev/null
+@@ -1,85 +0,0 @@
+-/// Aliases to well-known hyperlink schemes.
+-///
+-/// These need to be sorted by name.
+-const HYPERLINK_PATTERN_ALIASES: &[(&str, &str)] = &[
+-    #[cfg(not(windows))]
+-    ("default", "file://{host}{path}"),
+-    #[cfg(windows)]
+-    ("default", "file://{path}"),
+-    ("file", "file://{host}{path}"),
+-    // https://github.com/misaki-web/grepp
+-    ("grep+", "grep+://{path}:{line}"),
+-    ("kitty", "file://{host}{path}#{line}"),
+-    // https://macvim.org/docs/gui_mac.txt.html#mvim%3A%2F%2F
+-    ("macvim", "mvim://open?url=file://{path}&line={line}&column={column}"),
+-    ("none", ""),
+-    // https://macromates.com/blog/2007/the-textmate-url-scheme/
+-    ("textmate", "txmt://open?url=file://{path}&line={line}&column={column}"),
+-    // https://code.visualstudio.com/docs/editor/command-line#_opening-vs-code-with-urls
+-    ("vscode", "vscode://file{path}:{line}:{column}"),
+-    ("vscode-insiders", "vscode-insiders://file{path}:{line}:{column}"),
+-    ("vscodium", "vscodium://file{path}:{line}:{column}"),
+-];
+-
+-/// Look for the hyperlink format defined by the given alias name.
+-///
+-/// If one does not exist, `None` is returned.
+-pub(crate) fn find(name: &str) -> Option<&str> {
+-    HYPERLINK_PATTERN_ALIASES
+-        .binary_search_by_key(&name, |&(name, _)| name)
+-        .map(|i| HYPERLINK_PATTERN_ALIASES[i].1)
+-        .ok()
+-}
+-
+-/// Return an iterator over all available alias names and their definitions.
+-pub(crate) fn iter() -> impl Iterator<Item = (&'static str, &'static str)> {
+-    HYPERLINK_PATTERN_ALIASES.iter().copied()
+-}
+-
+-#[cfg(test)]
+-mod tests {
+-    use crate::HyperlinkFormat;
+-
+-    use super::*;
+-
+-    #[test]
+-    fn is_sorted() {
+-        let mut prev = HYPERLINK_PATTERN_ALIASES
+-            .get(0)
+-            .expect("aliases should be non-empty")
+-            .0;
+-        for &(name, _) in HYPERLINK_PATTERN_ALIASES.iter().skip(1) {
+-            assert!(
+-                name > prev,
+-                "'{prev}' should come before '{name}' in \
+-                 HYPERLINK_PATTERN_ALIASES",
+-            );
+-            prev = name;
+-        }
+-    }
+-
+-    #[test]
+-    fn alias_names_are_reasonable() {
+-        for &(name, _) in HYPERLINK_PATTERN_ALIASES.iter() {
+-            // There's no hard rule here, but if we want to define an alias
+-            // with a name that doesn't pass this assert, then we should
+-            // probably flag it as worthy of consideration. For example, we
+-            // really do not want to define an alias that contains `{` or `}`,
+-            // which might confuse it for a variable.
+-            assert!(name.chars().all(|c| c.is_alphanumeric()
+-                || c == '+'
+-                || c == '-'
+-                || c == '.'));
+-        }
+-    }
+-
+-    #[test]
+-    fn aliases_are_valid_formats() {
+-        for (name, definition) in HYPERLINK_PATTERN_ALIASES {
+-            assert!(
+-                definition.parse::<HyperlinkFormat>().is_ok(),
+-                "invalid hyperlink alias '{name}': {definition}",
+-            );
+-        }
+-    }
+-}
+diff --git a/crates/printer/src/lib.rs b/crates/printer/src/lib.rs
+index 5748862cb977f17dd5b028092d415a378cf4a188..96748e2cc497c074245aa81ea7815d0351a3f08e 100644
+--- a/crates/printer/src/lib.rs
++++ b/crates/printer/src/lib.rs
+@@ -63,8 +63,8 @@ assert_eq!(output, expected);
+ pub use crate::{
+     color::{default_color_specs, ColorError, ColorSpecs, UserColorSpec},
+     hyperlink::{
+-        HyperlinkConfig, HyperlinkEnvironment, HyperlinkFormat,
+-        HyperlinkFormatError,
++        hyperlink_aliases, HyperlinkAlias, HyperlinkConfig,
++        HyperlinkEnvironment, HyperlinkFormat, HyperlinkFormatError,
+     },
+     path::{PathPrinter, PathPrinterBuilder},
+     standard::{Standard, StandardBuilder, StandardSink},
+@@ -92,7 +92,6 @@ mod macros;
+ mod color;
+ mod counter;
+ mod hyperlink;
+-mod hyperlink_aliases;
+ #[cfg(feature = "serde")]
+ mod json;
+ #[cfg(feature = "serde")]
+diff --git a/crates/printer/src/summary.rs b/crates/printer/src/summary.rs
+index 073b89e023c9eb588eddc1a5c31c32b986b7fc14..c43135562bdc2718e3402e63339ff9bd41f099b3 100644
+--- a/crates/printer/src/summary.rs
++++ b/crates/printer/src/summary.rs
+@@ -87,7 +87,13 @@ pub enum SummaryKind {
+     ///
+     /// Note that if `stats` is enabled, then searching continues in order to
+     /// compute statistics.
+-    Quiet,
++    QuietWithMatch,
++    /// Don't show any output and the stop the search once a non-matching file
++    /// is found.
++    ///
++    /// Note that if `stats` is enabled, then searching continues in order to
++    /// compute statistics.
++    QuietWithoutMatch,
+ }
+ 
+ impl SummaryKind {
+@@ -101,7 +107,7 @@ impl SummaryKind {
+ 
+         match *self {
+             PathWithMatch | PathWithoutMatch => true,
+-            Count | CountMatches | Quiet => false,
++            Count | CountMatches | QuietWithMatch | QuietWithoutMatch => false,
+         }
+     }
+ 
+@@ -112,7 +118,8 @@ impl SummaryKind {
+ 
+         match *self {
+             CountMatches => true,
+-            Count | PathWithMatch | PathWithoutMatch | Quiet => false,
++            Count | PathWithMatch | PathWithoutMatch | QuietWithMatch
++            | QuietWithoutMatch => false,
+         }
+     }
+ 
+@@ -122,8 +129,10 @@ impl SummaryKind {
+         use self::SummaryKind::*;
+ 
+         match *self {
+-            PathWithMatch | Quiet => true,
+-            Count | CountMatches | PathWithoutMatch => false,
++            PathWithMatch | QuietWithMatch => true,
++            Count | CountMatches | PathWithoutMatch | QuietWithoutMatch => {
++                false
++            }
+         }
+     }
+ }
+@@ -246,9 +255,9 @@ impl SummaryBuilder {
+     ///
+     /// When this is enabled, this printer may need to do extra work in order
+     /// to compute certain statistics, which could cause the search to take
+-    /// longer. For example, in `Quiet` mode, a search can quit after finding
+-    /// the first match, but if `stats` is enabled, then the search will
+-    /// continue after the first match in order to compute statistics.
++    /// longer. For example, in `QuietWithMatch` mode, a search can quit after
++    /// finding the first match, but if `stats` is enabled, then the search
++    /// will continue after the first match in order to compute statistics.
+     ///
+     /// For a complete description of available statistics, see [`Stats`].
+     ///
+@@ -505,7 +514,9 @@ impl<'p, 's, M: Matcher, W: WriteColor> SummarySink<'p, 's, M, W> {
+     /// search.
+     pub fn has_match(&self) -> bool {
+         match self.summary.config.kind {
+-            SummaryKind::PathWithoutMatch => self.match_count == 0,
++            SummaryKind::PathWithoutMatch | SummaryKind::QuietWithoutMatch => {
++                self.match_count == 0
++            }
+             _ => self.match_count > 0,
+         }
+     }
+@@ -749,14 +760,14 @@ impl<'p, 's, M: Matcher, W: WriteColor> Sink for SummarySink<'p, 's, M, W> {
+         // don't quit and therefore search the entire contents of the file.
+         //
+         // There is an unfortunate inconsistency here. Namely, when using
+-        // Quiet or PathWithMatch, then the printer can quit after the first
+-        // match seen, which could be long before seeing binary data. This
+-        // means that using PathWithMatch can print a path where as using
++        // QuietWithMatch or PathWithMatch, then the printer can quit after the
++        // first match seen, which could be long before seeing binary data.
++        // This means that using PathWithMatch can print a path where as using
+         // Count might not print it at all because of binary data.
+         //
+         // It's not possible to fix this without also potentially significantly
+-        // impacting the performance of Quiet or PathWithMatch, so we accept
+-        // the bug.
++        // impacting the performance of QuietWithMatch or PathWithMatch, so we
++        // accept the bug.
+         if self.binary_byte_offset.is_some()
+             && searcher.binary_detection().quit_byte().is_some()
+         {
+@@ -798,7 +809,7 @@ impl<'p, 's, M: Matcher, W: WriteColor> Sink for SummarySink<'p, 's, M, W> {
+                     self.write_path_line(searcher)?;
+                 }
+             }
+-            SummaryKind::Quiet => {}
++            SummaryKind::QuietWithMatch | SummaryKind::QuietWithoutMatch => {}
+         }
+         Ok(())
+     }

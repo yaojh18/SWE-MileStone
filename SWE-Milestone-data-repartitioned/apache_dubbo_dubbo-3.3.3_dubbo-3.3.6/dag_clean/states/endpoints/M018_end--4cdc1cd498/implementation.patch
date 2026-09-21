@@ -1,0 +1,1723 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.github/workflows/build-and-test-pr.yml b/.github/workflows/build-and-test-pr.yml
+index 921791f7666e8cb91496f4da2c3ffe9567406c06..1bd5e2e982472286917886501ffa3820d76e760f 100644
+--- a/.github/workflows/build-and-test-pr.yml
++++ b/.github/workflows/build-and-test-pr.yml
+@@ -207,12 +207,10 @@ jobs:
+ 
+   unit-test:
+     needs: [check-format, unit-test-prepare]
+-    name: "Unit Test On ubuntu-latest Java: ${{ matrix.java }}"
++    name: "Unit Test On ubuntu-latest"
+     runs-on: ubuntu-latest
+     strategy:
+       fail-fast: false
+-      matrix:
+-        java: [ 8, 11, 17, 21 ]
+     env:
+       DISABLE_FILE_SYSTEM_TEST: true
+       CURRENT_ROLE: ${{ matrix.case-role }}
+@@ -222,11 +220,11 @@ jobs:
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+-      - name: "Set up JDK ${{ matrix.java }}"
++      - name: "Set up JDK 21"
+         uses: actions/setup-java@v4
+         with:
+           distribution: 'zulu'
+-          java-version: ${{ matrix.java }}
++          java-version: 21
+       - name: "Set current date as env variable"
+         run: echo "TODAY=$(date +'%Y%m%d')" >> $GITHUB_ENV
+       - name: "Cache local maven repository"
+@@ -245,15 +243,8 @@ jobs:
+           key: zookeeper-${{ runner.os }}-${{ env.ZOOKEEPER_VERSION }}
+           restore-keys: |
+             zookeeper-${{ runner.os }}-
+-      - name: "Test with maven on Java: 8"
+-        timeout-minutes: 90
+-        if: ${{ matrix.java == '8' }}
+-        run: |
+-          set -o pipefail
+-          ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+-      - name: "Test with maven on Java: ${{ matrix.java }}"
++      - name: "Test with maven"
+         timeout-minutes: 90
+-        if: ${{ matrix.java != '8' }}
+         run: |
+           set -o pipefail
+           ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,jdk15ge-simple,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+@@ -265,13 +256,13 @@ jobs:
+         with:
+           token: ${{ secrets.CODECOV_TOKEN }}
+           verbose: true
+-          flags: unit-tests-java${{ matrix.java }}
++          flags: unit-tests
+         env:
+           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+       - name: "Upload surefire reports"
+         uses: actions/upload-artifact@v4
+         with:
+-          name: surefire-reports-java${{ matrix.java }}
++          name: surefire-reports
+           path: "**/target/surefire-reports/**"
+ 
+   samples-test-prepare:
+@@ -302,7 +293,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -343,7 +334,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -374,7 +365,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -417,7 +408,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -458,7 +449,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -489,7 +480,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -510,7 +501,7 @@ jobs:
+     needs: [check-format, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+@@ -560,7 +551,7 @@ jobs:
+     needs: [check-format, integration-test-result, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+diff --git a/.github/workflows/build-and-test-scheduled-3.1.yml b/.github/workflows/build-and-test-scheduled-3.1.yml
+index 29fffd081e69b088dff50e48a1b29fab1ed8a860..d53f36a7db396964f70f629944b981a70fd4c3ae 100644
+--- a/.github/workflows/build-and-test-scheduled-3.1.yml
++++ b/.github/workflows/build-and-test-scheduled-3.1.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.2.yml b/.github/workflows/build-and-test-scheduled-3.2.yml
+index 514097e7796c16c7beaef02b690987a8c4c651e1..72d67ef65a1a9cd00efa8313abd5667b9e0a6ac0 100644
+--- a/.github/workflows/build-and-test-scheduled-3.2.yml
++++ b/.github/workflows/build-and-test-scheduled-3.2.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.3.yml b/.github/workflows/build-and-test-scheduled-3.3.yml
+index 014b120a046aedcd1e5bcaeec0d3af68a3806cdb..944cbfa9247576d1945f173a924a0540f07c6f5a 100644
+--- a/.github/workflows/build-and-test-scheduled-3.3.yml
++++ b/.github/workflows/build-and-test-scheduled-3.3.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/release-test.yml b/.github/workflows/release-test.yml
+index a579ba3727cfea46da6c97ef49c6970e87148b96..e010b7e8335a17b05191bda8d00d9e82faa0e8b8 100644
+--- a/.github/workflows/release-test.yml
++++ b/.github/workflows/release-test.yml
+@@ -283,7 +283,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+@@ -383,7 +383,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+diff --git a/README.md b/README.md
+index 3350b17742d80d8542d524baf57368702d1a0de2..56f43e9a6702c497d95f8df453be8e061373e529 100644
+--- a/README.md
++++ b/README.md
+@@ -73,7 +73,7 @@ Explore more through our hands-on tasks:
+ 
+ | Version  | JDK Support | Dependencies                                                                                          | Highlights                                                                                                     |
+ |----------|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+-| **3.3.5**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.5/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
++| **3.3.2**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.2/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
+ | **3.2.16** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.5/dubbo-dependencies-bom/pom.xml#L94) | ✅ Actively Maintained <br> ✅ Metrics & Tracing <br> ✅ Thread Pool Isolation <br> ✅ +30% Performance <br> ✅ Native Image Support |
+ | **3.1.11** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.11/dubbo-dependencies-bom/pom.xml#L90) | ⚠️ Stable, but Not Actively Maintained                                                                         |
+ 
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
+index 82421e460febf5d1e147276a6ef509d0d48d1b8a..b776dbe3a7148b3fe1db9423c1ddbd065db2a911 100644
+--- a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
+@@ -53,13 +53,13 @@ public class ConsistentHashLoadBalance extends AbstractLoadBalance {
+     protected <T> Invoker<T> doSelect(List<Invoker<T>> invokers, URL url, Invocation invocation) {
+         String methodName = RpcUtils.getMethodName(invocation);
+         String key = invokers.get(0).getUrl().getServiceKey() + "." + methodName;
+-        // using the hashcode of list to compute the hash only pay attention to the elements in the list
+         int invokersHashCode = invokers.hashCode();
+-        ConsistentHashSelector<T> selector = (ConsistentHashSelector<T>) selectors.get(key);
+-        if (selector == null || selector.identityHashCode != invokersHashCode) {
+-            selectors.put(key, new ConsistentHashSelector<T>(invokers, methodName, invokersHashCode));
+-            selector = (ConsistentHashSelector<T>) selectors.get(key);
+-        }
++        // using the hashcode of invoker list to create consistent selector by atomic computation.
++        ConsistentHashSelector<T> selector = (ConsistentHashSelector<T>) selectors.compute(
++                key,
++                (k, oldSelector) -> (oldSelector == null || oldSelector.identityHashCode != invokersHashCode)
++                        ? new ConsistentHashSelector<>(invokers, methodName, invokersHashCode)
++                        : oldSelector);
+         return selector.select(invocation);
+     }
+ 
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java b/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
+index b68e1ab5e14711f9588faa0f9af8ba52d369fd8a..0aaadc9a2f4a583a795e0b3365fe854b9a06611f 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
+@@ -112,16 +112,17 @@ public abstract class Wrapper {
+      * @return Wrapper instance(not null).
+      */
+     public static Wrapper getWrapper(Class<?> c) {
+-        while (ClassGenerator.isDynamicClass(c)) // can not wrapper on dynamic class.
+-        {
+-            c = c.getSuperclass();
+-        }
+-
+-        if (c == Object.class) {
+-            return OBJECT_WRAPPER;
+-        }
++        return ConcurrentHashMapUtils.computeIfAbsent(WRAPPER_MAP, c, (clazz) -> {
++            while (ClassGenerator.isDynamicClass(clazz)) // can not wrapper on dynamic class.
++            {
++                clazz = clazz.getSuperclass();
++            }
+ 
+-        return ConcurrentHashMapUtils.computeIfAbsent(WRAPPER_MAP, c, Wrapper::makeWrapper);
++            if (clazz == Object.class) {
++                return OBJECT_WRAPPER;
++            }
++            return makeWrapper(clazz);
++        });
+     }
+ 
+     private static Wrapper makeWrapper(Class<?> c) {
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
+index ea80a698a6809db98157be3e98ebae1eb70f5632..bd11fd8d1218b8b0cc98648dedffef33d4065fab 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
+@@ -47,11 +47,13 @@ import static org.apache.dubbo.common.constants.CommonConstants.SERIALIZE_BLOCKE
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.COMMON_IO_EXCEPTION;
+ 
+ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<ModuleModel> {
+-    private final SerializeSecurityManager serializeSecurityManager;
+-
+-    private static final ErrorTypeAwareLogger logger =
++    private static final ErrorTypeAwareLogger LOGGER =
+             LoggerFactory.getErrorTypeAwareLogger(SerializeSecurityConfigurator.class);
+ 
++    private final Set<Type> markedTypeCache = new HashSet<>();
++
++    private final SerializeSecurityManager serializeSecurityManager;
++
+     private final ModuleModel moduleModel;
+ 
+     private final ClassHolder classHolder;
+@@ -137,7 +139,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         Set<URL> urls = ClassLoaderResourceLoader.loadResources(SERIALIZE_ALLOW_LIST_FILE_PATH, classLoader);
+         for (URL u : urls) {
+             try {
+-                logger.info("Read serialize allow list from " + u);
++                LOGGER.info("Read serialize allow list from " + u);
+                 String[] lines = IOUtils.readLines(u.openStream());
+                 for (String line : lines) {
+                     line = line.trim();
+@@ -147,7 +149,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                     serializeSecurityManager.addToAlwaysAllowed(line);
+                 }
+             } catch (IOException e) {
+-                logger.error(
++                LOGGER.error(
+                         COMMON_IO_EXCEPTION,
+                         "",
+                         "",
+@@ -161,7 +163,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         Set<URL> urls = ClassLoaderResourceLoader.loadResources(SERIALIZE_BLOCKED_LIST_FILE_PATH, classLoader);
+         for (URL u : urls) {
+             try {
+-                logger.info("Read serialize blocked list from " + u);
++                LOGGER.info("Read serialize blocked list from " + u);
+                 String[] lines = IOUtils.readLines(u.openStream());
+                 for (String line : lines) {
+                     line = line.trim();
+@@ -171,7 +173,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                     serializeSecurityManager.addToDisAllowed(line);
+                 }
+             } catch (IOException e) {
+-                logger.error(
++                LOGGER.error(
+                         COMMON_IO_EXCEPTION,
+                         "",
+                         "",
+@@ -213,8 +215,9 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+             return;
+         }
+ 
+-        Set<Type> markedClass = new HashSet<>();
+-        checkClass(markedClass, clazz);
++        if (!checkClass(clazz)) {
++            return;
++        }
+ 
+         addToAllow(clazz);
+ 
+@@ -223,84 +226,84 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         for (Method method : methodsToExport) {
+             Class<?>[] parameterTypes = method.getParameterTypes();
+             for (Class<?> parameterType : parameterTypes) {
+-                checkClass(markedClass, parameterType);
++                checkClass(parameterType);
+             }
+ 
+             Type[] genericParameterTypes = method.getGenericParameterTypes();
+             for (Type genericParameterType : genericParameterTypes) {
+-                checkType(markedClass, genericParameterType);
++                checkType(genericParameterType);
+             }
+ 
+             Class<?> returnType = method.getReturnType();
+-            checkClass(markedClass, returnType);
++            checkClass(returnType);
+ 
+             Type genericReturnType = method.getGenericReturnType();
+-            checkType(markedClass, genericReturnType);
++            checkType(genericReturnType);
+ 
+             Class<?>[] exceptionTypes = method.getExceptionTypes();
+             for (Class<?> exceptionType : exceptionTypes) {
+-                checkClass(markedClass, exceptionType);
++                checkClass(exceptionType);
+             }
+ 
+             Type[] genericExceptionTypes = method.getGenericExceptionTypes();
+             for (Type genericExceptionType : genericExceptionTypes) {
+-                checkType(markedClass, genericExceptionType);
++                checkType(genericExceptionType);
+             }
+         }
+     }
+ 
+-    private void checkType(Set<Type> markedClass, Type type) {
++    private void checkType(Type type) {
+         if (type == null) {
+             return;
+         }
+ 
+         if (type instanceof Class) {
+-            checkClass(markedClass, (Class<?>) type);
++            checkClass((Class<?>) type);
+             return;
+         }
+ 
+-        if (!markedClass.add(type)) {
++        if (!markedTypeCache.add(type)) {
+             return;
+         }
+ 
+         if (type instanceof ParameterizedType) {
+             ParameterizedType parameterizedType = (ParameterizedType) type;
+-            checkClass(markedClass, (Class<?>) parameterizedType.getRawType());
++            checkClass((Class<?>) parameterizedType.getRawType());
+             for (Type actualTypeArgument : parameterizedType.getActualTypeArguments()) {
+-                checkType(markedClass, actualTypeArgument);
++                checkType(actualTypeArgument);
+             }
+         } else if (type instanceof GenericArrayType) {
+             GenericArrayType genericArrayType = (GenericArrayType) type;
+-            checkType(markedClass, genericArrayType.getGenericComponentType());
++            checkType(genericArrayType.getGenericComponentType());
+         } else if (type instanceof TypeVariable) {
+             TypeVariable typeVariable = (TypeVariable) type;
+             for (Type bound : typeVariable.getBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+         } else if (type instanceof WildcardType) {
+             WildcardType wildcardType = (WildcardType) type;
+             for (Type bound : wildcardType.getUpperBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+             for (Type bound : wildcardType.getLowerBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+         }
+     }
+ 
+-    private void checkClass(Set<Type> markedClass, Class<?> clazz) {
++    private boolean checkClass(Class<?> clazz) {
+         if (clazz == null) {
+-            return;
++            return false;
+         }
+ 
+-        if (!markedClass.add(clazz)) {
+-            return;
++        if (!markedTypeCache.add(clazz)) {
++            return false;
+         }
+ 
+         addToAllow(clazz);
+ 
+         if (ClassUtils.isSimpleType(clazz) || clazz.isPrimitive() || clazz.isArray()) {
+-            return;
++            return true;
+         }
+         String className = clazz.getName();
+         if (className.startsWith("java.")
+@@ -308,26 +311,26 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                 || className.startsWith("com.sun.")
+                 || className.startsWith("sun.")
+                 || className.startsWith("jdk.")) {
+-            return;
++            return true;
+         }
+ 
+         Class<?>[] interfaces = clazz.getInterfaces();
+         for (Class<?> interfaceClass : interfaces) {
+-            checkClass(markedClass, interfaceClass);
++            checkClass(interfaceClass);
+         }
+ 
+         for (Type genericInterface : clazz.getGenericInterfaces()) {
+-            checkType(markedClass, genericInterface);
++            checkType(genericInterface);
+         }
+ 
+         Class<?> superclass = clazz.getSuperclass();
+         if (superclass != null) {
+-            checkClass(markedClass, superclass);
++            checkClass(superclass);
+         }
+ 
+         Type genericSuperclass = clazz.getGenericSuperclass();
+         if (genericSuperclass != null) {
+-            checkType(markedClass, genericSuperclass);
++            checkType(genericSuperclass);
+         }
+ 
+         Field[] fields = clazz.getDeclaredFields();
+@@ -338,9 +341,11 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+             }
+ 
+             Class<?> fieldClass = field.getType();
+-            checkClass(markedClass, fieldClass);
+-            checkType(markedClass, field.getGenericType());
++            checkClass(fieldClass);
++            checkType(field.getGenericType());
+         }
++
++        return true;
+     }
+ 
+     private void addToAllow(Class<?> clazz) {
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/UrlUtils.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/UrlUtils.java
+index ff7c88394e33d40ac9dc096da8e225ec73bf60a9..56895f0da02d325c928d5bd4a7ac93b585a42ee2 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/UrlUtils.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/UrlUtils.java
+@@ -20,11 +20,14 @@ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.URLStrParser;
+ import org.apache.dubbo.common.constants.RemotingConstants;
+ import org.apache.dubbo.common.url.component.ServiceConfigURL;
++import org.apache.dubbo.rpc.model.ServiceMetadata;
++import org.apache.dubbo.rpc.model.ServiceModel;
+ 
+ import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Optional;
+ import java.util.Set;
+ import java.util.function.Function;
+ import java.util.function.Predicate;
+@@ -690,7 +693,10 @@ public class UrlUtils {
+ 
+     @SuppressWarnings("unchecked")
+     public static <T> T computeServiceAttribute(URL url, String key, Function<URL, T> fn) {
+-        return (T)
+-                url.getServiceModel().getServiceMetadata().getAttributeMap().computeIfAbsent(key, k -> fn.apply(url));
++        return Optional.ofNullable(url.getServiceModel())
++                .map(ServiceModel::getServiceMetadata)
++                .map(ServiceMetadata::getAttributeMap)
++                .map(stringObjectMap -> (T) stringObjectMap.computeIfAbsent(key, k -> fn.apply(url)))
++                .orElse(null);
+     }
+ }
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/MethodDescriptor.java b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/MethodDescriptor.java
+index 2496d2dea31183a6bcbf21129f433ed650d5e657..77f87ede4aeceb732bfaec9b7d83edf11fe7ba2d 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/MethodDescriptor.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/MethodDescriptor.java
+@@ -51,6 +51,10 @@ public interface MethodDescriptor {
+ 
+     Object getAttribute(String key);
+ 
++    Class<?>[] getActualRequestTypes();
++
++    Class<?> getActualResponseType();
++
+     enum RpcType {
+         UNARY,
+         CLIENT_STREAM,
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ReflectionMethodDescriptor.java b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ReflectionMethodDescriptor.java
+index 7d4fd1208aac61ac68eaf7be1788af6fb74c9da6..ac0778d601abe0a79ac151795f58a737ffadf0b2 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ReflectionMethodDescriptor.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ReflectionMethodDescriptor.java
+@@ -99,12 +99,17 @@ public class ReflectionMethodDescriptor implements MethodDescriptor {
+         boolean returnIsVoid = returnClass.getName().equals(void.class.getName());
+         if (returnIsVoid && parameterClasses.length == 1 && isStreamType(parameterClasses[0])) {
+             actualRequestTypes = Collections.emptyList().toArray(new Class<?>[0]);
++            actualResponseType = obtainActualTypeInStreamObserver(
++                    ((ParameterizedType) method.getGenericParameterTypes()[0]).getActualTypeArguments()[0]);
+             return RpcType.SERVER_STREAM;
+         }
+         if (returnIsVoid
+                 && parameterClasses.length == 2
+                 && !isStreamType(parameterClasses[0])
+                 && isStreamType(parameterClasses[1])) {
++            actualRequestTypes = parameterClasses;
++            actualResponseType = obtainActualTypeInStreamObserver(
++                    ((ParameterizedType) method.getGenericParameterTypes()[1]).getActualTypeArguments()[0]);
+             return RpcType.SERVER_STREAM;
+         }
+         if (Arrays.stream(parameterClasses).anyMatch(this::isStreamType) || isStreamType(returnClass)) {
+@@ -119,13 +124,6 @@ public class ReflectionMethodDescriptor implements MethodDescriptor {
+         return StreamObserver.class.isAssignableFrom(classType);
+     }
+ 
+-    private static Class<?> obtainActualTypeInStreamObserver(Type typeInStreamObserver) {
+-        return (Class<?>)
+-                (typeInStreamObserver instanceof ParameterizedType
+-                        ? ((ParameterizedType) typeInStreamObserver).getRawType()
+-                        : typeInStreamObserver);
+-    }
+-
+     @Override
+     public String getMethodName() {
+         return methodName;
+@@ -179,14 +177,23 @@ public class ReflectionMethodDescriptor implements MethodDescriptor {
+         return this.attributeMap.get(key);
+     }
+ 
++    @Override
+     public Class<?>[] getActualRequestTypes() {
+         return actualRequestTypes;
+     }
+ 
++    @Override
+     public Class<?> getActualResponseType() {
+         return actualResponseType;
+     }
+ 
++    private Class<?> obtainActualTypeInStreamObserver(Type typeInStreamObserver) {
++        return (Class<?>)
++                (typeInStreamObserver instanceof ParameterizedType
++                        ? ((ParameterizedType) typeInStreamObserver).getRawType()
++                        : typeInStreamObserver);
++    }
++
+     @Override
+     public boolean equals(Object o) {
+         if (this == o) {
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/StubMethodDescriptor.java b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/StubMethodDescriptor.java
+index 784c93e12bc24a46f4984b5d558394bfd11de982..2e0c3f84a7e68ca27665ba145666c1b4d826617b 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/StubMethodDescriptor.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/StubMethodDescriptor.java
+@@ -119,6 +119,16 @@ public class StubMethodDescriptor implements MethodDescriptor, PackableMethod {
+         return this.attributeMap.get(key);
+     }
+ 
++    @Override
++    public Class<?>[] getActualRequestTypes() {
++        return this.parameterClasses;
++    }
++
++    @Override
++    public Class<?> getActualResponseType() {
++        return this.returnClass;
++    }
++
+     @Override
+     public Pack getRequestPack() {
+         return requestPack;
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index 1075b795dcd02c1e428dac78f53b79fb294c7560..b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -90,7 +90,6 @@
+   <build>
+     <plugins>
+       <plugin>
+-        <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+         <version>${maven_os_plugin_version}</version>
+@@ -113,13 +112,5 @@
+         </configuration>
+       </plugin>
+     </plugins>
+-    <extensions>
+-      <!-- add os-maven-plugin to extensions for `mvn install` -->
+-      <extension>
+-        <groupId>kr.motd.maven</groupId>
+-        <artifactId>os-maven-plugin</artifactId>
+-        <version>${maven_os_plugin_version}</version>
+-      </extension>
+-    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index a1ab6004d0e3fbd9c56ec020f8cd2e5fa7a24cb4..78c1e2325938a0d936e20ca703a1f568e8e3512a 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -96,6 +96,7 @@
+     <byte-buddy_version>1.17.5</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+     <netty4_version>4.2.2.Final</netty4_version>
++    <netty_http3_version>0.0.29.Final</netty_http3_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+@@ -299,6 +300,11 @@
+         <artifactId>netty-all</artifactId>
+         <version>${netty4_version}</version>
+       </dependency>
++      <dependency>
++        <groupId>io.netty.incubator</groupId>
++        <artifactId>netty-incubator-codec-http3</artifactId>
++        <version>${netty_http3_version}</version>
++      </dependency>
+       <dependency>
+         <groupId>org.javassist</groupId>
+         <artifactId>javassist</artifactId>
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-maven-plugin/src/main/java/org/apache/dubbo/maven/plugin/protoc/DubboProtocCompilerMojo.java b/dubbo-maven-plugin/src/main/java/org/apache/dubbo/maven/plugin/protoc/DubboProtocCompilerMojo.java
+index 60a99ea9c056111b452b385b28209282c25eb33d..2d357cecd8e20d510b90d99c1fa698a08fab6d9e 100644
+--- a/dubbo-maven-plugin/src/main/java/org/apache/dubbo/maven/plugin/protoc/DubboProtocCompilerMojo.java
++++ b/dubbo-maven-plugin/src/main/java/org/apache/dubbo/maven/plugin/protoc/DubboProtocCompilerMojo.java
+@@ -125,8 +125,7 @@ public class DubboProtocCompilerMojo extends AbstractMojo {
+     public void execute() throws MojoExecutionException, MojoFailureException {
+         Properties versionMatrix = new Properties();
+         ClassLoader loader = Thread.currentThread().getContextClassLoader();
+-        InputStream stream = loader.getResourceAsStream("version-matrix.properties");
+-        try {
++        try (InputStream stream = loader.getResourceAsStream("version-matrix.properties")) {
+             versionMatrix.load(stream);
+         } catch (IOException e) {
+             getLog().warn("Unable to load default version matrix", e);
+diff --git a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataProxyDescriberRegistrar.java b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataProxyDescriberRegistrar.java
+index 04db2f81db7c7f512debc2b38a58974e51daa15b..a5a800a7716f1f4cf1731e8b270721637170f835 100644
+--- a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataProxyDescriberRegistrar.java
++++ b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataProxyDescriberRegistrar.java
+@@ -19,6 +19,7 @@ package org.apache.dubbo.metadata.aot;
+ import org.apache.dubbo.aot.api.JdkProxyDescriber;
+ import org.apache.dubbo.aot.api.ProxyDescriberRegistrar;
+ import org.apache.dubbo.metadata.MetadataService;
++import org.apache.dubbo.metadata.MetadataServiceV2;
+ import org.apache.dubbo.rpc.service.Destroyable;
+ import org.apache.dubbo.rpc.service.EchoService;
+ 
+@@ -30,6 +31,7 @@ public class MetadataProxyDescriberRegistrar implements ProxyDescriberRegistrar
+     public List<JdkProxyDescriber> getJdkProxyDescribers() {
+         List<JdkProxyDescriber> describers = new ArrayList<>();
+         describers.add(buildJdkProxyDescriber(MetadataService.class));
++        describers.add(buildJdkProxyDescriber(MetadataServiceV2.class));
+         return describers;
+     }
+ 
+diff --git a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataReflectionTypeDescriberRegistrar.java b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataReflectionTypeDescriberRegistrar.java
+index 52450d866e54795c15b2ad74d33c4f434f6c2ebd..453ac9d0663749b5450c764c5033acad2b89a212 100644
+--- a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataReflectionTypeDescriberRegistrar.java
++++ b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/aot/MetadataReflectionTypeDescriberRegistrar.java
+@@ -20,7 +20,9 @@ import org.apache.dubbo.aot.api.MemberCategory;
+ import org.apache.dubbo.aot.api.ReflectionTypeDescriberRegistrar;
+ import org.apache.dubbo.aot.api.TypeDescriber;
+ import org.apache.dubbo.metadata.MetadataInfo;
++import org.apache.dubbo.metadata.MetadataInfoV2;
+ import org.apache.dubbo.metadata.MetadataService;
++import org.apache.dubbo.metadata.MetadataServiceV2;
+ 
+ import java.util.ArrayList;
+ import java.util.HashSet;
+@@ -33,7 +35,9 @@ public class MetadataReflectionTypeDescriberRegistrar implements ReflectionTypeD
+     public List<TypeDescriber> getTypeDescribers() {
+         List<TypeDescriber> typeDescribers = new ArrayList<>();
+         typeDescribers.add(buildTypeDescriberWithPublicMethod(MetadataService.class));
++        typeDescribers.add(buildTypeDescriberWithPublicMethod(MetadataServiceV2.class));
+         typeDescribers.add(buildTypeDescriberWithDeclaredConstructors(MetadataInfo.class));
++        typeDescribers.add(buildTypeDescriberWithDeclaredConstructors(MetadataInfoV2.class));
+         return typeDescribers;
+     }
+ 
+diff --git a/dubbo-plugin/dubbo-native/src/main/java/org/apache/dubbo/aot/generate/JarScanner.java b/dubbo-plugin/dubbo-native/src/main/java/org/apache/dubbo/aot/generate/JarScanner.java
+index 86fad8ec6aff1dff972d6465a4fa714d0636ae10..396e001580b991d4dcf7567be266a92c7bbf53f1 100644
+--- a/dubbo-plugin/dubbo-native/src/main/java/org/apache/dubbo/aot/generate/JarScanner.java
++++ b/dubbo-plugin/dubbo-native/src/main/java/org/apache/dubbo/aot/generate/JarScanner.java
+@@ -77,8 +77,9 @@ public class JarScanner {
+                 if ("file".equals(protocol)) {
+                     scanFile(resource.getPath());
+                 } else if ("jar".equals(protocol)) {
+-                    JarFile jar = ((JarURLConnection) resource.openConnection()).getJarFile();
+-                    scanJar(jar);
++                    try (JarFile jar = ((JarURLConnection) resource.openConnection()).getJarFile()) {
++                        scanJar(jar);
++                    }
+                 }
+             }
+         } catch (Throwable ex) {
+diff --git a/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/RestSpringScopeModelInitializer.java b/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/RestSpringScopeModelInitializer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..bca5c0dd4334c8f50ac8ab3aac709deb98ef2a43
+--- /dev/null
++++ b/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/RestSpringScopeModelInitializer.java
+@@ -0,0 +1,34 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.protocol.tri.rest.support.spring;
++
++import org.apache.dubbo.common.beans.factory.ScopeBeanFactory;
++import org.apache.dubbo.common.utils.DefaultParameterNameReader;
++import org.apache.dubbo.rpc.model.FrameworkModel;
++import org.apache.dubbo.rpc.model.ScopeModelInitializer;
++import org.apache.dubbo.rpc.protocol.tri.rest.argument.CompositeArgumentResolver;
++import org.apache.dubbo.rpc.protocol.tri.rest.argument.GeneralTypeConverter;
++
++public class RestSpringScopeModelInitializer implements ScopeModelInitializer {
++    @Override
++    public void initializeFrameworkModel(FrameworkModel frameworkModel) {
++        ScopeBeanFactory beanFactory = frameworkModel.getBeanFactory();
++        beanFactory.registerBean(GeneralTypeConverter.class);
++        beanFactory.registerBean(DefaultParameterNameReader.class);
++        beanFactory.registerBean(CompositeArgumentResolver.class);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-rest-spring/src/main/resources/META-INF/dubbo/internal/org.apache.dubbo.rpc.model.ScopeModelInitializer b/dubbo-plugin/dubbo-rest-spring/src/main/resources/META-INF/dubbo/internal/org.apache.dubbo.rpc.model.ScopeModelInitializer
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6c9fdc882e799d2cc2edc51d18fc6b46310f323
+--- /dev/null
++++ b/dubbo-plugin/dubbo-rest-spring/src/main/resources/META-INF/dubbo/internal/org.apache.dubbo.rpc.model.ScopeModelInitializer
+@@ -0,0 +1 @@
++rest-spring=org.apache.dubbo.rpc.protocol.tri.rest.support.spring.RestSpringScopeModelInitializer
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3e357d55ea31ae458c0d0e1e74a143bfd751d5ee 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,7 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/RegistryScopeModelInitializer.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/RegistryScopeModelInitializer.java
+index 9cb22fa8a534ec473c170777fa64e62b3b9dc210..f7031384c84831ec72057044df54c5f6e7dc8ce4 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/RegistryScopeModelInitializer.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/RegistryScopeModelInitializer.java
+@@ -18,6 +18,7 @@ package org.apache.dubbo.registry;
+ 
+ import org.apache.dubbo.common.beans.factory.ScopeBeanFactory;
+ import org.apache.dubbo.registry.client.metadata.MetadataServiceDelegation;
++import org.apache.dubbo.registry.client.metadata.MetadataServiceDelegationV2;
+ import org.apache.dubbo.registry.integration.ExporterFactory;
+ import org.apache.dubbo.registry.support.RegistryManager;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
+@@ -37,5 +38,6 @@ public class RegistryScopeModelInitializer implements ScopeModelInitializer {
+         ScopeBeanFactory beanFactory = applicationModel.getBeanFactory();
+         beanFactory.registerBean(RegistryManager.class);
+         beanFactory.registerBean(MetadataServiceDelegation.class);
++        beanFactory.registerBean(MetadataServiceDelegationV2.class);
+     }
+ }
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
+index 663d213247e0f20c338fbea4f57f5ef94c2daa19..bc5979e2c142a6e3b769da67b2efe7111e8c8384 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
+@@ -176,7 +176,7 @@ public class MetadataUtils {
+         RemoteMetadataService remoteMetadataService;
+         ProxyFactory proxyFactory =
+                 applicationModel.getExtensionLoader(ProxyFactory.class).getAdaptiveExtension();
+-        if (useV2) {
++        if (useV2 && !inNativeImage) {
+             Invoker<MetadataServiceV2> invoker = protocol.refer(MetadataServiceV2.class, url);
+ 
+             if (url.getParameter(AUTH_KEY, false)) {
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/codec/ExchangeCodec.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/codec/ExchangeCodec.java
+index 4eeccebca7509c1bf6688e70c26af81dff322988..127ab95a46657afd0388d94386129ebe115ad799 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/codec/ExchangeCodec.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/codec/ExchangeCodec.java
+@@ -327,38 +327,39 @@ public class ExchangeCodec extends TelnetCodec {
+             Bytes.long2bytes(res.getId(), header, 4);
+ 
+             buffer.writerIndex(savedWriteIndex + HEADER_LENGTH);
+-            ChannelBufferOutputStream bos = new ChannelBufferOutputStream(buffer);
++            int len;
++            try (ChannelBufferOutputStream bos = new ChannelBufferOutputStream(buffer)) {
+ 
+-            // encode response data or error message.
+-            if (status == Response.OK) {
+-                if (res.isHeartbeat()) {
+-                    // heartbeat response data is always null
+-                    bos.write(CodecSupport.getNullBytesOf(serialization));
+-                } else {
+-                    ObjectOutput out = serialization.serialize(channel.getUrl(), bos);
+-                    if (res.isEvent()) {
+-                        encodeEventData(channel, out, res.getResult());
++                // encode response data or error message.
++                if (status == Response.OK) {
++                    if (res.isHeartbeat()) {
++                        // heartbeat response data is always null
++                        bos.write(CodecSupport.getNullBytesOf(serialization));
+                     } else {
+-                        encodeResponseData(channel, out, res.getResult(), res.getVersion());
++                        ObjectOutput out = serialization.serialize(channel.getUrl(), bos);
++                        if (res.isEvent()) {
++                            encodeEventData(channel, out, res.getResult());
++                        } else {
++                            encodeResponseData(channel, out, res.getResult(), res.getVersion());
++                        }
++                        out.flushBuffer();
++                        if (out instanceof Cleanable) {
++                            ((Cleanable) out).cleanup();
++                        }
+                     }
++                } else {
++                    ObjectOutput out = serialization.serialize(channel.getUrl(), bos);
++                    out.writeUTF(res.getErrorMessage());
+                     out.flushBuffer();
+                     if (out instanceof Cleanable) {
+                         ((Cleanable) out).cleanup();
+                     }
+                 }
+-            } else {
+-                ObjectOutput out = serialization.serialize(channel.getUrl(), bos);
+-                out.writeUTF(res.getErrorMessage());
+-                out.flushBuffer();
+-                if (out instanceof Cleanable) {
+-                    ((Cleanable) out).cleanup();
+-                }
+-            }
+ 
+-            bos.flush();
+-            bos.close();
++                bos.flush();
++                len = bos.writtenBytes();
++            }
+ 
+-            int len = bos.writtenBytes();
+             checkPayload(channel, len);
+             Bytes.int2bytes(len, header, 12);
+             // write
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
+index 40383e3d97724dd6935f544677e5090bcc2bec9b..d193c5a3612afcc89fe80bf4ced3e4cdc39e3c50 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.dubbo.remoting.http12;
+ 
++import org.apache.dubbo.common.constants.CommonConstants;
+ import org.apache.dubbo.common.io.StreamUtils;
+ import org.apache.dubbo.common.utils.StringUtils;
+ import org.apache.dubbo.remoting.http12.exception.DecodeException;
+@@ -81,6 +82,27 @@ public final class HttpUtils {
+         return cookies;
+     }
+ 
++    public static String parseCharset(String contentType) {
++        String charset = null;
++        if (contentType == null) {
++            charset = StringUtils.EMPTY_STRING;
++        } else {
++            int index = contentType.lastIndexOf(CHARSET_PREFIX);
++            if (index == -1) {
++                charset = StringUtils.EMPTY_STRING;
++            } else {
++                charset = contentType.substring(index + CHARSET_PREFIX.length()).trim();
++                int splits = charset.indexOf(CommonConstants.SEMICOLON_SEPARATOR);
++                if (splits == -1) {
++                    return charset;
++                } else {
++                    return charset.substring(0, splits).trim();
++                }
++            }
++        }
++        return charset;
++    }
++
+     public static String encodeCookie(HttpCookie cookie) {
+         DefaultCookie c = new DefaultCookie(cookie.name(), cookie.value());
+         c.setPath(cookie.path());
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
+index f3166707b4c70d7b27340990b559bc70434cead8..d09b9bd2a2ce7625f6b5933ca752c4ae06c51e30 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
+@@ -243,14 +243,7 @@ public class DefaultHttpRequest implements HttpRequest {
+         String charset = this.charset;
+         if (charset == null) {
+             String contentType = contentType();
+-            if (contentType == null) {
+-                charset = StringUtils.EMPTY_STRING;
+-            } else {
+-                int index = contentType.lastIndexOf(HttpUtils.CHARSET_PREFIX);
+-                charset = index == -1
+-                        ? StringUtils.EMPTY_STRING
+-                        : contentType.substring(index + 8).trim();
+-            }
++            charset = HttpUtils.parseCharset(contentType);
+             this.charset = charset;
+         }
+         return charset.isEmpty() ? null : charset;
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
+index 9becb189d3dfbe522d69595e494f1efcfcbfb0b3..7eaad2703897328ab1a7f3462bd0242dfa294b44 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
+@@ -166,14 +166,7 @@ public class DefaultHttpResponse implements HttpResponse {
+         String charset = this.charset;
+         if (charset == null) {
+             String contentType = contentType();
+-            if (contentType == null) {
+-                charset = StringUtils.EMPTY_STRING;
+-            } else {
+-                int index = contentType.lastIndexOf(HttpUtils.CHARSET_PREFIX);
+-                charset = index == -1
+-                        ? StringUtils.EMPTY_STRING
+-                        : contentType.substring(index + 8).trim();
+-            }
++            charset = HttpUtils.parseCharset(contentType);
+             this.charset = charset;
+         }
+         return charset.isEmpty() ? null : charset;
+diff --git a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/netty4/NettyHttp3FrameCodec.java b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/netty4/NettyHttp3FrameCodec.java
+index 9ef885ed3ecc91820e5b3d315f3f26da48ff21f8..dfa8b6d826fd1a6ffe6e5f7fe72d52082ce01eb0 100644
+--- a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/netty4/NettyHttp3FrameCodec.java
++++ b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/http3/netty4/NettyHttp3FrameCodec.java
+@@ -30,7 +30,8 @@ import java.net.SocketAddress;
+ 
+ import io.netty.buffer.ByteBufInputStream;
+ import io.netty.buffer.ByteBufOutputStream;
+-import io.netty.buffer.Unpooled;
++import io.netty.channel.ChannelFuture;
++import io.netty.channel.ChannelFutureListener;
+ import io.netty.channel.ChannelHandler.Sharable;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelOutboundHandler;
+@@ -67,8 +68,12 @@ public class NettyHttp3FrameCodec extends Http3RequestStreamInboundHandler imple
+         Http3Headers pongHeader = new DefaultHttp3Headers(false);
+         pongHeader.set(TRI_PING, "0");
+         pongHeader.set(PseudoHeaderName.STATUS.value(), HttpStatus.OK.getStatusString());
+-        ctx.write(new DefaultHttp3HeadersFrame(pongHeader));
+-        ctx.close();
++        ChannelFuture future = ctx.write(new DefaultHttp3HeadersFrame(pongHeader), ctx.newPromise());
++        if (future.isDone()) {
++            ctx.close();
++        } else {
++            future.addListener((ChannelFutureListener) f -> ctx.close());
++        }
+     }
+ 
+     @Override
+@@ -91,32 +96,43 @@ public class NettyHttp3FrameCodec extends Http3RequestStreamInboundHandler imple
+     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+         if (msg instanceof Http2Header) {
+             Http2Header headers = (Http2Header) msg;
++            if (headers.isEndStream()) {
++                ChannelFuture future = ctx.write(
++                        new DefaultHttp3HeadersFrame(((NettyHttpHeaders<Http3Headers>) headers.headers()).getHeaders()),
++                        ctx.newPromise());
++                if (future.isDone()) {
++                    ctx.close(promise);
++                } else {
++                    future.addListener((ChannelFutureListener) f -> ctx.close(promise));
++                }
++                return;
++            }
+             ctx.write(
+                     new DefaultHttp3HeadersFrame(((NettyHttpHeaders<Http3Headers>) headers.headers()).getHeaders()),
+                     promise);
+-            if (headers.isEndStream()) {
+-                ctx.close();
+-            }
+         } else if (msg instanceof Http2OutputMessage) {
+             Http2OutputMessage message = (Http2OutputMessage) msg;
+-            try {
+-                OutputStream body = message.getBody();
++            OutputStream body = message.getBody();
++            assert body instanceof ByteBufOutputStream || body == null;
++            if (message.isEndStream()) {
+                 if (body == null) {
+-                    Http3DataFrame frame = new DefaultHttp3DataFrame(Unpooled.EMPTY_BUFFER);
+-                    ctx.write(frame, promise);
++                    ctx.close(promise);
+                     return;
+                 }
+-                if (body instanceof ByteBufOutputStream) {
+-                    Http3DataFrame frame = new DefaultHttp3DataFrame(((ByteBufOutputStream) body).buffer());
+-                    ctx.write(frame, promise);
+-                    return;
+-                }
+-            } finally {
+-                if (message.isEndStream()) {
+-                    ctx.close();
++                ChannelFuture future =
++                        ctx.write(new DefaultHttp3DataFrame(((ByteBufOutputStream) body).buffer()), ctx.newPromise());
++                if (future.isDone()) {
++                    ctx.close(promise);
++                } else {
++                    future.addListener((ChannelFutureListener) f -> ctx.close(promise));
+                 }
++                return;
++            }
++            if (body == null) {
++                promise.trySuccess();
++                return;
+             }
+-            throw new IllegalArgumentException("Http2OutputMessage body must be ByteBufOutputStream");
++            ctx.write(new DefaultHttp3DataFrame(((ByteBufOutputStream) body).buffer()), promise);
+         } else {
+             ctx.write(msg, promise);
+         }
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/AbstractNettyConnectionClient.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/AbstractNettyConnectionClient.java
+index f26ca4d81967ea0facb617e59b0015064ccea45b..fc6a1a0630a6512be973225368fcb6e2286a4562 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/AbstractNettyConnectionClient.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/AbstractNettyConnectionClient.java
+@@ -177,15 +177,21 @@ public abstract class AbstractNettyConnectionClient extends AbstractConnectionCl
+         NettyChannel.removeChannelIfDisconnected(getNettyChannel());
+     }
+ 
+-    protected void doReconnect() {
+-        connectivityExecutor.execute(() -> {
+-            try {
+-                doConnect();
+-            } catch (RemotingException e) {
+-                logger.error(
+-                        TRANSPORT_FAILED_RECONNECT, "", "", "Failed to reconnect to server: " + getConnectAddress());
+-            }
+-        });
++    protected void scheduleReconnect(long reconnectDuration, TimeUnit unit) {
++        connectivityExecutor.schedule(
++                () -> {
++                    try {
++                        doConnect();
++                    } catch (RemotingException e) {
++                        logger.error(
++                                TRANSPORT_FAILED_RECONNECT,
++                                "",
++                                "",
++                                "Failed to connect to server: " + getConnectAddress());
++                    }
++                },
++                reconnectDuration,
++                unit);
+     }
+ 
+     @Override
+@@ -378,7 +384,7 @@ public abstract class AbstractNettyConnectionClient extends AbstractConnectionCl
+             // Notify the connection is unavailable.
+             disconnectedPromise.trySuccess(null);
+ 
+-            doReconnect();
++            scheduleReconnect(reconnectDuration, TimeUnit.MILLISECONDS);
+         }
+     }
+ }
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyConnectionHandler.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyConnectionHandler.java
+index 9c4d08c0cee4d54736b70d6339498b55ecefac7c..16b14a0a8113267975334749de5f49d0aed40fde 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyConnectionHandler.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyConnectionHandler.java
+@@ -26,7 +26,6 @@ import io.netty.channel.Channel;
+ import io.netty.channel.ChannelHandler.Sharable;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelInboundHandlerAdapter;
+-import io.netty.channel.EventLoop;
+ import io.netty.util.Attribute;
+ import io.netty.util.AttributeKey;
+ 
+@@ -71,16 +70,14 @@ public class NettyConnectionHandler extends ChannelInboundHandlerAdapter impleme
+         if (!(channel instanceof Channel)) {
+             return;
+         }
+-        Channel nettyChannel = ((Channel) channel);
+         if (LOGGER.isDebugEnabled()) {
+             LOGGER.debug("Connection:{} is reconnecting, attempt={}", connectionClient, 1);
+         }
+-        EventLoop eventLoop = nettyChannel.eventLoop();
+         if (connectionClient.isClosed()) {
+             LOGGER.info("The connection {} has been closed and will not reconnect", connectionClient);
+             return;
+         }
+-        eventLoop.schedule(connectionClient::doReconnect, 1, TimeUnit.SECONDS);
++        connectionClient.scheduleReconnect(1, TimeUnit.SECONDS);
+     }
+ 
+     @Override
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/TriRpcStatus.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/TriRpcStatus.java
+index df45b6d5e2bdab471268b4ba0a622342e9dbe52e..335fd48abeeb977f511cc18fcc3b59e668333107 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/TriRpcStatus.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/TriRpcStatus.java
+@@ -135,7 +135,7 @@ public class TriRpcStatus implements Serializable {
+                 code = Code.UNAVAILABLE;
+                 break;
+             case METHOD_NOT_FOUND:
+-                code = Code.NOT_FOUND;
++                code = Code.UNIMPLEMENTED;
+                 break;
+             case SERIALIZATION_EXCEPTION:
+                 code = Code.INTERNAL;
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
+index 8fc8867a4382e73c585e77d97732fc3e6cb8be71..4fd388d33627146dc24a476e68e9c6d2939e5570 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
+@@ -73,19 +73,9 @@ public class ReflectionPackableMethod implements PackableMethod {
+         switch (method.getRpcType()) {
+             case CLIENT_STREAM:
+             case BI_STREAM:
+-                actualRequestTypes = new Class<?>[] {
+-                    obtainActualTypeInStreamObserver(
+-                            ((ParameterizedType) method.getMethod().getGenericReturnType()).getActualTypeArguments()[0])
+-                };
+-                actualResponseType = obtainActualTypeInStreamObserver(
+-                        ((ParameterizedType) method.getMethod().getGenericParameterTypes()[0])
+-                                .getActualTypeArguments()[0]);
+-                break;
+             case SERVER_STREAM:
+-                actualRequestTypes = method.getMethod().getParameterTypes();
+-                actualResponseType = obtainActualTypeInStreamObserver(
+-                        ((ParameterizedType) method.getMethod().getGenericParameterTypes()[1])
+-                                .getActualTypeArguments()[0]);
++                actualRequestTypes = method.getActualRequestTypes();
++                actualResponseType = method.getActualResponseType();
+                 break;
+             case UNARY:
+                 actualRequestTypes = method.getParameterClasses();
+@@ -411,6 +401,9 @@ public class ReflectionPackableMethod implements PackableMethod {
+             for (String type : argumentsType) {
+                 builder.addArgTypes(type);
+             }
++            if (actualRequestTypes == null || actualRequestTypes.length == 0) {
++                return builder.build().toByteArray();
++            }
+             ByteArrayOutputStream bos = new ByteArrayOutputStream();
+             for (int i = 0; i < arguments.length; i++) {
+                 Object argument = arguments[i];
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriHttp2RemoteFlowController.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriHttp2RemoteFlowController.java
+index e224fc4b8f9d13d3c8fc79ab460940561a0734c4..2b23e1766479a19c89bcba16c3acc561a4dbba6f 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriHttp2RemoteFlowController.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriHttp2RemoteFlowController.java
+@@ -407,10 +407,8 @@ public class TriHttp2RemoteFlowController implements Http2RemoteFlowController {
+                 if (cancelled) {
+                     cancel(INTERNAL_ERROR, cause);
+                 }
+-                if (monitor.isOverFlowControl()) {
+-                    cause = new Throwable();
+-                    cancel(FLOW_CONTROL_ERROR, cause);
+-                }
++
++                // does not check overflow anymore: Let receiver continue receiving the pending bytes.
+             }
+             return writtenBytes;
+         }
+@@ -670,14 +668,6 @@ public class TriHttp2RemoteFlowController implements Http2RemoteFlowController {
+         final boolean isWritableConnection() {
+             return connectionState.windowSize() - totalPendingBytes > 0 && isChannelWritable();
+         }
+-
+-        final boolean isOverFlowControl() {
+-            if (connectionState.windowSize() == 0) {
+-                return true;
+-            } else {
+-                return false;
+-            }
+-        }
+     }
+ 
+     /**
+@@ -777,13 +767,8 @@ public class TriHttp2RemoteFlowController implements Http2RemoteFlowController {
+                 checkAllWritabilityChanged();
+             } else if (isWritable(state) != state.markedWritability()) {
+                 notifyWritabilityChanged(state);
+-            } else if (isOverFlowControl()) {
+-                throw streamError(
+-                        state.stream().id(),
+-                        FLOW_CONTROL_ERROR,
+-                        "TotalPendingBytes size overflow for stream: %d",
+-                        state.stream().id());
+             }
++            // does not check overflow anymore: Let receiver continue receiving the pending bytes.
+         }
+ 
+         private void checkAllWritabilityChanged() throws Http2Exception {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
+index 6a26fbc32f2a23ecfdfd4122bcb829daedbfe8e2..c3e486a93a665e6ecb3276f54f91dfcfd8b471f1 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
+@@ -53,6 +53,7 @@ import org.apache.dubbo.rpc.protocol.tri.call.TripleClientCall;
+ import org.apache.dubbo.rpc.protocol.tri.call.UnaryClientCallListener;
+ import org.apache.dubbo.rpc.protocol.tri.compressor.Compressor;
+ import org.apache.dubbo.rpc.protocol.tri.compressor.Identity;
++import org.apache.dubbo.rpc.protocol.tri.h12.grpc.GrpcUtils;
+ import org.apache.dubbo.rpc.protocol.tri.observer.ClientCallToObserverAdapter;
+ import org.apache.dubbo.rpc.protocol.tri.transport.TripleWriteQueue;
+ import org.apache.dubbo.rpc.service.ServiceDescriptorInternalCache;
+@@ -65,6 +66,7 @@ import java.util.Set;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.ExecutorService;
++import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
+ import io.netty.util.AsciiString;
+@@ -207,10 +209,20 @@ public class TripleInvoker<T> extends AbstractInvoker<T> {
+ 
+     AsyncRpcResult invokeServerStream(MethodDescriptor methodDescriptor, Invocation invocation, ClientCall call) {
+         RequestMetadata request = createRequest(methodDescriptor, invocation, null);
+-        StreamObserver<Object> responseObserver =
+-                (StreamObserver<Object>) invocation.getArguments()[1];
+-        final StreamObserver<Object> requestObserver = streamCall(call, request, responseObserver);
+-        requestObserver.onNext(invocation.getArguments()[0]);
++        Object[] arguments = invocation.getArguments();
++        final StreamObserver<Object> requestObserver;
++        if (arguments.length == 2) {
++            StreamObserver<Object> responseObserver = (StreamObserver<Object>) arguments[1];
++            requestObserver = streamCall(call, request, responseObserver);
++            requestObserver.onNext(invocation.getArguments()[0]);
++        } else if (arguments.length == 1) {
++            StreamObserver<Object> responseObserver = (StreamObserver<Object>) arguments[0];
++            requestObserver = streamCall(call, request, responseObserver);
++            requestObserver.onNext(null);
++        } else {
++            throw new IllegalStateException(
++                    "The first parameter must be a StreamObserver when there are no parameters, or the second parameter must be a StreamObserver when there are parameters");
++        }
+         requestObserver.onCompleted();
+         return new AsyncRpcResult(CompletableFuture.completedFuture(new AppResponse()), invocation);
+     }
+@@ -311,7 +323,7 @@ public class TripleInvoker<T> extends AbstractInvoker<T> {
+         meta.version = url.getVersion();
+         meta.acceptEncoding = acceptEncodings;
+         if (timeout != null) {
+-            meta.timeout = timeout + "m";
++            meta.timeout = GrpcUtils.getTimeoutHeaderValue(Long.valueOf(timeout), TimeUnit.MILLISECONDS);
+         }
+         String application = (String) invocation.getObjectAttachmentWithoutConvert(CommonConstants.APPLICATION_KEY);
+         if (application == null) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/AbstractServerTransportListener.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/AbstractServerTransportListener.java
+index 15ef4a0fc6eeb4910f9192a494fa7af779e64861..28dc4dce3184a35e6528b1d30855087068f99f2b 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/AbstractServerTransportListener.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/AbstractServerTransportListener.java
+@@ -279,6 +279,9 @@ public abstract class AbstractServerTransportListener<HEADER extends RequestMeta
+         // customizer RpcInvocation
+         HeaderFilter[] headerFilters =
+                 UrlUtils.computeServiceAttribute(invoker.getUrl(), HEADER_FILTERS_CACHE, this::loadHeaderFilters);
++        if (headerFilters == null) {
++            headerFilters = this.loadHeaderFilters(invoker.getUrl());
++        }
+         for (HeaderFilter headerFilter : headerFilters) {
+             headerFilter.invoke(invoker, inv);
+         }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/grpc/GrpcUtils.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/grpc/GrpcUtils.java
+index 4d5bd6550452ad0bc97456ba0417f829b0640c72..f062b025bd3c5a474acc75f0167b0edb99f8741c 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/grpc/GrpcUtils.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/grpc/GrpcUtils.java
+@@ -50,6 +50,43 @@ public class GrpcUtils {
+         }
+     }
+ 
++    /**
++     * Converts a timeout value to the gRPC `grpc-timeout` ASCII string format.
++     * <p>
++     * This method applies a greedy strategy: it chooses the largest possible unit
++     * (nanos, micros, millis, seconds, minutes, hours) such that the numeric part is
++     * less than 100_000_000, as required by the gRPC specification.
++     * For example, a 1-second timeout will be encoded as "1000000u" (in microseconds).
++     * </p>
++     *
++     * @param timeout the timeout value
++     * @param unit the time unit of the timeout
++     * @return a string suitable for use as the value of the gRPC `grpc-timeout` header
++     * @throws IllegalArgumentException if the timeout too small
++     */
++    public static String getTimeoutHeaderValue(Long timeout, TimeUnit unit) {
++        long timeoutNanos = timeout;
++        if (unit != TimeUnit.NANOSECONDS) {
++            timeoutNanos = unit.toNanos(timeout);
++        }
++        final long cutoff = 100_000_000L;
++        if (timeoutNanos < 0) {
++            throw new IllegalArgumentException("Timeout too small");
++        } else if (timeoutNanos < cutoff) {
++            return timeoutNanos + "n";
++        } else if (timeoutNanos < cutoff * 1_000L) {
++            return TimeUnit.NANOSECONDS.toMicros(timeoutNanos) + "u";
++        } else if (timeoutNanos < cutoff * 1_000_000L) {
++            return TimeUnit.NANOSECONDS.toMillis(timeoutNanos) + "m";
++        } else if (timeoutNanos < cutoff * 1_000_000_000L) {
++            return TimeUnit.NANOSECONDS.toSeconds(timeoutNanos) + "S";
++        } else if (timeoutNanos < cutoff * 1_000_000_000L * 60L) {
++            return TimeUnit.NANOSECONDS.toMinutes(timeoutNanos) + "M";
++        } else {
++            return TimeUnit.NANOSECONDS.toHours(timeoutNanos) + "H";
++        }
++    }
++
+     public static boolean isGrpcRequest(String contentType) {
+         return contentType != null && contentType.startsWith(MediaType.APPLICATION_GRPC.getName());
+     }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
+index da4e9cd9e9950f57ad2719777fd3885378220fcf..82e41bd333fe3f29e5805686c4581a09f2e2369b 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
+@@ -26,6 +26,8 @@ import org.apache.dubbo.rpc.protocol.tri.TripleHeaderEnum;
+ 
+ import io.netty.buffer.Unpooled;
+ import io.netty.channel.ChannelDuplexHandler;
++import io.netty.channel.ChannelFuture;
++import io.netty.channel.ChannelFutureListener;
+ import io.netty.channel.ChannelHandler.Sharable;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelPipeline;
+@@ -99,14 +101,36 @@ public class Http3ClientFrameCodec extends ChannelDuplexHandler {
+     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+         if (msg instanceof Http2HeadersFrame) {
+             Http2HeadersFrame frame = (Http2HeadersFrame) msg;
+-            ctx.write(new DefaultHttp3HeadersFrame(new Http3HeadersAdapter(frame.headers())), promise);
+             if (frame.isEndStream()) {
+-                ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise);
++                ChannelFuture future = ctx.write(
++                        new DefaultHttp3HeadersFrame(new Http3HeadersAdapter(frame.headers())), ctx.newPromise());
++                if (future.isDone()) {
++                    ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise);
++                } else {
++                    future.addListener(
++                            (ChannelFutureListener) f -> ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise));
++                }
++                return;
+             }
++            ctx.write(new DefaultHttp3HeadersFrame(new Http3HeadersAdapter(frame.headers())), promise);
+         } else if (msg instanceof Http2DataFrame) {
+             Http2DataFrame frame = (Http2DataFrame) msg;
+             if (frame.isEndStream()) {
+-                ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise);
++                if (Unpooled.EMPTY_BUFFER.equals(frame.content())) {
++                    ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise);
++                    return;
++                }
++                ChannelFuture future = ctx.write(new DefaultHttp3DataFrame(frame.content()), ctx.newPromise());
++                if (future.isDone()) {
++                    ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise);
++                } else {
++                    future.addListener(
++                            (ChannelFutureListener) f -> ((QuicStreamChannel) ctx.channel()).shutdownOutput(promise));
++                }
++                return;
++            }
++            if (Unpooled.EMPTY_BUFFER.equals(frame.content())) {
++                promise.trySuccess();
+                 return;
+             }
+             ctx.write(new DefaultHttp3DataFrame(frame.content()), promise);
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
+index 036739f019a81f88f6764131527b4f32dedbb028..5ae99b500364d882525e2ccdd8c68344ef348bea 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
+@@ -234,7 +234,7 @@ public abstract class AbstractTripleClientStream extends AbstractStream implemen
+             final CharSequence contentType = headers.get(HttpHeaderNames.CONTENT_TYPE.getKey());
+             if (contentType == null || !GrpcUtils.isGrpcRequest(contentType.toString())) {
+                 return TriRpcStatus.fromCode(TriRpcStatus.httpStatusToGrpcCode(httpStatus))
+-                        .withDescription("invalid content-type: " + contentType);
++                        .withDescription("HTTP status: " + httpStatus + ", invalid content-type: " + contentType);
+             }
+             return null;
+         }
+@@ -399,6 +399,9 @@ public abstract class AbstractTripleClientStream extends AbstractStream implemen
+ 
+         @Override
+         public void onHeader(Http2Headers headers, boolean endStream) {
++            if (LOGGER.isDebugEnabled()) {
++                LOGGER.debug("endStream: {} HEADERS: {}", endStream, headers);
++            }
+             executor.execute(() -> {
+                 if (endStream) {
+                     if (!halfClosed) {
+@@ -418,6 +421,9 @@ public abstract class AbstractTripleClientStream extends AbstractStream implemen
+ 
+         @Override
+         public void onData(ByteBuf data, boolean endStream) {
++            if (LOGGER.isDebugEnabled()) {
++                LOGGER.debug("endStream: {} DATA: {}", endStream, data.toString(StandardCharsets.UTF_8));
++            }
+             try {
+                 executor.execute(() -> doOnData(data, endStream));
+             } catch (Throwable t) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/transport/GracefulShutdown.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/transport/GracefulShutdown.java
+index 29c0b6f44f5710c9dfb6ed721f5535322b684458..5e86b592c0a5631929bcb4adbc2c8958f6c0e1ff 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/transport/GracefulShutdown.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/transport/GracefulShutdown.java
+@@ -19,6 +19,8 @@ package org.apache.dubbo.rpc.protocol.tri.transport;
+ import java.util.concurrent.TimeUnit;
+ 
+ import io.netty.buffer.ByteBufUtil;
++import io.netty.channel.ChannelFuture;
++import io.netty.channel.ChannelFutureListener;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelPromise;
+ import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
+@@ -66,9 +68,12 @@ public class GracefulShutdown {
+         try {
+             Http2GoAwayFrame goAwayFrame = new DefaultHttp2GoAwayFrame(
+                     Http2Error.NO_ERROR, ByteBufUtil.writeAscii(this.ctx.alloc(), this.goAwayMessage));
+-            ctx.writeAndFlush(goAwayFrame);
+-            // TODO support customize graceful shutdown timeout mills
+-            ctx.close(originPromise);
++            ChannelFuture future = ctx.writeAndFlush(goAwayFrame, ctx.newPromise());
++            if (future.isDone()) {
++                ctx.close(originPromise);
++            } else {
++                future.addListener((ChannelFutureListener) f -> ctx.close(originPromise));
++            }
+         } catch (Exception e) {
+             ctx.fireExceptionCaught(e);
+         }
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 28a86e7b62272991e0be5eae2a001d1975b2c2f5..4d511307d427448cec8d3b04c71a67a763f44d6e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -60,6 +60,8 @@ public class WelcomeLogoApplicationListener implements ApplicationListener<Appli
+ 
+         if (logger.isInfoEnabled()) {
+             logger.info(bannerText);
++        } else {
++            System.out.print(bannerText);
+         }
+ 
+         // mark processed to be true
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..f8507cdf785109a93b95677ffc71830ef7a6790c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -157,7 +157,7 @@
+     <build_helper_maven_plugin_version>3.6.0</build_helper_maven_plugin_version>
+     <maven_jacoco_version>0.8.13</maven_jacoco_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+-    <maven_enforce_version>3.6.0</maven_enforce_version>
++    <maven_enforce_version>3.5.0</maven_enforce_version>
+     <maven_antrun_version>3.1.0</maven_antrun_version>
+     <maven_os_plugin_version>1.7.1</maven_os_plugin_version>
+     <maven_protobuf_plugin_version>0.6.1</maven_protobuf_plugin_version>
+@@ -165,12 +165,10 @@
+ 
+     <!-- For unify spring boot 3 version -->
+     <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+-    <!-- grpc_version should be same as grpc.version at dubbo-dependencies-bom -->
+-    <grpc_version>1.73.0</grpc_version>
++    <grpc_version>1.54.0</grpc_version>
+     <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+@@ -497,7 +495,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +644,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

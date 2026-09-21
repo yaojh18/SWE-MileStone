@@ -1,0 +1,3501 @@
+diff --git a/.codecov.yml b/.codecov.yml
+deleted file mode 100644
+index ea0a4218a33bf3e86985a356d246d78b10bc4cd3..0000000000000000000000000000000000000000
+--- a/.codecov.yml
++++ /dev/null
+@@ -1,13 +0,0 @@
+-coverage:
+-  status:
+-    patch: true
+-    project: false # disabled because project coverage is not stable
+-comment:
+-  layout: "flags, files"
+-  behavior: once
+-  require_changes: true
+-ignore:
+-  - "tools"
+-  - "**/mock"
+-  - "**/*_mock.go"
+-  - "**/*test"
+diff --git a/.github/copilot-instructions.md b/.github/copilot-instructions.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb763a244b49e3df6d156c71d448758483c11e8e
+--- /dev/null
++++ b/.github/copilot-instructions.md
+@@ -0,0 +1,197 @@
++# GitHub Copilot Instructions for go-zero
++
++This document provides guidelines for GitHub Copilot when assisting with development in the go-zero project.
++
++## Project Overview
++
++go-zero is a web and RPC framework with lots of built-in engineering practices designed to ensure the stability of busy services with resilience design. It has been serving sites with tens of millions of users for years.
++
++### Key Architecture Components
++
++- **REST API framework** (`rest/`) - HTTP service framework with middleware support
++- **RPC framework** (`zrpc/`) - gRPC-based RPC framework with service discovery
++- **Core utilities** (`core/`) - Foundational components including:
++  - Circuit breakers, rate limiters, load shedding
++  - Caching, stores (Redis, MongoDB, SQL)
++  - Concurrency control, metrics, tracing
++  - Configuration management
++- **Code generation tool** (`tools/goctl/`) - CLI tool for generating code from API files
++
++## Coding Standards and Conventions
++
++### Code Style
++
++1. **Follow Go conventions**: Use `gofmt` for formatting, follow effective Go practices
++2. **Package naming**: Use lowercase, single-word package names when possible
++3. **Error handling**: Always handle errors explicitly, use `errorx.BatchError` for multiple errors
++4. **Context propagation**: Always pass `context.Context` as the first parameter for functions that may block
++5. **Configuration structures**: Use struct tags with JSON annotations and default values
++
++Example configuration pattern:
++```go
++type Config struct {
++    Host     string `json:",default=0.0.0.0"`
++    Port     int    `json:",default=8080"`
++    Timeout  int    `json:",default=3000"`
++    Optional string `json:",optional"`
++}
++```
++
++### Interface Design
++
++1. **Small interfaces**: Follow Go's preference for small, focused interfaces
++2. **Context methods**: Provide both context and non-context versions of methods
++3. **Options pattern**: Use functional options for complex configuration
++
++Example:
++```go
++func (c *Client) Get(key string, val any) error {
++    return c.GetCtx(context.Background(), key, val)
++}
++
++func (c *Client) GetCtx(ctx context.Context, key string, val any) error {
++    // implementation
++}
++```
++
++### Testing Patterns
++
++1. **Test file naming**: Use `*_test.go` suffix
++2. **Test function naming**: Use `TestFunctionName` pattern
++3. **Use testify/assert**: Prefer `assert` package for assertions
++4. **Table-driven tests**: Use table-driven tests for multiple scenarios
++5. **Mock interfaces**: Use `go.uber.org/mock` for mocking
++6. **Test helpers**: Use `redistest`, `mongtest` helpers for database testing
++
++Example test pattern:
++```go
++func TestSomething(t *testing.T) {
++    tests := []struct {
++        name     string
++        input    string
++        expected string
++        wantErr  bool
++    }{
++        {"valid case", "input", "output", false},
++        {"error case", "bad", "", true},
++    }
++
++    for _, tt := range tests {
++        t.Run(tt.name, func(t *testing.T) {
++            result, err := SomeFunction(tt.input)
++            if tt.wantErr {
++                assert.Error(t, err)
++                return
++            }
++            assert.NoError(t, err)
++            assert.Equal(t, tt.expected, result)
++        })
++    }
++}
++```
++
++## Framework-Specific Guidelines
++
++### REST API Development
++
++1. **API Definition**: Use `.api` files to define REST APIs
++2. **Handler pattern**: Separate business logic into logic packages
++3. **Middleware**: Use built-in middlewares (tracing, logging, metrics, recovery)
++4. **Response handling**: Use `httpx.WriteJson` for JSON responses
++5. **Error handling**: Use `httpx.Error` for HTTP error responses
++
++### RPC Development
++
++1. **Protocol Buffers**: Use protobuf for service definitions
++2. **Service discovery**: Integrate with etcd for service registration
++3. **Load balancing**: Use built-in load balancing strategies
++4. **Interceptors**: Implement interceptors for cross-cutting concerns
++
++### Database Operations
++
++1. **SQL operations**: Use `sqlx` package for database operations
++2. **Caching**: Implement caching patterns with `cache` package
++3. **Transactions**: Use proper transaction handling
++4. **Connection pooling**: Configure appropriate connection pools
++
++Example cache pattern:
++```go
++err := c.QueryRowCtx(ctx, &dest, key, func(ctx context.Context, conn sqlx.SqlConn) error {
++    return conn.QueryRowCtx(ctx, &dest, query, args...)
++})
++```
++
++### Configuration Management
++
++1. **YAML configuration**: Use YAML for configuration files
++2. **Environment variables**: Support environment variable overrides
++3. **Validation**: Include proper validation for configuration parameters
++4. **Sensible defaults**: Provide reasonable default values
++
++## Error Handling Best Practices
++
++1. **Wrap errors**: Use `fmt.Errorf` with `%w` verb to wrap errors
++2. **Custom errors**: Define custom error types when needed
++3. **Error logging**: Log errors appropriately with context
++4. **Graceful degradation**: Implement fallback mechanisms
++
++## Performance Considerations
++
++1. **Resource pools**: Use connection pools and worker pools
++2. **Circuit breakers**: Implement circuit breaker patterns for external calls
++3. **Rate limiting**: Apply rate limiting to protect services
++4. **Load shedding**: Implement adaptive load shedding
++5. **Metrics**: Add appropriate metrics and monitoring
++
++## Security Guidelines
++
++1. **Input validation**: Validate all input parameters
++2. **SQL injection prevention**: Use parameterized queries
++3. **Authentication**: Implement proper JWT token handling
++4. **HTTPS**: Support TLS/HTTPS configurations
++5. **CORS**: Configure CORS appropriately for web APIs
++
++## Documentation Standards
++
++1. **Package documentation**: Include package-level documentation
++2. **Function documentation**: Document exported functions with examples
++3. **API documentation**: Maintain API documentation in sync
++4. **README updates**: Update README for significant changes
++
++## Common Patterns to Follow
++
++### Service Configuration
++```go
++type ServiceConf struct {
++    Name string
++    Log  logx.LogConf
++    Mode string `json:",default=pro,options=[dev,test,pre,pro]"`
++    // ... other common fields
++}
++```
++
++### Middleware Implementation
++```go
++func SomeMiddleware() rest.Middleware {
++    return func(next http.HandlerFunc) http.HandlerFunc {
++        return func(w http.ResponseWriter, r *http.Request) {
++            // Pre-processing
++            next.ServeHTTP(w, r)
++            // Post-processing
++        }
++    }
++}
++```
++
++### Resource Management
++Always implement proper resource cleanup using defer and context cancellation.
++
++## Build and Test Commands
++
++- Build: `go build ./...`
++- Test: `go test ./...`  
++- Test with race detection: `go test -race ./...`
++- Format: `gofmt -w .`
++- Generate code: `goctl api go -api *.api -dir .`
++
++Remember to run tests and ensure all checks pass before submitting changes. The project emphasizes high quality, performance, and reliability, so these should be primary considerations in all development work.
+\ No newline at end of file
+diff --git a/.github/workflows/codeql-analysis.yml b/.github/workflows/codeql-analysis.yml
+index cfb233b73b16152ae1b6aea7016eaf098792f64b..568fbe13a1c0c27c398712b6a47fed2bc87d98eb 100644
+--- a/.github/workflows/codeql-analysis.yml
++++ b/.github/workflows/codeql-analysis.yml
+@@ -35,11 +35,11 @@ jobs:
+ 
+     steps:
+     - name: Checkout repository
+-      uses: actions/checkout@v4
++      uses: actions/checkout@v5
+ 
+     # Initializes the CodeQL tools for scanning.
+     - name: Initialize CodeQL
+-      uses: github/codeql-action/init@v3
++      uses: github/codeql-action/init@v4
+       with:
+         languages: ${{ matrix.language }}
+         # If you wish to specify custom queries, you can do so here or in a config file.
+@@ -50,7 +50,7 @@ jobs:
+     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
+     # If this step fails, then you should remove it and run the build manually (see below)
+     - name: Autobuild
+-      uses: github/codeql-action/autobuild@v3
++      uses: github/codeql-action/autobuild@v4
+ 
+     # ℹ️ Command-line programs to run using the OS shell.
+     # 📚 https://git.io/JvXDl
+@@ -64,4 +64,4 @@ jobs:
+     #   make release
+ 
+     - name: Perform CodeQL Analysis
+-      uses: github/codeql-action/analyze@v3
++      uses: github/codeql-action/analyze@v4
+diff --git a/.github/workflows/go.yml b/.github/workflows/go.yml
+index 4cadaa56780cb0a14bb75ec6a0cd71051017390e..bc6f24260c93d465796ca9f6c32611c8fe18f005 100644
+--- a/.github/workflows/go.yml
++++ b/.github/workflows/go.yml
+@@ -12,10 +12,10 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+       - name: Check out code into the Go module directory
+-        uses: actions/checkout@v4
++        uses: actions/checkout@v5
+ 
+       - name: Set up Go 1.x
+-        uses: actions/setup-go@v5
++        uses: actions/setup-go@v6
+         with:
+           go-version-file: go.mod
+           check-latest: true
+@@ -41,16 +41,21 @@ jobs:
+ 
+       - name: Codecov
+         uses: codecov/codecov-action@v5
++        with:
++          files: ./coverage.txt
++          flags: unittests
++          name: codecov-umbrella
++          fail_ci_if_error: false
+ 
+   test-win:
+     name: Windows
+     runs-on: windows-latest
+     steps:
+       - name: Checkout codebase
+-        uses: actions/checkout@v4
++        uses: actions/checkout@v5
+ 
+       - name: Set up Go 1.x
+-        uses: actions/setup-go@v5
++        uses: actions/setup-go@v6
+         with:
+           # make sure Go version compatible with go-zero
+           go-version-file: go.mod
+diff --git a/.github/workflows/issues.yml b/.github/workflows/issues.yml
+index 5b2d9a2820a1b09f2069aabf5b6cd618dfa34096..039490a3dfc3428d298632ced7f48379ec253c7d 100644
+--- a/.github/workflows/issues.yml
++++ b/.github/workflows/issues.yml
+@@ -7,7 +7,7 @@ jobs:
+   close-issues:
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/stale@v9
++      - uses: actions/stale@v10
+         with:
+           days-before-issue-stale: 365
+           days-before-issue-close: 90
+diff --git a/.github/workflows/release.yaml b/.github/workflows/release.yaml
+index 7df5e153cbdb53b39b4819214bd34f3885e0efd9..74e44b5f64a973dc8aae56a1cea74cad4d2b4dbc 100644
+--- a/.github/workflows/release.yaml
++++ b/.github/workflows/release.yaml
+@@ -16,7 +16,7 @@ jobs:
+           - goarch: "386"
+             goos: darwin
+     steps:
+-      - uses: actions/checkout@v4
++      - uses: actions/checkout@v5
+       - uses: zeromicro/go-zero-release-action@master
+         with:
+           github_token: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/.github/workflows/reviewdog.yml b/.github/workflows/reviewdog.yml
+index 1699dbb1976d50e49d90df48eeff4a1d0ddac1d6..6af481d274f136e8ae90e222e2ca152930a3d1ba 100644
+--- a/.github/workflows/reviewdog.yml
++++ b/.github/workflows/reviewdog.yml
+@@ -5,7 +5,7 @@ jobs:
+     name: runner / staticcheck
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/checkout@v4
++      - uses: actions/checkout@v5
+       - uses: reviewdog/action-staticcheck@v1
+         with:
+           github_token: ${{ secrets.github_token }}
+diff --git a/.github/workflows/version-check.yml b/.github/workflows/version-check.yml
+index 0db97e1f3637ec5235c0ea6951f4bb55f97221a5..a894cda8850502a830c0b9459e404db22ab42721 100644
+--- a/.github/workflows/version-check.yml
++++ b/.github/workflows/version-check.yml
+@@ -10,10 +10,10 @@ jobs:
+   version-check:
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/checkout@v4
++      - uses: actions/checkout@v5
+ 
+       - name: Set up Go
+-        uses: actions/setup-go@v5
++        uses: actions/setup-go@v6
+         with:
+           go-version: '1.21'
+ 
+diff --git a/.gitignore b/.gitignore
+index d01e513cde2b41a867b3c079665a0e8ec43a91f1..c8e0c1de9a348836faa96faed84dd1f4efd4738f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -17,6 +17,7 @@
+ **/logs
+ **/adhoc
+ **/coverage.txt
++**/WARP.md
+ 
+ # for test purpose
+ go.work
+diff --git a/go.mod b/go.mod
+index a233c8f43fbb9d55e094cf8eb3544251a52ecd61..8ff41ded93cf18a66cdf4523ef6bd3adbd2bd778 100644
+--- a/go.mod
++++ b/go.mod
+@@ -9,20 +9,19 @@ require (
+ 	github.com/fullstorydev/grpcurl v1.9.3
+ 	github.com/go-sql-driver/mysql v1.9.0
+ 	github.com/golang-jwt/jwt/v4 v4.5.2
+-	github.com/golang/mock v1.6.0
+ 	github.com/golang/protobuf v1.5.4
+ 	github.com/google/uuid v1.6.0
+-	github.com/grafana/pyroscope-go v1.2.2
++	github.com/grafana/pyroscope-go v1.2.7
+ 	github.com/jackc/pgx/v5 v5.7.4
+ 	github.com/jhump/protoreflect v1.17.0
+ 	github.com/pelletier/go-toml/v2 v2.2.2
+ 	github.com/prometheus/client_golang v1.21.1
+-	github.com/redis/go-redis/v9 v9.10.0
++	github.com/redis/go-redis/v9 v9.16.0
+ 	github.com/spaolacci/murmur3 v1.1.0
+-	github.com/stretchr/testify v1.10.0
++	github.com/stretchr/testify v1.11.1
+ 	go.etcd.io/etcd/api/v3 v3.5.15
+ 	go.etcd.io/etcd/client/v3 v3.5.15
+-	go.mongodb.org/mongo-driver v1.17.4
++	go.mongodb.org/mongo-driver/v2 v2.3.1
+ 	go.opentelemetry.io/otel v1.24.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.24.0
+@@ -33,6 +32,7 @@ require (
+ 	go.opentelemetry.io/otel/trace v1.24.0
+ 	go.uber.org/automaxprocs v1.6.0
+ 	go.uber.org/goleak v1.3.0
++	go.uber.org/mock v0.4.0
+ 	golang.org/x/net v0.35.0
+ 	golang.org/x/sys v0.30.0
+ 	golang.org/x/time v0.10.0
+@@ -68,11 +68,11 @@ require (
+ 	github.com/go-openapi/jsonreference v0.20.2 // indirect
+ 	github.com/go-openapi/swag v0.22.4 // indirect
+ 	github.com/gogo/protobuf v1.3.2 // indirect
+-	github.com/golang/snappy v0.0.4 // indirect
++	github.com/golang/snappy v1.0.0 // indirect
+ 	github.com/google/gnostic-models v0.6.8 // indirect
+ 	github.com/google/go-cmp v0.6.0 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+-	github.com/grafana/pyroscope-go/godeltaprof v0.1.8 // indirect
++	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
+ 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
+ 	github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 // indirect
+ 	github.com/jackc/pgpassfile v1.0.0 // indirect
+@@ -88,7 +88,6 @@ require (
+ 	github.com/mattn/go-runewidth v0.0.15 // indirect
+ 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+ 	github.com/modern-go/reflect2 v1.0.2 // indirect
+-	github.com/montanaflynn/stats v0.7.1 // indirect
+ 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+ 	github.com/openzipkin/zipkin-go v0.4.3 // indirect
+ 	github.com/pmezard/go-difflib v1.0.0 // indirect
+diff --git a/go.sum b/go.sum
+index f4d4d368889dfd61f2cb8048c05d15d79e9ad460..d62f5850013184dec3cb4d6d74b10333c1d4ef55 100644
+--- a/go.sum
++++ b/go.sum
+@@ -62,12 +62,10 @@ github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
+ github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
+ github.com/golang-jwt/jwt/v4 v4.5.2 h1:YtQM7lnr8iZ+j5q71MGKkNw9Mn7AjHM68uc9g5fXeUI=
+ github.com/golang-jwt/jwt/v4 v4.5.2/go.mod h1:m21LjoU+eqJr34lmDMbreY2eSTRJ1cv77w39/MY0Ch0=
+-github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+-github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
+ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+-github.com/golang/snappy v0.0.4 h1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=
+-github.com/golang/snappy v0.0.4/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
++github.com/golang/snappy v1.0.0 h1:Oy607GVXHs7RtbggtPBnr2RmDArIsAefDwvrdWvRhGs=
++github.com/golang/snappy v1.0.0/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
+ github.com/google/gnostic-models v0.6.8 h1:yo/ABAfM5IMRsS1VnXjTBvUb61tFIHozhlYvRgGre9I=
+ github.com/google/gnostic-models v0.6.8/go.mod h1:5n7qKqH0f5wFt+aWF8CW6pZLLNOfYuF5OpfBSENuI8U=
+ github.com/google/go-cmp v0.5.9/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+@@ -80,10 +78,10 @@ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1 h1:K6RDEckDVWvDI9JAJY
+ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1/go.mod h1:kpwsk12EmLew5upagYY7GY0pfYCcupk39gWOCRROcvE=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+-github.com/grafana/pyroscope-go v1.2.2 h1:uvKCyZMD724RkaCEMrSTC38Yn7AnFe8S2wiAIYdDPCE=
+-github.com/grafana/pyroscope-go v1.2.2/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8 h1:iwOtYXeeVSAeYefJNaxDytgjKtUuKQbJqgAIjlnicKg=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
++github.com/grafana/pyroscope-go v1.2.7 h1:VWBBlqxjyR0Cwk2W6UrE8CdcdD80GOFNutj0Kb1T8ac=
++github.com/grafana/pyroscope-go v1.2.7/go.mod h1:o/bpSLiJYYP6HQtvcoVKiE9s5RiNgjYTj1DhiddP2Pc=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9 h1:c1Us8i6eSmkW+Ez05d3co8kasnuOY813tbMN8i/a3Og=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0/go.mod h1:P+Lt/0by1T8bfcF3z737NnSbmxQAppXMRziHUxPOC8k=
+ github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 h1:2VTzZjLZBgl62/EtslCrtky5vbi9dd7HrQPQIx6wqiw=
+@@ -130,8 +128,6 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w
+ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+ github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
+ github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+-github.com/montanaflynn/stats v0.7.1 h1:etflOAAHORrCC44V+aR6Ftzort912ZU+YLiSTuV8eaE=
+-github.com/montanaflynn/stats v0.7.1/go.mod h1:etXPPgVO6n31NxCd9KQUMvCM+ve0ruNzt6R8Bnaayow=
+ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
+ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
+ github.com/nbio/st v0.0.0-20140626010706-e9e8d9816f32 h1:W6apQkHrMkS0Muv8G/TipAy/FJl/rCYT0+EuS8+Z0z4=
+@@ -158,8 +154,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.10.0 h1:FxwK3eV8p/CQa0Ch276C7u2d0eNC9kCmAYQ7mCXCzVs=
+-github.com/redis/go-redis/v9 v9.10.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.16.0 h1:OotgqgLSRCmzfqChbQyG1PHC3tLNR89DG4jdOERSEP4=
++github.com/redis/go-redis/v9 v9.16.0/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
+ github.com/rivo/uniseg v0.2.0 h1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=
+ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
+ github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
+@@ -180,8 +176,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
+ github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
+ github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
+ github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+-github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
+-github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
++github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
++github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+ github.com/xdg-go/pbkdf2 v1.0.0 h1:Su7DPu48wXMwC3bs7MCNG+z4FhcyEuz5dlvchbq0B0c=
+ github.com/xdg-go/pbkdf2 v1.0.0/go.mod h1:jrpuAogTd400dnrH08LKmI/xc1MbPOebTwRqcT5RDeI=
+ github.com/xdg-go/scram v1.1.2 h1:FHX5I5B4i4hKRVRBCFRxq1iQRej7WO3hhBuJf+UUySY=
+@@ -192,7 +188,6 @@ github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 h1:ilQV1hzziu+LLM3zU
+ github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78/go.mod h1:aL8wCCfTfSfmXjznFBSZNN13rSJjlIOI1fUNAtF7rmI=
+ github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+ github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+-github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
+ github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
+ github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
+ github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
+@@ -202,8 +197,8 @@ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15/go.mod h1:mXDI4NAOwEiszrHCb0aqfAYNCrZP4e9hRca3d1YK8EU=
+ go.etcd.io/etcd/client/v3 v3.5.15 h1:23M0eY4Fd/inNv1ZfU3AxrbbOdW79r9V9Rl62Nm6ip4=
+ go.etcd.io/etcd/client/v3 v3.5.15/go.mod h1:CLSJxrYjvLtHsrPKsy7LmZEE+DK2ktfd2bN4RhBMwlU=
+-go.mongodb.org/mongo-driver v1.17.4 h1:jUorfmVzljjr0FLzYQsGP8cgN/qzzxlY9Vh0C9KFXVw=
+-go.mongodb.org/mongo-driver v1.17.4/go.mod h1:Hy04i7O2kC4RS06ZrhPRqj/u4DTYkFDAAccj+rVKqgQ=
++go.mongodb.org/mongo-driver/v2 v2.3.1 h1:WrCgSzO7dh1/FrePud9dK5fKNZOE97q5EQimGkos7Wo=
++go.mongodb.org/mongo-driver/v2 v2.3.1/go.mod h1:jHeEDJHJq7tm6ZF45Issun9dbogjfnPySb1vXA7EeAI=
+ go.opentelemetry.io/otel v1.24.0 h1:0LAOdjNmQeSTzGBzduGe/rU4tZhMwL5rWgtp9Ku5Jfo=
+ go.opentelemetry.io/otel v1.24.0/go.mod h1:W7b9Ozg4nkF5tWI5zsXkaKKDjdVjpD4oAt9Qi/MArHo=
+ go.opentelemetry.io/otel/exporters/jaeger v1.17.0 h1:D7UpUy2Xc2wsi1Ras6V40q806WM07rqoCWzXu7Sqy+4=
+@@ -232,6 +227,8 @@ go.uber.org/automaxprocs v1.6.0 h1:O3y2/QNTOdbF+e/dpXNNW7Rx2hZ4sTIPyybbxyNqTUs=
+ go.uber.org/automaxprocs v1.6.0/go.mod h1:ifeIMSnPZuznNm6jmdzmU3/bfk01Fe2fotchwEFJ8r8=
+ go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+ go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
++go.uber.org/mock v0.4.0 h1:VcM4ZOtdbR4f6VXfiOpwpVJDL6lCReaZ6mw31wqh7KU=
++go.uber.org/mock v0.4.0/go.mod h1:a6FSlNadKUHUa9IP5Vyt1zh4fC7uAwxMutEAscFbkZc=
+ go.uber.org/multierr v1.9.0 h1:7fIwc/ZtS0q++VgcfqFDxSBZVv/Xo49/SYnDFupUwlI=
+ go.uber.org/multierr v1.9.0/go.mod h1:X2jQV1h+kxSjClGpnseKVIxpmcjrj7MNnI0bnlfKTVQ=
+ go.uber.org/zap v1.24.0 h1:FiJd5l1UOLj0wCgbSE0rwwXHzEdAZS6hiiSnxJN/D60=
+@@ -244,14 +241,12 @@ golang.org/x/crypto v0.33.0 h1:IOBPskki6Lysi0lo9qQvbxiQ+FvsCC/YWOecCHAixus=
+ golang.org/x/crypto v0.33.0/go.mod h1:bVdXmD7IV/4GdElGPozy6U7lWdRXA4qyRVGJV57uQ5M=
+ golang.org/x/mod v0.2.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.3.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+-golang.org/x/mod v0.4.2/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4/go.mod h1:jJ57K6gSWd91VN4djpZkiMVwK6gcyfeH4XE8wZrZaV4=
+ golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
+ golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+ golang.org/x/net v0.0.0-20200226121028-0de0cce0169b/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+ golang.org/x/net v0.0.0-20201021035429-f5854403a974/go.mod h1:sp8m0HH+o8qH0wwXwYZr8TS3Oi6o0r6Gce1SSxlDquU=
+ golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
+-golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4/go.mod h1:p54w0d4576C0XHj96bSt6lcn1PtDYWL6XObtHCRCNQM=
+ golang.org/x/net v0.0.0-20220722155237-a158d28d115b/go.mod h1:XRhObCWvk6IyKnWLug+ECip1KBveYUHfp+8e9klMJ9c=
+ golang.org/x/net v0.35.0 h1:T5GQRQb2y08kTAByq9L4/bz8cipCdA8FbRTXewonqY8=
+ golang.org/x/net v0.35.0/go.mod h1:EglIi67kWsHKlRzzVMUD93VMSWGFOMSZgxFjparz1Qk=
+@@ -260,7 +255,6 @@ golang.org/x/oauth2 v0.24.0/go.mod h1:XYTD2NtWslqkgxebSiOHnXEap4TF09sJSc7H1sXbht
+ golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+-golang.org/x/sync v0.0.0-20210220032951-036812b2e83c/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.11.0 h1:GGz8+XQP4FvTTrjZPzNKTMFtSXH80RAzG+5ghFPgK9w=
+ golang.org/x/sync v0.11.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
+@@ -268,8 +262,6 @@ golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5h
+ golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+-golang.org/x/sys v0.0.0-20210330210617-4fbd30eecc44/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+-golang.org/x/sys v0.0.0-20210510120138-977fb7262007/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+@@ -293,7 +285,6 @@ golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGm
+ golang.org/x/tools v0.0.0-20191119224855-298f0cb1881e/go.mod h1:b+2E5dAYhXwXZwtnZ6UAqBI28+e2cm9otk0dWdXHAEo=
+ golang.org/x/tools v0.0.0-20200619180055-7c47624df98f/go.mod h1:EkVYQZoAsY45+roYkvgYkIh4xh/qjgUK9TdY2XT94GE=
+ golang.org/x/tools v0.0.0-20210106214847-113979e3529a/go.mod h1:emZCQorbCU4vsT4fOWvOPXz4eW1wZW4PmDk9uLelYpA=
+-golang.org/x/tools v0.1.1/go.mod h1:o0xws9oXOQQZyjljx8fwUC0k7L1pTE6eaCbjGeHmOkk=
+ golang.org/x/tools v0.1.12/go.mod h1:hNGJHUnrk76NpqgfD5Aqm5Crs+Hm0VOH/i9J2+nxYbc=
+ golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d h1:vU5i/LfpvrRCpgM/VPfJLg5KjxD3E+hfT1SH+d9zLwg=
+ golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d/go.mod h1:aiJjzUbINMkxbQROHiO6hDPo2LHcIPhhQsa9DLh0yGk=
+diff --git a/readme-cn.md b/readme-cn.md
+index 19285fc4ab20cf16ccac6d5bbb8bd9a0ca4b1c49..e276eb4d0911bdbce3eae76df5023c1166e71536 100644
+--- a/readme-cn.md
++++ b/readme-cn.md
+@@ -175,7 +175,7 @@ GO111MODULE=on GOPROXY=https://goproxy.cn/,direct go get -u github.com/zeromicro
+ 
+ * API 文档
+ 
+-  [https://go-zero.dev/cn/](https://go-zero.dev/cn/)
++  [https://go-zero.dev](https://go-zero.dev)
+ 
+ * awesome 系列（更多文章见『微服务实践』公众号）
+ 
+@@ -303,6 +303,9 @@ go-zero 已被许多公司用于生产部署，接入场景如在线教育、电
+ >105. 昆仑万维科技股份有限公司
+ >106. 无锡盛算信息技术有限公司
+ >107. 深圳市聚货通信息科技有限公司
++>108. 浙江银盾云科技有限公司
++>109. 南京造世网络科技有限公司
++>110. 温州飞儿云信息技术有限公司
+ 
+ 如果贵公司也已使用 go-zero，欢迎在 [登记地址](https://github.com/zeromicro/go-zero/issues/602) 登记，仅仅为了推广，不做其它用途。
+ 
+diff --git a/tools/goctl/api/cmd.go b/tools/goctl/api/cmd.go
+index 8405bc83a98011a842a48e133a92a34355c2ff5d..d300260cda8fa1aa956bd2861e8baf1be98cb026 100644
+--- a/tools/goctl/api/cmd.go
++++ b/tools/goctl/api/cmd.go
+@@ -90,6 +90,7 @@ func init() {
+ 	newCmdFlags.StringVar(&new.VarStringHome, "home")
+ 	newCmdFlags.StringVar(&new.VarStringRemote, "remote")
+ 	newCmdFlags.StringVar(&new.VarStringBranch, "branch")
++	newCmdFlags.StringVar(&new.VarStringModule, "module")
+ 	newCmdFlags.StringVarWithDefaultValue(&new.VarStringStyle, "style", config.DefaultFormat)
+ 
+ 	pluginCmdFlags.StringVarP(&plugin.VarStringPlugin, "plugin", "p")
+diff --git a/tools/goctl/api/dartgen/util.go b/tools/goctl/api/dartgen/util.go
+index 79d94e80971c1135251146ee168f4a63a6d95a79..d781fe2635e1e8697528339828cbb49821d7c2da 100644
+--- a/tools/goctl/api/dartgen/util.go
++++ b/tools/goctl/api/dartgen/util.go
+@@ -250,8 +250,9 @@ func extractPositionalParamsFromPath(route spec.Route) string {
+ 		return ""
+ 	}
+ 
+-	var params []string
+-	for _, member := range ds.GetTagMembers(pathTagKey) {
++	tagMembers := ds.GetTagMembers(pathTagKey)
++	params := make([]string, 0, len(tagMembers))
++	for _, member := range tagMembers {
+ 		dartType := member.Type.Name()
+ 		params = append(params, fmt.Sprintf("%s %s", dartType, getPropertyFromMember(member)))
+ 	}
+diff --git a/tools/goctl/api/dartgen/vars.go b/tools/goctl/api/dartgen/vars.go
+index c34d364a4d3f2d763c5e9c00b085283d701800de..2488c5153a6f975a352b34dcdab1d1c0b2549a63 100644
+--- a/tools/goctl/api/dartgen/vars.go
++++ b/tools/goctl/api/dartgen/vars.go
+@@ -32,7 +32,7 @@ import '../vars/vars.dart';
+ /// Send GET request.
+ ///
+ /// ok: the function that will be called on success.
+-/// fail：the fuction that will be called on failure.
++/// fail：the function that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiGet(String path,
+     {Map<String, String> header,
+@@ -47,7 +47,7 @@ Future apiGet(String path,
+ ///
+ /// data: the data to post, it will be marshaled to json automatically.
+ /// ok: the function that will be called on success.
+-/// fail：the fuction that will be called on failure.
++/// fail：the function that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiPost(String path, dynamic data,
+     {Map<String, String> header,
+diff --git a/tools/goctl/api/gogen/config.tpl b/tools/goctl/api/gogen/config.tpl
+index 55127efbaaea77ad5dcb6c3cbba4e714d9f7e277..5fa7ad602622978e0a484b8a3039639c93e088db 100644
+--- a/tools/goctl/api/gogen/config.tpl
++++ b/tools/goctl/api/gogen/config.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package config
+ 
+ import {{.authImport}}
+diff --git a/tools/goctl/api/gogen/gen.go b/tools/goctl/api/gogen/gen.go
+index 9c1bb7b1822a25421884e63695bbff14ef8dd9e1..b3d12642a3d31d2ca8ba98752a856af8d3cff62a 100644
+--- a/tools/goctl/api/gogen/gen.go
++++ b/tools/goctl/api/gogen/gen.go
+@@ -75,6 +75,11 @@ func GoCommand(_ *cobra.Command, _ []string) error {
+ 
+ // DoGenProject gen go project files with api file
+ func DoGenProject(apiFile, dir, style string, withTest bool) error {
++	return DoGenProjectWithModule(apiFile, dir, "", style, withTest)
++}
++
++// DoGenProjectWithModule gen go project files with api file using custom module name
++func DoGenProjectWithModule(apiFile, dir, moduleName, style string, withTest bool) error {
+ 	api, err := parser.Parse(apiFile)
+ 	if err != nil {
+ 		return err
+@@ -90,23 +95,31 @@ func DoGenProject(apiFile, dir, style string, withTest bool) error {
+ 	}
+ 
+ 	logx.Must(pathx.MkdirIfNotExist(dir))
+-	rootPkg, err := golang.GetParentPackage(dir)
++
++	var rootPkg, projectPkg string
++	if len(moduleName) > 0 {
++		rootPkg, projectPkg, err = golang.GetParentPackageWithModule(dir, moduleName)
++	} else {
++		rootPkg, projectPkg, err = golang.GetParentPackage(dir)
++	}
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+ 	logx.Must(genEtc(dir, cfg, api))
+-	logx.Must(genConfig(dir, cfg, api))
+-	logx.Must(genMain(dir, rootPkg, cfg, api))
+-	logx.Must(genServiceContext(dir, rootPkg, cfg, api))
++	logx.Must(genConfig(dir, projectPkg, cfg, api))
++	logx.Must(genMain(dir, rootPkg, projectPkg, cfg, api))
++	logx.Must(genServiceContext(dir, rootPkg, projectPkg, cfg, api))
+ 	logx.Must(genTypes(dir, cfg, api))
+-	logx.Must(genRoutes(dir, rootPkg, cfg, api))
+-	logx.Must(genHandlers(dir, rootPkg, cfg, api))
+-	logx.Must(genLogic(dir, rootPkg, cfg, api))
++	logx.Must(genRoutes(dir, rootPkg, projectPkg, cfg, api))
++	logx.Must(genHandlers(dir, rootPkg, projectPkg, cfg, api))
++	logx.Must(genLogic(dir, rootPkg, projectPkg, cfg, api))
+ 	logx.Must(genMiddleware(dir, cfg, api))
+ 	if withTest {
+-		logx.Must(genHandlersTest(dir, rootPkg, cfg, api))
+-		logx.Must(genLogicTest(dir, rootPkg, cfg, api))
++		logx.Must(genHandlersTest(dir, rootPkg, projectPkg, cfg, api))
++		logx.Must(genLogicTest(dir, rootPkg, projectPkg, cfg, api))
++		logx.Must(genServiceContextTest(dir, rootPkg, projectPkg, cfg, api))
++		logx.Must(genIntegrationTest(dir, rootPkg, projectPkg, cfg, api))
+ 	}
+ 
+ 	if err := backupAndSweep(apiFile); err != nil {
+diff --git a/tools/goctl/api/gogen/genconfig.go b/tools/goctl/api/gogen/genconfig.go
+index 0f3920d7f567d4bd5ccabf3d4cac91a937925e9d..465dcfc6429c8c42ab1b77697c6853bbe708bce0 100644
+--- a/tools/goctl/api/gogen/genconfig.go
++++ b/tools/goctl/api/gogen/genconfig.go
+@@ -7,6 +7,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/vars"
+ )
+@@ -29,20 +30,20 @@ const (
+ //go:embed config.tpl
+ var configTemplate string
+ 
+-func genConfig(dir string, cfg *config.Config, api *spec.ApiSpec) error {
++func genConfig(dir, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	filename, err := format.FileNamingFormat(cfg.NamingFormat, configFile)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+ 	authNames := getAuths(api)
+-	var auths []string
++	auths := make([]string, 0, len(authNames))
+ 	for _, item := range authNames {
+ 		auths = append(auths, fmt.Sprintf("%s %s", item, jwtTemplate))
+ 	}
+ 
+ 	jwtTransNames := getJwtTrans(api)
+-	var jwtTransList []string
++	jwtTransList := make([]string, 0, len(jwtTransNames))
+ 	for _, item := range jwtTransNames {
+ 		jwtTransList = append(jwtTransList, fmt.Sprintf("%s %s", item, jwtTransTemplate))
+ 	}
+@@ -60,6 +61,8 @@ func genConfig(dir string, cfg *config.Config, api *spec.ApiSpec) error {
+ 			"authImport": authImportStr,
+ 			"auth":       strings.Join(auths, "\n"),
+ 			"jwtTrans":   strings.Join(jwtTransList, "\n"),
++			"projectPkg": projectPkg,
++			"version":    version.BuildVersion,
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/genhandlers.go b/tools/goctl/api/gogen/genhandlers.go
+index 4611be4d7ea2d8d3da6c7e21f7009777ff1ed484..a8008c3df49618f3ae900ee092f296a9ed5dad63 100644
+--- a/tools/goctl/api/gogen/genhandlers.go
++++ b/tools/goctl/api/gogen/genhandlers.go
+@@ -8,6 +8,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+@@ -15,10 +16,14 @@ import (
+ 
+ const defaultLogicPackage = "logic"
+ 
+-//go:embed handler.tpl
+-var handlerTemplate string
++var (
++	//go:embed handler.tpl
++	handlerTemplate string
++	//go:embed sse_handler.tpl
++	sseHandlerTemplate string
++)
+ 
+-func genHandler(dir, rootPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
++func genHandler(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
+ 	handler := getHandlerName(route)
+ 	handlerPath := getHandlerFolderPath(group, route)
+ 	pkgName := handlerPath[strings.LastIndex(handlerPath, "/")+1:]
+@@ -32,19 +37,28 @@ func genHandler(dir, rootPkg string, cfg *config.Config, group spec.Group, route
+ 		return err
+ 	}
+ 
++	var builtinTemplate = handlerTemplate
++	var templateFile = handlerTemplateFile
++	sse := group.GetAnnotation("sse")
++	if sse == "true" {
++		builtinTemplate = sseHandlerTemplate
++		templateFile = sseHandlerTemplateFile
++	}
++
+ 	return genFile(fileGenConfig{
+ 		dir:             dir,
+ 		subdir:          getHandlerFolderPath(group, route),
+ 		filename:        filename + ".go",
+ 		templateName:    "handlerTemplate",
+ 		category:        category,
+-		templateFile:    handlerTemplateFile,
+-		builtinTemplate: handlerTemplate,
++		templateFile:    templateFile,
++		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"PkgName":        pkgName,
+ 			"ImportPackages": genHandlerImports(group, route, rootPkg),
+ 			"HandlerName":    handler,
+ 			"RequestType":    util.Title(route.RequestTypeName()),
++			"ResponseType":   responseGoTypeName(route, typesPacket),
+ 			"LogicName":      logicName,
+ 			"LogicType":      strings.Title(getLogicName(route)),
+ 			"Call":           strings.Title(strings.TrimSuffix(handler, "Handler")),
+@@ -52,14 +66,16 @@ func genHandler(dir, rootPkg string, cfg *config.Config, group spec.Group, route
+ 			"HasRequest":     len(route.RequestTypeName()) > 0,
+ 			"HasDoc":         len(route.JoinedDoc()) > 0,
+ 			"Doc":            getDoc(route.JoinedDoc()),
++			"projectPkg":     projectPkg,
++			"version":        version.BuildVersion,
+ 		},
+ 	})
+ }
+ 
+-func genHandlers(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genHandlers(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	for _, group := range api.Service.Groups {
+ 		for _, route := range group.Routes {
+-			if err := genHandler(dir, rootPkg, cfg, group, route); err != nil {
++			if err := genHandler(dir, rootPkg, projectPkg, cfg, group, route); err != nil {
+ 				return err
+ 			}
+ 		}
+@@ -73,7 +89,8 @@ func genHandlerImports(group spec.Group, route spec.Route, parentPkg string) str
+ 		fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, getLogicFolderPath(group, route))),
+ 		fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, contextDir)),
+ 	}
+-	if len(route.RequestTypeName()) > 0 {
++	sse := group.GetAnnotation("sse")
++	if len(route.RequestTypeName()) > 0 || sse == "true" {
+ 		imports = append(imports, fmt.Sprintf("\"%s\"\n", pathx.JoinPackages(parentPkg, typesDir)))
+ 	}
+ 
+diff --git a/tools/goctl/api/gogen/genhandlerstest.go b/tools/goctl/api/gogen/genhandlerstest.go
+index ea913144cbb74426f6e9a6909e1ae7b84047c161..51603ddd4795130efd2cbafd97160ede2f10bb6f 100644
+--- a/tools/goctl/api/gogen/genhandlerstest.go
++++ b/tools/goctl/api/gogen/genhandlerstest.go
+@@ -7,6 +7,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+@@ -15,7 +16,7 @@ import (
+ //go:embed handler_test.tpl
+ var handlerTestTemplate string
+ 
+-func genHandlerTest(dir, rootPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
++func genHandlerTest(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
+ 	handler := getHandlerName(route)
+ 	handlerPath := getHandlerFolderPath(group, route)
+ 	pkgName := handlerPath[strings.LastIndex(handlerPath, "/")+1:]
+@@ -50,14 +51,16 @@ func genHandlerTest(dir, rootPkg string, cfg *config.Config, group spec.Group, r
+ 			"HasRequest":     len(route.RequestTypeName()) > 0,
+ 			"HasDoc":         len(route.JoinedDoc()) > 0,
+ 			"Doc":            getDoc(route.JoinedDoc()),
++			"projectPkg":     projectPkg,
++			"version":        version.BuildVersion,
+ 		},
+ 	})
+ }
+ 
+-func genHandlersTest(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genHandlersTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	for _, group := range api.Service.Groups {
+ 		for _, route := range group.Routes {
+-			if err := genHandlerTest(dir, rootPkg, cfg, group, route); err != nil {
++			if err := genHandlerTest(dir, rootPkg, projectPkg, cfg, group, route); err != nil {
+ 				return err
+ 			}
+ 		}
+diff --git a/tools/goctl/api/gogen/genintegrationtest.go b/tools/goctl/api/gogen/genintegrationtest.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..48c920ca101ecbf18df809b7ab53b736296eae6b
+--- /dev/null
++++ b/tools/goctl/api/gogen/genintegrationtest.go
+@@ -0,0 +1,42 @@
++package gogen
++
++import (
++	_ "embed"
++
++	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
++	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
++	"github.com/zeromicro/go-zero/tools/goctl/util/format"
++)
++
++//go:embed integration_test.tpl
++var integrationTestTemplate string
++
++func genIntegrationTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++	serviceName := api.Service.Name
++	if len(serviceName) == 0 {
++		serviceName = "server"
++	}
++
++	filename, err := format.FileNamingFormat(cfg.NamingFormat, serviceName)
++	if err != nil {
++		return err
++	}
++
++	return genFile(fileGenConfig{
++		dir:             dir,
++		subdir:          "",
++		filename:        filename + "_test.go",
++		templateName:    "integrationTestTemplate",
++		category:        category,
++		templateFile:    integrationTestTemplateFile,
++		builtinTemplate: integrationTestTemplate,
++		data: map[string]any{
++			"projectPkg":  projectPkg,
++			"serviceName": serviceName,
++			"version":     version.BuildVersion,
++			"hasRoutes":   len(api.Service.Routes()) > 0,
++			"routes":      api.Service.Routes(),
++		},
++	})
++}
+diff --git a/tools/goctl/api/gogen/genlogic.go b/tools/goctl/api/gogen/genlogic.go
+index e162eeb642226f22e1e09a3c950c2277cff3ddc5..99d652b826a593c3de07229ed1dc4313b0e88d7e 100644
+--- a/tools/goctl/api/gogen/genlogic.go
++++ b/tools/goctl/api/gogen/genlogic.go
+@@ -10,18 +10,24 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/parser/g4/gen/api"
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ 	"github.com/zeromicro/go-zero/tools/goctl/vars"
+ )
+ 
+-//go:embed logic.tpl
+-var logicTemplate string
++var (
++	//go:embed logic.tpl
++	logicTemplate string
+ 
+-func genLogic(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++	//go:embed sse_logic.tpl
++	sseLogicTemplate string
++)
++
++func genLogic(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	for _, g := range api.Service.Groups {
+ 		for _, r := range g.Routes {
+-			err := genLogicByRoute(dir, rootPkg, cfg, g, r)
++			err := genLogicByRoute(dir, rootPkg, projectPkg, cfg, g, r)
+ 			if err != nil {
+ 				return err
+ 			}
+@@ -30,7 +36,7 @@ func genLogic(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error
+ 	return nil
+ }
+ 
+-func genLogicByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
++func genLogicByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
+ 	logic := getLogicName(route)
+ 	goFile, err := format.FileNamingFormat(cfg.NamingFormat, logic)
+ 	if err != nil {
+@@ -54,14 +60,30 @@ func genLogicByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group,
+ 	}
+ 
+ 	subDir := getLogicFolderPath(group, route)
++	builtinTemplate := logicTemplate
++	templateFile := logicTemplateFile
++	sse := group.GetAnnotation("sse")
++	if sse == "true" {
++		builtinTemplate = sseLogicTemplate
++		templateFile = sseLogicTemplateFile
++		responseString = "error"
++		returnString = "return nil"
++		resp := responseGoTypeName(route, typesPacket)
++		if len(requestString) == 0 {
++			requestString = "client chan<- " + resp
++		} else {
++			requestString += ", client chan<- " + resp
++		}
++	}
++
+ 	return genFile(fileGenConfig{
+ 		dir:             dir,
+ 		subdir:          subDir,
+ 		filename:        goFile + ".go",
+ 		templateName:    "logicTemplate",
+ 		category:        category,
+-		templateFile:    logicTemplateFile,
+-		builtinTemplate: logicTemplate,
++		templateFile:    templateFile,
++		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"pkgName":      subDir[strings.LastIndex(subDir, "/")+1:],
+ 			"imports":      imports,
+@@ -72,6 +94,8 @@ func genLogicByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group,
+ 			"request":      requestString,
+ 			"hasDoc":       len(route.JoinedDoc()) > 0,
+ 			"doc":          getDoc(route.JoinedDoc()),
++			"projectPkg":   projectPkg,
++			"version":      version.BuildVersion,
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/genlogictest.go b/tools/goctl/api/gogen/genlogictest.go
+index 14f4ac21bd12ac021feb753c8dfe9de13ba9c151..e0c5b6b46992230803b00e183ea44a6a58a21ddc 100644
+--- a/tools/goctl/api/gogen/genlogictest.go
++++ b/tools/goctl/api/gogen/genlogictest.go
+@@ -7,6 +7,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ )
+@@ -14,10 +15,10 @@ import (
+ //go:embed logic_test.tpl
+ var logicTestTemplate string
+ 
+-func genLogicTest(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genLogicTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	for _, g := range api.Service.Groups {
+ 		for _, r := range g.Routes {
+-			err := genLogicTestByRoute(dir, rootPkg, cfg, g, r)
++			err := genLogicTestByRoute(dir, rootPkg, projectPkg, cfg, g, r)
+ 			if err != nil {
+ 				return err
+ 			}
+@@ -26,7 +27,7 @@ func genLogicTest(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) er
+ 	return nil
+ }
+ 
+-func genLogicTestByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
++func genLogicTestByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
+ 	logic := getLogicName(route)
+ 	goFile, err := format.FileNamingFormat(cfg.NamingFormat, logic)
+ 	if err != nil {
+@@ -73,6 +74,8 @@ func genLogicTestByRoute(dir, rootPkg string, cfg *config.Config, group spec.Gro
+ 			"requestType":  requestType,
+ 			"hasDoc":       len(route.JoinedDoc()) > 0,
+ 			"doc":          getDoc(route.JoinedDoc()),
++			"projectPkg":   projectPkg,
++			"version":      version.BuildVersion,
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/genmain.go b/tools/goctl/api/gogen/genmain.go
+index 154a7dccf46b180b6b30030c92eda32983deb88f..c0e36f03a13464126b7b2cfc39cc196761a558d4 100644
+--- a/tools/goctl/api/gogen/genmain.go
++++ b/tools/goctl/api/gogen/genmain.go
+@@ -7,6 +7,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ 	"github.com/zeromicro/go-zero/tools/goctl/vars"
+@@ -15,7 +16,7 @@ import (
+ //go:embed main.tpl
+ var mainTemplate string
+ 
+-func genMain(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genMain(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	name := strings.ToLower(api.Service.Name)
+ 	filename, err := format.FileNamingFormat(cfg.NamingFormat, name)
+ 	if err != nil {
+@@ -38,6 +39,8 @@ func genMain(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 		data: map[string]string{
+ 			"importPackages": genMainImports(rootPkg),
+ 			"serviceName":    configName,
++			"projectPkg":     projectPkg,
++			"version":        version.BuildVersion,
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/genmiddleware.go b/tools/goctl/api/gogen/genmiddleware.go
+index d302b51cc30fae2b13f69ce5daa1ba1bed791bf3..35d81172474024a9956b099c41fd5aa7a26b8824 100644
+--- a/tools/goctl/api/gogen/genmiddleware.go
++++ b/tools/goctl/api/gogen/genmiddleware.go
+@@ -6,6 +6,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ )
+ 
+@@ -31,7 +32,8 @@ func genMiddleware(dir string, cfg *config.Config, api *spec.ApiSpec) error {
+ 			templateFile:    middlewareImplementCodeFile,
+ 			builtinTemplate: middlewareImplementCode,
+ 			data: map[string]string{
+-				"name": strings.Title(name),
++				"name":    strings.Title(name),
++				"version": version.BuildVersion,
+ 			},
+ 		})
+ 		if err != nil {
+diff --git a/tools/goctl/api/gogen/genroutes.go b/tools/goctl/api/gogen/genroutes.go
+index 9770a57e13417315af748c2b695ff4ddf1d3889c..89882604b48a4923ece39c3e7b04be8447b7b7a7 100644
+--- a/tools/goctl/api/gogen/genroutes.go
++++ b/tools/goctl/api/gogen/genroutes.go
+@@ -40,7 +40,7 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
+ `
+ 	routesAdditionTemplate = `
+ 	server.AddRoutes(
+-		{{.routes}} {{.jwt}}{{.signature}} {{.prefix}} {{.timeout}} {{.maxBytes}}
++		{{.routes}} {{.jwt}}{{.signature}} {{.prefix}} {{.timeout}} {{.maxBytes}} {{.sse}}
+ 	)
+ `
+ 	timeoutThreshold = time.Millisecond
+@@ -63,6 +63,7 @@ type (
+ 		routes           []route
+ 		jwtEnabled       bool
+ 		signatureEnabled bool
++		sseEnabled       bool
+ 		authName         string
+ 		timeout          string
+ 		middlewares      []string
+@@ -78,7 +79,7 @@ type (
+ 	}
+ )
+ 
+-func genRoutes(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genRoutes(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	var builder strings.Builder
+ 	groups, err := getRoutes(api)
+ 	if err != nil {
+@@ -123,10 +124,17 @@ func genRoutes(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error
+ 		if len(g.jwtTrans) > 0 {
+ 			jwt = jwt + fmt.Sprintf("\n rest.WithJwtTransition(serverCtx.Config.%s.PrevSecret,serverCtx.Config.%s.Secret),", g.jwtTrans, g.jwtTrans)
+ 		}
++
+ 		var signature, prefix string
+ 		if g.signatureEnabled {
+ 			signature = "\n rest.WithSignature(serverCtx.Config.Signature),"
+ 		}
++
++		var sse string
++		if g.sseEnabled {
++			sse = "\n rest.WithSSE(),"
++		}
++
+ 		if len(g.prefix) > 0 {
+ 			prefix = fmt.Sprintf(`
+ rest.WithPrefix("%s"),`, g.prefix)
+@@ -172,6 +180,7 @@ rest.WithPrefix("%s"),`, g.prefix)
+ 			"routes":    routes,
+ 			"jwt":       jwt,
+ 			"signature": signature,
++			"sse":       sse,
+ 			"prefix":    prefix,
+ 			"timeout":   timeout,
+ 			"maxBytes":  maxBytes,
+@@ -202,6 +211,7 @@ rest.WithPrefix("%s"),`, g.prefix)
+ 			"importPackages":  genRouteImports(rootPkg, api),
+ 			"routesAdditions": strings.TrimSpace(builder.String()),
+ 			"version":         version.BuildVersion,
++			"projectPkg":      projectPkg,
+ 		},
+ 	})
+ }
+@@ -217,8 +227,8 @@ func formatDuration(duration time.Duration) string {
+ }
+ 
+ func genRouteImports(parentPkg string, api *spec.ApiSpec) string {
+-	importSet := collection.NewSet()
+-	importSet.AddStr(fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, contextDir)))
++	importSet := collection.NewSet[string]()
++	importSet.Add(fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, contextDir)))
+ 	for _, group := range api.Service.Groups {
+ 		for _, route := range group.Routes {
+ 			folder := route.GetAnnotation(groupProperty)
+@@ -228,11 +238,11 @@ func genRouteImports(parentPkg string, api *spec.ApiSpec) string {
+ 					continue
+ 				}
+ 			}
+-			importSet.AddStr(fmt.Sprintf("%s \"%s\"", toPrefix(folder),
++			importSet.Add(fmt.Sprintf("%s \"%s\"", toPrefix(folder),
+ 				pathx.JoinPackages(parentPkg, handlerDir, folder)))
+ 		}
+ 	}
+-	imports := importSet.KeysStr()
++	imports := importSet.Keys()
+ 	sort.Strings(imports)
+ 	projectSection := strings.Join(imports, "\n\t")
+ 	depSection := fmt.Sprintf("\"%s/rest\"", vars.ProjectOpenSourceURL)
+@@ -281,6 +291,10 @@ func getRoutes(api *spec.ApiSpec) ([]group, error) {
+ 		if signature == "true" {
+ 			groupedRoutes.signatureEnabled = true
+ 		}
++		sse := g.GetAnnotation("sse")
++		if sse == "true" {
++			groupedRoutes.sseEnabled = true
++		}
+ 		middleware := g.GetAnnotation("middleware")
+ 		if len(middleware) > 0 {
+ 			groupedRoutes.middlewares = append(groupedRoutes.middlewares,
+diff --git a/tools/goctl/api/gogen/gensvc.go b/tools/goctl/api/gogen/gensvc.go
+index 1f500a001754bef3dd7a9014785a8415511bfcb0..fefbb71dd9a9ad8291d0b8a12e6a6d58715e1d52 100644
+--- a/tools/goctl/api/gogen/gensvc.go
++++ b/tools/goctl/api/gogen/gensvc.go
+@@ -7,6 +7,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ 	"github.com/zeromicro/go-zero/tools/goctl/vars"
+@@ -17,7 +18,7 @@ const contextFilename = "service_context"
+ //go:embed svc.tpl
+ var contextTemplate string
+ 
+-func genServiceContext(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++func genServiceContext(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	filename, err := format.FileNamingFormat(cfg.NamingFormat, contextFilename)
+ 	if err != nil {
+ 		return err
+@@ -53,6 +54,8 @@ func genServiceContext(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpe
+ 			"config":               "config.Config",
+ 			"middleware":           middlewareStr,
+ 			"middlewareAssignment": middlewareAssignment,
++			"projectPkg":           projectPkg,
++			"version":              version.BuildVersion,
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/gensvctest.go b/tools/goctl/api/gogen/gensvctest.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..3699ecf3ee2d0a04ce41f0d2dd09c921a9200abd
+--- /dev/null
++++ b/tools/goctl/api/gogen/gensvctest.go
+@@ -0,0 +1,34 @@
++package gogen
++
++import (
++	_ "embed"
++
++	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
++	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
++	"github.com/zeromicro/go-zero/tools/goctl/util/format"
++)
++
++//go:embed svc_test.tpl
++var svcTestTemplate string
++
++func genServiceContextTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
++	filename, err := format.FileNamingFormat(cfg.NamingFormat, contextFilename)
++	if err != nil {
++		return err
++	}
++
++	return genFile(fileGenConfig{
++		dir:             dir,
++		subdir:          contextDir,
++		filename:        filename + "_test.go",
++		templateName:    "svcTestTemplate",
++		category:        category,
++		templateFile:    svcTestTemplateFile,
++		builtinTemplate: svcTestTemplate,
++		data: map[string]any{
++			"projectPkg": projectPkg,
++			"version":    version.BuildVersion,
++		},
++	})
++}
+diff --git a/tools/goctl/api/gogen/gentypes.go b/tools/goctl/api/gogen/gentypes.go
+index 80d78e51be6407b74f229cc75a589a7f82418f03..29e081b830a9614605b58f2ec86d0dc81b01fa88 100644
+--- a/tools/goctl/api/gogen/gentypes.go
++++ b/tools/goctl/api/gogen/gentypes.go
+@@ -59,7 +59,7 @@ func getTypeName(tp spec.Type) string {
+ 
+ func genTypesWithGroup(dir string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	groupTypes := make(map[string]map[string]spec.Type)
+-	typesBelongToFiles := make(map[string]*collection.Set)
++	typesBelongToFiles := make(map[string]*collection.Set[string])
+ 
+ 	for _, v := range api.Service.Groups {
+ 		group := v.GetAnnotation(groupProperty)
+@@ -75,37 +75,37 @@ func genTypesWithGroup(dir string, cfg *config.Config, api *spec.ApiSpec) error
+ 			responseTypeName := getTypeName(v.ResponseType)
+ 			requestTypeFileSet, ok := typesBelongToFiles[requestTypeName]
+ 			if !ok {
+-				requestTypeFileSet = collection.NewSet()
++				requestTypeFileSet = collection.NewSet[string]()
+ 			}
+ 			if len(requestTypeName) > 0 {
+-				requestTypeFileSet.AddStr(group)
++				requestTypeFileSet.Add(group)
+ 				typesBelongToFiles[requestTypeName] = requestTypeFileSet
+ 			}
+ 
+ 			responseTypeFileSet, ok := typesBelongToFiles[responseTypeName]
+ 			if !ok {
+-				responseTypeFileSet = collection.NewSet()
++				responseTypeFileSet = collection.NewSet[string]()
+ 			}
+ 			if len(responseTypeName) > 0 {
+-				responseTypeFileSet.AddStr(group)
++				responseTypeFileSet.Add(group)
+ 				typesBelongToFiles[responseTypeName] = responseTypeFileSet
+ 			}
+ 		}
+ 	}
+ 
+-	typesInOneFile := make(map[string]*collection.Set)
++	typesInOneFile := make(map[string]*collection.Set[string])
+ 	for typeName, fileSet := range typesBelongToFiles {
+ 		count := fileSet.Count()
+ 		switch {
+ 		case count == 0: // it means there has no structure type or no request/response body
+ 			continue
+ 		case count == 1: // it means a structure type used in only one group.
+-			groupName := fileSet.KeysStr()[0]
++			groupName := fileSet.Keys()[0]
+ 			typeSet, ok := typesInOneFile[groupName]
+ 			if !ok {
+-				typeSet = collection.NewSet()
++				typeSet = collection.NewSet[string]()
+ 			}
+-			typeSet.AddStr(typeName)
++			typeSet.Add(typeName)
+ 			typesInOneFile[groupName] = typeSet
+ 		default: // it means this type is used in multiple groups.
+ 			continue
+@@ -133,7 +133,7 @@ func genTypesWithGroup(dir string, cfg *config.Config, api *spec.ApiSpec) error
+ 		}
+ 
+ 		if typeCount == 1 { // belong to one group
+-			groupName := groupSet.KeysStr()[0]
++			groupName := groupSet.Keys()[0]
+ 			types, ok := groupTypes[groupName]
+ 			if !ok {
+ 				types = make(map[string]spec.Type)
+@@ -154,7 +154,7 @@ func genTypesWithGroup(dir string, cfg *config.Config, api *spec.ApiSpec) error
+ 	}
+ 
+ 	for group, typeGroup := range groupTypes {
+-		var types []spec.Type
++		types := make([]spec.Type, 0, len(typeGroup))
+ 		for _, v := range typeGroup {
+ 			types = append(types, v)
+ 		}
+diff --git a/tools/goctl/api/gogen/handler.tpl b/tools/goctl/api/gogen/handler.tpl
+index fce5acc2d157658bd14a628a10338d8a44d2bb4d..eba1f7abc6aa1d39e34612d4995addc1dda56f95 100644
+--- a/tools/goctl/api/gogen/handler.tpl
++++ b/tools/goctl/api/gogen/handler.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package {{.PkgName}}
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/handler_test.tpl b/tools/goctl/api/gogen/handler_test.tpl
+index a0771635068017453d465f3fa5fb36ae99fc8294..d1976ea08d7dff36eb9129f14a46d01642729452 100644
+--- a/tools/goctl/api/gogen/handler_test.tpl
++++ b/tools/goctl/api/gogen/handler_test.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package {{.PkgName}}
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/integration_test.tpl b/tools/goctl/api/gogen/integration_test.tpl
+new file mode 100644
+index 0000000000000000000000000000000000000000..e64c2f3e2c499721fc3db9e7e93854e1eee513a5
+--- /dev/null
++++ b/tools/goctl/api/gogen/integration_test.tpl
+@@ -0,0 +1,120 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
++package main
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"{{.projectPkg}}/internal/config"
++	"{{.projectPkg}}/internal/handler"
++	"{{.projectPkg}}/internal/svc"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"github.com/zeromicro/go-zero/rest"
++)
++
++func TestMain(m *testing.M) {
++	// TODO: Add setup/teardown logic here if needed
++	m.Run()
++}
++
++func TestServerIntegration(t *testing.T) {
++	// Create test server
++	c := config.Config{
++		RestConf: rest.RestConf{
++			Host: "127.0.0.1",
++			Port: 0, // Use random available port
++		},
++	}
++	
++	server := rest.MustNewServer(c.RestConf)
++	defer server.Stop()
++
++	ctx := svc.NewServiceContext(c)
++	handler.RegisterHandlers(server, ctx)
++
++	// Start server in background
++	go func() {
++		server.Start()
++	}()
++
++	// Wait for server to start
++	time.Sleep(100 * time.Millisecond)
++
++	tests := []struct {
++		name           string
++		method         string
++		path           string
++		body           string
++		expectedStatus int
++		setup          func()
++	}{
++		{
++			name:           "health check",
++			method:         "GET",
++			path:           "/health",
++			expectedStatus: http.StatusNotFound, // Adjust based on actual routes
++			setup:          func() {},
++		},
++		{{if .hasRoutes}}{{range .routes}}{
++			name:           "{{.Method}} {{.Path}}",
++			method:         "{{.Method}}",
++			path:           "{{.Path}}",
++			expectedStatus: http.StatusOK, // TODO: Adjust expected status
++			setup:          func() {
++				// TODO: Add setup logic for this endpoint
++			},
++		},
++		{{end}}{{end}}{
++			name:           "not found route",
++			method:         "GET", 
++			path:           "/nonexistent",
++			expectedStatus: http.StatusNotFound,
++			setup:          func() {},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			tt.setup()
++
++			req, err := http.NewRequest(tt.method, tt.path, nil)
++			require.NoError(t, err)
++
++			rr := httptest.NewRecorder()
++			server.ServeHTTP(rr, req)
++
++			assert.Equal(t, tt.expectedStatus, rr.Code)
++			
++			// TODO: Add response body assertions
++			t.Logf("Response: %s", rr.Body.String())
++		})
++	}
++}
++
++func TestServerLifecycle(t *testing.T) {
++	c := config.Config{
++		RestConf: rest.RestConf{
++			Host: "127.0.0.1", 
++			Port: 0,
++		},
++	}
++
++	server := rest.MustNewServer(c.RestConf)
++	
++	// Test server can start and stop without errors
++	ctx := svc.NewServiceContext(c)
++	handler.RegisterHandlers(server, ctx)
++
++	// In a real integration test, you might start the server in a goroutine
++	// and test actual HTTP requests, but for scaffolding we keep it simple
++	server.Stop()
++
++	// TODO: Add more lifecycle tests as needed
++	assert.True(t, true, "Server lifecycle test passed")
++}
+diff --git a/tools/goctl/api/gogen/jwt.api b/tools/goctl/api/gogen/jwt.api
+new file mode 100755
+index 0000000000000000000000000000000000000000..a8763c0d4293141611f4dab44eec787c8db7cfc9
+--- /dev/null
++++ b/tools/goctl/api/gogen/jwt.api
+@@ -0,0 +1,17 @@
++type Request {
++	Name string `path:"name,options=you|me"`
++}
++
++type Response {
++	Message string `json:"message"`
++}
++
++@server(
++	jwt: Auth
++	jwtTransition: Trans
++	middleware: TokenValidate
++)
++service A-api {
++	@handler GreetHandler
++	get /greet/from/:name(Request) returns (Response)
++}
+diff --git a/tools/goctl/api/gogen/logic.tpl b/tools/goctl/api/gogen/logic.tpl
+index 94611c577b29d670d33df883ca18bdaa2240b2c6..d89dc15145f3e1ab05d52ae80f7555926f8f4604 100644
+--- a/tools/goctl/api/gogen/logic.tpl
++++ b/tools/goctl/api/gogen/logic.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package {{.pkgName}}
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/logic_test.tpl b/tools/goctl/api/gogen/logic_test.tpl
+index a63cd2a214f362d4a958fed1b3f135313eb90276..9a211df9b210db6cb7c5bdad82ae78cef2d770ba 100644
+--- a/tools/goctl/api/gogen/logic_test.tpl
++++ b/tools/goctl/api/gogen/logic_test.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package {{.pkgName}}
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/main.tpl b/tools/goctl/api/gogen/main.tpl
+index ad1a46d0b1a1b53257d3125c03b404bced925317..88c6fd9876814616fe2832fc85010f0e647ba35e 100644
+--- a/tools/goctl/api/gogen/main.tpl
++++ b/tools/goctl/api/gogen/main.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package main
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/middleware.tpl b/tools/goctl/api/gogen/middleware.tpl
+index 3a9f8e91a26974d0b2a765b1114f87b8996336e0..260e98dc02f0f8d0590235a773da6ef86f421025 100644
+--- a/tools/goctl/api/gogen/middleware.tpl
++++ b/tools/goctl/api/gogen/middleware.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package middleware
+ 
+ import "net/http"
+diff --git a/tools/goctl/api/gogen/sse_handler.tpl b/tools/goctl/api/gogen/sse_handler.tpl
+new file mode 100644
+index 0000000000000000000000000000000000000000..84aea28b8f8d0e04faa7cb3385cc460dd64c2dca
+--- /dev/null
++++ b/tools/goctl/api/gogen/sse_handler.tpl
+@@ -0,0 +1,68 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
++package {{.PkgName}}
++
++import (
++    "encoding/json"
++    "fmt"
++	"net/http"
++
++    "github.com/zeromicro/go-zero/core/logc"
++    "github.com/zeromicro/go-zero/core/threading"
++	{{if .HasRequest}}"github.com/zeromicro/go-zero/rest/httpx"{{end}}
++	{{.ImportPackages}}
++)
++
++{{if .HasDoc}}{{.Doc}}{{end}}
++func {{.HandlerName}}(svcCtx *svc.ServiceContext) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		{{if .HasRequest}}var req types.{{.RequestType}}
++		if err := httpx.Parse(r, &req); err != nil {
++			httpx.ErrorCtx(r.Context(), w, err)
++			return
++		}
++
++		{{end}}// Buffer size of 16 is chosen as a reasonable default to balance throughput and memory usage.
++		// You can change this based on your application's needs.
++		// if your go-zero version less than 1.8.1, you need to add 3 lines below.
++        // w.Header().Set("Content-Type", "text/event-stream")
++        // w.Header().Set("Cache-Control", "no-cache")
++        // w.Header().Set("Connection", "keep-alive")
++		client := make(chan {{.ResponseType}}, 16)
++
++        l := {{.LogicName}}.New{{.LogicType}}(r.Context(), svcCtx)
++        threading.GoSafeCtx(r.Context(), func() {
++            defer close(client)
++            err := l.{{.Call}}({{if .HasRequest}}&req, {{end}}client)
++            if err != nil {
++                logc.Errorw(r.Context(), "{{.HandlerName}}", logc.Field("error", err))
++                return
++            }
++        })
++
++        for {
++            select {
++            case data, ok := <-client:
++                if !ok {
++                    return
++                }
++                output, err := json.Marshal(data)
++                if err != nil {
++                    logc.Errorw(r.Context(), "{{.HandlerName}}", logc.Field("error", err))
++                    continue
++                }
++
++                if _, err := fmt.Fprintf(w, "data: %s\n\n", string(output)); err != nil {
++                    logc.Errorw(r.Context(), "{{.HandlerName}}", logc.Field("error", err))
++                    return
++                }
++               if flusher, ok := w.(http.Flusher); ok {
++                   flusher.Flush()
++               }
++            case <-r.Context().Done():
++                return
++            }
++        }
++	}
++}
+diff --git a/tools/goctl/api/gogen/sse_logic.tpl b/tools/goctl/api/gogen/sse_logic.tpl
+new file mode 100644
+index 0000000000000000000000000000000000000000..676cdf3226ba198f231dcfd0ca91340f843c5f32
+--- /dev/null
++++ b/tools/goctl/api/gogen/sse_logic.tpl
+@@ -0,0 +1,29 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
++package {{.pkgName}}
++
++import (
++	{{.imports}}
++)
++
++type {{.logic}} struct {
++	logx.Logger
++	ctx    context.Context
++	svcCtx *svc.ServiceContext
++}
++
++{{if .hasDoc}}{{.doc}}{{end}}
++func New{{.logic}}(ctx context.Context, svcCtx *svc.ServiceContext) *{{.logic}} {
++	return &{{.logic}}{
++		Logger: logx.WithContext(ctx),
++		ctx:    ctx,
++		svcCtx: svcCtx,
++	}
++}
++
++func (l *{{.logic}}) {{.function}}({{.request}}) {{.responseType}} {
++    // todo: add your logic here and delete this line
++
++	{{.returnString}}
++}
+diff --git a/tools/goctl/api/gogen/svc.tpl b/tools/goctl/api/gogen/svc.tpl
+index c15c1e4520f1253edbde984c7459095c5d360b49..c85dfb0a9e7bf7368d7bb6ce26d77b6130cbd84f 100644
+--- a/tools/goctl/api/gogen/svc.tpl
++++ b/tools/goctl/api/gogen/svc.tpl
+@@ -1,3 +1,6 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
+ package svc
+ 
+ import (
+diff --git a/tools/goctl/api/gogen/svc_test.tpl b/tools/goctl/api/gogen/svc_test.tpl
+new file mode 100644
+index 0000000000000000000000000000000000000000..10009d9a4900f9a4ca1b176f7cbe7d77279b5ad0
+--- /dev/null
++++ b/tools/goctl/api/gogen/svc_test.tpl
+@@ -0,0 +1,60 @@
++// Code scaffolded by goctl. Safe to edit.
++// goctl {{.version}}
++
++package svc
++
++import (
++	"testing"
++
++	"{{.projectPkg}}/internal/config"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestNewServiceContext(t *testing.T) {
++	tests := []struct {
++		name   string
++		config config.Config
++		setup  func() config.Config
++	}{
++		{
++			name: "default config",
++			setup: func() config.Config {
++				return config.Config{}
++			},
++		},
++		{
++			name: "valid config", 
++			setup: func() config.Config {
++				return config.Config{
++					// TODO: Add valid config values here
++				}
++			},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c := tt.setup()
++			svcCtx := NewServiceContext(c)
++
++			// Basic assertions
++			require.NotNil(t, svcCtx)
++			assert.Equal(t, c, svcCtx.Config)
++
++			// TODO: Add additional assertions for middleware and dependencies
++		})
++	}
++}
++
++func TestServiceContext_Initialization(t *testing.T) {
++	c := config.Config{}
++	svcCtx := NewServiceContext(c)
++
++	// Verify service context is properly initialized
++	assert.NotNil(t, svcCtx)
++	assert.Equal(t, c, svcCtx.Config)
++
++	// TODO: Add tests for middleware initialization if any
++	// TODO: Add tests for external dependencies if any
++}
+diff --git a/tools/goctl/api/gogen/template.go b/tools/goctl/api/gogen/template.go
+index 1bb05dc5a4edd8392c211a7784f8812fce44bcb5..27adc711b1b090c267000719339f8739cfb686bc 100644
+--- a/tools/goctl/api/gogen/template.go
++++ b/tools/goctl/api/gogen/template.go
+@@ -12,14 +12,18 @@ const (
+ 	contextTemplateFile         = "context.tpl"
+ 	etcTemplateFile             = "etc.tpl"
+ 	handlerTemplateFile         = "handler.tpl"
++	sseHandlerTemplateFile      = "sse_handler.tpl"
+ 	handlerTestTemplateFile     = "handler_test.tpl"
+ 	logicTemplateFile           = "logic.tpl"
++	sseLogicTemplateFile        = "sse_logic.tpl"
+ 	logicTestTemplateFile       = "logic_test.tpl"
+ 	mainTemplateFile            = "main.tpl"
+ 	middlewareImplementCodeFile = "middleware.tpl"
+ 	routesTemplateFile          = "routes.tpl"
+ 	routesAdditionTemplateFile  = "route-addition.tpl"
+ 	typesTemplateFile           = "types.tpl"
++	svcTestTemplateFile         = "svc_test.tpl"
++	integrationTestTemplateFile = "integration_test.tpl"
+ )
+ 
+ var templates = map[string]string{
+@@ -27,14 +31,18 @@ var templates = map[string]string{
+ 	contextTemplateFile:         contextTemplate,
+ 	etcTemplateFile:             etcTemplate,
+ 	handlerTemplateFile:         handlerTemplate,
++	sseHandlerTemplateFile:      sseHandlerTemplate,
+ 	handlerTestTemplateFile:     handlerTestTemplate,
+ 	logicTemplateFile:           logicTemplate,
++	sseLogicTemplateFile:        sseLogicTemplate,
+ 	logicTestTemplateFile:       logicTestTemplate,
+ 	mainTemplateFile:            mainTemplate,
+ 	middlewareImplementCodeFile: middlewareImplementCode,
+ 	routesTemplateFile:          routesTemplate,
+ 	routesAdditionTemplateFile:  routesAdditionTemplate,
+ 	typesTemplateFile:           typesTemplate,
++	svcTestTemplateFile:         svcTestTemplate,
++	integrationTestTemplateFile: integrationTestTemplate,
+ }
+ 
+ // Category returns the category of the api files.
+diff --git a/tools/goctl/api/gogen/util.go b/tools/goctl/api/gogen/util.go
+index 566aa1c7bd53612cd7a4fa78c21885383d5ce021..8a4a55ffe7b88681774a431f82f88d186f59a1c1 100644
+--- a/tools/goctl/api/gogen/util.go
++++ b/tools/goctl/api/gogen/util.go
+@@ -115,29 +115,29 @@ func writeProperty(writer io.Writer, name, tag, comment string, tp spec.Type, in
+ }
+ 
+ func getAuths(api *spec.ApiSpec) []string {
+-	authNames := collection.NewSet()
++	authNames := collection.NewSet[string]()
+ 	for _, g := range api.Service.Groups {
+ 		jwt := g.GetAnnotation("jwt")
+ 		if len(jwt) > 0 {
+ 			authNames.Add(jwt)
+ 		}
+ 	}
+-	return authNames.KeysStr()
++	return authNames.Keys()
+ }
+ 
+ func getJwtTrans(api *spec.ApiSpec) []string {
+-	jwtTransList := collection.NewSet()
++	jwtTransList := collection.NewSet[string]()
+ 	for _, g := range api.Service.Groups {
+ 		jt := g.GetAnnotation(jwtTransKey)
+ 		if len(jt) > 0 {
+ 			jwtTransList.Add(jt)
+ 		}
+ 	}
+-	return jwtTransList.KeysStr()
++	return jwtTransList.Keys()
+ }
+ 
+ func getMiddleware(api *spec.ApiSpec) []string {
+-	result := collection.NewSet()
++	result := collection.NewSet[string]()
+ 	for _, g := range api.Service.Groups {
+ 		middleware := g.GetAnnotation("middleware")
+ 		if len(middleware) > 0 {
+@@ -147,7 +147,7 @@ func getMiddleware(api *spec.ApiSpec) []string {
+ 		}
+ 	}
+ 
+-	return result.KeysStr()
++	return result.Keys()
+ }
+ 
+ func responseGoTypeName(r spec.Route, pkg ...string) string {
+diff --git a/tools/goctl/api/new/newservice.go b/tools/goctl/api/new/newservice.go
+index 7780a240193f9bffb3d884b0e0586a7499afc1d8..e9a9ea89a46ada965661e7eba058378995719652 100644
+--- a/tools/goctl/api/new/newservice.go
++++ b/tools/goctl/api/new/newservice.go
+@@ -27,6 +27,8 @@ var (
+ 	VarStringBranch string
+ 	// VarStringStyle describes the style of output files.
+ 	VarStringStyle string
++	// VarStringModule describes the module name for go.mod.
++	VarStringModule string
+ )
+ 
+ // CreateServiceCommand fast create service
+@@ -83,6 +85,6 @@ func CreateServiceCommand(_ *cobra.Command, args []string) error {
+ 		return err
+ 	}
+ 
+-	err = gogen.DoGenProject(apiFilePath, abs, VarStringStyle, false)
++	err = gogen.DoGenProjectWithModule(apiFilePath, abs, VarStringModule, VarStringStyle, false)
+ 	return err
+ }
+diff --git a/tools/goctl/api/parser/g4/ast/service.go b/tools/goctl/api/parser/g4/ast/service.go
+index fb760ec2de559d7f24ac1c698a818d722106c7f4..70b48373c0a81a547c64fbc07c9e91a50f6975a9 100644
+--- a/tools/goctl/api/parser/g4/ast/service.go
++++ b/tools/goctl/api/parser/g4/ast/service.go
+@@ -268,7 +268,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 				v.panic(lit.Expr(), fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit.Expr().Text()))
+ 			}
+ 		default:
+-			v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
++			v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
+ 		}
+ 	case *Literal:
+ 		lit := dataType.Literal.Text()
+@@ -276,7 +276,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 			v.panic(dataType.Literal, fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit))
+ 		}
+ 	default:
+-		v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
++		v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
+ 	}
+ 
+ 	return &Body{
+diff --git a/tools/goctl/api/parser/g4/ast/type.go b/tools/goctl/api/parser/g4/ast/type.go
+index 4302317670686fe95d867ecac21cbba44971be81..f0cadf9b229d9e50f55e513db52ca588bdf60072 100644
+--- a/tools/goctl/api/parser/g4/ast/type.go
++++ b/tools/goctl/api/parser/g4/ast/type.go
+@@ -126,7 +126,7 @@ func (v *ApiVisitor) VisitTypeLit(ctx *api.TypeLitContext) any {
+ // VisitTypeBlock implements from api.BaseApiParserVisitor
+ func (v *ApiVisitor) VisitTypeBlock(ctx *api.TypeBlockContext) any {
+ 	list := ctx.AllTypeBlockBody()
+-	var types []TypeExpr
++	types := make([]TypeExpr, 0, len(list))
+ 	for _, each := range list {
+ 		types = append(types, each.Accept(v).(TypeExpr))
+ 	}
+@@ -190,7 +190,7 @@ func (v *ApiVisitor) VisitTypeBlockStruct(ctx *api.TypeBlockStructContext) any {
+ 		structExpr := v.newExprWithToken(ctx.GetStructToken())
+ 		structTokenText := ctx.GetStructToken().GetText()
+ 		if structTokenText != "struct" {
+-			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found imput '%s'", structTokenText))
++			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found input '%s'", structTokenText))
+ 		}
+ 
+ 		if api.IsGolangKeyWord(structTokenText, "struct") {
+diff --git a/tools/goctl/api/parser/parser.go b/tools/goctl/api/parser/parser.go
+index d29be54ad2c8e30c26f8c103a31bca2171276eec..a41c0044b51a0023e8f8e2eb2ad51f38800414a5 100644
+--- a/tools/goctl/api/parser/parser.go
++++ b/tools/goctl/api/parser/parser.go
+@@ -18,7 +18,7 @@ type parser struct {
+ }
+ 
+ // Parse parses the api file.
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ func Parse(filename string) (*spec.ApiSpec, error) {
+ 	if env.UseExperimental() {
+@@ -63,14 +63,14 @@ func parseContent(content string, skipCheckTypeDeclaration bool, filename ...str
+ 	return apiSpec, nil
+ }
+ 
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContent parses the api content
+ func ParseContent(content string, filename ...string) (*spec.ApiSpec, error) {
+ 	return parseContent(content, false, filename...)
+ }
+ 
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContentWithParserSkipCheckTypeDeclaration parses the api content with skip check type declaration
+ func ParseContentWithParserSkipCheckTypeDeclaration(content string, filename ...string) (*spec.ApiSpec, error) {
+@@ -125,7 +125,7 @@ func (p parser) fillTypes() error {
+ 	for _, item := range p.ast.Type {
+ 		switch v := (item).(type) {
+ 		case *ast.TypeStruct:
+-			var members []spec.Member
++			members := make([]spec.Member, 0, len(v.Fields))
+ 			for _, item := range v.Fields {
+ 				members = append(members, p.fieldToMember(item))
+ 			}
+@@ -227,7 +227,7 @@ func (p parser) astTypeToSpec(in ast.DataType) spec.Type {
+ 		return spec.PointerType{RawName: v.PointerExpr.Text(), Type: spec.DefineStruct{RawName: raw}}
+ 	}
+ 
+-	panic(fmt.Sprintf("unspported type %+v", in))
++	panic(fmt.Sprintf("unsupported type %+v", in))
+ }
+ 
+ func (p parser) stringExprs(docs []ast.Expr) []string {
+diff --git a/tools/goctl/api/parser/readme.md b/tools/goctl/api/parser/readme.md
+index 93eae48059f681cf441058aefc99681f913ff034..be3356a7bf41b39f5bd3ceaf88b75fc02f7075f0 100644
+--- a/tools/goctl/api/parser/readme.md
++++ b/tools/goctl/api/parser/readme.md
+@@ -639,7 +639,7 @@ line comments
+ 以下为对应语法块解析后细带doc和comment的写法
+ ``` api
+ // syntaxLit doc
+-syntax = "v1" // syntaxLit commnet
++syntax = "v1" // syntaxLit comment
+ 
+ info(
+   // kvLit doc
+diff --git a/tools/goctl/api/spec/fn.go b/tools/goctl/api/spec/fn.go
+index 441f27a21bcc6278aeb1f63b17e64d0fa8a818a5..9555411b198d0a2eb5435ee3f499c4dc9b987614 100644
+--- a/tools/goctl/api/spec/fn.go
++++ b/tools/goctl/api/spec/fn.go
+@@ -20,11 +20,11 @@ const (
+ var definedKeys = []string{bodyTagKey, formTagKey, pathTagKey, headerTagKey}
+ 
+ func (s Service) JoinPrefix() Service {
+-	var groups []Group
++	groups := make([]Group, 0, len(s.Groups))
+ 	for _, g := range s.Groups {
+ 		prefix := strings.TrimSpace(g.GetAnnotation(RoutePrefixKey))
+ 		prefix = strings.ReplaceAll(prefix, `"`, "")
+-		var routes []Route
++		routes := make([]Route, 0, len(g.Routes))
+ 		for _, r := range g.Routes {
+ 			r.Path = path.Join("/", prefix, r.Path)
+ 			routes = append(routes, r)
+diff --git a/tools/goctl/api/spec/tags.go b/tools/goctl/api/spec/tags.go
+index 312772d35f97dcdebd1f9d9ee653d879668d7bb8..31d45303e7f906ea2106f3c379d3b899c192b7b3 100644
+--- a/tools/goctl/api/spec/tags.go
++++ b/tools/goctl/api/spec/tags.go
+@@ -49,6 +49,9 @@ func Parse(tag string) (*Tags, error) {
+ 
+ // Get gets tag value by specified key
+ func (t *Tags) Get(key string) (*Tag, error) {
++	if t == nil {
++		return nil, errTagNotExist
++	}
+ 	for _, tag := range t.tags {
+ 		if tag.Key == key {
+ 			return tag, nil
+@@ -60,7 +63,10 @@ func (t *Tags) Get(key string) (*Tag, error) {
+ 
+ // Keys returns all keys in Tags
+ func (t *Tags) Keys() []string {
+-	var keys []string
++	if t == nil {
++		return []string{}
++	}
++	keys := make([]string, 0, len(t.tags))
+ 	for _, tag := range t.tags {
+ 		keys = append(keys, tag.Key)
+ 	}
+@@ -69,5 +75,8 @@ func (t *Tags) Keys() []string {
+ 
+ // Tags returns all tags in Tags
+ func (t *Tags) Tags() []*Tag {
++	if t == nil {
++		return []*Tag{}
++	}
+ 	return t.tags
+ }
+diff --git a/tools/goctl/api/swagger/annotation.go b/tools/goctl/api/swagger/annotation.go
+index ad85f18b2fb8ead8727c5d3aa7bb7aaa3f8164f6..cd6736ea9ce34fb3be5aa62f6b4befcef871c952 100644
+--- a/tools/goctl/api/swagger/annotation.go
++++ b/tools/goctl/api/swagger/annotation.go
+@@ -8,68 +8,71 @@ import (
+ )
+ 
+ func getBoolFromKVOrDefault(properties map[string]string, key string, def bool) bool {
+-	if len(properties) == 0 {
+-		return def
+-	}
+-	md := metadata.New(properties)
+-	val := md.Get(key)
+-	if len(val) == 0 {
+-		return def
+-	}
+-	str := util.Unquote(val[0])
+-	if len(str) == 0 {
+-		return def
+-	}
+-	res, _ := strconv.ParseBool(str)
+-	return res
++	return getOrDefault(properties, key, def, func(str string, def bool) bool {
++		res, err := strconv.ParseBool(str)
++		if err != nil {
++			return def
++		}
++
++		return res
++	})
+ }
+ 
+-func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
+-	if len(properties) == 0 {
+-		return def
+-	}
+-	md := metadata.New(properties)
+-	val := md.Get(key)
+-	if len(val) == 0 {
+-		return def
++func getFirstUsableString(def ...string) string {
++	if len(def) == 0 {
++		return ""
+ 	}
+-	str := util.Unquote(val[0])
+-	if len(str) == 0 {
+-		return def
++
++	for _, val := range def {
++		// Try to unquote if it's a quoted string
++		if str, err := strconv.Unquote(val); err == nil && len(str) != 0 {
++			return str
++		}
++
++		// Otherwise, use the value as-is if it's not empty
++		if len(val) != 0 {
++			return val
++		}
+ 	}
+-	return str
++
++	return ""
+ }
+ 
+ func getListFromInfoOrDefault(properties map[string]string, key string, def []string) []string {
++	return getOrDefault(properties, key, def, func(str string, def []string) []string {
++		resp := util.FieldsAndTrimSpace(str, commaRune)
++		if len(resp) == 0 {
++			return def
++		}
++		return resp
++	})
++}
++
++// getOrDefault abstracts the common logic for fetching, unquoting, and defaulting.
++func getOrDefault[T any](properties map[string]string, key string, def T, convert func(string, T) T) T {
+ 	if len(properties) == 0 {
+ 		return def
+ 	}
++
+ 	md := metadata.New(properties)
+ 	val := md.Get(key)
+ 	if len(val) == 0 {
+ 		return def
+ 	}
+ 
+-	str := util.Unquote(val[0])
+-	if len(str) == 0 {
+-		return def
++	str := val[0]
++	if unquoted, err := strconv.Unquote(str); err == nil {
++		str = unquoted
+ 	}
+-	resp := util.FieldsAndTrimSpace(str, commaRune)
+-	if len(resp) == 0 {
++	if len(str) == 0 {
+ 		return def
+ 	}
+-	return resp
++
++	return convert(str, def)
+ }
+ 
+-func getFirstUsableString(def ...string) string {
+-	if len(def) == 0 {
+-		return ""
+-	}
+-	for _, val := range def {
+-		str := util.Unquote(val)
+-		if len(str) != 0 {
+-			return str
+-		}
+-	}
+-	return ""
++func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
++	return getOrDefault(properties, key, def, func(str string, def string) string {
++		return str
++	})
+ }
+diff --git a/tools/goctl/api/swagger/api.go b/tools/goctl/api/swagger/api.go
+index 9f9baba1b2dadefa7129694f7b3467cce45c7b40..ed32c45c8529ee26e005ce194cec91858188d946 100644
+--- a/tools/goctl/api/swagger/api.go
++++ b/tools/goctl/api/swagger/api.go
+@@ -19,7 +19,7 @@ func fillAllStructs(api *spec.ApiSpec) {
+ 	}
+ 
+ 	for _, group := range api.Service.Groups {
+-		var routes []spec.Route
++		routes := make([]spec.Route, 0, len(group.Routes))
+ 		for _, route := range group.Routes {
+ 			route.RequestType = fillStruct("", route.RequestType, structTypes)
+ 			route.ResponseType = fillStruct("", route.ResponseType, structTypes)
+@@ -74,7 +74,7 @@ func fillStruct(parent string, tp spec.Type, allTypes map[string]spec.DefineStru
+ 		val.Members = members
+ 		return val
+ 	case spec.NestedStruct:
+-		var members []spec.Member
++		members := make([]spec.Member, 0, len(val.Members))
+ 		for _, member := range val.Members {
+ 			switch memberType := member.Type.(type) {
+ 			case spec.PointerType:
+diff --git a/tools/goctl/api/swagger/options.go b/tools/goctl/api/swagger/options.go
+index a2a35fa4d5f0e767eb6ef3867135c531ea09de30..61b6b6e69c5cc30e5c5e839eb0797efb1bb76c89 100644
+--- a/tools/goctl/api/swagger/options.go
++++ b/tools/goctl/api/swagger/options.go
+@@ -67,11 +67,11 @@ func enumsValueFromOptions(options []string) []any {
+ 	}
+ 	for _, option := range options {
+ 		if strings.HasPrefix(option, enumFlag) {
+-			var resp = make([]any, 0)
+ 			val := option[8:]
+ 			fields := util.FieldsAndTrimSpace(val, func(r rune) bool {
+ 				return r == '|'
+ 			})
++			var resp = make([]any, 0, len(fields))
+ 			for _, field := range fields {
+ 				resp = append(resp, field)
+ 			}
+diff --git a/tools/goctl/api/swagger/parameter.go b/tools/goctl/api/swagger/parameter.go
+index 2f5970535f0be278c378d06d4167e823bc763631..0530bbcf75507768c2f54fb43016cba8b9804316 100644
+--- a/tools/goctl/api/swagger/parameter.go
++++ b/tools/goctl/api/swagger/parameter.go
+@@ -8,28 +8,37 @@ import (
+ 	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ )
+ 
+-func isPostJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
+-	if strings.EqualFold(method, http.MethodPost) {
++func isRequestBodyJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
++	// Support HTTP methods that commonly use request bodies with JSON
++	// POST, PUT, PATCH are standard methods with bodies
++	// DELETE can also have a body (though less common)
++	method = strings.ToUpper(method)
++	if method != http.MethodPost && method != http.MethodPut &&
++		method != http.MethodPatch && method != http.MethodDelete {
+ 		return "", false
+ 	}
++
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return "", false
+ 	}
+-	var isPostJson bool
++
++	var hasJsonField bool
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		jsonTag, _ := tag.Get(tagJson)
+-		if !isPostJson {
+-			isPostJson = jsonTag != nil
++		if !hasJsonField {
++			hasJsonField = jsonTag != nil
+ 		}
+ 	})
+-	return structType.RawName, isPostJson
++
++	return structType.RawName, hasJsonField
+ }
+ 
+ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Parameter {
+ 	if tp == nil {
+ 		return []spec.Parameter{}
+ 	}
++
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return []spec.Parameter{}
+@@ -43,15 +52,13 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		headerTag, _ := tag.Get(tagHeader)
+ 		hasHeader := headerTag != nil
+-
+ 		pathParameterTag, _ := tag.Get(tagPath)
+ 		hasPathParameter := pathParameterTag != nil
+-
+ 		formTag, _ := tag.Get(tagForm)
+ 		hasForm := formTag != nil
+-
+ 		jsonTag, _ := tag.Get(tagJson)
+ 		hasJson := jsonTag != nil
++
+ 		if hasHeader {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(headerTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -75,6 +82,7 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
++
+ 		if hasPathParameter {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(pathParameterTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -98,6 +106,7 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
++
+ 		if hasForm {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(formTag.Options)
+ 			if strings.EqualFold(method, http.MethodGet) {
+@@ -145,8 +154,8 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 					},
+ 				})
+ 			}
+-
+ 		}
++
+ 		if hasJson {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(jsonTag.Options)
+ 			if required {
+@@ -179,9 +188,10 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			properties[jsonTag.Name] = schema
+ 		}
+ 	})
++
+ 	if len(properties) > 0 {
+ 		if ctx.UseDefinitions {
+-			structName, ok := isPostJson(ctx, method, tp)
++			structName, ok := isRequestBodyJson(ctx, method, tp)
+ 			if ok {
+ 				resp = append(resp, spec.Parameter{
+ 					ParamProps: spec.ParamProps{
+@@ -213,5 +223,6 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			})
+ 		}
+ 	}
++
+ 	return resp
+ }
+diff --git a/tools/goctl/api/swagger/path.go b/tools/goctl/api/swagger/path.go
+index f76134c0d53d1b97b3b3a97b0d522b26a8457d9f..19dfe4ad22aae29d6aeaa549444ab9b536cfd55c 100644
+--- a/tools/goctl/api/swagger/path.go
++++ b/tools/goctl/api/swagger/path.go
+@@ -19,7 +19,11 @@ func spec2Paths(ctx Context, srv apiSpec.Service) *spec.Paths {
+ 		for _, route := range group.Routes {
+ 			routPath := pathVariable2SwaggerVariable(ctx, route.Path)
+ 			if len(prefix) > 0 && prefix != "." {
+-				routPath = "/" + path.Clean(prefix) + routPath
++				if routPath == "/" {
++					routPath = "/" + path.Clean(prefix)
++				} else {
++					routPath = "/" + path.Clean(prefix) + routPath
++				}
+ 			}
+ 			pathItem := spec2Path(ctx, group, route)
+ 			existPathItem, ok := paths.Paths[routPath]
+diff --git a/tools/goctl/api/swagger/properties.go b/tools/goctl/api/swagger/properties.go
+index e5bf6d204af8901aa6e07e721efd43affca93eec..bf263fb5a101501c2dd0272b5860b221ef939c36 100644
+--- a/tools/goctl/api/swagger/properties.go
++++ b/tools/goctl/api/swagger/properties.go
+@@ -70,15 +70,40 @@ func propertiesFromType(ctx Context, tp apiSpec.Type) (spec.SchemaProperties, []
+ 			switch sampleTypeFromGoType(ctx, member.Type) {
+ 			case swaggerTypeArray:
+ 				schema.Items = itemsFromGoType(ctx, member.Type)
++				// Special handling for arrays with useDefinitions
++				if ctx.UseDefinitions {
++					// For arrays, check if the array element (not the array itself) contains a struct
++					if arrayType, ok := member.Type.(apiSpec.ArrayType); ok {
++						if structName, containsStruct := containsStruct(arrayType.Value); containsStruct {
++							// Set the $ref inside the items, not at the schema level
++							schema.Items = &spec.SchemaOrArray{
++								Schema: &spec.Schema{
++									SchemaProps: spec.SchemaProps{
++										Ref: spec.MustCreateRef(getRefName(structName)),
++									},
++								},
++							}
++						}
++					}
++				}
+ 			case swaggerTypeObject:
+ 				p, r := propertiesFromType(ctx, member.Type)
+ 				schema.Properties = p
+ 				schema.Required = r
+-			}
+-			if ctx.UseDefinitions {
+-				structName, containsStruct := containsStruct(member.Type)
+-				if containsStruct {
+-					schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++				// For objects with useDefinitions, set $ref at schema level
++				if ctx.UseDefinitions {
++					structName, containsStruct := containsStruct(member.Type)
++					if containsStruct {
++						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++					}
++				}
++			default:
++				// For non-array, non-object types, apply useDefinitions logic
++				if ctx.UseDefinitions {
++					structName, containsStruct := containsStruct(member.Type)
++					if containsStruct {
++						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++					}
+ 				}
+ 			}
+ 
+diff --git a/tools/goctl/api/swagger/swagger.go b/tools/goctl/api/swagger/swagger.go
+index 41966bf775370c0fdad8453290fd7b0a1d599a72..106b041ef2fdf3ec4944dd11466661f2051b3507 100644
+--- a/tools/goctl/api/swagger/swagger.go
++++ b/tools/goctl/api/swagger/swagger.go
+@@ -244,7 +244,7 @@ func isOptional(_ Context, options []string) bool {
+ 
+ func pathVariable2SwaggerVariable(_ Context, path string) string {
+ 	pathItems := strings.FieldsFunc(path, slashRune)
+-	var resp []string
++	resp := make([]string, 0, len(pathItems))
+ 	for _, v := range pathItems {
+ 		if strings.HasPrefix(v, ":") {
+ 			resp = append(resp, "{"+v[1:]+"}")
+diff --git a/tools/goctl/api/util/case.go b/tools/goctl/api/util/case.go
+index b48f735766ef027db6b302d6d775e5afe1e69358..c01115d1fb7848272139750f65d89fadf7bbd3f7 100644
+--- a/tools/goctl/api/util/case.go
++++ b/tools/goctl/api/util/case.go
+@@ -90,7 +90,7 @@ func ToUpperCase(r rune) rune {
+ 
+ // ToLower returns a copy string by converting it into lower
+ func ToLower(s string) string {
+-	var out []rune
++	out := make([]rune, 0, len(s))
+ 	for _, r := range s {
+ 		out = append(out, ToLowerCase(r))
+ 	}
+@@ -99,7 +99,7 @@ func ToLower(s string) string {
+ 
+ // ToUpper returns a copy string by converting it into upper
+ func ToUpper(s string) string {
+-	var out []rune
++	out := make([]rune, 0, len(s))
+ 	for _, r := range s {
+ 		out = append(out, ToUpperCase(r))
+ 	}
+diff --git a/tools/goctl/config/default.yaml b/tools/goctl/config/default.yaml
+index 6da7fa6b52d2bf951e00242345e18fbffb82f7b8..b61c625704506e3d568658305f89cf21f41e625d 100644
+--- a/tools/goctl/config/default.yaml
++++ b/tools/goctl/config/default.yaml
+@@ -10,6 +10,9 @@ model:
+     decimal:
+       null_type: sql.NullFloat64
+       type: float64
++    numeric:
++      null_type: sql.NullFloat64
++      type: float64
+     double:
+       null_type: sql.NullFloat64
+       type: float64
+diff --git a/tools/goctl/docker/docker.go b/tools/goctl/docker/docker.go
+index 3859697a6b0f3a97c55104d5a7639106ef3cbd30..807329f9ccf4e941f27b75fd2963787a3364bb5f 100644
+--- a/tools/goctl/docker/docker.go
++++ b/tools/goctl/docker/docker.go
+@@ -73,6 +73,7 @@ func dockerCommand(_ *cobra.Command, _ []string) (err error) {
+ 
+ 	base := varStringBase
+ 	port := varIntPort
++	etcDir := filepath.Join(filepath.Dir(goFile), etcDir)
+ 	if _, err := os.Stat(etcDir); os.IsNotExist(err) {
+ 		return generateDockerfile(goFile, base, port, version, timezone)
+ 	}
+@@ -170,7 +171,7 @@ func generateDockerfile(goFile, base string, port int, version, timezone string,
+ 	t := template.Must(template.New("dockerfile").Parse(text))
+ 	return t.Execute(out, Docker{
+ 		Chinese:     env.InChina(),
+-		GoMainFrom:  path.Join(projPath, goFile),
++		GoMainFrom:  path.Join(projPath, filepath.Base(goFile)),
+ 		GoRelPath:   projPath,
+ 		GoFile:      goFile,
+ 		ExeFile:     exeName,
+diff --git a/tools/goctl/go.mod b/tools/goctl/go.mod
+index 30418d135f35bc1634cd7af9906adbdd8fc57480..20b546f652c2fae968468c73af63dc8d214913b7 100644
+--- a/tools/goctl/go.mod
++++ b/tools/goctl/go.mod
+@@ -4,19 +4,19 @@ go 1.21
+ 
+ require (
+ 	github.com/DATA-DOG/go-sqlmock v1.5.2
+-	github.com/emicklei/proto v1.14.1
++	github.com/emicklei/proto v1.14.2
+ 	github.com/fatih/structtag v1.2.0
+ 	github.com/go-openapi/spec v0.21.1-0.20250328170532-a3928469592e
+ 	github.com/go-sql-driver/mysql v1.9.0
+-	github.com/gookit/color v1.5.4
++	github.com/gookit/color v1.6.0
+ 	github.com/iancoleman/strcase v0.3.0
+-	github.com/spf13/cobra v1.9.1
+-	github.com/spf13/pflag v1.0.6
+-	github.com/stretchr/testify v1.10.0
++	github.com/spf13/cobra v1.10.1
++	github.com/spf13/pflag v1.0.10
++	github.com/stretchr/testify v1.11.1
+ 	github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1
+ 	github.com/zeromicro/antlr v0.0.1
+ 	github.com/zeromicro/ddl-parser v1.0.5
+-	github.com/zeromicro/go-zero v1.8.4
++	github.com/zeromicro/go-zero v1.9.2
+ 	golang.org/x/text v0.22.0
+ 	google.golang.org/grpc v1.65.0
+ 	google.golang.org/protobuf v1.36.5
+@@ -42,14 +42,13 @@ require (
+ 	github.com/go-openapi/jsonreference v0.21.0 // indirect
+ 	github.com/go-openapi/swag v0.23.1 // indirect
+ 	github.com/gogo/protobuf v1.3.2 // indirect
+-	github.com/golang/mock v1.6.0 // indirect
+ 	github.com/golang/protobuf v1.5.4 // indirect
+ 	github.com/google/gnostic-models v0.6.8 // indirect
+ 	github.com/google/go-cmp v0.6.0 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+-	github.com/grafana/pyroscope-go v1.2.2 // indirect
+-	github.com/grafana/pyroscope-go/godeltaprof v0.1.8 // indirect
++	github.com/grafana/pyroscope-go v1.2.7 // indirect
++	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
+ 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+ 	github.com/jackc/pgpassfile v1.0.0 // indirect
+@@ -73,9 +72,9 @@ require (
+ 	github.com/prometheus/client_model v0.6.1 // indirect
+ 	github.com/prometheus/common v0.62.0 // indirect
+ 	github.com/prometheus/procfs v0.15.1 // indirect
+-	github.com/redis/go-redis/v9 v9.10.0 // indirect
++	github.com/redis/go-redis/v9 v9.15.0 // indirect
+ 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+-	github.com/xo/terminfo v0.0.0-20210125001918-ca9a967f8778 // indirect
++	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+ 	github.com/yuin/gopher-lua v1.1.1 // indirect
+ 	go.etcd.io/etcd/api/v3 v3.5.15 // indirect
+ 	go.etcd.io/etcd/client/pkg/v3 v3.5.15 // indirect
+@@ -93,6 +92,7 @@ require (
+ 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
+ 	go.uber.org/atomic v1.10.0 // indirect
+ 	go.uber.org/automaxprocs v1.6.0 // indirect
++	go.uber.org/mock v0.4.0 // indirect
+ 	go.uber.org/multierr v1.9.0 // indirect
+ 	go.uber.org/zap v1.24.0 // indirect
+ 	golang.org/x/crypto v0.33.0 // indirect
+diff --git a/tools/goctl/go.sum b/tools/goctl/go.sum
+index 78417165dec81cc593ceca1d2717fd9b2e25c6c9..1fde4d973296c8abe9f2609a9902d898b8fb7060 100644
+--- a/tools/goctl/go.sum
++++ b/tools/goctl/go.sum
+@@ -30,8 +30,8 @@ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/r
+ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
+ github.com/emicklei/go-restful/v3 v3.11.0 h1:rAQeMHw1c7zTmncogyy8VvRZwtkmkZ4FxERmMY4rD+g=
+ github.com/emicklei/go-restful/v3 v3.11.0/go.mod h1:6n3XBCmQQb25CM2LCACGz8ukIrRry+4bhvbpWn3mrbc=
+-github.com/emicklei/proto v1.14.1 h1:fFq+Bj70XXZWXWikcVRvYZxrMS4KIIiPAqdJ8vPrenY=
+-github.com/emicklei/proto v1.14.1/go.mod h1:rn1FgRS/FANiZdD2djyH7TMA9jdRDcYQ9IEN9yvjX0A=
++github.com/emicklei/proto v1.14.2 h1:wJPxPy2Xifja9cEMrcA/g08art5+7CGJNFNk35iXC1I=
++github.com/emicklei/proto v1.14.2/go.mod h1:rn1FgRS/FANiZdD2djyH7TMA9jdRDcYQ9IEN9yvjX0A=
+ github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
+ github.com/fatih/color v1.18.0/go.mod h1:4FelSpRwEGDpQ12mAdzqdOukCy4u8WUtOY6lkT/6HfU=
+ github.com/fatih/structtag v1.2.0 h1:/OdNE99OxoI/PqaW/SuSK9uxxT3f/tcSZgon/ssNSx4=
+@@ -57,8 +57,6 @@ github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572/go.mod h1:9Pwr4
+ github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
+ github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
+ github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
+-github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+-github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
+ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/gnostic-models v0.6.8 h1:yo/ABAfM5IMRsS1VnXjTBvUb61tFIHozhlYvRgGre9I=
+@@ -73,12 +71,14 @@ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1 h1:K6RDEckDVWvDI9JAJY
+ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1/go.mod h1:kpwsk12EmLew5upagYY7GY0pfYCcupk39gWOCRROcvE=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+-github.com/gookit/color v1.5.4 h1:FZmqs7XOyGgCAxmWyPslpiok1k05wmY3SJTytgvYFs0=
+-github.com/gookit/color v1.5.4/go.mod h1:pZJOeOS8DM43rXbp4AZo1n9zCU2qjpcRko0b6/QJi9w=
+-github.com/grafana/pyroscope-go v1.2.2 h1:uvKCyZMD724RkaCEMrSTC38Yn7AnFe8S2wiAIYdDPCE=
+-github.com/grafana/pyroscope-go v1.2.2/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8 h1:iwOtYXeeVSAeYefJNaxDytgjKtUuKQbJqgAIjlnicKg=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
++github.com/gookit/assert v0.1.1 h1:lh3GcawXe/p+cU7ESTZ5Ui3Sm/x8JWpIis4/1aF0mY0=
++github.com/gookit/assert v0.1.1/go.mod h1:jS5bmIVQZTIwk42uXl4lyj4iaaxx32tqH16CFj0VX2E=
++github.com/gookit/color v1.6.0 h1:JjJXBTk1ETNyqyilJhkTXJYYigHG24TM9Xa2M1xAhRA=
++github.com/gookit/color v1.6.0/go.mod h1:9ACFc7/1IpHGBW8RwuDm/0YEnhg3dwwXpoMsmtyHfjs=
++github.com/grafana/pyroscope-go v1.2.7 h1:VWBBlqxjyR0Cwk2W6UrE8CdcdD80GOFNutj0Kb1T8ac=
++github.com/grafana/pyroscope-go v1.2.7/go.mod h1:o/bpSLiJYYP6HQtvcoVKiE9s5RiNgjYTj1DhiddP2Pc=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9 h1:c1Us8i6eSmkW+Ez05d3co8kasnuOY813tbMN8i/a3Og=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0/go.mod h1:P+Lt/0by1T8bfcF3z737NnSbmxQAppXMRziHUxPOC8k=
+ github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 h1:2VTzZjLZBgl62/EtslCrtky5vbi9dd7HrQPQIx6wqiw=
+@@ -148,17 +148,18 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.10.0 h1:FxwK3eV8p/CQa0Ch276C7u2d0eNC9kCmAYQ7mCXCzVs=
+-github.com/redis/go-redis/v9 v9.10.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.15.0 h1:2jdes0xJxer4h3NUZrZ4OGSntGlXp4WbXju2nOTRXto=
++github.com/redis/go-redis/v9 v9.15.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rogpeppe/go-internal v1.11.0 h1:cWPaGQEPrBb5/AsnsZesgZZ9yb1OQ+GOISoDNXVBh4M=
+ github.com/rogpeppe/go-internal v1.11.0/go.mod h1:ddIwULY96R17DhadqLgMfk9H9tvdUzkipdSkR5nkCZA=
+ github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+ github.com/spaolacci/murmur3 v1.1.0 h1:7c1g84S4BPRrfL5Xrdp6fOJ206sU9y293DDHaoy0bLI=
+ github.com/spaolacci/murmur3 v1.1.0/go.mod h1:JwIasOWyU6f++ZhiEuf87xNszmSA2myDM2Kzu9HwQUA=
+-github.com/spf13/cobra v1.9.1 h1:CXSaggrXdbHK9CF+8ywj8Amf7PBRmPCOJugH954Nnlo=
+-github.com/spf13/cobra v1.9.1/go.mod h1:nDyEzZ8ogv936Cinf6g1RU9MRY64Ir93oCnqb9wxYW0=
+-github.com/spf13/pflag v1.0.6 h1:jFzHGLGAlb3ruxLB8MhbI6A8+AQX/2eW4qeyNZXNp2o=
+-github.com/spf13/pflag v1.0.6/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
++github.com/spf13/cobra v1.10.1 h1:lJeBwCfmrnXthfAupyUTzJ/J4Nc1RsHC/mSRU2dll/s=
++github.com/spf13/cobra v1.10.1/go.mod h1:7SmJGaTHFVBY0jW4NXGluQoLvhqFQM+6XSKD+P4XaB0=
++github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
++github.com/spf13/pflag v1.0.10 h1:4EBh2KAYBwaONj6b2Ye1GiHfwjqyROoF4RwYO+vPwFk=
++github.com/spf13/pflag v1.0.10/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
+ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+ github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+ github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+@@ -170,23 +171,22 @@ github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
+ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
+ github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
+ github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+-github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
+-github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
++github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
++github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+ github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1 h1:+dBg5k7nuTE38VVdoroRsT0Z88fmvdYrI2EjzJst35I=
+ github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1/go.mod h1:nmuySobZb4kFgFy6BptpXp/BBw+xFSyvVPP6auoJB4k=
+-github.com/xo/terminfo v0.0.0-20210125001918-ca9a967f8778 h1:QldyIu/L63oPpyvQmHgvgickp1Yw510KJOqX7H24mg8=
+-github.com/xo/terminfo v0.0.0-20210125001918-ca9a967f8778/go.mod h1:2MuV+tbUrU1zIOPMxZ5EncGwgmMJsa+9ucAQZXxsObs=
++github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
++github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
+ github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+ github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+-github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
+ github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
+ github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
+ github.com/zeromicro/antlr v0.0.1 h1:CQpIn/dc0pUjgGQ81y98s/NGOm2Hfru2NNio2I9mQgk=
+ github.com/zeromicro/antlr v0.0.1/go.mod h1:nfpjEwFR6Q4xGDJMcZnCL9tEfQRgszMwu3rDz2Z+p5M=
+ github.com/zeromicro/ddl-parser v1.0.5 h1:LaVqHdzMTjasua1yYpIYaksxKqRzFrEukj2Wi2EbWaQ=
+ github.com/zeromicro/ddl-parser v1.0.5/go.mod h1:ISU/8NuPyEpl9pa17Py9TBPetMjtsiHrb9f5XGiYbo8=
+-github.com/zeromicro/go-zero v1.8.4 h1:3s7kOoThCnkDoqCafsqSX58Y9osYTBIa5QEmomw07TE=
+-github.com/zeromicro/go-zero v1.8.4/go.mod h1:eM5f6If/RF+jG1wSCmlvfXD2h2l23vJwETI8oDpjYt4=
++github.com/zeromicro/go-zero v1.9.2 h1:ZXOXBIcazZ1pWAMiHyVnDQ3Sxwy7DYPzjE89Qtj9vqM=
++github.com/zeromicro/go-zero v1.9.2/go.mod h1:k8YBMEFZKjTd4q/qO5RCW+zDgUlNyAs5vue3P4/Kmn0=
+ go.etcd.io/etcd/api/v3 v3.5.15 h1:3KpLJir1ZEBrYuV2v+Twaa/e2MdDCEZ/70H+lzEiwsk=
+ go.etcd.io/etcd/api/v3 v3.5.15/go.mod h1:N9EhGzXq58WuMllgH9ZvnEr7SI9pS0k0+DHZezGp7jM=
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5fWlA=
+@@ -221,6 +221,8 @@ go.uber.org/automaxprocs v1.6.0 h1:O3y2/QNTOdbF+e/dpXNNW7Rx2hZ4sTIPyybbxyNqTUs=
+ go.uber.org/automaxprocs v1.6.0/go.mod h1:ifeIMSnPZuznNm6jmdzmU3/bfk01Fe2fotchwEFJ8r8=
+ go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+ go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
++go.uber.org/mock v0.4.0 h1:VcM4ZOtdbR4f6VXfiOpwpVJDL6lCReaZ6mw31wqh7KU=
++go.uber.org/mock v0.4.0/go.mod h1:a6FSlNadKUHUa9IP5Vyt1zh4fC7uAwxMutEAscFbkZc=
+ go.uber.org/multierr v1.9.0 h1:7fIwc/ZtS0q++VgcfqFDxSBZVv/Xo49/SYnDFupUwlI=
+ go.uber.org/multierr v1.9.0/go.mod h1:X2jQV1h+kxSjClGpnseKVIxpmcjrj7MNnI0bnlfKTVQ=
+ go.uber.org/zap v1.24.0 h1:FiJd5l1UOLj0wCgbSE0rwwXHzEdAZS6hiiSnxJN/D60=
+@@ -230,14 +232,14 @@ golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8U
+ golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+ golang.org/x/crypto v0.33.0 h1:IOBPskki6Lysi0lo9qQvbxiQ+FvsCC/YWOecCHAixus=
+ golang.org/x/crypto v0.33.0/go.mod h1:bVdXmD7IV/4GdElGPozy6U7lWdRXA4qyRVGJV57uQ5M=
++golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561 h1:MDc5xs78ZrZr3HMQugiXOAkSZtfTpbJLDr/lwfgO53E=
++golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561/go.mod h1:cyybsKvd6eL0RnXn6p/Grxp8F5bW7iYuBgsNCOHpMYE=
+ golang.org/x/mod v0.2.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.3.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+-golang.org/x/mod v0.4.2/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
+ golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+ golang.org/x/net v0.0.0-20200226121028-0de0cce0169b/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
+ golang.org/x/net v0.0.0-20201021035429-f5854403a974/go.mod h1:sp8m0HH+o8qH0wwXwYZr8TS3Oi6o0r6Gce1SSxlDquU=
+-golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4/go.mod h1:p54w0d4576C0XHj96bSt6lcn1PtDYWL6XObtHCRCNQM=
+ golang.org/x/net v0.35.0 h1:T5GQRQb2y08kTAByq9L4/bz8cipCdA8FbRTXewonqY8=
+ golang.org/x/net v0.35.0/go.mod h1:EglIi67kWsHKlRzzVMUD93VMSWGFOMSZgxFjparz1Qk=
+ golang.org/x/oauth2 v0.24.0 h1:KTBBxWqUa0ykRPLtV69rRto9TLXcqYkeswu48x/gvNE=
+@@ -245,20 +247,15 @@ golang.org/x/oauth2 v0.24.0/go.mod h1:XYTD2NtWslqkgxebSiOHnXEap4TF09sJSc7H1sXbht
+ golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+-golang.org/x/sync v0.0.0-20210220032951-036812b2e83c/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.11.0 h1:GGz8+XQP4FvTTrjZPzNKTMFtSXH80RAzG+5ghFPgK9w=
+ golang.org/x/sync v0.11.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
+ golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+ golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+-golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+-golang.org/x/sys v0.0.0-20210330210617-4fbd30eecc44/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+-golang.org/x/sys v0.0.0-20210510120138-977fb7262007/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.30.0 h1:QjkSwP/36a20jFYWkSue1YwXzLmsV5Gfq7Eiy72C1uc=
+ golang.org/x/sys v0.30.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+-golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+ golang.org/x/term v0.29.0 h1:L6pJp37ocefwRRtYPKSWOWzOtWSxVajvz2ldH/xi3iU=
+ golang.org/x/term v0.29.0/go.mod h1:6bl4lRlvVuDgSf3179VpIxBF0o10JUpXWOnI7nErv7s=
+ golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+@@ -271,7 +268,6 @@ golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGm
+ golang.org/x/tools v0.0.0-20191119224855-298f0cb1881e/go.mod h1:b+2E5dAYhXwXZwtnZ6UAqBI28+e2cm9otk0dWdXHAEo=
+ golang.org/x/tools v0.0.0-20200619180055-7c47624df98f/go.mod h1:EkVYQZoAsY45+roYkvgYkIh4xh/qjgUK9TdY2XT94GE=
+ golang.org/x/tools v0.0.0-20210106214847-113979e3529a/go.mod h1:emZCQorbCU4vsT4fOWvOPXz4eW1wZW4PmDk9uLelYpA=
+-golang.org/x/tools v0.1.1/go.mod h1:o0xws9oXOQQZyjljx8fwUC0k7L1pTE6eaCbjGeHmOkk=
+ golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d h1:vU5i/LfpvrRCpgM/VPfJLg5KjxD3E+hfT1SH+d9zLwg=
+ golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d/go.mod h1:aiJjzUbINMkxbQROHiO6hDPo2LHcIPhhQsa9DLh0yGk=
+ golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+diff --git a/tools/goctl/internal/flags/default_en.json b/tools/goctl/internal/flags/default_en.json
+index 6d10c89ff13f3c544a41b4774c8f44825344faa7..2b86cdda89e2133b5d8ea1a0bfd1d415f99197bd 100644
+--- a/tools/goctl/internal/flags/default_en.json
++++ b/tools/goctl/internal/flags/default_en.json
+@@ -47,6 +47,7 @@
+         "home": "{{.global.home}}",
+         "remote": "{{.global.remote}}",
+         "branch": "{{.global.branch}}",
++        "module": "Custom module name for go.mod (default: directory name)",
+         "style": "{{.global.style}}"
+       },
+       "validate": {
+@@ -238,6 +239,7 @@
+         "home": "{{.global.home}}",
+         "remote": "{{.global.remote}}",
+         "branch": "{{.global.branch}}",
++        "module": "Custom module name for go.mod (default: directory name)",
+         "verbose": "Enable log output",
+         "client": "Whether to generate rpc client"
+       },
+diff --git a/tools/goctl/internal/version/version.go b/tools/goctl/internal/version/version.go
+index 2a58b6e8ba5e014aad2375bbefe158b5a0d12d8a..dda268ecd4116b486e8000c795ee6c6f1316468a 100644
+--- a/tools/goctl/internal/version/version.go
++++ b/tools/goctl/internal/version/version.go
+@@ -6,9 +6,9 @@ import (
+ )
+ 
+ // BuildVersion is the version of goctl.
+-const BuildVersion = "1.8.4"
++const BuildVersion = "1.9.2"
+ 
+-var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-bata": 2, "beta": 3, "released": 4, "": 5}
++var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-beta": 2, "beta": 3, "released": 4, "": 5}
+ 
+ // GetGoctlVersion returns BuildVersion
+ func GetGoctlVersion() string {
+diff --git a/tools/goctl/model/mongo/template/model.tpl b/tools/goctl/model/mongo/template/model.tpl
+index d593f368623c5167204eff3ec6fa0e660a341a9b..e26a94bc5fadf1049389d03b7b9f28a6ac694072 100644
+--- a/tools/goctl/model/mongo/template/model.tpl
++++ b/tools/goctl/model/mongo/template/model.tpl
+@@ -8,9 +8,8 @@ import (
+     "time"
+ 
+     {{if .Cache}}"github.com/zeromicro/go-zero/core/stores/monc"{{else}}"github.com/zeromicro/go-zero/core/stores/mon"{{end}}
+-    "go.mongodb.org/mongo-driver/bson"
+-    "go.mongodb.org/mongo-driver/bson/primitive"
+-    "go.mongodb.org/mongo-driver/mongo"
++    "go.mongodb.org/mongo-driver/v2/bson"
++    "go.mongodb.org/mongo-driver/v2/mongo"
+ )
+ 
+ {{if .Cache}}var prefix{{.Type}}CacheKey = "{{if .Prefix}}{{.Prefix}}:{{end}}cache:{{.lowerType}}:"{{end}}
+@@ -33,7 +32,7 @@ func newDefault{{.Type}}Model(conn {{if .Cache}}*monc.Model{{else}}*mon.Model{{e
+ 
+ func (m *default{{.Type}}Model) Insert(ctx context.Context, data *{{.Type}}) error {
+     if data.ID.IsZero() {
+-        data.ID = primitive.NewObjectID()
++        data.ID = bson.NewObjectID()
+         data.CreateAt = time.Now()
+         data.UpdateAt = time.Now()
+     }
+@@ -44,7 +43,7 @@ func (m *default{{.Type}}Model) Insert(ctx context.Context, data *{{.Type}}) err
+ }
+ 
+ func (m *default{{.Type}}Model) FindOne(ctx context.Context, id string) (*{{.Type}}, error) {
+-    oid, err := primitive.ObjectIDFromHex(id)
++    oid, err := bson.ObjectIDFromHex(id)
+     if err != nil {
+         return nil, ErrInvalidObjectId
+     }
+@@ -70,7 +69,7 @@ func (m *default{{.Type}}Model) Update(ctx context.Context, data *{{.Type}}) (*m
+ }
+ 
+ func (m *default{{.Type}}Model) Delete(ctx context.Context, id string) (int64, error) {
+-    oid, err := primitive.ObjectIDFromHex(id)
++    oid, err := bson.ObjectIDFromHex(id)
+     if err != nil {
+         return 0, ErrInvalidObjectId
+     }
+diff --git a/tools/goctl/model/mongo/template/types.tpl b/tools/goctl/model/mongo/template/types.tpl
+index 8da006f4435388cda5fb9f25f6b0a99c90f980e7..9f8c197792c00a9f568332e96538b45985cb84bc 100644
+--- a/tools/goctl/model/mongo/template/types.tpl
++++ b/tools/goctl/model/mongo/template/types.tpl
+@@ -3,11 +3,11 @@ package model
+ import (
+ 	"time"
+ 
+-	"go.mongodb.org/mongo-driver/bson/primitive"
++	"go.mongodb.org/mongo-driver/v2/bson"
+ )
+ 
+ type {{.Type}} struct {
+-	ID primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
++	ID bson.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+ 	// TODO: Fill your own fields
+ 	UpdateAt time.Time `bson:"updateAt,omitempty" json:"updateAt,omitempty"`
+ 	CreateAt time.Time `bson:"createAt,omitempty" json:"createAt,omitempty"`
+diff --git a/tools/goctl/model/sql/command/command.go b/tools/goctl/model/sql/command/command.go
+index e67c2dc755a1f4335f7b1880e0d7caa03b0eb42f..d6bb25d22699a43fd8c7d06ae9f4047208e31bbe 100644
+--- a/tools/goctl/model/sql/command/command.go
++++ b/tools/goctl/model/sql/command/command.go
+@@ -145,14 +145,14 @@ func MySqlDataSource(_ *cobra.Command, _ []string) error {
+ }
+ 
+ func mergeColumns(columns []string) []string {
+-	set := collection.NewSet()
++	set := collection.NewSet[string]()
+ 	for _, v := range columns {
+ 		fields := strings.FieldsFunc(v, func(r rune) bool {
+ 			return r == ','
+ 		})
+-		set.AddStr(fields...)
++		set.Add(fields...)
+ 	}
+-	return set.KeysStr()
++	return set.Keys()
+ }
+ 
+ type pattern map[string]struct{}
+@@ -172,7 +172,7 @@ func (p pattern) Match(s string) bool {
+ }
+ 
+ func (p pattern) list() []string {
+-	var ret []string
++	ret := make([]string, 0, len(p))
+ 	for v := range p {
+ 		ret = append(ret, v)
+ 	}
+diff --git a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+index 8de49a5900ed36440fe1a53dd6413b2208a586f2..c04c36ed51fdfdd496d4b63dfc00fa0564f6f718 100644
+--- a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
++++ b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+@@ -5,7 +5,7 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ )
+ 
+-// BeforeCommands run before comamnd run to show some migration notes
++// BeforeCommands run before command run to show some migration notes
+ func BeforeCommands(dir, style string) error {
+ 	if err := migrateBefore1_3_4(dir, style); err != nil {
+ 		return err
+diff --git a/tools/goctl/model/sql/gen/customized.go b/tools/goctl/model/sql/gen/customized.go
+index 77872837ff1386cd7d75bf790301147b648f99ad..d689156ef159f3bd1bd7640be7a67c750ae909da 100644
+--- a/tools/goctl/model/sql/gen/customized.go
++++ b/tools/goctl/model/sql/gen/customized.go
+@@ -60,17 +60,17 @@ func genCustomized(table Table, withCache, postgreSql bool) (string, error) {
+ 		fields = append(fields, f)
+ 	}
+ 
+-	keySet := collection.NewSet()
+-	keyVariableSet := collection.NewSet()
+-	keySet.AddStr(table.PrimaryCacheKey.KeyExpression)
+-	keyVariableSet.AddStr(table.PrimaryCacheKey.KeyLeft)
++	keySet := collection.NewSet[string]()
++	keyVariableSet := collection.NewSet[string]()
++	keySet.Add(table.PrimaryCacheKey.KeyExpression)
++	keyVariableSet.Add(table.PrimaryCacheKey.KeyLeft)
+ 	for _, key := range table.UniqueCacheKey {
+-		keySet.AddStr(key.DataKeyExpression)
+-		keyVariableSet.AddStr(key.KeyLeft)
++		keySet.Add(key.DataKeyExpression)
++		keyVariableSet.Add(key.KeyLeft)
+ 	}
+-	keys := keySet.KeysStr()
++	keys := keySet.Keys()
+ 	sort.Strings(keys)
+-	keyVars := keyVariableSet.KeysStr()
++	keyVars := keyVariableSet.Keys()
+ 	sort.Strings(keyVars)
+ 
+ 	camel := table.Name.ToCamel()
+diff --git a/tools/goctl/model/sql/gen/delete.go b/tools/goctl/model/sql/gen/delete.go
+index 5cc550aa7e8b5a0226eb8f0334ad83720fd51ce8..e75f3792a2b61c9d725740a4a045777648263a50 100644
+--- a/tools/goctl/model/sql/gen/delete.go
++++ b/tools/goctl/model/sql/gen/delete.go
+@@ -12,17 +12,17 @@ import (
+ )
+ 
+ func genDelete(table Table, withCache, postgreSql bool) (string, string, error) {
+-	keySet := collection.NewSet()
+-	keyVariableSet := collection.NewSet()
+-	keySet.AddStr(table.PrimaryCacheKey.KeyExpression)
+-	keyVariableSet.AddStr(table.PrimaryCacheKey.KeyLeft)
++	keySet := collection.NewSet[string]()
++	keyVariableSet := collection.NewSet[string]()
++	keySet.Add(table.PrimaryCacheKey.KeyExpression)
++	keyVariableSet.Add(table.PrimaryCacheKey.KeyLeft)
+ 	for _, key := range table.UniqueCacheKey {
+-		keySet.AddStr(key.DataKeyExpression)
+-		keyVariableSet.AddStr(key.KeyLeft)
++		keySet.Add(key.DataKeyExpression)
++		keyVariableSet.Add(key.KeyLeft)
+ 	}
+-	keys := keySet.KeysStr()
++	keys := keySet.Keys()
+ 	sort.Strings(keys)
+-	keyVars := keyVariableSet.KeysStr()
++	keyVars := keyVariableSet.Keys()
+ 	sort.Strings(keyVars)
+ 
+ 	camel := table.Name.ToCamel()
+diff --git a/tools/goctl/model/sql/gen/insert.go b/tools/goctl/model/sql/gen/insert.go
+index ce0c8d0880e02c4d63040ea803a705663fb8715d..baa13f0db4b29fd7dc2f848cda1532a0677d80eb 100644
+--- a/tools/goctl/model/sql/gen/insert.go
++++ b/tools/goctl/model/sql/gen/insert.go
+@@ -13,17 +13,17 @@ import (
+ )
+ 
+ func genInsert(table Table, withCache, postgreSql bool) (string, string, error) {
+-	keySet := collection.NewSet()
+-	keyVariableSet := collection.NewSet()
+-	keySet.AddStr(table.PrimaryCacheKey.DataKeyExpression)
+-	keyVariableSet.AddStr(table.PrimaryCacheKey.KeyLeft)
++	keySet := collection.NewSet[string]()
++	keyVariableSet := collection.NewSet[string]()
++	keySet.Add(table.PrimaryCacheKey.DataKeyExpression)
++	keyVariableSet.Add(table.PrimaryCacheKey.KeyLeft)
+ 	for _, key := range table.UniqueCacheKey {
+-		keySet.AddStr(key.DataKeyExpression)
+-		keyVariableSet.AddStr(key.KeyLeft)
++		keySet.Add(key.DataKeyExpression)
++		keyVariableSet.Add(key.KeyLeft)
+ 	}
+-	keys := keySet.KeysStr()
++	keys := keySet.Keys()
+ 	sort.Strings(keys)
+-	keyVars := keyVariableSet.KeysStr()
++	keyVars := keyVariableSet.Keys()
+ 	sort.Strings(keyVars)
+ 
+ 	expressions := make([]string, 0)
+diff --git a/tools/goctl/model/sql/gen/keys.go b/tools/goctl/model/sql/gen/keys.go
+index ff4f931858121f8f1939b763e9aba01ffa10b2f0..8e4920079c1cb45f02982f8b2710474142647c2f 100644
+--- a/tools/goctl/model/sql/gen/keys.go
++++ b/tools/goctl/model/sql/gen/keys.go
+@@ -39,8 +39,8 @@ type Join []string
+ 
+ func genCacheKeys(prefix string, table parser.Table) (Key, []Key) {
+ 	var primaryKey Key
+-	var uniqueKey []Key
+ 	primaryKey = genCacheKey(prefix, table.Db, table.Name, []*parser.Field{&table.PrimaryKey.Field})
++	uniqueKey := make([]Key, 0, len(table.UniqueIndex))
+ 	for _, each := range table.UniqueIndex {
+ 		uniqueKey = append(uniqueKey, genCacheKey(prefix, table.Db, table.Name, each))
+ 	}
+diff --git a/tools/goctl/model/sql/gen/update.go b/tools/goctl/model/sql/gen/update.go
+index 8af1ad62dea3edf528e46f3442412ae6bd532e9c..f1cb0a1d577b4ea233068da3ab4ea327d2ec1c83 100644
+--- a/tools/goctl/model/sql/gen/update.go
++++ b/tools/goctl/model/sql/gen/update.go
+@@ -32,17 +32,17 @@ func genUpdate(table Table, withCache, postgreSql bool) (
+ 		expressionValues = append(expressionValues, pkg+camel)
+ 	}
+ 
+-	keySet := collection.NewSet()
+-	keyVariableSet := collection.NewSet()
+-	keySet.AddStr(table.PrimaryCacheKey.DataKeyExpression)
+-	keyVariableSet.AddStr(table.PrimaryCacheKey.KeyLeft)
++	keySet := collection.NewSet[string]()
++	keyVariableSet := collection.NewSet[string]()
++	keySet.Add(table.PrimaryCacheKey.DataKeyExpression)
++	keyVariableSet.Add(table.PrimaryCacheKey.KeyLeft)
+ 	for _, key := range table.UniqueCacheKey {
+-		keySet.AddStr(key.DataKeyExpression)
+-		keyVariableSet.AddStr(key.KeyLeft)
++		keySet.Add(key.DataKeyExpression)
++		keyVariableSet.Add(key.KeyLeft)
+ 	}
+-	keys := keySet.KeysStr()
++	keys := keySet.Keys()
+ 	sort.Strings(keys)
+-	keyVars := keyVariableSet.KeysStr()
++	keyVars := keyVariableSet.Keys()
+ 	sort.Strings(keyVars)
+ 
+ 	if postgreSql {
+diff --git a/tools/goctl/model/sql/gen/vars.go b/tools/goctl/model/sql/gen/vars.go
+index 58323026e28b79c4c6f45cf03d39777013d94a59..3b2a2436ff15db202a9365c1158a56c71d2c3053 100644
+--- a/tools/goctl/model/sql/gen/vars.go
++++ b/tools/goctl/model/sql/gen/vars.go
+@@ -36,15 +36,15 @@ func genVars(table Table, withCache, postgreSql bool) (string, error) {
+ 		"postgreSql":            postgreSql,
+ 		"data":                  table,
+ 		"ignoreColumns": func() string {
+-			var set = collection.NewSet()
++			var set = collection.NewSet[string]()
+ 			for _, c := range table.ignoreColumns {
+ 				if postgreSql {
+-					set.AddStr(fmt.Sprintf(`"%s"`, c))
++					set.Add(fmt.Sprintf(`"%s"`, c))
+ 				} else {
+-					set.AddStr(fmt.Sprintf("\"`%s`\"", c))
++					set.Add(fmt.Sprintf("\"`%s`\"", c))
+ 				}
+ 			}
+-			list := set.KeysStr()
++			list := set.Keys()
+ 			sort.Strings(list)
+ 			return strings.Join(list, ", ")
+ 		}(),
+diff --git a/tools/goctl/model/sql/model/postgresqlmodel.go b/tools/goctl/model/sql/model/postgresqlmodel.go
+index 28c74f5a3fb8a600a40c1e2472ee3be5d578327f..b7bbcb5354c61d754ae411a7cc8e2e94b465e6f7 100644
+--- a/tools/goctl/model/sql/model/postgresqlmodel.go
++++ b/tools/goctl/model/sql/model/postgresqlmodel.go
+@@ -9,13 +9,12 @@ import (
+ 
+ var p2m = map[string]string{
+ 	"int8":        "bigint",
+-	"numeric":     "double",
+-	"decimal":     "double",
+ 	"float8":      "double",
+ 	"float4":      "float",
+ 	"int2":        "smallint",
+ 	"int4":        "integer",
+ 	"timestamptz": "timestamp",
++	"uuid":        "varchar",
+ }
+ 
+ // PostgreSqlModel gets table information from information_schema、pg_catalog
+diff --git a/tools/goctl/model/sql/parser/parser.go b/tools/goctl/model/sql/parser/parser.go
+index e93d9bedf3213f1319a9ea5180decb9dc5c055fc..81beae142b2a9f01617c6524876f1cc48333bf0e 100644
+--- a/tools/goctl/model/sql/parser/parser.go
++++ b/tools/goctl/model/sql/parser/parser.go
+@@ -81,7 +81,7 @@ func Parse(filename, database string, strict bool) ([]*Table, error) {
+ 	for indexTable, e := range tables {
+ 		var (
+ 			primaryColumn    string
+-			primaryColumnSet = collection.NewSet()
++			primaryColumnSet = collection.NewSet[string]()
+ 			uniqueKeyMap     = make(map[string][]string)
+ 			// Unused local variable
+ 			// normalKeyMap     = make(map[string][]string)
+@@ -91,7 +91,7 @@ func Parse(filename, database string, strict bool) ([]*Table, error) {
+ 		for _, column := range columns {
+ 			if column.Constraint != nil {
+ 				if column.Constraint.Primary {
+-					primaryColumnSet.AddStr(column.Name)
++					primaryColumnSet.Add(column.Name)
+ 				}
+ 
+ 				if column.Constraint.Unique {
+@@ -113,7 +113,7 @@ func Parse(filename, database string, strict bool) ([]*Table, error) {
+ 
+ 			if len(e.ColumnPrimaryKey) == 1 {
+ 				primaryColumn = e.ColumnPrimaryKey[0]
+-				primaryColumnSet.AddStr(e.ColumnPrimaryKey[0])
++				primaryColumnSet.Add(e.ColumnPrimaryKey[0])
+ 			}
+ 
+ 			if len(e.ColumnUniqueKey) > 0 {
+@@ -173,7 +173,7 @@ func Parse(filename, database string, strict bool) ([]*Table, error) {
+ 
+ func checkDuplicateUniqueIndex(uniqueIndex map[string][]*Field, tableName string) {
+ 	log := console.NewColorConsole()
+-	uniqueSet := collection.NewSet()
++	uniqueSet := collection.NewSet[string]()
+ 	for k, i := range uniqueIndex {
+ 		var list []string
+ 		for _, e := range i {
+@@ -187,7 +187,7 @@ func checkDuplicateUniqueIndex(uniqueIndex map[string][]*Field, tableName string
+ 			continue
+ 		}
+ 
+-		uniqueSet.AddStr(joinRet)
++		uniqueSet.Add(joinRet)
+ 	}
+ }
+ 
+@@ -311,7 +311,7 @@ func ConvertDataType(table *model.Table, strict bool) (*Table, error) {
+ 		return reply.Fields[i].OrdinalPosition < reply.Fields[j].OrdinalPosition
+ 	})
+ 
+-	uniqueIndexSet := collection.NewSet()
++	uniqueIndexSet := collection.NewSet[string]()
+ 	log := console.NewColorConsole()
+ 	for indexName, each := range table.UniqueIndex {
+ 		sort.Slice(each, func(i, j int) bool {
+@@ -342,7 +342,7 @@ func ConvertDataType(table *model.Table, strict bool) (*Table, error) {
+ 			continue
+ 		}
+ 
+-		uniqueIndexSet.AddStr(uniqueKey)
++		uniqueIndexSet.Add(uniqueKey)
+ 		reply.UniqueIndex[indexName] = list
+ 	}
+ 
+diff --git a/tools/goctl/model/sql/test/sqlconn.go b/tools/goctl/model/sql/test/sqlconn.go
+index da90d9ff4343a6f790dff8d5b0cd160a6f4d0fa1..748f3b10873ab24296031032b344503b34a4e0ec 100644
+--- a/tools/goctl/model/sql/test/sqlconn.go
++++ b/tools/goctl/model/sql/test/sqlconn.go
+@@ -99,12 +99,12 @@ func (conn *MockConn) RawDB() (*sql.DB, error) {
+ 	return conn.db, nil
+ }
+ 
+-// Transact is the implemention of sqlx.SqlConn, nothing to do
++// Transact is the implementation of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) Transact(func(session sqlx.Session) error) error {
+ 	return nil
+ }
+ 
+-// TransactCtx is the implemention of sqlx.SqlConn, nothing to do
++// TransactCtx is the implementation of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) TransactCtx(ctx context.Context, fn func(context.Context, sqlx.Session) error) error {
+ 	return nil
+ }
+diff --git a/tools/goctl/pkg/golang/path.go b/tools/goctl/pkg/golang/path.go
+index 1f0a2bb1d0195714a6237848ece21e2bae65fd8a..ebf5d8584a56fa05679860569b28f3c2d2b1cb9e 100644
+--- a/tools/goctl/pkg/golang/path.go
++++ b/tools/goctl/pkg/golang/path.go
+@@ -8,23 +8,36 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ )
+ 
+-func GetParentPackage(dir string) (string, error) {
++func GetParentPackage(dir string) (string, string, error) {
++	return GetParentPackageWithModule(dir, "")
++}
++
++func GetParentPackageWithModule(dir, moduleName string) (string, string, error) {
+ 	abs, err := filepath.Abs(dir)
+ 	if err != nil {
+-		return "", err
++		return "", "", err
+ 	}
+ 
+-	projectCtx, err := ctx.Prepare(abs)
++	var projectCtx *ctx.ProjectContext
++	if len(moduleName) > 0 {
++		projectCtx, err = ctx.PrepareWithModule(abs, moduleName)
++	} else {
++		projectCtx, err = ctx.Prepare(abs)
++	}
+ 	if err != nil {
+-		return "", err
++		return "", "", err
+ 	}
+ 
+-	// fix https://github.com/zeromicro/go-zero/issues/1058
++	return buildParentPackage(projectCtx)
++}
++
++// buildParentPackage extracts the common logic for building parent package paths
++func buildParentPackage(projectCtx *ctx.ProjectContext) (string, string, error) {
+ 	wd := projectCtx.WorkDir
+ 	d := projectCtx.Dir
+ 	same, err := pathx.SameFile(wd, d)
+ 	if err != nil {
+-		return "", err
++		return "", "", err
+ 	}
+ 
+ 	trim := strings.TrimPrefix(projectCtx.WorkDir, projectCtx.Dir)
+@@ -32,5 +45,5 @@ func GetParentPackage(dir string) (string, error) {
+ 		trim = strings.TrimPrefix(strings.ToLower(projectCtx.WorkDir), strings.ToLower(projectCtx.Dir))
+ 	}
+ 
+-	return filepath.ToSlash(filepath.Join(projectCtx.Path, trim)), nil
++	return filepath.ToSlash(filepath.Join(projectCtx.Path, trim)), projectCtx.Path, nil
+ }
+diff --git a/tools/goctl/pkg/parser/api/parser/analyzer.go b/tools/goctl/pkg/parser/api/parser/analyzer.go
+index 34722ef642afb9a5725279988598eb48e5b19786..b668a8ad93f1a5b018faf2e66f55405335cd0342 100644
+--- a/tools/goctl/pkg/parser/api/parser/analyzer.go
++++ b/tools/goctl/pkg/parser/api/parser/analyzer.go
+@@ -244,6 +244,7 @@ func (a *Analyzer) fillService() error {
+ 			group.Annotation.Properties = a.convertKV(item.AtServerStmt.Values)
+ 		}
+ 
++		sse := group.GetAnnotation("sse") == "true"
+ 		for _, astRoute := range item.Routes {
+ 			head, leading := astRoute.CommentGroup()
+ 			route := spec.Route{
+@@ -277,6 +278,13 @@ func (a *Analyzer) fillService() error {
+ 				}
+ 				route.ResponseType = responseType
+ 			}
++			if route.ResponseType == nil && sse {
++				if route.RequestType != nil {
++					return ast.SyntaxError(astRoute.Route.Request.Pos(), "missing response type")
++				} else {
++					return ast.SyntaxError(astRoute.Route.Path.Pos(), "missing response type")
++				}
++			}
+ 
+ 			if err := a.fillRouteType(&route); err != nil {
+ 				return err
+@@ -417,9 +425,12 @@ func (a *Analyzer) getType(expr *ast.BodyStmt, req bool) (spec.Type, error) {
+ 	}
+ 	if body.LBrack != nil {
+ 		if body.Star != nil {
+-			return spec.PointerType{
++			return spec.ArrayType{
+ 				RawName: rawText,
+-				Type:    tp,
++				Value: spec.PointerType{
++					RawName: rawText,
++					Type:    tp,
++				},
+ 			}, nil
+ 		}
+ 		return spec.ArrayType{
+diff --git a/tools/goctl/pkg/protoc/protoc.go b/tools/goctl/pkg/protoc/protoc.go
+index 0db64de9f241d0dd8143d2325148d7a90f2c593f..089e357bc3dc147f49491a37f9d11fb14115937b 100644
+--- a/tools/goctl/pkg/protoc/protoc.go
++++ b/tools/goctl/pkg/protoc/protoc.go
+@@ -43,7 +43,7 @@ func Install(cacheDir string) (string, error) {
+ 		case vars.OsLinux:
+ 			downloadUrl = url[fmt.Sprintf("%s_%d", vars.OsLinux, bit)]
+ 		default:
+-			return "", fmt.Errorf("unsupport OS: %q", goos)
++			return "", fmt.Errorf("unsupported OS: %q", goos)
+ 		}
+ 
+ 		err := downloader.Download(downloadUrl, tempFile)
+diff --git a/tools/goctl/quickstart/mono.go b/tools/goctl/quickstart/mono.go
+index 5d04bf5dfd750e8427d85cc09f87dfcc6be15d0e..5f3fbec7c0d5b40d588aa58e346788a5ed985a56 100644
+--- a/tools/goctl/quickstart/mono.go
++++ b/tools/goctl/quickstart/mono.go
+@@ -65,17 +65,17 @@ func (m mono) createAPIProject() {
+ 	configPath := filepath.Join(apiWorkDir, "internal", "config")
+ 	svcPath := filepath.Join(apiWorkDir, "internal", "svc")
+ 	typesPath := filepath.Join(apiWorkDir, "internal", "types")
+-	svcPkg, err := golang.GetParentPackage(svcPath)
++	svcPkg, _, err := golang.GetParentPackage(svcPath)
+ 	logx.Must(err)
+-	typesPkg, err := golang.GetParentPackage(typesPath)
++	typesPkg, _, err := golang.GetParentPackage(typesPath)
+ 	logx.Must(err)
+-	configPkg, err := golang.GetParentPackage(configPath)
++	configPkg, _, err := golang.GetParentPackage(configPath)
+ 	logx.Must(err)
+ 
+ 	var rpcClientPkg string
+ 	if m.callRPC {
+ 		rpcClientPath := filepath.Join(rpcWorkDir, "greet")
+-		rpcClientPkg, err = golang.GetParentPackage(rpcClientPath)
++		rpcClientPkg, _, err = golang.GetParentPackage(rpcClientPath)
+ 		logx.Must(err)
+ 	}
+ 
+diff --git a/tools/goctl/rpc/cli/cli.go b/tools/goctl/rpc/cli/cli.go
+index 762c57a12e572e4a2624a27780cab5682aa76473..09193052a34b8600757809af854dad52fff77d0f 100644
+--- a/tools/goctl/rpc/cli/cli.go
++++ b/tools/goctl/rpc/cli/cli.go
+@@ -46,6 +46,8 @@ var (
+ 	VarBoolMultiple bool
+ 	// VarBoolClient describes whether to generate rpc client
+ 	VarBoolClient bool
++	// VarStringModule describes the module name for go.mod.
++	VarStringModule string
+ )
+ 
+ // RPCNew is to generate rpc greet service, this greet service can speed
+@@ -91,6 +93,7 @@ func RPCNew(_ *cobra.Command, args []string) error {
+ 	ctx.Output = filepath.Dir(src)
+ 	ctx.ProtocCmd = fmt.Sprintf("protoc -I=%s %s --go_out=%s --go-grpc_out=%s", filepath.Dir(src), filepath.Base(src), filepath.Dir(src), filepath.Dir(src))
+ 	ctx.IsGenClient = VarBoolClient
++	ctx.Module = VarStringModule
+ 
+ 	grpcOptList := VarStringSliceGoGRPCOpt
+ 	if len(grpcOptList) > 0 {
+diff --git a/tools/goctl/rpc/cli/zrpc.go b/tools/goctl/rpc/cli/zrpc.go
+index 558d97786dad09530ab08163406c03096aaed4dd..3f42c1135ac890278e9b77d36da4df023d897332 100644
+--- a/tools/goctl/rpc/cli/zrpc.go
++++ b/tools/goctl/rpc/cli/zrpc.go
+@@ -103,6 +103,7 @@ func ZRPC(_ *cobra.Command, args []string) error {
+ 	ctx.Output = zrpcOut
+ 	ctx.ProtocCmd = strings.Join(protocArgs, " ")
+ 	ctx.IsGenClient = VarBoolClient
++	ctx.Module = VarStringModule
+ 	g := generator.NewGenerator(style, verbose)
+ 	return g.Generate(&ctx)
+ }
+diff --git a/tools/goctl/rpc/cmd.go b/tools/goctl/rpc/cmd.go
+index 0bb69c3af1e8d32dde2ef657c614560bf52a3959..c474acc2c7785640d46b37ca65b3d1adefc48e44 100644
+--- a/tools/goctl/rpc/cmd.go
++++ b/tools/goctl/rpc/cmd.go
+@@ -40,6 +40,7 @@ func init() {
+ 	newCmdFlags.StringVar(&cli.VarStringHome, "home")
+ 	newCmdFlags.StringVar(&cli.VarStringRemote, "remote")
+ 	newCmdFlags.StringVar(&cli.VarStringBranch, "branch")
++	newCmdFlags.StringVar(&cli.VarStringModule, "module")
+ 	newCmdFlags.BoolVarP(&cli.VarBoolVerbose, "verbose", "v")
+ 	newCmdFlags.MarkHidden("go_opt")
+ 	newCmdFlags.MarkHidden("go-grpc_opt")
+@@ -57,6 +58,7 @@ func init() {
+ 	protocCmdFlags.StringVar(&cli.VarStringHome, "home")
+ 	protocCmdFlags.StringVar(&cli.VarStringRemote, "remote")
+ 	protocCmdFlags.StringVar(&cli.VarStringBranch, "branch")
++	protocCmdFlags.StringVar(&cli.VarStringModule, "module")
+ 	protocCmdFlags.BoolVarP(&cli.VarBoolVerbose, "verbose", "v")
+ 	protocCmdFlags.MarkHidden("go_out")
+ 	protocCmdFlags.MarkHidden("go-grpc_out")
+diff --git a/tools/goctl/rpc/generator/gen.go b/tools/goctl/rpc/generator/gen.go
+index c9a2e7c8a7434d0234d0ac76a8ad55faf7f68835..9ff9aa60deafafd150f7ba2f41418cbdca621ef3 100644
+--- a/tools/goctl/rpc/generator/gen.go
++++ b/tools/goctl/rpc/generator/gen.go
+@@ -30,6 +30,8 @@ type ZRpcContext struct {
+ 	Multiple bool
+ 	// Whether to generate rpc client
+ 	IsGenClient bool
++	// Module is the custom module name for go.mod
++	Module string
+ }
+ 
+ // Generate generates a rpc service, through the proto file,
+@@ -51,7 +53,12 @@ func (g *Generator) Generate(zctx *ZRpcContext) error {
+ 		return err
+ 	}
+ 
+-	projectCtx, err := ctx.Prepare(abs)
++	var projectCtx *ctx.ProjectContext
++	if len(zctx.Module) > 0 {
++		projectCtx, err = ctx.PrepareWithModule(abs, zctx.Module)
++	} else {
++		projectCtx, err = ctx.Prepare(abs)
++	}
+ 	if err != nil {
+ 		return err
+ 	}
+diff --git a/tools/goctl/rpc/generator/gencall.go b/tools/goctl/rpc/generator/gencall.go
+index 060877cd619fb23abcd90ea22c5a4faf3e5de347..6d59610be259842a16192ddfa0304f4c12196801 100644
+--- a/tools/goctl/rpc/generator/gencall.go
++++ b/tools/goctl/rpc/generator/gencall.go
+@@ -64,7 +64,7 @@ func (g *Generator) genCallGroup(ctx DirContext, proto parser.Proto, cfg *conf.C
+ 		isCallPkgSameToGrpcPkg := childDir == ctx.GetProtoGo().Filename
+ 
+ 		serviceName := stringx.From(service.Name).ToCamel()
+-		alias := collection.NewSet()
++		alias := collection.NewSet[string]()
+ 		var hasSameNameBetweenMessageAndService bool
+ 		for _, item := range proto.Message {
+ 			msgName := getMessageName(*item.Message)
+@@ -72,7 +72,7 @@ func (g *Generator) genCallGroup(ctx DirContext, proto parser.Proto, cfg *conf.C
+ 				hasSameNameBetweenMessageAndService = true
+ 			}
+ 			if !isCallPkgSameToPbPkg {
+-				alias.AddStr(fmt.Sprintf("%s = %s", parser.CamelCase(msgName),
++				alias.Add(fmt.Sprintf("%s = %s", parser.CamelCase(msgName),
+ 					fmt.Sprintf("%s.%s", proto.PbPackage, parser.CamelCase(msgName))))
+ 			}
+ 		}
+@@ -102,7 +102,7 @@ func (g *Generator) genCallGroup(ctx DirContext, proto parser.Proto, cfg *conf.C
+ 			protoGoPackage = ""
+ 		}
+ 
+-		aliasKeys := alias.KeysStr()
++		aliasKeys := alias.Keys()
+ 		sort.Strings(aliasKeys)
+ 		if err = util.With("shared").GoFmt(true).Parse(text).SaveTo(map[string]any{
+ 			"name":           callFilename,
+@@ -135,7 +135,7 @@ func (g *Generator) genCallInCompatibility(ctx DirContext, proto parser.Proto,
+ 	}
+ 
+ 	serviceName := stringx.From(service.Name).ToCamel()
+-	alias := collection.NewSet()
++	alias := collection.NewSet[string]()
+ 	var hasSameNameBetweenMessageAndService bool
+ 	for _, item := range proto.Message {
+ 		msgName := getMessageName(*item.Message)
+@@ -143,7 +143,7 @@ func (g *Generator) genCallInCompatibility(ctx DirContext, proto parser.Proto,
+ 			hasSameNameBetweenMessageAndService = true
+ 		}
+ 		if !isCallPkgSameToPbPkg {
+-			alias.AddStr(fmt.Sprintf("%s = %s", parser.CamelCase(msgName),
++			alias.Add(fmt.Sprintf("%s = %s", parser.CamelCase(msgName),
+ 				fmt.Sprintf("%s.%s", proto.PbPackage, parser.CamelCase(msgName))))
+ 		}
+ 	}
+@@ -174,7 +174,7 @@ func (g *Generator) genCallInCompatibility(ctx DirContext, proto parser.Proto,
+ 		pbPackage = ""
+ 		protoGoPackage = ""
+ 	}
+-	aliasKeys := alias.KeysStr()
++	aliasKeys := alias.Keys()
+ 	sort.Strings(aliasKeys)
+ 	return util.With("shared").GoFmt(true).Parse(text).SaveTo(map[string]any{
+ 		"name":           callFilename,
+diff --git a/tools/goctl/rpc/generator/genlogic.go b/tools/goctl/rpc/generator/genlogic.go
+index 43acd0ea62f6183ba1f5fb2c642e3a82d2701caa..4a51d4fb73408cb41b33dd27782c154cef8e64ea 100644
+--- a/tools/goctl/rpc/generator/genlogic.go
++++ b/tools/goctl/rpc/generator/genlogic.go
+@@ -53,9 +53,9 @@ func (g *Generator) genLogicInCompatibility(ctx DirContext, proto parser.Proto,
+ 			return err
+ 		}
+ 
+-		imports := collection.NewSet()
+-		imports.AddStr(fmt.Sprintf(`"%v"`, ctx.GetSvc().Package))
+-		imports.AddStr(fmt.Sprintf(`"%v"`, ctx.GetPb().Package))
++		imports := collection.NewSet[string]()
++		imports.Add(fmt.Sprintf(`"%v"`, ctx.GetSvc().Package))
++		imports.Add(fmt.Sprintf(`"%v"`, ctx.GetPb().Package))
+ 		text, err := pathx.LoadTemplate(category, logicTemplateFileFile, logicTemplate)
+ 		if err != nil {
+ 			return err
+@@ -64,7 +64,7 @@ func (g *Generator) genLogicInCompatibility(ctx DirContext, proto parser.Proto,
+ 			"logicName":   fmt.Sprintf("%sLogic", stringx.From(rpc.Name).ToCamel()),
+ 			"functions":   functions,
+ 			"packageName": "logic",
+-			"imports":     strings.Join(imports.KeysStr(), pathx.NL),
++			"imports":     strings.Join(imports.Keys(), pathx.NL),
+ 		}, filename, false)
+ 		if err != nil {
+ 			return err
+@@ -106,9 +106,9 @@ func (g *Generator) genLogicGroup(ctx DirContext, proto parser.Proto, cfg *conf.
+ 				return err
+ 			}
+ 
+-			imports := collection.NewSet()
+-			imports.AddStr(fmt.Sprintf(`"%v"`, ctx.GetSvc().Package))
+-			imports.AddStr(fmt.Sprintf(`"%v"`, ctx.GetPb().Package))
++			imports := collection.NewSet[string]()
++			imports.Add(fmt.Sprintf(`"%v"`, ctx.GetSvc().Package))
++			imports.Add(fmt.Sprintf(`"%v"`, ctx.GetPb().Package))
+ 			text, err := pathx.LoadTemplate(category, logicTemplateFileFile, logicTemplate)
+ 			if err != nil {
+ 				return err
+@@ -118,7 +118,7 @@ func (g *Generator) genLogicGroup(ctx DirContext, proto parser.Proto, cfg *conf.
+ 				"logicName":   logicName,
+ 				"functions":   functions,
+ 				"packageName": packageName,
+-				"imports":     strings.Join(imports.KeysStr(), pathx.NL),
++				"imports":     strings.Join(imports.Keys(), pathx.NL),
+ 			}, filename, false); err != nil {
+ 				return err
+ 			}
+diff --git a/tools/goctl/rpc/generator/genserver.go b/tools/goctl/rpc/generator/genserver.go
+index 1ead7ef6d9e2487d6fe78db3cb86b19c282a9581..c24b11426633ea1ef2c33221e345210a6c2886ed 100644
+--- a/tools/goctl/rpc/generator/genserver.go
++++ b/tools/goctl/rpc/generator/genserver.go
+@@ -66,8 +66,8 @@ func (g *Generator) genServerGroup(ctx DirContext, proto parser.Proto, cfg *conf
+ 		svcImport := fmt.Sprintf(`"%v"`, ctx.GetSvc().Package)
+ 		pbImport := fmt.Sprintf(`"%v"`, ctx.GetPb().Package)
+ 
+-		imports := collection.NewSet()
+-		imports.AddStr(logicImport, svcImport, pbImport)
++		imports := collection.NewSet[string]()
++		imports.Add(logicImport, svcImport, pbImport)
+ 
+ 		head := util.GetHead(proto.Name)
+ 
+@@ -94,7 +94,7 @@ func (g *Generator) genServerGroup(ctx DirContext, proto parser.Proto, cfg *conf
+ 			"unimplementedServer": fmt.Sprintf("%s.Unimplemented%sServer", proto.PbPackage,
+ 				parser.CamelCase(service.Name)),
+ 			"server":    stringx.From(service.Name).ToCamel(),
+-			"imports":   strings.Join(imports.KeysStr(), pathx.NL),
++			"imports":   strings.Join(imports.Keys(), pathx.NL),
+ 			"funcs":     strings.Join(funcList, pathx.NL),
+ 			"notStream": notStream,
+ 		}, serverFile, true); err != nil {
+@@ -111,8 +111,8 @@ func (g *Generator) genServerInCompatibility(ctx DirContext, proto parser.Proto,
+ 	svcImport := fmt.Sprintf(`"%v"`, ctx.GetSvc().Package)
+ 	pbImport := fmt.Sprintf(`"%v"`, ctx.GetPb().Package)
+ 
+-	imports := collection.NewSet()
+-	imports.AddStr(logicImport, svcImport, pbImport)
++	imports := collection.NewSet[string]()
++	imports.Add(logicImport, svcImport, pbImport)
+ 
+ 	head := util.GetHead(proto.Name)
+ 	service := proto.Service[0]
+@@ -145,7 +145,7 @@ func (g *Generator) genServerInCompatibility(ctx DirContext, proto parser.Proto,
+ 		"unimplementedServer": fmt.Sprintf("%s.Unimplemented%sServer", proto.PbPackage,
+ 			parser.CamelCase(service.Name)),
+ 		"server":    stringx.From(service.Name).ToCamel(),
+-		"imports":   strings.Join(imports.KeysStr(), pathx.NL),
++		"imports":   strings.Join(imports.Keys(), pathx.NL),
+ 		"funcs":     strings.Join(funcList, pathx.NL),
+ 		"notStream": notStream,
+ 	}, serverFile, true)
+diff --git a/tools/goctl/util/ctx/context.go b/tools/goctl/util/ctx/context.go
+index 25f8d5a8cbb8853101b77db2e6178fce8d4c2810..36fb57f7b6a7d6cc2fa074332d90eca9c24a3a4f 100644
+--- a/tools/goctl/util/ctx/context.go
++++ b/tools/goctl/util/ctx/context.go
+@@ -27,16 +27,31 @@ type ProjectContext struct {
+ // workDir parameter is the directory of the source of generating code,
+ // where can be found the project path and the project module,
+ func Prepare(workDir string) (*ProjectContext, error) {
++	return PrepareWithModule(workDir, "")
++}
++
++// PrepareWithModule checks the project which module belongs to,and returns the path and module.
++// workDir parameter is the directory of the source of generating code,
++// where can be found the project path and the project module,
++// moduleName parameter is the custom module name to use if creating a new go.mod
++func PrepareWithModule(workDir string, moduleName string) (*ProjectContext, error) {
+ 	ctx, err := background(workDir)
+ 	if err == nil {
+ 		return ctx, nil
+ 	}
+ 
+-	name := filepath.Base(workDir)
++	var name string
++	if len(moduleName) > 0 {
++		name = moduleName
++	} else {
++		name = filepath.Base(workDir)
++	}
++
+ 	_, err = execx.Run("go mod init "+name, workDir)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
+ 	return background(workDir)
+ }
+ 
+diff --git a/tools/goctl/util/string.go b/tools/goctl/util/string.go
+index 7bcaf2ed0f672c8887483d8086a53828fbd31ae0..05c76916e8c94d33b44563c784db500fa8819daf 100644
+--- a/tools/goctl/util/string.go
++++ b/tools/goctl/util/string.go
+@@ -1,6 +1,7 @@
+ package util
+ 
+ import (
++	"slices"
+ 	"strings"
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/console"
+@@ -54,14 +55,9 @@ func Untitle(s string) string {
+ }
+ 
+ // Index returns the index where the item equal,it will return -1 if mismatched
++// Deprecated: use slices.Index instead
+ func Index(slice []string, item string) int {
+-	for i := range slice {
+-		if slice[i] == item {
+-			return i
+-		}
+-	}
+-
+-	return -1
++	return slices.Index(slice, item)
+ }
+ 
+ // SafeString converts the input string into a safe naming style in golang
+@@ -133,22 +129,3 @@ func FieldsAndTrimSpace(s string, f func(r rune) bool) []string {
+ 	}
+ 	return resp
+ }
+-
+-func Unquote(s string) string {
+-	if len(s) == 0 {
+-		return s
+-	}
+-	left := s[0]
+-
+-	if left == '`' || left == '"' {
+-		s = s[1:len(s)]
+-	}
+-	if len(s) == 0 {
+-		return s
+-	}
+-	right := s[len(s)-1]
+-	if right == '`' || right == '"' {
+-		s = s[0 : len(s)-1]
+-	}
+-	return s
+-}

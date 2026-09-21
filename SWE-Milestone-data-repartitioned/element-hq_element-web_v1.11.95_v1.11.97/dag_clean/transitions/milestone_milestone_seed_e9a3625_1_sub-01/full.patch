@@ -1,0 +1,480 @@
+diff --git a/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx b/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9e141c13790d72cc361336990d41077c57a0bd23
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx
+@@ -0,0 +1,57 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import { useCallback, useEffect, useState } from "react";
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import { type MessagePreview, MessagePreviewStore } from "../../../stores/room-list/MessagePreviewStore";
++import { useEventEmitter } from "../../../hooks/useEventEmitter";
++
++interface MessagePreviewViewState {
++    /**
++     * A string representation of the message preview if available.
++     */
++    message?: string;
++}
++
++/**
++ * View model for rendering a message preview for a given room list item.
++ * @param room The room for which we're rendering the message preview.
++ * @see {@link MessagePreviewViewState} for what this view model returns.
++ */
++export function useMessagePreviewViewModel(room: Room): MessagePreviewViewState {
++    const [messagePreview, setMessagePreview] = useState<MessagePreview | null>(null);
++
++    const updatePreview = useCallback(async (): Promise<void> => {
++        /**
++         * The second argument to getPreviewForRoom is a tag id which doesn't really make
++         * much sense within the context of the new room list. We can pass an empty string
++         * to match all tags for now but we should remember to actually change the implementation
++         * in the store once we remove the legacy room list.
++         */
++        const newPreview = await MessagePreviewStore.instance.getPreviewForRoom(room, "");
++        setMessagePreview(newPreview);
++    }, [room]);
++
++    /**
++     * Update when the message preview has changed for this room.
++     */
++    useEventEmitter(MessagePreviewStore.instance, MessagePreviewStore.getPreviewChangedEventName(room), () => {
++        updatePreview();
++    });
++
++    /**
++     * Do an initial fetch of the message preview.
++     */
++    useEffect(() => {
++        updatePreview();
++    }, [updatePreview]);
++
++    return {
++        message: messagePreview?.text,
++    };
++}
+diff --git a/src/components/viewmodels/roomlist/RoomListViewModel.tsx b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+index 1dacd030e2d46dc288738c81ba23e95bb21a757b..a7dc25b312e36901dcd22724a2e88351a3f707cd 100644
+--- a/src/components/viewmodels/roomlist/RoomListViewModel.tsx
++++ b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+@@ -5,14 +5,62 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
++import { useCallback } from "react";
++
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import type { ViewRoomPayload } from "../../../dispatcher/payloads/ViewRoomPayload";
++import dispatcher from "../../../dispatcher/dispatcher";
++import { Action } from "../../../dispatcher/actions";
++import { type PrimaryFilter, type SecondaryFilters, useFilteredRooms } from "./useFilteredRooms";
++import { type SortOption, useSorter } from "./useSorter";
++import { useMessagePreviewToggle } from "./useMessagePreviewToggle";
+ 
+ export interface RoomListViewState {
+     /**
+      * A list of rooms to be displayed in the left panel.
+      */
+     rooms: Room[];
++
++    /**
++     * Open the room having given roomId.
++     */
++    openRoom: (roomId: string) => void;
++
++    /**
++     * A list of objects that provide the view enough information
++     * to render primary room filters.
++     */
++    primaryFilters: PrimaryFilter[];
++
++    /**
++     * A function to activate a given secondary filter.
++     */
++    activateSecondaryFilter: (filter: SecondaryFilters) => void;
++
++    /**
++     * The currently active secondary filter.
++     */
++    activeSecondaryFilter: SecondaryFilters;
++
++    /**
++     * Change the sort order of the room-list.
++     */
++    sort: (option: SortOption) => void;
++
++    /**
++     * The currently active sort option.
++     */
++    activeSortOption: SortOption;
++
++    /**
++     * Whether message previews must be shown or not.
++     */
++    shouldShowMessagePreview: boolean;
++
++    /**
++     * A function to turn on/off message previews.
++     */
++    toggleMessagePreview: () => void;
+ }
+ 
+ /**
+@@ -20,6 +68,27 @@ export interface RoomListViewState {
+  * @see {@link RoomListViewState} for more information about what this view model returns.
+  */
+ export function useRoomListViewModel(): RoomListViewState {
+-    const rooms = RoomListStoreV3.instance.getSortedRooms();
+-    return { rooms };
++    const { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter } = useFilteredRooms();
++    const { activeSortOption, sort } = useSorter();
++    const { shouldShowMessagePreview, toggleMessagePreview } = useMessagePreviewToggle();
++
++    const openRoom = useCallback((roomId: string): void => {
++        dispatcher.dispatch<ViewRoomPayload>({
++            action: Action.ViewRoom,
++            room_id: roomId,
++            metricsTrigger: "RoomList",
++        });
++    }, []);
++
++    return {
++        rooms,
++        openRoom,
++        primaryFilters,
++        activateSecondaryFilter,
++        activeSecondaryFilter,
++        activeSortOption,
++        sort,
++        shouldShowMessagePreview,
++        toggleMessagePreview,
++    };
+ }
+diff --git a/src/components/viewmodels/roomlist/useFilteredRooms.tsx b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b78dcd16b19216d9bcae49517644ac039ae0c0c
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+@@ -0,0 +1,180 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { useCallback, useMemo, useState } from "react";
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import { FilterKey } from "../../../stores/room-list-v3/skip-list/filters";
++import { _t, _td, type TranslationKey } from "../../../languageHandler";
++import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import { LISTS_UPDATE_EVENT } from "../../../stores/room-list/RoomListStore";
++import { useEventEmitter } from "../../../hooks/useEventEmitter";
++
++/**
++ * Provides information about a primary filter.
++ * A primary filter is a commonly used filter that is given
++ * more precedence in the UI. For eg, primary filters may be
++ * rendered as pills above the room list.
++ */
++export interface PrimaryFilter {
++    // A function to toggle this filter on and off.
++    toggle: () => void;
++    // Whether this filter is currently applied
++    active: boolean;
++    // Text that can be used in the UI to represent this filter.
++    name: string;
++}
++
++interface FilteredRooms {
++    primaryFilters: PrimaryFilter[];
++    rooms: Room[];
++    activateSecondaryFilter: (filter: SecondaryFilters) => void;
++    activeSecondaryFilter: SecondaryFilters;
++}
++
++const filterKeyToNameMap: Map<FilterKey, TranslationKey> = new Map([
++    [FilterKey.UnreadFilter, _td("room_list|filters|unread")],
++    [FilterKey.FavouriteFilter, _td("room_list|filters|favourite")],
++    [FilterKey.PeopleFilter, _td("room_list|filters|people")],
++    [FilterKey.RoomsFilter, _td("room_list|filters|rooms")],
++]);
++
++/**
++ * These are the secondary filters which are not prominently shown
++ * in the UI.
++ */
++export const enum SecondaryFilters {
++    AllActivity,
++    MentionsOnly,
++    InvitesOnly,
++    LowPriority,
++}
++
++/**
++ * A map from {@link SecondaryFilters} which the UI understands to
++ * {@link FilterKey} which the store understands.
++ */
++const secondaryFiltersToFilterKeyMap = new Map([
++    [SecondaryFilters.AllActivity, undefined],
++    [SecondaryFilters.MentionsOnly, FilterKey.MentionsFilter],
++    [SecondaryFilters.InvitesOnly, FilterKey.InvitesFilter],
++    [SecondaryFilters.LowPriority, FilterKey.LowPriorityFilter],
++]);
++
++/**
++ * Use this function to determine if a given primary filter is compatible with
++ * a given secondary filter. Practically, this determines whether it makes sense
++ * to expose two filters together in the UI - for eg, it does not make sense to show the
++ * favourite primary filter if the active secondary filter is low priority.
++ * @param primary Primary filter key
++ * @param secondary Secondary filter key
++ * @returns true if compatible, false otherwise
++ */
++function isPrimaryFilterCompatible(primary: FilterKey, secondary: FilterKey): boolean {
++    if (secondary === FilterKey.MentionsFilter) {
++        if (primary === FilterKey.UnreadFilter) return false;
++    } else if (secondary === FilterKey.InvitesFilter) {
++        if (primary === FilterKey.UnreadFilter || primary === FilterKey.FavouriteFilter) return false;
++    } else if (secondary === FilterKey.LowPriorityFilter) {
++        if (primary === FilterKey.FavouriteFilter) return false;
++    }
++    return true;
++}
++
++/**
++ * Track available filters and provide a filtered list of rooms.
++ */
++export function useFilteredRooms(): FilteredRooms {
++    /**
++     * Primary filter refers to the pill based filters
++     * rendered above the room list.
++     */
++    const [primaryFilter, setPrimaryFilter] = useState<FilterKey | undefined>();
++    /**
++     * Secondary filters are also filters but they are hidden
++     * away in a popup menu.
++     */
++    const [activeSecondaryFilter, setActiveSecondaryFilter] = useState<SecondaryFilters>(SecondaryFilters.AllActivity);
++
++    const secondaryFilter = useMemo(
++        () => secondaryFiltersToFilterKeyMap.get(activeSecondaryFilter),
++        [activeSecondaryFilter],
++    );
++
++    const [rooms, setRooms] = useState(() => RoomListStoreV3.instance.getSortedRoomsInActiveSpace());
++
++    const updateRoomsFromStore = useCallback((filters: FilterKey[] = []): void => {
++        const newRooms = RoomListStoreV3.instance.getSortedRoomsInActiveSpace(filters);
++        setRooms(newRooms);
++    }, []);
++
++    const filterUndefined = (array: (FilterKey | undefined)[]): FilterKey[] =>
++        array.filter((f) => f !== undefined) as FilterKey[];
++
++    const getAppliedFilters = (): FilterKey[] => {
++        return filterUndefined([primaryFilter, secondaryFilter]);
++    };
++
++    useEventEmitter(RoomListStoreV3.instance, LISTS_UPDATE_EVENT, () => {
++        const filters = getAppliedFilters();
++        updateRoomsFromStore(filters);
++    });
++
++    /**
++     * Secondary filters are activated using this function.
++     * This is different to how primary filters work because the secondary
++     * filters are static i.e they are always available and don't need to be
++     * hidden.
++     */
++    const activateSecondaryFilter = useCallback(
++        (filter: SecondaryFilters): void => {
++            // If the filter is already active, just return.
++            if (filter === activeSecondaryFilter) return;
++
++            // SecondaryFilter is an enum for the UI, let's convert it to something
++            // that the store will understand.
++            const secondary = secondaryFiltersToFilterKeyMap.get(filter);
++            setActiveSecondaryFilter(filter);
++
++            // Reset any active primary filters.
++            setPrimaryFilter(undefined);
++
++            updateRoomsFromStore(filterUndefined([secondary]));
++        },
++        [activeSecondaryFilter, updateRoomsFromStore],
++    );
++
++    /**
++     * This tells the view which primary filters are available, how to toggle them
++     * and whether a given primary filter is active. @see {@link PrimaryFilter}
++     */
++    const primaryFilters = useMemo(() => {
++        const createPrimaryFilter = (key: FilterKey, name: string): PrimaryFilter => {
++            return {
++                toggle: () => {
++                    setPrimaryFilter((currentFilter) => {
++                        const filter = currentFilter === key ? undefined : key;
++                        updateRoomsFromStore(filterUndefined([filter, secondaryFilter]));
++                        return filter;
++                    });
++                },
++                active: primaryFilter === key,
++                name,
++            };
++        };
++        const filters: PrimaryFilter[] = [];
++        for (const [key, name] of filterKeyToNameMap.entries()) {
++            if (secondaryFilter && !isPrimaryFilterCompatible(key, secondaryFilter)) {
++                continue;
++            }
++            filters.push(createPrimaryFilter(key, _t(name)));
++        }
++        return filters;
++    }, [primaryFilter, updateRoomsFromStore, secondaryFilter]);
++
++    return { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter };
++}
+diff --git a/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx b/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..27ccd4010664c114699d734358698358078000e0
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx
+@@ -0,0 +1,36 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++import { useCallback, useState } from "react";
++
++import SettingsStore from "../../../settings/SettingsStore";
++import { SettingLevel } from "../../../settings/SettingLevel";
++
++interface MessagePreviewToggleState {
++    shouldShowMessagePreview: boolean;
++    toggleMessagePreview: () => void;
++}
++
++/**
++ * This hook:
++ * - Provides a state that tracks whether message previews are turned on or off.
++ * - Provides a function to toggle message previews.
++ */
++export function useMessagePreviewToggle(): MessagePreviewToggleState {
++    const [shouldShowMessagePreview, setShouldShowMessagePreview] = useState(() =>
++        SettingsStore.getValue("RoomList.showMessagePreview"),
++    );
++
++    const toggleMessagePreview = useCallback((): void => {
++        setShouldShowMessagePreview((current) => {
++            const toggled = !current;
++            SettingsStore.setValue("RoomList.showMessagePreview", null, SettingLevel.DEVICE, toggled);
++            return toggled;
++        });
++    }, []);
++
++    return { toggleMessagePreview, shouldShowMessagePreview };
++}
+diff --git a/src/components/viewmodels/roomlist/useSorter.ts b/src/components/viewmodels/roomlist/useSorter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7a880d430f0c00624fff9beeaa3bf53da848471
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useSorter.ts
+@@ -0,0 +1,62 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++import { useState } from "react";
++
++import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import { SortingAlgorithm } from "../../../stores/room-list-v3/skip-list/sorters";
++import SettingsStore from "../../../settings/SettingsStore";
++
++/**
++ * Sorting options made available to the view.
++ */
++export const enum SortOption {
++    Activity = SortingAlgorithm.Recency,
++    AToZ = SortingAlgorithm.Alphabetic,
++}
++
++/**
++ * {@link SortOption} holds almost the same information as
++ * {@link SortingAlgorithm}. This is done intentionally to
++ * prevent the view from having a dependence on the
++ * model (which is the store in this case).
++ */
++const sortingAlgorithmToSortingOption = {
++    [SortingAlgorithm.Alphabetic]: SortOption.AToZ,
++    [SortingAlgorithm.Recency]: SortOption.Activity,
++};
++
++const sortOptionToSortingAlgorithm = {
++    [SortOption.AToZ]: SortingAlgorithm.Alphabetic,
++    [SortOption.Activity]: SortingAlgorithm.Recency,
++};
++
++interface SortState {
++    sort: (option: SortOption) => void;
++    activeSortOption: SortOption;
++}
++
++/**
++ * This hook does two things:
++ * - Provides a way to track the currently active sort option.
++ * - Provides a function to resort the room list.
++ */
++export function useSorter(): SortState {
++    const [activeSortingAlgorithm, setActiveSortingAlgorithm] = useState(() =>
++        SettingsStore.getValue("RoomList.preferredSorting"),
++    );
++
++    const sort = (option: SortOption): void => {
++        const sortingAlgorithm = sortOptionToSortingAlgorithm[option];
++        RoomListStoreV3.instance.resort(sortingAlgorithm);
++        setActiveSortingAlgorithm(sortingAlgorithm);
++    };
++
++    return {
++        sort,
++        activeSortOption: sortingAlgorithmToSortingOption[activeSortingAlgorithm!],
++    };
++}
+diff --git a/src/settings/Settings.tsx b/src/settings/Settings.tsx
+index 3084263b2fec627c279aea83592d9e9e2646ac62..d887c9bb49b0b2f45ca899c35b1ffa679d8c93bb 100644
+--- a/src/settings/Settings.tsx
++++ b/src/settings/Settings.tsx
+@@ -314,6 +314,7 @@ export interface Settings {
+     "showImages": IBaseSetting<boolean>;
+     "showAvatarsOnInvites": IBaseSetting<boolean>;
+     "RoomList.preferredSorting": IBaseSetting<SortingAlgorithm>;
++    "RoomList.showMessagePreview": IBaseSetting<boolean>;
+     "RightPanel.phasesGlobal": IBaseSetting<IRightPanelForRoomStored | null>;
+     "RightPanel.phases": IBaseSetting<IRightPanelForRoomStored | null>;
+     "enableEventIndexing": IBaseSetting<boolean>;
+@@ -1126,6 +1127,10 @@ export const SETTINGS: Settings = {
+         supportedLevels: [SettingLevel.DEVICE],
+         default: SortingAlgorithm.Recency,
+     },
++    "RoomList.showMessagePreview": {
++        supportedLevels: [SettingLevel.DEVICE],
++        default: false,
++    },
+     "RightPanel.phasesGlobal": {
+         supportedLevels: [SettingLevel.DEVICE],
+         default: null,

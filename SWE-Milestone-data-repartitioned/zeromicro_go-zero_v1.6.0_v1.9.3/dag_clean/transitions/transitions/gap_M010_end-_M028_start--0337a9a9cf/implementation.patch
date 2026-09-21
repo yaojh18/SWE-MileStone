@@ -1,0 +1,4226 @@
+diff --git a/.github/workflows/codeql-analysis.yml b/.github/workflows/codeql-analysis.yml
+index 582e67ab31fe108fc0933d1ec0a7e822e34dbc57..568fbe13a1c0c27c398712b6a47fed2bc87d98eb 100644
+--- a/.github/workflows/codeql-analysis.yml
++++ b/.github/workflows/codeql-analysis.yml
+@@ -39,7 +39,7 @@ jobs:
+ 
+     # Initializes the CodeQL tools for scanning.
+     - name: Initialize CodeQL
+-      uses: github/codeql-action/init@v3
++      uses: github/codeql-action/init@v4
+       with:
+         languages: ${{ matrix.language }}
+         # If you wish to specify custom queries, you can do so here or in a config file.
+@@ -50,7 +50,7 @@ jobs:
+     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
+     # If this step fails, then you should remove it and run the build manually (see below)
+     - name: Autobuild
+-      uses: github/codeql-action/autobuild@v3
++      uses: github/codeql-action/autobuild@v4
+ 
+     # ℹ️ Command-line programs to run using the OS shell.
+     # 📚 https://git.io/JvXDl
+@@ -64,4 +64,4 @@ jobs:
+     #   make release
+ 
+     - name: Perform CodeQL Analysis
+-      uses: github/codeql-action/analyze@v3
++      uses: github/codeql-action/analyze@v4
+diff --git a/core/breaker/breaker.go b/core/breaker/breaker.go
+index 9fc4a48321df4a94196ea1888a47affd0a4aa30e..be85e5dbc9f5fa906ce5b6db245b96a617ab21fa 100644
+--- a/core/breaker/breaker.go
++++ b/core/breaker/breaker.go
+@@ -7,7 +7,6 @@ import (
+ 	"sync"
+ 	"time"
+ 
+-	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+@@ -200,7 +199,7 @@ func (ew *errorWindow) add(reason string) {
+ 	ew.lock.Lock()
+ 	ew.reasons[ew.index] = fmt.Sprintf("%s %s", time.Now().Format(timeFormat), reason)
+ 	ew.index = (ew.index + 1) % numHistoryReasons
+-	ew.count = mathx.MinInt(ew.count+1, numHistoryReasons)
++	ew.count = min(ew.count+1, numHistoryReasons)
+ 	ew.lock.Unlock()
+ }
+ 
+diff --git a/core/collection/ring.go b/core/collection/ring.go
+index 8218d60dcb20b93b1f38365a7e818f1848753db7..c7ad4fcba787308387fb34f6d79904ada224e6ac 100644
+--- a/core/collection/ring.go
++++ b/core/collection/ring.go
+@@ -25,8 +25,14 @@ func (r *Ring) Add(v any) {
+ 	r.lock.Lock()
+ 	defer r.lock.Unlock()
+ 
+-	r.elements[r.index%len(r.elements)] = v
++	rlen := len(r.elements)
++	r.elements[r.index%rlen] = v
+ 	r.index++
++
++	// prevent ring index overflow
++	if r.index >= rlen<<1 {
++		r.index -= rlen
++	}
+ }
+ 
+ // Take takes all items from r.
+@@ -36,16 +42,18 @@ func (r *Ring) Take() []any {
+ 
+ 	var size int
+ 	var start int
+-	if r.index > len(r.elements) {
+-		size = len(r.elements)
+-		start = r.index % len(r.elements)
++	rlen := len(r.elements)
++
++	if r.index > rlen {
++		size = rlen
++		start = r.index % rlen
+ 	} else {
+ 		size = r.index
+ 	}
+ 
+ 	elements := make([]any, size)
+ 	for i := 0; i < size; i++ {
+-		elements[i] = r.elements[(start+i)%len(r.elements)]
++		elements[i] = r.elements[(start+i)%rlen]
+ 	}
+ 
+ 	return elements
+diff --git a/core/collection/set.go b/core/collection/set.go
+index b65e33fbdcf87ebd10f4a10ada1e981bd0bbecd6..41fbb3cb547d39500a8fd386f3345e3f18464eb2 100644
+--- a/core/collection/set.go
++++ b/core/collection/set.go
+@@ -1,235 +1,53 @@
+ package collection
+ 
+-import (
+-	"github.com/zeromicro/go-zero/core/lang"
+-	"github.com/zeromicro/go-zero/core/logx"
+-)
++import "github.com/zeromicro/go-zero/core/lang"
+ 
+-const (
+-	unmanaged = iota
+-	untyped
+-	intType
+-	int64Type
+-	uintType
+-	uint64Type
+-	stringType
+-)
+-
+-// Set is not thread-safe, for concurrent use, make sure to use it with synchronization.
+-type Set struct {
+-	data map[any]lang.PlaceholderType
+-	tp   int
+-}
+-
+-// NewSet returns a managed Set, can only put the values with the same type.
+-func NewSet() *Set {
+-	return &Set{
+-		data: make(map[any]lang.PlaceholderType),
+-		tp:   untyped,
+-	}
+-}
+-
+-// NewUnmanagedSet returns an unmanaged Set, which can put values with different types.
+-func NewUnmanagedSet() *Set {
+-	return &Set{
+-		data: make(map[any]lang.PlaceholderType),
+-		tp:   unmanaged,
+-	}
+-}
+-
+-// Add adds i into s.
+-func (s *Set) Add(i ...any) {
+-	for _, each := range i {
+-		s.add(each)
+-	}
++// Set is a type-safe generic set collection.
++// It's not thread-safe, use with synchronization for concurrent access.
++type Set[T comparable] struct {
++	data map[T]lang.PlaceholderType
+ }
+ 
+-// AddInt adds int values ii into s.
+-func (s *Set) AddInt(ii ...int) {
+-	for _, each := range ii {
+-		s.add(each)
++// NewSet returns a new type-safe set.
++func NewSet[T comparable]() *Set[T] {
++	return &Set[T]{
++		data: make(map[T]lang.PlaceholderType),
+ 	}
+ }
+ 
+-// AddInt64 adds int64 values ii into s.
+-func (s *Set) AddInt64(ii ...int64) {
+-	for _, each := range ii {
+-		s.add(each)
++// Add adds items to the set. Duplicates are automatically ignored.
++func (s *Set[T]) Add(items ...T) {
++	for _, item := range items {
++		s.data[item] = lang.Placeholder
+ 	}
+ }
+ 
+-// AddUint adds uint values ii into s.
+-func (s *Set) AddUint(ii ...uint) {
+-	for _, each := range ii {
+-		s.add(each)
+-	}
+-}
+-
+-// AddUint64 adds uint64 values ii into s.
+-func (s *Set) AddUint64(ii ...uint64) {
+-	for _, each := range ii {
+-		s.add(each)
+-	}
++// Clear removes all items from the set.
++func (s *Set[T]) Clear() {
++	clear(s.data)
+ }
+ 
+-// AddStr adds string values ss into s.
+-func (s *Set) AddStr(ss ...string) {
+-	for _, each := range ss {
+-		s.add(each)
+-	}
+-}
+-
+-// Contains checks if i is in s.
+-func (s *Set) Contains(i any) bool {
+-	if len(s.data) == 0 {
+-		return false
+-	}
+-
+-	s.validate(i)
+-	_, ok := s.data[i]
++// Contains checks if an item exists in the set.
++func (s *Set[T]) Contains(item T) bool {
++	_, ok := s.data[item]
+ 	return ok
+ }
+ 
+-// Keys returns the keys in s.
+-func (s *Set) Keys() []any {
+-	var keys []any
+-
+-	for key := range s.data {
+-		keys = append(keys, key)
+-	}
+-
+-	return keys
+-}
+-
+-// KeysInt returns the int keys in s.
+-func (s *Set) KeysInt() []int {
+-	var keys []int
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(int); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysInt64 returns int64 keys in s.
+-func (s *Set) KeysInt64() []int64 {
+-	var keys []int64
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(int64); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysUint returns uint keys in s.
+-func (s *Set) KeysUint() []uint {
+-	var keys []uint
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(uint); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
++// Count returns the number of items in the set.
++func (s *Set[T]) Count() int {
++	return len(s.data)
+ }
+ 
+-// KeysUint64 returns uint64 keys in s.
+-func (s *Set) KeysUint64() []uint64 {
+-	var keys []uint64
+-
++// Keys returns all elements in the set as a slice.
++func (s *Set[T]) Keys() []T {
++	keys := make([]T, 0, len(s.data))
+ 	for key := range s.data {
+-		if intKey, ok := key.(uint64); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysStr returns string keys in s.
+-func (s *Set) KeysStr() []string {
+-	var keys []string
+-
+-	for key := range s.data {
+-		if strKey, ok := key.(string); ok {
+-			keys = append(keys, strKey)
+-		}
++		keys = append(keys, key)
+ 	}
+-
+ 	return keys
+ }
+ 
+-// Remove removes i from s.
+-func (s *Set) Remove(i any) {
+-	s.validate(i)
+-	delete(s.data, i)
+-}
+-
+-// Count returns the number of items in s.
+-func (s *Set) Count() int {
+-	return len(s.data)
+-}
+-
+-func (s *Set) add(i any) {
+-	switch s.tp {
+-	case unmanaged:
+-		// do nothing
+-	case untyped:
+-		s.setType(i)
+-	default:
+-		s.validate(i)
+-	}
+-	s.data[i] = lang.Placeholder
+-}
+-
+-func (s *Set) setType(i any) {
+-	// s.tp can only be untyped here
+-	switch i.(type) {
+-	case int:
+-		s.tp = intType
+-	case int64:
+-		s.tp = int64Type
+-	case uint:
+-		s.tp = uintType
+-	case uint64:
+-		s.tp = uint64Type
+-	case string:
+-		s.tp = stringType
+-	}
+-}
+-
+-func (s *Set) validate(i any) {
+-	if s.tp == unmanaged {
+-		return
+-	}
+-
+-	switch i.(type) {
+-	case int:
+-		if s.tp != intType {
+-			logx.Errorf("element is int, but set contains elements with type %d", s.tp)
+-		}
+-	case int64:
+-		if s.tp != int64Type {
+-			logx.Errorf("element is int64, but set contains elements with type %d", s.tp)
+-		}
+-	case uint:
+-		if s.tp != uintType {
+-			logx.Errorf("element is uint, but set contains elements with type %d", s.tp)
+-		}
+-	case uint64:
+-		if s.tp != uint64Type {
+-			logx.Errorf("element is uint64, but set contains elements with type %d", s.tp)
+-		}
+-	case string:
+-		if s.tp != stringType {
+-			logx.Errorf("element is string, but set contains elements with type %d", s.tp)
+-		}
+-	}
++// Remove removes an item from the set.
++func (s *Set[T]) Remove(item T) {
++	delete(s.data, item)
+ }
+diff --git a/core/conf/config.go b/core/conf/config.go
+index d189b932bdeb8b88a9ae79dfcb95dafdd9e8b82a..03d25ea889fb2add0144a2bf3e7f2fcad73b8562 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -62,7 +62,11 @@ func Load(file string, v any, opts ...Option) error {
+ 		return loader([]byte(os.ExpandEnv(string(content))), v)
+ 	}
+ 
+-	return loader(content, v)
++	if err = loader(content, v); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfig loads config into v from file, .json, .yaml and .yml are acceptable.
+@@ -85,7 +89,12 @@ func LoadFromJsonBytes(content []byte, v any) error {
+ 
+ 	lowerCaseKeyMap := toLowerCaseKeyMap(m, info)
+ 
+-	return mapping.UnmarshalJsonMap(lowerCaseKeyMap, v, mapping.WithCanonicalKeyFunc(toLowerCase))
++	if err = mapping.UnmarshalJsonMap(lowerCaseKeyMap, v,
++		mapping.WithCanonicalKeyFunc(toLowerCase)); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfigFromJsonBytes loads config into v from content json bytes.
+@@ -189,7 +198,7 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
+ 	switch tp.Kind() {
+ 	case reflect.Struct:
+ 		return buildStructFieldsInfo(tp, fullName)
+-	case reflect.Array, reflect.Slice:
++	case reflect.Array, reflect.Slice, reflect.Map:
+ 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
+ 	case reflect.Chan, reflect.Func:
+ 		return nil, fmt.Errorf("unsupported type: %s,fullName: %s", tp.Kind(), fullName)
+@@ -332,6 +341,8 @@ func toLowerCaseKeyMap(m map[string]any, info *fieldInfo) map[string]any {
+ 			res[lk] = toLowerCaseInterface(v, ti)
+ 		} else if info.mapField != nil {
+ 			res[k] = toLowerCaseInterface(v, info.mapField)
++		} else if vv, ok := v.(map[string]any); ok {
++			res[k] = toLowerCaseKeyMap(vv, info)
+ 		} else {
+ 			res[k] = v
+ 		}
+diff --git a/core/conf/validate.go b/core/conf/validate.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2724aa6a2bd907650ad599d582a57f06702c61c8
+--- /dev/null
++++ b/core/conf/validate.go
+@@ -0,0 +1,12 @@
++package conf
++
++import "github.com/zeromicro/go-zero/core/validation"
++
++// validate validates the value if it implements the Validator interface.
++func validate(v any) error {
++	if val, ok := v.(validation.Validator); ok {
++		return val.Validate()
++	}
++
++	return nil
++}
+diff --git a/core/configcenter/configurator.go b/core/configcenter/configurator.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..cfd02a8068664f8c73314f751eea252d816db68d
+--- /dev/null
++++ b/core/configcenter/configurator.go
+@@ -0,0 +1,200 @@
++package configurator
++
++import (
++	"errors"
++	"fmt"
++	"reflect"
++	"strings"
++	"sync"
++	"sync/atomic"
++
++	"github.com/zeromicro/go-zero/core/configcenter/subscriber"
++	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/mapping"
++	"github.com/zeromicro/go-zero/core/threading"
++)
++
++var (
++	errEmptyConfig            = errors.New("empty config value")
++	errMissingUnmarshalerType = errors.New("missing unmarshaler type")
++)
++
++// Configurator is the interface for configuration center.
++type Configurator[T any] interface {
++	// GetConfig returns the subscription value.
++	GetConfig() (T, error)
++	// AddListener adds a listener to the subscriber.
++	AddListener(listener func())
++}
++
++type (
++	// Config is the configuration for Configurator.
++	Config struct {
++		// Type is the value type, yaml, json or toml.
++		Type string `json:",default=yaml,options=[yaml,json,toml]"`
++		// Log is the flag to control logging.
++		Log bool `json:",default=true"`
++	}
++
++	configCenter[T any] struct {
++		conf        Config
++		unmarshaler LoaderFn
++		subscriber  subscriber.Subscriber
++		listeners   []func()
++		lock        sync.Mutex
++		snapshot    atomic.Value
++	}
++
++	value[T any] struct {
++		data        string
++		marshalData T
++		err         error
++	}
++)
++
++// Configurator is the interface for configuration center.
++var _ Configurator[any] = (*configCenter[any])(nil)
++
++// MustNewConfigCenter returns a Configurator, exits on errors.
++func MustNewConfigCenter[T any](c Config, subscriber subscriber.Subscriber) Configurator[T] {
++	cc, err := NewConfigCenter[T](c, subscriber)
++	logx.Must(err)
++	return cc
++}
++
++// NewConfigCenter returns a Configurator.
++func NewConfigCenter[T any](c Config, subscriber subscriber.Subscriber) (Configurator[T], error) {
++	unmarshaler, ok := Unmarshaler(strings.ToLower(c.Type))
++	if !ok {
++		return nil, fmt.Errorf("unknown format: %s", c.Type)
++	}
++
++	cc := &configCenter[T]{
++		conf:        c,
++		unmarshaler: unmarshaler,
++		subscriber:  subscriber,
++	}
++
++	if err := cc.loadConfig(); err != nil {
++		return nil, err
++	}
++
++	if err := cc.subscriber.AddListener(cc.onChange); err != nil {
++		return nil, err
++	}
++
++	if _, err := cc.GetConfig(); err != nil {
++		return nil, err
++	}
++
++	return cc, nil
++}
++
++// AddListener adds listener to s.
++func (c *configCenter[T]) AddListener(listener func()) {
++	c.lock.Lock()
++	defer c.lock.Unlock()
++	c.listeners = append(c.listeners, listener)
++}
++
++// GetConfig return structured config.
++func (c *configCenter[T]) GetConfig() (T, error) {
++	v := c.value()
++	if v == nil || len(v.data) == 0 {
++		var empty T
++		return empty, errEmptyConfig
++	}
++
++	return v.marshalData, v.err
++}
++
++// Value returns the subscription value.
++func (c *configCenter[T]) Value() string {
++	v := c.value()
++	if v == nil {
++		return ""
++	}
++	return v.data
++}
++
++func (c *configCenter[T]) loadConfig() error {
++	v, err := c.subscriber.Value()
++	if err != nil {
++		if c.conf.Log {
++			logx.Errorf("ConfigCenter loads changed configuration, error: %v", err)
++		}
++		return err
++	}
++
++	if c.conf.Log {
++		logx.Infof("ConfigCenter loads changed configuration, content [%s]", v)
++	}
++
++	c.snapshot.Store(c.genValue(v))
++	return nil
++}
++
++func (c *configCenter[T]) onChange() {
++	if err := c.loadConfig(); err != nil {
++		return
++	}
++
++	c.lock.Lock()
++	listeners := make([]func(), len(c.listeners))
++	copy(listeners, c.listeners)
++	c.lock.Unlock()
++
++	for _, l := range listeners {
++		threading.GoSafe(l)
++	}
++}
++
++func (c *configCenter[T]) value() *value[T] {
++	content := c.snapshot.Load()
++	if content == nil {
++		return nil
++	}
++	return content.(*value[T])
++}
++
++func (c *configCenter[T]) genValue(data string) *value[T] {
++	v := &value[T]{
++		data: data,
++	}
++	if len(data) == 0 {
++		return v
++	}
++
++	t := reflect.TypeOf(v.marshalData)
++	// if the type is nil, it means that the user has not set the type of the configuration.
++	if t == nil {
++		v.err = errMissingUnmarshalerType
++		return v
++	}
++
++	t = mapping.Deref(t)
++	switch t.Kind() {
++	case reflect.Struct, reflect.Array, reflect.Slice:
++		if err := c.unmarshaler([]byte(data), &v.marshalData); err != nil {
++			v.err = err
++			if c.conf.Log {
++				logx.Errorf("ConfigCenter unmarshal configuration failed, err: %+v, content [%s]",
++					err.Error(), data)
++			}
++		}
++	case reflect.String:
++		if str, ok := any(data).(T); ok {
++			v.marshalData = str
++		} else {
++			v.err = errMissingUnmarshalerType
++		}
++	default:
++		if c.conf.Log {
++			logx.Errorf("ConfigCenter unmarshal configuration missing unmarshaler for type: %s, content [%s]",
++				t.Kind(), data)
++		}
++		v.err = errMissingUnmarshalerType
++	}
++
++	return v
++}
+diff --git a/core/configcenter/subscriber/etcd.go b/core/configcenter/subscriber/etcd.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9a11efccbd62269958ce0c412c8e7ff94c87355
+--- /dev/null
++++ b/core/configcenter/subscriber/etcd.go
+@@ -0,0 +1,67 @@
++package subscriber
++
++import (
++	"github.com/zeromicro/go-zero/core/discov"
++	"github.com/zeromicro/go-zero/core/logx"
++)
++
++type (
++	// etcdSubscriber is a subscriber that subscribes to etcd.
++	etcdSubscriber struct {
++		*discov.Subscriber
++	}
++
++	// EtcdConf is the configuration for etcd.
++	EtcdConf = discov.EtcdConf
++)
++
++// MustNewEtcdSubscriber returns an etcd Subscriber, exits on errors.
++func MustNewEtcdSubscriber(conf EtcdConf) Subscriber {
++	s, err := NewEtcdSubscriber(conf)
++	logx.Must(err)
++	return s
++}
++
++// NewEtcdSubscriber returns an etcd Subscriber.
++func NewEtcdSubscriber(conf EtcdConf) (Subscriber, error) {
++	opts := buildSubOptions(conf)
++	s, err := discov.NewSubscriber(conf.Hosts, conf.Key, opts...)
++	if err != nil {
++		return nil, err
++	}
++
++	return &etcdSubscriber{Subscriber: s}, nil
++}
++
++// buildSubOptions constructs the options for creating a new etcd subscriber.
++func buildSubOptions(conf EtcdConf) []discov.SubOption {
++	opts := []discov.SubOption{
++		discov.WithExactMatch(),
++	}
++
++	if len(conf.User) > 0 {
++		opts = append(opts, discov.WithSubEtcdAccount(conf.User, conf.Pass))
++	}
++	if len(conf.CertFile) > 0 || len(conf.CertKeyFile) > 0 || len(conf.CACertFile) > 0 {
++		opts = append(opts, discov.WithSubEtcdTLS(conf.CertFile, conf.CertKeyFile,
++			conf.CACertFile, conf.InsecureSkipVerify))
++	}
++
++	return opts
++}
++
++// AddListener adds a listener to the subscriber.
++func (s *etcdSubscriber) AddListener(listener func()) error {
++	s.Subscriber.AddListener(listener)
++	return nil
++}
++
++// Value returns the value of the subscriber.
++func (s *etcdSubscriber) Value() (string, error) {
++	vs := s.Subscriber.Values()
++	if len(vs) > 0 {
++		return vs[len(vs)-1], nil
++	}
++
++	return "", nil
++}
+diff --git a/core/configcenter/subscriber/subscriber.go b/core/configcenter/subscriber/subscriber.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..e0ad9fc808d8960e5809c52a735f12ca65f2260c
+--- /dev/null
++++ b/core/configcenter/subscriber/subscriber.go
+@@ -0,0 +1,9 @@
++package subscriber
++
++// Subscriber is the interface for configcenter subscribers.
++type Subscriber interface {
++	// AddListener adds a listener to the subscriber.
++	AddListener(listener func()) error
++	// Value returns the value of the subscriber.
++	Value() (string, error)
++}
+diff --git a/core/configcenter/unmarshaler.go b/core/configcenter/unmarshaler.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..dc9fa507448fdc52dd4940919c540633776ea6ea
+--- /dev/null
++++ b/core/configcenter/unmarshaler.go
+@@ -0,0 +1,41 @@
++package configurator
++
++import (
++	"sync"
++
++	"github.com/zeromicro/go-zero/core/conf"
++)
++
++var registry = &unmarshalerRegistry{
++	unmarshalers: map[string]LoaderFn{
++		"json": conf.LoadFromJsonBytes,
++		"toml": conf.LoadFromTomlBytes,
++		"yaml": conf.LoadFromYamlBytes,
++	},
++}
++
++type (
++	// LoaderFn is the function type for loading configuration.
++	LoaderFn func([]byte, any) error
++
++	// unmarshalerRegistry is the registry for unmarshalers.
++	unmarshalerRegistry struct {
++		unmarshalers map[string]LoaderFn
++		mu           sync.RWMutex
++	}
++)
++
++// RegisterUnmarshaler registers an unmarshaler.
++func RegisterUnmarshaler(name string, fn LoaderFn) {
++	registry.mu.Lock()
++	defer registry.mu.Unlock()
++	registry.unmarshalers[name] = fn
++}
++
++// Unmarshaler returns the unmarshaler by name.
++func Unmarshaler(name string) (LoaderFn, bool) {
++	registry.mu.RLock()
++	defer registry.mu.RUnlock()
++	fn, ok := registry.unmarshalers[name]
++	return fn, ok
++}
+diff --git a/core/discov/internal/registry.go b/core/discov/internal/registry.go
+index 97dd97aa8113d2a854ce3d2929253d84adf11589..49463f7bcc9211a0c4d4668162b659e50aca213b 100644
+--- a/core/discov/internal/registry.go
++++ b/core/discov/internal/registry.go
+@@ -2,6 +2,7 @@ package internal
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"io"
+ 	"sort"
+@@ -9,25 +10,30 @@ import (
+ 	"sync"
+ 	"time"
+ 
+-	"github.com/zeromicro/go-zero/core/contextx"
+ 	"github.com/zeromicro/go-zero/core/lang"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
++	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
++	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+ 	clientv3 "go.etcd.io/etcd/client/v3"
+ )
+ 
++const coolDownDeviation = 0.05
++
+ var (
+ 	registry = Registry{
+ 		clusters: make(map[string]*cluster),
+ 	}
+-	connManager = syncx.NewResourceManager()
++	connManager      = syncx.NewResourceManager()
++	coolDownUnstable = mathx.NewUnstable(coolDownDeviation)
++	errClosed        = errors.New("etcd monitor chan has been closed")
+ )
+ 
+ // A Registry is a registry that manages the etcd client connections.
+ type Registry struct {
+ 	clusters map[string]*cluster
+-	lock     sync.Mutex
++	lock     sync.RWMutex
+ }
+ 
+ // GetRegistry returns a global Registry.
+@@ -37,60 +43,148 @@ func GetRegistry() *Registry {
+ 
+ // GetConn returns an etcd client connection associated with given endpoints.
+ func (r *Registry) GetConn(endpoints []string) (EtcdClient, error) {
+-	c, _ := r.getCluster(endpoints)
++	c, _ := r.getOrCreateCluster(endpoints)
+ 	return c.getClient()
+ }
+ 
+ // Monitor monitors the key on given etcd endpoints, notify with the given UpdateListener.
+-func (r *Registry) Monitor(endpoints []string, key string, l UpdateListener) error {
+-	c, exists := r.getCluster(endpoints)
++func (r *Registry) Monitor(endpoints []string, key string, exactMatch bool, l UpdateListener) error {
++	wkey := watchKey{
++		key:        key,
++		exactMatch: exactMatch,
++	}
++
++	c, exists := r.getOrCreateCluster(endpoints)
+ 	// if exists, the existing values should be updated to the listener.
+ 	if exists {
+-		kvs := c.getCurrent(key)
+-		for _, kv := range kvs {
+-			l.OnAdd(kv)
++		c.lock.Lock()
++		watcher, ok := c.watchers[wkey]
++		if ok {
++			watcher.listeners = append(watcher.listeners, l)
++		}
++		c.lock.Unlock()
++
++		if ok {
++			kvs := c.getCurrent(wkey)
++			for _, kv := range kvs {
++				l.OnAdd(kv)
++			}
++
++			return nil
+ 		}
+ 	}
+ 
+-	return c.monitor(key, l)
++	return c.monitor(wkey, l)
+ }
+ 
+-func (r *Registry) getCluster(endpoints []string) (c *cluster, exists bool) {
++func (r *Registry) Unmonitor(endpoints []string, key string, exactMatch bool, l UpdateListener) {
++	c, exists := r.getCluster(endpoints)
++	if !exists {
++		return
++	}
++
++	wkey := watchKey{
++		key:        key,
++		exactMatch: exactMatch,
++	}
++
++	c.lock.Lock()
++	defer c.lock.Unlock()
++
++	watcher, ok := c.watchers[wkey]
++	if !ok {
++		return
++	}
++
++	for i, listener := range watcher.listeners {
++		if listener == l {
++			watcher.listeners = append(watcher.listeners[:i], watcher.listeners[i+1:]...)
++			break
++		}
++	}
++
++	if len(watcher.listeners) == 0 {
++		if watcher.cancel != nil {
++			watcher.cancel()
++		}
++		delete(c.watchers, wkey)
++	}
++}
++
++func (r *Registry) getCluster(endpoints []string) (*cluster, bool) {
+ 	clusterKey := getClusterKey(endpoints)
+-	r.lock.Lock()
+-	defer r.lock.Unlock()
+-	c, exists = r.clusters[clusterKey]
++
++	r.lock.RLock()
++	c, ok := r.clusters[clusterKey]
++	r.lock.RUnlock()
++
++	return c, ok
++}
++
++func (r *Registry) getOrCreateCluster(endpoints []string) (c *cluster, exists bool) {
++	c, exists = r.getCluster(endpoints)
+ 	if !exists {
+-		c = newCluster(endpoints)
+-		r.clusters[clusterKey] = c
++		clusterKey := getClusterKey(endpoints)
++
++		r.lock.Lock()
++		defer r.lock.Unlock()
++
++		// double-check locking
++		c, exists = r.clusters[clusterKey]
++		if !exists {
++			c = newCluster(endpoints)
++			r.clusters[clusterKey] = c
++		}
+ 	}
+ 
+ 	return
+ }
+ 
+-type cluster struct {
+-	endpoints  []string
+-	key        string
+-	values     map[string]map[string]string
+-	listeners  map[string][]UpdateListener
+-	watchGroup *threading.RoutineGroup
+-	done       chan lang.PlaceholderType
+-	lock       sync.Mutex
+-}
++type (
++	watchKey struct {
++		key        string
++		exactMatch bool
++	}
++
++	watchValue struct {
++		listeners []UpdateListener
++		values    map[string]string
++		cancel    context.CancelFunc
++	}
++
++	cluster struct {
++		endpoints  []string
++		key        string
++		watchers   map[watchKey]*watchValue
++		watchGroup *threading.RoutineGroup
++		done       chan lang.PlaceholderType
++		lock       sync.RWMutex
++	}
++)
+ 
+ func newCluster(endpoints []string) *cluster {
+ 	return &cluster{
+ 		endpoints:  endpoints,
+ 		key:        getClusterKey(endpoints),
+-		values:     make(map[string]map[string]string),
+-		listeners:  make(map[string][]UpdateListener),
++		watchers:   make(map[watchKey]*watchValue),
+ 		watchGroup: threading.NewRoutineGroup(),
+ 		done:       make(chan lang.PlaceholderType),
+ 	}
+ }
+ 
+-func (c *cluster) context(cli EtcdClient) context.Context {
+-	return contextx.ValueOnlyFrom(cli.Ctx())
++func (c *cluster) addListener(key watchKey, l UpdateListener) {
++	c.lock.Lock()
++	defer c.lock.Unlock()
++
++	watcher, ok := c.watchers[key]
++	if ok {
++		watcher.listeners = append(watcher.listeners, l)
++		return
++	}
++
++	val := newWatchValue()
++	val.listeners = []UpdateListener{l}
++	c.watchers[key] = val
+ }
+ 
+ func (c *cluster) getClient() (EtcdClient, error) {
+@@ -104,12 +198,17 @@ func (c *cluster) getClient() (EtcdClient, error) {
+ 	return val.(EtcdClient), nil
+ }
+ 
+-func (c *cluster) getCurrent(key string) []KV {
+-	c.lock.Lock()
+-	defer c.lock.Unlock()
++func (c *cluster) getCurrent(key watchKey) []KV {
++	c.lock.RLock()
++	defer c.lock.RUnlock()
++
++	watcher, ok := c.watchers[key]
++	if !ok {
++		return nil
++	}
+ 
+ 	var kvs []KV
+-	for k, v := range c.values[key] {
++	for k, v := range watcher.values {
+ 		kvs = append(kvs, KV{
+ 			Key: k,
+ 			Val: v,
+@@ -119,42 +218,23 @@ func (c *cluster) getCurrent(key string) []KV {
+ 	return kvs
+ }
+ 
+-func (c *cluster) handleChanges(key string, kvs []KV) {
+-	var add []KV
+-	var remove []KV
++func (c *cluster) handleChanges(key watchKey, kvs []KV) {
+ 	c.lock.Lock()
+-	listeners := append([]UpdateListener(nil), c.listeners[key]...)
+-	vals, ok := c.values[key]
++	watcher, ok := c.watchers[key]
+ 	if !ok {
+-		add = kvs
+-		vals = make(map[string]string)
+-		for _, kv := range kvs {
+-			vals[kv.Key] = kv.Val
+-		}
+-		c.values[key] = vals
+-	} else {
+-		m := make(map[string]string)
+-		for _, kv := range kvs {
+-			m[kv.Key] = kv.Val
+-		}
+-		for k, v := range vals {
+-			if val, ok := m[k]; !ok || v != val {
+-				remove = append(remove, KV{
+-					Key: k,
+-					Val: v,
+-				})
+-			}
+-		}
+-		for k, v := range m {
+-			if val, ok := vals[k]; !ok || v != val {
+-				add = append(add, KV{
+-					Key: k,
+-					Val: v,
+-				})
+-			}
+-		}
+-		c.values[key] = m
++		c.lock.Unlock()
++		return
+ 	}
++
++	listeners := append([]UpdateListener(nil), watcher.listeners...)
++	// watcher.values cannot be nil
++	vals := watcher.values
++	newVals := make(map[string]string, len(kvs)+len(vals))
++	for _, kv := range kvs {
++		newVals[kv.Key] = kv.Val
++	}
++	add, remove := calculateChanges(vals, newVals)
++	watcher.values = newVals
+ 	c.lock.Unlock()
+ 
+ 	for _, kv := range add {
+@@ -169,20 +249,22 @@ func (c *cluster) handleChanges(key string, kvs []KV) {
+ 	}
+ }
+ 
+-func (c *cluster) handleWatchEvents(key string, events []*clientv3.Event) {
+-	c.lock.Lock()
+-	listeners := append([]UpdateListener(nil), c.listeners[key]...)
+-	c.lock.Unlock()
++func (c *cluster) handleWatchEvents(ctx context.Context, key watchKey, events []*clientv3.Event) {
++	c.lock.RLock()
++	watcher, ok := c.watchers[key]
++	if !ok {
++		c.lock.RUnlock()
++		return
++	}
++
++	listeners := append([]UpdateListener(nil), watcher.listeners...)
++	c.lock.RUnlock()
+ 
+ 	for _, ev := range events {
+ 		switch ev.Type {
+ 		case clientv3.EventTypePut:
+ 			c.lock.Lock()
+-			if vals, ok := c.values[key]; ok {
+-				vals[string(ev.Kv.Key)] = string(ev.Kv.Value)
+-			} else {
+-				c.values[key] = map[string]string{string(ev.Kv.Key): string(ev.Kv.Value)}
+-			}
++			watcher.values[string(ev.Kv.Key)] = string(ev.Kv.Value)
+ 			c.lock.Unlock()
+ 			for _, l := range listeners {
+ 				l.OnAdd(KV{
+@@ -192,9 +274,7 @@ func (c *cluster) handleWatchEvents(key string, events []*clientv3.Event) {
+ 			}
+ 		case clientv3.EventTypeDelete:
+ 			c.lock.Lock()
+-			if vals, ok := c.values[key]; ok {
+-				delete(vals, string(ev.Kv.Key))
+-			}
++			delete(watcher.values, string(ev.Kv.Key))
+ 			c.lock.Unlock()
+ 			for _, l := range listeners {
+ 				l.OnDelete(KV{
+@@ -203,24 +283,29 @@ func (c *cluster) handleWatchEvents(key string, events []*clientv3.Event) {
+ 				})
+ 			}
+ 		default:
+-			logx.Errorf("Unknown event type: %v", ev.Type)
++			logc.Errorf(ctx, "Unknown event type: %v", ev.Type)
+ 		}
+ 	}
+ }
+ 
+-func (c *cluster) load(cli EtcdClient, key string) int64 {
++func (c *cluster) load(cli EtcdClient, key watchKey) int64 {
+ 	var resp *clientv3.GetResponse
+ 	for {
+ 		var err error
+-		ctx, cancel := context.WithTimeout(c.context(cli), RequestTimeout)
+-		resp, err = cli.Get(ctx, makeKeyPrefix(key), clientv3.WithPrefix())
++		ctx, cancel := context.WithTimeout(cli.Ctx(), RequestTimeout)
++		if key.exactMatch {
++			resp, err = cli.Get(ctx, key.key)
++		} else {
++			resp, err = cli.Get(ctx, makeKeyPrefix(key.key), clientv3.WithPrefix())
++		}
++
+ 		cancel()
+ 		if err == nil {
+ 			break
+ 		}
+ 
+-		logx.Error(err)
+-		time.Sleep(coolDownInterval)
++		logc.Errorf(cli.Ctx(), "%s, key: %s, exactMatch: %t", err.Error(), key.key, key.exactMatch)
++		time.Sleep(coolDownUnstable.AroundDuration(coolDownInterval))
+ 	}
+ 
+ 	var kvs []KV
+@@ -236,16 +321,13 @@ func (c *cluster) load(cli EtcdClient, key string) int64 {
+ 	return resp.Header.Revision
+ }
+ 
+-func (c *cluster) monitor(key string, l UpdateListener) error {
+-	c.lock.Lock()
+-	c.listeners[key] = append(c.listeners[key], l)
+-	c.lock.Unlock()
+-
++func (c *cluster) monitor(key watchKey, l UpdateListener) error {
+ 	cli, err := c.getClient()
+ 	if err != nil {
+ 		return err
+ 	}
+ 
++	c.addListener(key, l)
+ 	rev := c.load(cli, key)
+ 	c.watchGroup.Run(func() {
+ 		c.watch(cli, key, rev)
+@@ -267,16 +349,22 @@ func (c *cluster) newClient() (EtcdClient, error) {
+ 
+ func (c *cluster) reload(cli EtcdClient) {
+ 	c.lock.Lock()
++	// cancel the previous watches
+ 	close(c.done)
+ 	c.watchGroup.Wait()
++	var keys []watchKey
++	for wk, wval := range c.watchers {
++		keys = append(keys, wk)
++		if wval.cancel != nil {
++			wval.cancel()
++		}
++	}
++
+ 	c.done = make(chan lang.PlaceholderType)
+ 	c.watchGroup = threading.NewRoutineGroup()
+-	var keys []string
+-	for k := range c.listeners {
+-		keys = append(keys, k)
+-	}
+ 	c.lock.Unlock()
+ 
++	// start new watches
+ 	for _, key := range keys {
+ 		k := key
+ 		c.watchGroup.Run(func() {
+@@ -286,46 +374,80 @@ func (c *cluster) reload(cli EtcdClient) {
+ 	}
+ }
+ 
+-func (c *cluster) watch(cli EtcdClient, key string, rev int64) {
++func (c *cluster) watch(cli EtcdClient, key watchKey, rev int64) {
+ 	for {
+-		if c.watchStream(cli, key, rev) {
++		err := c.watchStream(cli, key, rev)
++		if err == nil {
+ 			return
+ 		}
++
++		if rev != 0 && errors.Is(err, rpctypes.ErrCompacted) {
++			logc.Errorf(cli.Ctx(), "etcd watch stream has been compacted, try to reload, rev %d", rev)
++			rev = c.load(cli, key)
++		}
++
++		// log the error and retry
++		logc.Error(cli.Ctx(), err)
+ 	}
+ }
+ 
+-func (c *cluster) watchStream(cli EtcdClient, key string, rev int64) bool {
+-	var rch clientv3.WatchChan
+-	if rev != 0 {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix(),
+-			clientv3.WithRev(rev+1))
+-	} else {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix())
+-	}
++func (c *cluster) watchStream(cli EtcdClient, key watchKey, rev int64) error {
++	ctx, rch := c.setupWatch(cli, key, rev)
+ 
+ 	for {
+ 		select {
+ 		case wresp, ok := <-rch:
+ 			if !ok {
+-				logx.Error("etcd monitor chan has been closed")
+-				return false
++				return errClosed
+ 			}
+ 			if wresp.Canceled {
+-				logx.Errorf("etcd monitor chan has been canceled, error: %v", wresp.Err())
+-				return false
++				return fmt.Errorf("etcd monitor chan has been canceled, error: %w", wresp.Err())
+ 			}
+ 			if wresp.Err() != nil {
+-				logx.Error(fmt.Sprintf("etcd monitor chan error: %v", wresp.Err()))
+-				return false
++				return fmt.Errorf("etcd monitor chan error: %w", wresp.Err())
+ 			}
+ 
+-			c.handleWatchEvents(key, wresp.Events)
++			c.handleWatchEvents(ctx, key, wresp.Events)
++		case <-ctx.Done():
++			return nil
+ 		case <-c.done:
+-			return true
++			return nil
+ 		}
+ 	}
+ }
+ 
++func (c *cluster) setupWatch(cli EtcdClient, key watchKey, rev int64) (context.Context, clientv3.WatchChan) {
++	var (
++		rch  clientv3.WatchChan
++		ops  []clientv3.OpOption
++		wkey = key.key
++	)
++
++	if !key.exactMatch {
++		wkey = makeKeyPrefix(key.key)
++		ops = append(ops, clientv3.WithPrefix())
++	}
++	if rev != 0 {
++		ops = append(ops, clientv3.WithRev(rev+1))
++	}
++
++	ctx, cancel := context.WithCancel(cli.Ctx())
++	if watcher, ok := c.watchers[key]; ok {
++		watcher.cancel = cancel
++	} else {
++		val := newWatchValue()
++		val.cancel = cancel
++
++		c.lock.Lock()
++		c.watchers[key] = val
++		c.lock.Unlock()
++	}
++
++	rch = cli.Watch(clientv3.WithRequireLeader(ctx), wkey, ops...)
++
++	return ctx, rch
++}
++
+ func (c *cluster) watchConnState(cli EtcdClient) {
+ 	watcher := newStateWatcher()
+ 	watcher.addListener(func() {
+@@ -354,6 +476,28 @@ func DialClient(endpoints []string) (EtcdClient, error) {
+ 	return clientv3.New(cfg)
+ }
+ 
++func calculateChanges(oldVals, newVals map[string]string) (add, remove []KV) {
++	for k, v := range newVals {
++		if val, ok := oldVals[k]; !ok || v != val {
++			add = append(add, KV{
++				Key: k,
++				Val: v,
++			})
++		}
++	}
++
++	for k, v := range oldVals {
++		if val, ok := newVals[k]; !ok || v != val {
++			remove = append(remove, KV{
++				Key: k,
++				Val: v,
++			})
++		}
++	}
++
++	return add, remove
++}
++
+ func getClusterKey(endpoints []string) string {
+ 	sort.Strings(endpoints)
+ 	return strings.Join(endpoints, endpointsSeparator)
+@@ -362,3 +506,10 @@ func getClusterKey(endpoints []string) string {
+ func makeKeyPrefix(key string) string {
+ 	return fmt.Sprintf("%s%c", key, Delimiter)
+ }
++
++// NewClient returns a watchValue that make sure values are not nil.
++func newWatchValue() *watchValue {
++	return &watchValue{
++		values: make(map[string]string),
++	}
++}
+diff --git a/core/discov/internal/updatelistener.go b/core/discov/internal/updatelistener.go
+index 535ceda1d83c0000b712d0db0a64363b196b6655..5bc288af6bf86edf5f2ac131378434a650a91528 100644
+--- a/core/discov/internal/updatelistener.go
++++ b/core/discov/internal/updatelistener.go
+@@ -10,6 +10,7 @@ type (
+ 	}
+ 
+ 	// UpdateListener wraps the OnAdd and OnDelete methods.
++	// The implementation should be thread-safe and idempotent.
+ 	UpdateListener interface {
+ 		OnAdd(kv KV)
+ 		OnDelete(kv KV)
+diff --git a/core/discov/publisher.go b/core/discov/publisher.go
+index 6d84201298ea5c635e6dfba102af9423e9d6855e..549a81e7ee0bfb284881fbdad981728ab5d227a9 100644
+--- a/core/discov/publisher.go
++++ b/core/discov/publisher.go
+@@ -5,6 +5,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/core/discov/internal"
+ 	"github.com/zeromicro/go-zero/core/lang"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+@@ -91,12 +92,12 @@ func (p *Publisher) doKeepAlive() error {
+ 		default:
+ 			cli, err := p.doRegister()
+ 			if err != nil {
+-				logx.Errorf("etcd publisher doRegister: %s", err.Error())
++				logc.Errorf(cli.Ctx(), "etcd publisher doRegister: %v", err)
+ 				break
+ 			}
+ 
+ 			if err := p.keepAliveAsync(cli); err != nil {
+-				logx.Errorf("etcd publisher keepAliveAsync: %s", err.Error())
++				logc.Errorf(cli.Ctx(), "etcd publisher keepAliveAsync: %v", err)
+ 				break
+ 			}
+ 
+@@ -124,23 +125,48 @@ func (p *Publisher) keepAliveAsync(cli internal.EtcdClient) error {
+ 	}
+ 
+ 	threading.GoSafe(func() {
++		wch := cli.Watch(cli.Ctx(), p.fullKey, clientv3.WithFilterPut())
++
+ 		for {
+ 			select {
+ 			case _, ok := <-ch:
+ 				if !ok {
+ 					p.revoke(cli)
+ 					if err := p.doKeepAlive(); err != nil {
+-						logx.Errorf("etcd publisher KeepAlive: %s", err.Error())
++						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
+ 					}
+ 					return
+ 				}
++
++			case c := <-wch:
++				if c.Err() != nil {
++					logc.Errorf(cli.Ctx(), "etcd publisher watch: %v", c.Err())
++					if err := p.doKeepAlive(); err != nil {
++						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
++					}
++					return
++				}
++
++				for _, evt := range c.Events {
++					if evt.Type == clientv3.EventTypeDelete {
++						logc.Infof(cli.Ctx(), "etcd publisher watch: %s, event: %v",
++							evt.Kv.Key, evt.Type)
++						_, err := cli.Put(cli.Ctx(), p.fullKey, p.value, clientv3.WithLease(p.lease))
++						if err != nil {
++							logc.Errorf(cli.Ctx(), "etcd publisher re-put key: %v", err)
++						} else {
++							logc.Infof(cli.Ctx(), "etcd publisher re-put key: %s, value: %s",
++								p.fullKey, p.value)
++						}
++					}
++				}
+ 			case <-p.pauseChan:
+-				logx.Infof("paused etcd renew, key: %s, value: %s", p.key, p.value)
++				logc.Infof(cli.Ctx(), "paused etcd renew, key: %s, value: %s", p.key, p.value)
+ 				p.revoke(cli)
+ 				select {
+ 				case <-p.resumeChan:
+ 					if err := p.doKeepAlive(); err != nil {
+-						logx.Errorf("etcd publisher KeepAlive: %s", err.Error())
++						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
+ 					}
+ 					return
+ 				case <-p.quit.Done():
+@@ -175,7 +201,7 @@ func (p *Publisher) register(client internal.EtcdClient) (clientv3.LeaseID, erro
+ 
+ func (p *Publisher) revoke(cli internal.EtcdClient) {
+ 	if _, err := cli.Revoke(cli.Ctx(), p.lease); err != nil {
+-		logx.Errorf("etcd publisher revoke: %s", err.Error())
++		logc.Errorf(cli.Ctx(), "etcd publisher revoke: %v", err)
+ 	}
+ }
+ 
+diff --git a/core/discov/subscriber.go b/core/discov/subscriber.go
+index 809dee2a981da2ca29583344020668ceed10aad7..7cb7fd51169b15f3be267ef2f9750bd1e61aa07f 100644
+--- a/core/discov/subscriber.go
++++ b/core/discov/subscriber.go
+@@ -15,9 +15,11 @@ type (
+ 
+ 	// A Subscriber is used to subscribe the given key on an etcd cluster.
+ 	Subscriber struct {
+-		endpoints []string
+-		exclusive bool
+-		items     *container
++		endpoints  []string
++		exclusive  bool
++		key        string
++		exactMatch bool
++		items      *container
+ 	}
+ )
+ 
+@@ -28,13 +30,14 @@ type (
+ func NewSubscriber(endpoints []string, key string, opts ...SubOption) (*Subscriber, error) {
+ 	sub := &Subscriber{
+ 		endpoints: endpoints,
++		key:       key,
+ 	}
+ 	for _, opt := range opts {
+ 		opt(sub)
+ 	}
+ 	sub.items = newContainer(sub.exclusive)
+ 
+-	if err := internal.GetRegistry().Monitor(endpoints, key, sub.items); err != nil {
++	if err := internal.GetRegistry().Monitor(endpoints, key, sub.exactMatch, sub.items); err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -46,6 +49,11 @@ func (s *Subscriber) AddListener(listener func()) {
+ 	s.items.addListener(listener)
+ }
+ 
++// Close closes the subscriber.
++func (s *Subscriber) Close() {
++	internal.GetRegistry().Unmonitor(s.endpoints, s.key, s.exactMatch, s.items)
++}
++
+ // Values returns all the subscription values.
+ func (s *Subscriber) Values() []string {
+ 	return s.items.getValues()
+@@ -59,6 +67,13 @@ func Exclusive() SubOption {
+ 	}
+ }
+ 
++// WithExactMatch turn off querying using key prefixes.
++func WithExactMatch() SubOption {
++	return func(sub *Subscriber) {
++		sub.exactMatch = true
++	}
++}
++
+ // WithSubEtcdAccount provides the etcd username/password.
+ func WithSubEtcdAccount(user, pass string) SubOption {
+ 	return func(sub *Subscriber) {
+diff --git a/core/errorx/batcherror.go b/core/errorx/batcherror.go
+index 92ae644d41d10da34cd297796ac82e56d7eb5c43..60cba03f3b05c14ff9fcba54e759782e0dde6810 100644
+--- a/core/errorx/batcherror.go
++++ b/core/errorx/batcherror.go
+@@ -1,18 +1,21 @@
+ package errorx
+ 
+-import "bytes"
+-
+-type (
+-	// A BatchError is an error that can hold multiple errors.
+-	BatchError struct {
+-		errs errorArray
+-	}
+-
+-	errorArray []error
++import (
++	"errors"
++	"sync"
+ )
+ 
+-// Add adds errs to be, nil errors are ignored.
++// BatchError is an error that can hold multiple errors.
++type BatchError struct {
++	errs []error
++	lock sync.RWMutex
++}
++
++// Add adds one or more non-nil errors to the BatchError instance.
+ func (be *BatchError) Add(errs ...error) {
++	be.lock.Lock()
++	defer be.lock.Unlock()
++
+ 	for _, err := range errs {
+ 		if err != nil {
+ 			be.errs = append(be.errs, err)
+@@ -20,33 +23,20 @@ func (be *BatchError) Add(errs ...error) {
+ 	}
+ }
+ 
+-// Err returns an error that represents all errors.
++// Err returns an error that represents all accumulated errors.
++// It returns nil if there are no errors.
+ func (be *BatchError) Err() error {
+-	switch len(be.errs) {
+-	case 0:
+-		return nil
+-	case 1:
+-		return be.errs[0]
+-	default:
+-		return be.errs
+-	}
+-}
++	be.lock.RLock()
++	defer be.lock.RUnlock()
+ 
+-// NotNil checks if any error inside.
+-func (be *BatchError) NotNil() bool {
+-	return len(be.errs) > 0
++	// If there are no non-nil errors, errors.Join(...) returns nil.
++	return errors.Join(be.errs...)
+ }
+ 
+-// Error returns a string that represents inside errors.
+-func (ea errorArray) Error() string {
+-	var buf bytes.Buffer
+-
+-	for i := range ea {
+-		if i > 0 {
+-			buf.WriteByte('\n')
+-		}
+-		buf.WriteString(ea[i].Error())
+-	}
++// NotNil checks if there is at least one error inside the BatchError.
++func (be *BatchError) NotNil() bool {
++	be.lock.RLock()
++	defer be.lock.RUnlock()
+ 
+-	return buf.String()
++	return len(be.errs) > 0
+ }
+diff --git a/core/fx/parallel.go b/core/fx/parallel.go
+index d5b173583513a779162dfbc965db550f64fa6771..74403913b409945ab8a12921fe5ca5824c4cbe43 100644
+--- a/core/fx/parallel.go
++++ b/core/fx/parallel.go
+@@ -1,6 +1,9 @@
+ package fx
+ 
+-import "github.com/zeromicro/go-zero/core/threading"
++import (
++	"github.com/zeromicro/go-zero/core/errorx"
++	"github.com/zeromicro/go-zero/core/threading"
++)
+ 
+ // Parallel runs fns parallelly and waits for done.
+ func Parallel(fns ...func()) {
+@@ -10,3 +13,20 @@ func Parallel(fns ...func()) {
+ 	}
+ 	group.Wait()
+ }
++
++func ParallelErr(fns ...func() error) error {
++	var be errorx.BatchError
++
++	group := threading.NewRoutineGroup()
++	for _, fn := range fns {
++		f := fn
++		group.RunSafe(func() {
++			if err := f(); err != nil {
++				be.Add(err)
++			}
++		})
++	}
++	group.Wait()
++
++	return be.Err()
++}
+diff --git a/core/jsonx/json.go b/core/jsonx/json.go
+index 1b522e55a35b2d4facd47b536c3e056ad618e5f3..61b4a4193e525616e06af01318025868ea8a6ddf 100644
+--- a/core/jsonx/json.go
++++ b/core/jsonx/json.go
+@@ -8,9 +8,25 @@ import (
+ 	"strings"
+ )
+ 
+-// Marshal marshals v into json bytes.
++// Marshal marshals v into json bytes, without escaping HTML and removes the trailing newline.
+ func Marshal(v any) ([]byte, error) {
+-	return json.Marshal(v)
++	// why not use json.Marshal?  https://github.com/golang/go/issues/28453
++	// it changes the behavior of json.Marshal, like & -> \u0026, < -> \u003c, > -> \u003e
++	// which is not what we want in API responses
++	var buf bytes.Buffer
++	enc := json.NewEncoder(&buf)
++	enc.SetEscapeHTML(false)
++	if err := enc.Encode(v); err != nil {
++		return nil, err
++	}
++
++	bs := buf.Bytes()
++	// Remove trailing newline added by json.Encoder.Encode
++	if len(bs) > 0 && bs[len(bs)-1] == '\n' {
++		bs = bs[:len(bs)-1]
++	}
++
++	return bs, nil
+ }
+ 
+ // MarshalToString marshals v into a string.
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index 38fcd7903f6782e9d133e39b363e279e8218fb25..1461aab27822f17faeec0818861581455896f032 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -3,6 +3,7 @@ package mapping
+ import (
+ 	"fmt"
+ 	"reflect"
++	"slices"
+ 	"strings"
+ )
+ 
+@@ -157,18 +158,10 @@ func validateOptional(field reflect.StructField, value reflect.Value) error {
+ }
+ 
+ func validateOptions(value reflect.Value, opt *fieldOptions) error {
+-	var found bool
+ 	val := fmt.Sprint(value.Interface())
+-	for i := range opt.Options {
+-		if opt.Options[i] == val {
+-			found = true
+-			break
+-		}
+-	}
+-	if !found {
++	if !slices.Contains(opt.Options, val) {
+ 		return fmt.Errorf("field %q not in options", val)
+ 	}
+-
+ 	return nil
+ }
+ 
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 4b388172d65f0350117822972cbf060988e036e0..bfe229c30690d0accdb8235e0434f67a400face4 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -7,6 +7,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"reflect"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -15,7 +16,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/jsonx"
+ 	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/proc"
+-	"github.com/zeromicro/go-zero/core/stringx"
+ )
+ 
+ const (
+@@ -914,7 +914,7 @@ func (u *Unmarshaler) processNamedFieldWithValueFromString(fieldType reflect.Typ
+ 				valueKind.String())
+ 		}
+ 
+-		if !stringx.Contains(options, checkValue) {
++		if !slices.Contains(options, checkValue) {
+ 			return fmt.Errorf(`value "%s" for field %q is not defined in options "%v"`,
+ 				mapValue, key, options)
+ 		}
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index f47aad0edc79e24e13f8f3fda3ba52f9db15e574..282a93594393d15d45c03f566b14f8f15f49e044 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -6,6 +6,7 @@ import (
+ 	"fmt"
+ 	"math"
+ 	"reflect"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -638,11 +639,11 @@ func validateValueInOptions(val any, options []string) error {
+ 	if len(options) > 0 {
+ 		switch v := val.(type) {
+ 		case string:
+-			if !stringx.Contains(options, v) {
++			if !slices.Contains(options, v) {
+ 				return fmt.Errorf(`error: value %q is not defined in options "%v"`, v, options)
+ 			}
+ 		default:
+-			if !stringx.Contains(options, Repr(v)) {
++			if !slices.Contains(options, Repr(v)) {
+ 				return fmt.Errorf(`error: value "%v" is not defined in options "%v"`, val, options)
+ 			}
+ 		}
+diff --git a/core/mathx/int.go b/core/mathx/int.go
+index 4c1fe63e90b1cb393ef830872eacd5677402d47b..0156706e370fd897222f7bdc43d93a7971100f04 100644
+--- a/core/mathx/int.go
++++ b/core/mathx/int.go
+@@ -1,19 +1,13 @@
+ package mathx
+ 
+ // MaxInt returns the larger one of a and b.
++// Deprecated: use builtin max instead.
+ func MaxInt(a, b int) int {
+-	if a > b {
+-		return a
+-	}
+-
+-	return b
++	return max(a, b)
+ }
+ 
+ // MinInt returns the smaller one of a and b.
++// Deprecated: use builtin min instead.
+ func MinInt(a, b int) int {
+-	if a < b {
+-		return a
+-	}
+-
+-	return b
++	return min(a, b)
+ }
+diff --git a/core/mr/mapreduce.go b/core/mr/mapreduce.go
+index edb328084ff23aea18925ed5e5646029e63a50b9..274f3c9b962f9a816db0fddd73e0547ebe169aa5 100644
+--- a/core/mr/mapreduce.go
++++ b/core/mr/mapreduce.go
+@@ -3,6 +3,9 @@ package mr
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
++	"runtime/debug"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 
+@@ -142,89 +145,6 @@ func MapReduceChan[T, U, V any](source <-chan T, mapper MapperFunc[T, U], reduce
+ 	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
+ }
+ 
+-// mapReduceWithPanicChan maps all elements from source, and reduce the output elements with given reducer.
+-func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, mapper MapperFunc[T, U],
+-	reducer ReducerFunc[U, V], opts ...Option) (val V, err error) {
+-	options := buildOptions(opts...)
+-	// output is used to write the final result
+-	output := make(chan V)
+-	defer func() {
+-		// reducer can only write once, if more, panic
+-		for range output {
+-			panic("more than one element written in reducer")
+-		}
+-	}()
+-
+-	// collector is used to collect data from mapper, and consume in reducer
+-	collector := make(chan U, options.workers)
+-	// if done is closed, all mappers and reducer should stop processing
+-	done := make(chan struct{})
+-	writer := newGuardedWriter(options.ctx, output, done)
+-	var closeOnce sync.Once
+-	// use atomic type to avoid data race
+-	var retErr errorx.AtomicError
+-	finish := func() {
+-		closeOnce.Do(func() {
+-			close(done)
+-			close(output)
+-		})
+-	}
+-	cancel := once(func(err error) {
+-		if err != nil {
+-			retErr.Set(err)
+-		} else {
+-			retErr.Set(ErrCancelWithNil)
+-		}
+-
+-		drain(source)
+-		finish()
+-	})
+-
+-	go func() {
+-		defer func() {
+-			drain(collector)
+-			if r := recover(); r != nil {
+-				panicChan.write(r)
+-			}
+-			finish()
+-		}()
+-
+-		reducer(collector, writer, cancel)
+-	}()
+-
+-	go executeMappers(mapperContext[T, U]{
+-		ctx: options.ctx,
+-		mapper: func(item T, w Writer[U]) {
+-			mapper(item, w, cancel)
+-		},
+-		source:    source,
+-		panicChan: panicChan,
+-		collector: collector,
+-		doneChan:  done,
+-		workers:   options.workers,
+-	})
+-
+-	select {
+-	case <-options.ctx.Done():
+-		cancel(context.DeadlineExceeded)
+-		err = context.DeadlineExceeded
+-	case v := <-panicChan.channel:
+-		// drain output here, otherwise for loop panic in defer
+-		drain(output)
+-		panic(v)
+-	case v, ok := <-output:
+-		if e := retErr.Load(); e != nil {
+-			err = e
+-		} else if ok {
+-			val = v
+-		} else {
+-			err = ErrReduceNoOutput
+-		}
+-	}
+-
+-	return
+-}
+-
+ // MapReduceVoid maps all elements generated from given generate,
+ // and reduce the output elements with given reducer.
+ func MapReduceVoid[T, U any](generate GenerateFunc[T], mapper MapperFunc[T, U],
+@@ -266,12 +186,16 @@ func buildOptions(opts ...Option) *mapReduceOptions {
+ 	return options
+ }
+ 
++func buildPanicInfo(r any, stack []byte) string {
++	return fmt.Sprintf("%+v\n\n%s", r, strings.TrimSpace(string(stack)))
++}
++
+ func buildSource[T any](generate GenerateFunc[T], panicChan *onceChan) chan T {
+ 	source := make(chan T)
+ 	go func() {
+ 		defer func() {
+ 			if r := recover(); r != nil {
+-				panicChan.write(r)
++				panicChan.write(buildPanicInfo(r, debug.Stack()))
+ 			}
+ 			close(source)
+ 		}()
+@@ -318,7 +242,7 @@ func executeMappers[T, U any](mCtx mapperContext[T, U]) {
+ 				defer func() {
+ 					if r := recover(); r != nil {
+ 						atomic.AddInt32(&failed, 1)
+-						mCtx.panicChan.write(r)
++						mCtx.panicChan.write(buildPanicInfo(r, debug.Stack()))
+ 					}
+ 					wg.Done()
+ 					<-pool
+@@ -330,6 +254,89 @@ func executeMappers[T, U any](mCtx mapperContext[T, U]) {
+ 	}
+ }
+ 
++// mapReduceWithPanicChan maps all elements from source, and reduce the output elements with given reducer.
++func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, mapper MapperFunc[T, U],
++	reducer ReducerFunc[U, V], opts ...Option) (val V, err error) {
++	options := buildOptions(opts...)
++	// output is used to write the final result
++	output := make(chan V)
++	defer func() {
++		// reducer can only write once, if more, panic
++		for range output {
++			panic("more than one element written in reducer")
++		}
++	}()
++
++	// collector is used to collect data from mapper, and consume in reducer
++	collector := make(chan U, options.workers)
++	// if done is closed, all mappers and reducer should stop processing
++	done := make(chan struct{})
++	writer := newGuardedWriter(options.ctx, output, done)
++	var closeOnce sync.Once
++	// use atomic type to avoid data race
++	var retErr errorx.AtomicError
++	finish := func() {
++		closeOnce.Do(func() {
++			close(done)
++			close(output)
++		})
++	}
++	cancel := once(func(err error) {
++		if err != nil {
++			retErr.Set(err)
++		} else {
++			retErr.Set(ErrCancelWithNil)
++		}
++
++		drain(source)
++		finish()
++	})
++
++	go func() {
++		defer func() {
++			drain(collector)
++			if r := recover(); r != nil {
++				panicChan.write(buildPanicInfo(r, debug.Stack()))
++			}
++			finish()
++		}()
++
++		reducer(collector, writer, cancel)
++	}()
++
++	go executeMappers(mapperContext[T, U]{
++		ctx: options.ctx,
++		mapper: func(item T, w Writer[U]) {
++			mapper(item, w, cancel)
++		},
++		source:    source,
++		panicChan: panicChan,
++		collector: collector,
++		doneChan:  done,
++		workers:   options.workers,
++	})
++
++	select {
++	case <-options.ctx.Done():
++		cancel(context.DeadlineExceeded)
++		err = context.DeadlineExceeded
++	case v := <-panicChan.channel:
++		// drain output here, otherwise for loop panic in defer
++		drain(output)
++		panic(v)
++	case v, ok := <-output:
++		if e := retErr.Load(); e != nil {
++			err = e
++		} else if ok {
++			val = v
++		} else {
++			err = ErrReduceNoOutput
++		}
++	}
++
++	return
++}
++
+ func newOptions() *mapReduceOptions {
+ 	return &mapReduceOptions{
+ 		ctx:     context.Background(),
+diff --git a/core/proc/shutdown.go b/core/proc/shutdown.go
+index 763742a298df3a7f7050fe814bc16eaad24b2072..3241f576b6ba62756e5a6aaad9068c4a24e510b6 100644
+--- a/core/proc/shutdown.go
++++ b/core/proc/shutdown.go
+@@ -14,17 +14,25 @@ import (
+ )
+ 
+ const (
+-	wrapUpTime = time.Second
++	defaultWrapUpTime = time.Second
+ 	// why we use 5500 milliseconds is because most of our queue are blocking mode with 5 seconds
+-	waitTime = 5500 * time.Millisecond
++	defaultWaitTime = 5500 * time.Millisecond
+ )
+ 
+ var (
+-	wrapUpListeners          = new(listenerManager)
+-	shutdownListeners        = new(listenerManager)
+-	delayTimeBeforeForceQuit = waitTime
++	wrapUpListeners   = new(listenerManager)
++	shutdownListeners = new(listenerManager)
++	wrapUpTime        = defaultWrapUpTime
++	waitTime          = defaultWaitTime
++	shutdownLock      sync.Mutex
+ )
+ 
++// ShutdownConf defines the shutdown configuration for the process.
++type ShutdownConf struct {
++	WrapUpTime time.Duration `json:",default=1s"`
++	WaitTime   time.Duration `json:",default=5.5s"`
++}
++
+ // AddShutdownListener adds fn as a shutdown listener.
+ // The returned func can be used to wait for fn getting called.
+ func AddShutdownListener(fn func()) (waitForCalled func()) {
+@@ -39,7 +47,21 @@ func AddWrapUpListener(fn func()) (waitForCalled func()) {
+ 
+ // SetTimeToForceQuit sets the waiting time before force quitting.
+ func SetTimeToForceQuit(duration time.Duration) {
+-	delayTimeBeforeForceQuit = duration
++	shutdownLock.Lock()
++	defer shutdownLock.Unlock()
++	waitTime = duration
++}
++
++func Setup(conf ShutdownConf) {
++	shutdownLock.Lock()
++	defer shutdownLock.Unlock()
++
++	if conf.WrapUpTime > 0 {
++		wrapUpTime = conf.WrapUpTime
++	}
++	if conf.WaitTime > 0 {
++		waitTime = conf.WaitTime
++	}
+ }
+ 
+ // Shutdown calls the registered shutdown listeners, only for test purpose.
+@@ -61,8 +83,12 @@ func gracefulStop(signals chan os.Signal, sig syscall.Signal) {
+ 	time.Sleep(wrapUpTime)
+ 	go shutdownListeners.notifyListeners()
+ 
+-	time.Sleep(delayTimeBeforeForceQuit - wrapUpTime)
+-	logx.Infof("Still alive after %v, going to force kill the process...", delayTimeBeforeForceQuit)
++	shutdownLock.Lock()
++	remainingTime := waitTime - wrapUpTime
++	shutdownLock.Unlock()
++
++	time.Sleep(remainingTime)
++	logx.Infof("Still alive after %v, going to force kill the process...", waitTime)
+ 	_ = syscall.Kill(syscall.Getpid(), sig)
+ }
+ 
+diff --git a/core/proc/signals.go b/core/proc/signals.go
+index f4a57b0887498b6c59f5aacf80059e76302d78c0..bbc41ce5fa79c22f7c83a331bccd307ce0cb4a8f 100644
+--- a/core/proc/signals.go
++++ b/core/proc/signals.go
+@@ -6,18 +6,20 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"syscall"
++	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/logx"
+ )
+ 
+-const timeFormat = "0102150405"
++const (
++	profileDuration = time.Minute
++	timeFormat      = "0102150405"
++)
+ 
+ var done = make(chan struct{})
+ 
+ func init() {
+ 	go func() {
+-		var profiler Stopper
+-
+ 		// https://golang.org/pkg/os/signal/#Notify
+ 		signals := make(chan os.Signal, 1)
+ 		signal.Notify(signals, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM, syscall.SIGINT)
+@@ -28,12 +30,11 @@ func init() {
+ 			case syscall.SIGUSR1:
+ 				dumpGoroutines(fileCreator{})
+ 			case syscall.SIGUSR2:
+-				if profiler == nil {
+-					profiler = StartProfile()
+-				} else {
++				profiler := StartProfile()
++				go func() {
++					<-time.After(profileDuration)
+ 					profiler.Stop()
+-					profiler = nil
+-				}
++				}()
+ 			case syscall.SIGTERM:
+ 				stopOnSignal()
+ 				gracefulStop(signals, syscall.SIGTERM)
+diff --git a/core/prof/profilecenter.go b/core/prof/profilecenter.go
+index 8b03fd211b2a9659e864c8190ec1e850b8dcf7d0..14405ab46b011a5ff4e613fb0285cf691ba2ee65 100644
+--- a/core/prof/profilecenter.go
++++ b/core/prof/profilecenter.go
+@@ -1,13 +1,12 @@
+ package prof
+ 
+ import (
+-	"bytes"
+-	"strconv"
++	"fmt"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+ 
+-	"github.com/olekukonko/tablewriter"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ )
+@@ -28,46 +27,15 @@ type (
+ 
+ const flushInterval = 5 * time.Minute
+ 
+-var (
+-	pc = &profileCenter{
+-		slots: make(map[string]*profileSlot),
+-	}
+-	once sync.Once
+-)
+-
+-func report(name string, duration time.Duration) {
+-	updated := func() bool {
+-		pc.lock.RLock()
+-		defer pc.lock.RUnlock()
+-
+-		slot, ok := pc.slots[name]
+-		if ok {
+-			atomic.AddInt64(&slot.lifecount, 1)
+-			atomic.AddInt64(&slot.lastcount, 1)
+-			atomic.AddInt64(&slot.lifecycle, int64(duration))
+-			atomic.AddInt64(&slot.lastcycle, int64(duration))
+-		}
+-		return ok
+-	}()
+-
+-	if !updated {
+-		func() {
+-			pc.lock.Lock()
+-			defer pc.lock.Unlock()
+-
+-			pc.slots[name] = &profileSlot{
+-				lifecount: 1,
+-				lastcount: 1,
+-				lifecycle: int64(duration),
+-				lastcycle: int64(duration),
+-			}
+-		}()
+-	}
++var pc = &profileCenter{
++	slots: make(map[string]*profileSlot),
++}
+ 
+-	once.Do(flushRepeatly)
++func init() {
++	flushRepeatedly()
+ }
+ 
+-func flushRepeatly() {
++func flushRepeatedly() {
+ 	threading.GoSafe(func() {
+ 		for {
+ 			time.Sleep(flushInterval)
+@@ -76,42 +44,64 @@ func flushRepeatly() {
+ 	})
+ }
+ 
++func report(name string, duration time.Duration) {
++	slot := loadOrStoreSlot(name, duration)
++
++	atomic.AddInt64(&slot.lifecount, 1)
++	atomic.AddInt64(&slot.lastcount, 1)
++	atomic.AddInt64(&slot.lifecycle, int64(duration))
++	atomic.AddInt64(&slot.lastcycle, int64(duration))
++}
++
++func loadOrStoreSlot(name string, duration time.Duration) *profileSlot {
++	pc.lock.RLock()
++	slot, ok := pc.slots[name]
++	pc.lock.RUnlock()
++
++	if ok {
++		return slot
++	}
++
++	pc.lock.Lock()
++	defer pc.lock.Unlock()
++
++	// double-check
++	if slot, ok = pc.slots[name]; ok {
++		return slot
++	}
++
++	slot = &profileSlot{}
++	pc.slots[name] = slot
++	return slot
++}
++
+ func generateReport() string {
+-	var buffer bytes.Buffer
+-	buffer.WriteString("Profiling report\n")
+-	var data [][]string
++	var builder strings.Builder
++	builder.WriteString("Profiling report\n")
++	builder.WriteString("QUEUE,LIFECOUNT,LIFECYCLE,LASTCOUNT,LASTCYCLE\n")
++
+ 	calcFn := func(total, count int64) string {
+ 		if count == 0 {
+ 			return "-"
+ 		}
+-
+ 		return (time.Duration(total) / time.Duration(count)).String()
+ 	}
+ 
+-	func() {
+-		pc.lock.Lock()
+-		defer pc.lock.Unlock()
+-
+-		for key, slot := range pc.slots {
+-			data = append(data, []string{
+-				key,
+-				strconv.FormatInt(slot.lifecount, 10),
+-				calcFn(slot.lifecycle, slot.lifecount),
+-				strconv.FormatInt(slot.lastcount, 10),
+-				calcFn(slot.lastcycle, slot.lastcount),
+-			})
+-
+-			// reset the data for last cycle
+-			slot.lastcount = 0
+-			slot.lastcycle = 0
+-		}
+-	}()
+-
+-	table := tablewriter.NewWriter(&buffer)
+-	table.SetHeader([]string{"QUEUE", "LIFECOUNT", "LIFECYCLE", "LASTCOUNT", "LASTCYCLE"})
+-	table.SetBorder(false)
+-	table.AppendBulk(data)
+-	table.Render()
++	pc.lock.Lock()
++	for key, slot := range pc.slots {
++		builder.WriteString(fmt.Sprintf("%s,%d,%s,%d,%s\n",
++			key,
++			slot.lifecount,
++			calcFn(slot.lifecycle, slot.lifecount),
++			slot.lastcount,
++			calcFn(slot.lastcycle, slot.lastcount),
++		))
++
++		// reset last cycle stats
++		atomic.StoreInt64(&slot.lastcount, 0)
++		atomic.StoreInt64(&slot.lastcycle, 0)
++	}
++	pc.lock.Unlock()
+ 
+-	return buffer.String()
++	return builder.String()
+ }
+diff --git a/core/prof/runtime.go b/core/prof/runtime.go
+index af41d0517f683b5b905236cc31a9a2c90cbced39..10554e56d41c6599947c032a389d53c21d8b4c56 100644
+--- a/core/prof/runtime.go
++++ b/core/prof/runtime.go
+@@ -5,6 +5,8 @@ import (
+ 	"io"
+ 	"os"
+ 	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"time"
+ )
+ 
+@@ -28,10 +30,29 @@ func displayStatsWithWriter(writer io.Writer, interval ...time.Duration) {
+ 		ticker := time.NewTicker(duration)
+ 		defer ticker.Stop()
+ 		for range ticker.C {
+-			var m runtime.MemStats
+-			runtime.ReadMemStats(&m)
++			var (
++				alloc, totalAlloc, sys uint64
++				samples                = []metrics.Sample{
++					{Name: "/memory/classes/heap/objects:bytes"},
++					{Name: "/gc/heap/allocs:bytes"},
++					{Name: "/memory/classes/total:bytes"},
++				}
++			)
++			metrics.Read(samples)
++
++			if samples[0].Value.Kind() == metrics.KindUint64 {
++				alloc = samples[0].Value.Uint64()
++			}
++			if samples[1].Value.Kind() == metrics.KindUint64 {
++				totalAlloc = samples[1].Value.Uint64()
++			}
++			if samples[2].Value.Kind() == metrics.KindUint64 {
++				sys = samples[2].Value.Uint64()
++			}
++			var stats debug.GCStats
++			debug.ReadGCStats(&stats)
+ 			fmt.Fprintf(writer, "Goroutines: %d, Alloc: %vm, TotalAlloc: %vm, Sys: %vm, NumGC: %v\n",
+-				runtime.NumGoroutine(), m.Alloc/mega, m.TotalAlloc/mega, m.Sys/mega, m.NumGC)
++				runtime.NumGoroutine(), alloc/mega, totalAlloc/mega, sys/mega, stats.NumGC)
+ 		}
+ 	}()
+ }
+diff --git a/core/service/serviceconf.go b/core/service/serviceconf.go
+index a4999ab8b075f5b16e7f5103e60feb715fb17720..8ad3a960eac50fd9b8d2cf1d193415f39268eb87 100644
+--- a/core/service/serviceconf.go
++++ b/core/service/serviceconf.go
+@@ -8,6 +8,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/trace"
+ 	"github.com/zeromicro/go-zero/internal/devserver"
++	"github.com/zeromicro/go-zero/internal/profiling"
+ )
+ 
+ const (
+@@ -37,6 +38,9 @@ type (
+ 		Prometheus prometheus.Config `json:",optional"`
+ 		Telemetry  trace.Config      `json:",optional"`
+ 		DevServer  DevServerConfig   `json:",optional"`
++		Shutdown   proc.ShutdownConf `json:",optional"`
++		// Profiling is the configuration for continuous profiling.
++		Profiling profiling.Config `json:",optional"`
+ 	}
+ )
+ 
+@@ -61,6 +65,7 @@ func (sc ServiceConf) SetUp() error {
+ 		sc.Telemetry.Name = sc.Name
+ 	}
+ 	trace.StartAgent(sc.Telemetry)
++	proc.Setup(sc.Shutdown)
+ 	proc.AddShutdownListener(func() {
+ 		trace.StopAgent()
+ 	})
+@@ -68,7 +73,9 @@ func (sc ServiceConf) SetUp() error {
+ 	if len(sc.MetricsUrl) > 0 {
+ 		stat.SetReportWriter(stat.NewRemoteWriter(sc.MetricsUrl))
+ 	}
++
+ 	devserver.StartAgent(sc.DevServer)
++	profiling.Start(sc.Profiling)
+ 
+ 	return nil
+ }
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 27ec45ad0fa29cbd3edf1d7b01674f0ca7094564..49434c83adf08716aaba2508e7a3e30e00c7b62a 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -1,10 +1,10 @@
+ package service
+ 
+ import (
+-	"log"
++	"sync"
+ 
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+-	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ )
+ 
+@@ -36,7 +36,7 @@ type (
+ // NewServiceGroup returns a ServiceGroup.
+ func NewServiceGroup() *ServiceGroup {
+ 	sg := new(ServiceGroup)
+-	sg.stopOnce = syncx.Once(sg.doStop)
++	sg.stopOnce = sync.OnceFunc(sg.doStop)
+ 	return sg
+ }
+ 
+@@ -51,7 +51,7 @@ func (sg *ServiceGroup) Add(service Service) {
+ // Also, quitting this method will close the logx output.
+ func (sg *ServiceGroup) Start() {
+ 	proc.AddShutdownListener(func() {
+-		log.Println("Shutting down...")
++		logx.Info("Shutting down service in group")
+ 		sg.stopOnce()
+ 	})
+ 
+diff --git a/core/stat/usage.go b/core/stat/usage.go
+index 40936604841f4b8447cb2dfcba4857bd2bb25a43..9bdecab76a35b63d430d48e2c4e42d98679b5f95 100644
+--- a/core/stat/usage.go
++++ b/core/stat/usage.go
+@@ -1,7 +1,8 @@
+ package stat
+ 
+ import (
+-	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -56,8 +57,28 @@ func bToMb(b uint64) float32 {
+ }
+ 
+ func printUsage() {
+-	var m runtime.MemStats
+-	runtime.ReadMemStats(&m)
++	var (
++		alloc, totalAlloc, sys uint64
++		samples                = []metrics.Sample{
++			{Name: "/memory/classes/heap/objects:bytes"},
++			{Name: "/gc/heap/allocs:bytes"},
++			{Name: "/memory/classes/total:bytes"},
++		}
++		stats debug.GCStats
++	)
++	metrics.Read(samples)
++
++	if samples[0].Value.Kind() == metrics.KindUint64 {
++		alloc = samples[0].Value.Uint64()
++	}
++	if samples[1].Value.Kind() == metrics.KindUint64 {
++		totalAlloc = samples[1].Value.Uint64()
++	}
++	if samples[2].Value.Kind() == metrics.KindUint64 {
++		sys = samples[2].Value.Uint64()
++	}
++	debug.ReadGCStats(&stats)
++
+ 	logx.Statf("CPU: %dm, MEMORY: Alloc=%.1fMi, TotalAlloc=%.1fMi, Sys=%.1fMi, NumGC=%d",
+-		CpuUsage(), bToMb(m.Alloc), bToMb(m.TotalAlloc), bToMb(m.Sys), m.NumGC)
++		CpuUsage(), bToMb(alloc), bToMb(totalAlloc), bToMb(sys), stats.NumGC)
+ }
+diff --git a/core/stringx/strings.go b/core/stringx/strings.go
+index 155c8b3ea136f8049ca1d2771233ea324b9d47ec..4d09e1b734fe9f415cb2b086601ccea09e29932a 100644
+--- a/core/stringx/strings.go
++++ b/core/stringx/strings.go
+@@ -2,6 +2,7 @@ package stringx
+ 
+ import (
+ 	"errors"
++	"slices"
+ 	"unicode"
+ 
+ 	"github.com/zeromicro/go-zero/core/lang"
+@@ -14,17 +15,6 @@ var (
+ 	ErrInvalidStopPosition = errors.New("stop position is invalid")
+ )
+ 
+-// Contains checks if str is in list.
+-func Contains(list []string, str string) bool {
+-	for _, each := range list {
+-		if each == str {
+-			return true
+-		}
+-	}
+-
+-	return false
+-}
+-
+ // Filter filters chars from s with given filter function.
+ func Filter(s string, filter func(r rune) bool) string {
+ 	var n int
+@@ -123,11 +113,7 @@ func Remove(strings []string, strs ...string) []string {
+ // Reverse reverses s.
+ func Reverse(s string) string {
+ 	runes := []rune(s)
+-
+-	for from, to := 0, len(runes)-1; from < to; from, to = from+1, to-1 {
+-		runes[from], runes[to] = runes[to], runes[from]
+-	}
+-
++	slices.Reverse(runes)
+ 	return string(runes)
+ }
+ 
+diff --git a/core/syncx/immutableresource.go b/core/syncx/immutableresource.go
+index dd9e4733aa00e5c662236b2eb0fc4d7ce1a72bd8..8b79a6ce5cbc96bfb499e72cdf5c1309c0f68609 100644
+--- a/core/syncx/immutableresource.go
++++ b/core/syncx/immutableresource.go
+@@ -47,30 +47,32 @@ func (ir *ImmutableResource) Get() (any, error) {
+ 		return resource, nil
+ 	}
+ 
+-	ir.maybeRefresh(func() {
+-		res, err := ir.fetch()
+-		ir.lock.Lock()
+-		if err != nil {
+-			ir.err = err
+-		} else {
+-			ir.resource, ir.err = res, nil
+-		}
+-		ir.lock.Unlock()
+-	})
++	ir.lock.Lock()
++	defer ir.lock.Unlock()
+ 
+-	ir.lock.RLock()
+-	resource, err := ir.resource, ir.err
+-	ir.lock.RUnlock()
+-	return resource, err
++	// double check
++	if ir.resource != nil {
++		return ir.resource, nil
++	}
++	if ir.err != nil && !ir.shouldRefresh() {
++		return ir.resource, ir.err
++	}
++
++	res, err := ir.fetch()
++	ir.lastTime.Set(timex.Now())
++	if err != nil {
++		ir.err = err
++		return nil, err
++	}
++
++	ir.resource, ir.err = res, nil
++	return res, nil
+ }
+ 
+-func (ir *ImmutableResource) maybeRefresh(execute func()) {
++func (ir *ImmutableResource) shouldRefresh() bool {
+ 	now := timex.Now()
+ 	lastTime := ir.lastTime.Load()
+-	if lastTime == 0 || lastTime+ir.refreshInterval < now {
+-		ir.lastTime.Set(now)
+-		execute()
+-	}
++	return lastTime == 0 || lastTime+ir.refreshInterval < now
+ }
+ 
+ // WithRefreshIntervalOnFailure sets refresh interval on failure.
+diff --git a/core/syncx/once.go b/core/syncx/once.go
+deleted file mode 100644
+index 8915eca5838f5e8461fadc725e5da33d892062f8..0000000000000000000000000000000000000000
+--- a/core/syncx/once.go
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package syncx
+-
+-import "sync"
+-
+-// Once returns a func that guarantees fn can only called once.
+-func Once(fn func()) func() {
+-	once := new(sync.Once)
+-	return func() {
+-		once.Do(fn)
+-	}
+-}
+diff --git a/core/utils/version.go b/core/utils/version.go
+index 2368fa910c54d994436b326b39c02380122d3414..b278451847146294c1bb0fbd10d8f880ef87115c 100644
+--- a/core/utils/version.go
++++ b/core/utils/version.go
+@@ -1,10 +1,10 @@
+ package utils
+ 
+ import (
++	"cmp"
+ 	"strconv"
+ 	"strings"
+ 
+-	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+ )
+ 
+@@ -39,7 +39,7 @@ func compare(v1, v2 string) int {
+ 	fields1, fields2 := strings.Split(v1, "."), strings.Split(v2, ".")
+ 	ver1, ver2 := strsToInts(fields1), strsToInts(fields2)
+ 	ver1len, ver2len := len(ver1), len(ver2)
+-	shorter := mathx.MinInt(ver1len, ver2len)
++	shorter := min(ver1len, ver2len)
+ 
+ 	for i := 0; i < shorter; i++ {
+ 		if ver1[i] == ver2[i] {
+@@ -50,14 +50,7 @@ func compare(v1, v2 string) int {
+ 			return 1
+ 		}
+ 	}
+-
+-	if ver1len < ver2len {
+-		return -1
+-	} else if ver1len == ver2len {
+-		return 0
+-	} else {
+-		return 1
+-	}
++	return cmp.Compare(ver1len, ver2len)
+ }
+ 
+ func strsToInts(strs []string) []int64 {
+diff --git a/go.mod b/go.mod
+index a0baf5de323e0c4e319da3d215825a41eb8099f4..431ded21dae960d1c67914c0e1de96fbacb8c4a8 100644
+--- a/go.mod
++++ b/go.mod
+@@ -16,12 +16,12 @@ require (
+ 	github.com/jhump/protoreflect v1.17.0
+ 	github.com/pelletier/go-toml/v2 v2.2.2
+ 	github.com/prometheus/client_golang v1.21.1
+-	github.com/redis/go-redis/v9 v9.15.0
++	github.com/redis/go-redis/v9 v9.16.0
+ 	github.com/spaolacci/murmur3 v1.1.0
+ 	github.com/stretchr/testify v1.11.1
+ 	go.etcd.io/etcd/api/v3 v3.5.15
+ 	go.etcd.io/etcd/client/v3 v3.5.15
+-	go.mongodb.org/mongo-driver/v2 v2.3.0
++	go.mongodb.org/mongo-driver/v2 v2.4.0
+ 	go.opentelemetry.io/otel v1.24.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.24.0
+diff --git a/go.sum b/go.sum
+index 3f832652d59209ba845713010491ba171d0ada36..fe55e1bba741dc13b03ec718c9f79d8053d2017f 100644
+--- a/go.sum
++++ b/go.sum
+@@ -154,8 +154,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.15.0 h1:2jdes0xJxer4h3NUZrZ4OGSntGlXp4WbXju2nOTRXto=
+-github.com/redis/go-redis/v9 v9.15.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.16.0 h1:OotgqgLSRCmzfqChbQyG1PHC3tLNR89DG4jdOERSEP4=
++github.com/redis/go-redis/v9 v9.16.0/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
+ github.com/rivo/uniseg v0.2.0 h1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=
+ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
+ github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
+@@ -197,8 +197,8 @@ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15/go.mod h1:mXDI4NAOwEiszrHCb0aqfAYNCrZP4e9hRca3d1YK8EU=
+ go.etcd.io/etcd/client/v3 v3.5.15 h1:23M0eY4Fd/inNv1ZfU3AxrbbOdW79r9V9Rl62Nm6ip4=
+ go.etcd.io/etcd/client/v3 v3.5.15/go.mod h1:CLSJxrYjvLtHsrPKsy7LmZEE+DK2ktfd2bN4RhBMwlU=
+-go.mongodb.org/mongo-driver/v2 v2.3.0 h1:sh55yOXA2vUjW1QYw/2tRlHSQViwDyPnW61AwpZ4rtU=
+-go.mongodb.org/mongo-driver/v2 v2.3.0/go.mod h1:jHeEDJHJq7tm6ZF45Issun9dbogjfnPySb1vXA7EeAI=
++go.mongodb.org/mongo-driver/v2 v2.4.0 h1:Oq6BmUAAFTzMeh6AonuDlgZMuAuEiUxoAD1koK5MuFo=
++go.mongodb.org/mongo-driver/v2 v2.4.0/go.mod h1:jHeEDJHJq7tm6ZF45Issun9dbogjfnPySb1vXA7EeAI=
+ go.opentelemetry.io/otel v1.24.0 h1:0LAOdjNmQeSTzGBzduGe/rU4tZhMwL5rWgtp9Ku5Jfo=
+ go.opentelemetry.io/otel v1.24.0/go.mod h1:W7b9Ozg4nkF5tWI5zsXkaKKDjdVjpD4oAt9Qi/MArHo=
+ go.opentelemetry.io/otel/exporters/jaeger v1.17.0 h1:D7UpUy2Xc2wsi1Ras6V40q806WM07rqoCWzXu7Sqy+4=
+diff --git a/internal/devserver/config.go b/internal/devserver/config.go
+index aa11b2fd6d0258a8e6be143d3e5ff585349e0e9a..1f94e4755691d1c7c0f391969928561e5c694b3f 100644
+--- a/internal/devserver/config.go
++++ b/internal/devserver/config.go
+@@ -9,5 +9,5 @@ type Config struct {
+ 	HealthPath     string `json:",default=/healthz"`
+ 	EnableMetrics  bool   `json:",default=true"`
+ 	EnablePprof    bool   `json:",default=true"`
+-	HealthRespInfo string `json:",default=OK"`
++	HealthResponse string `json:",default=OK"`
+ }
+diff --git a/internal/devserver/server.go b/internal/devserver/server.go
+index 57293adc88e9a59aa2dbb55720bee41682168419..069612b1f358c0ad28894d8ca4401f5897323b4d 100644
+--- a/internal/devserver/server.go
++++ b/internal/devserver/server.go
+@@ -16,8 +16,8 @@ import (
+ 
+ var once sync.Once
+ 
+-// Server is inner http server, expose some useful observability information of app.
+-// For example health check, metrics and pprof.
++// Server is an inner http server, expose some useful observability information of app.
++// For example, health check, metrics and pprof.
+ type Server struct {
+ 	config Config
+ 	server *http.ServeMux
+@@ -37,8 +37,9 @@ func (s *Server) addRoutes(c Config) {
+ 	s.handleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+ 		_ = json.NewEncoder(w).Encode(s.routes)
+ 	})
++
+ 	// health
+-	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthRespInfo))
++	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthResponse))
+ 
+ 	// metrics
+ 	if s.config.EnableMetrics {
+@@ -46,6 +47,7 @@ func (s *Server) addRoutes(c Config) {
+ 		prometheus.Enable()
+ 		s.handleFunc(s.config.MetricsPath, promhttp.Handler().ServeHTTP)
+ 	}
++
+ 	// pprof
+ 	if s.config.EnablePprof {
+ 		s.handleFunc("/debug/pprof/", pprof.Index)
+@@ -75,10 +77,11 @@ func (s *Server) StartAsync(c Config) {
+ 
+ // StartAgent start inner http server by config.
+ func StartAgent(c Config) {
++	if !c.Enabled {
++		return
++	}
+ 	once.Do(func() {
+-		if c.Enabled {
+-			s := NewServer(c)
+-			s.StartAsync(c)
+-		}
++		s := NewServer(c)
++		s.StartAsync(c)
+ 	})
+ }
+diff --git a/internal/health/health.go b/internal/health/health.go
+index 4711ee5067d6812b970d38e4deafb010346b52e6..afa299d6358486b44992fbcc8ff90c631b49c04a 100644
+--- a/internal/health/health.go
++++ b/internal/health/health.go
+@@ -13,7 +13,7 @@ import (
+ var defaultHealthManager = newComboHealthManager()
+ 
+ type (
+-	// Probe represents readiness status of given component.
++	// Probe represents readiness status of a given component.
+ 	Probe interface {
+ 		// MarkReady sets a ready state for the endpoint handlers.
+ 		MarkReady()
+@@ -44,10 +44,10 @@ func AddProbe(probe Probe) {
+ }
+ 
+ // CreateHttpHandler create health http handler base on given probe.
+-func CreateHttpHandler(healthRespInfo string) http.HandlerFunc {
++func CreateHttpHandler(healthResponse string) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, _ *http.Request) {
+ 		if defaultHealthManager.IsReady() {
+-			_, _ = w.Write([]byte(healthRespInfo))
++			_, _ = w.Write([]byte(healthResponse))
+ 		} else {
+ 			http.Error(w, "Service Unavailable\n"+defaultHealthManager.verboseInfo(),
+ 				http.StatusServiceUnavailable)
+diff --git a/internal/profiling/profiling.go b/internal/profiling/profiling.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..d79f0b4fc3027517caed2ed307b2dd987db154ef
+--- /dev/null
++++ b/internal/profiling/profiling.go
+@@ -0,0 +1,263 @@
++package profiling
++
++import (
++	"runtime"
++	"sync"
++	"time"
++
++	"github.com/grafana/pyroscope-go"
++	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/proc"
++	"github.com/zeromicro/go-zero/core/stat"
++	"github.com/zeromicro/go-zero/core/threading"
++)
++
++const (
++	defaultCheckInterval     = time.Second * 10
++	defaultProfilingDuration = time.Minute * 2
++	defaultUploadRate        = time.Second * 15
++)
++
++type (
++	Config struct {
++		// Name is the name of the application.
++		Name string `json:",optional,inherit"`
++		// ServerAddr is the address of the profiling server.
++		ServerAddr string
++		// AuthUser is the username for basic authentication.
++		AuthUser string `json:",optional"`
++		// AuthPassword is the password for basic authentication.
++		AuthPassword string `json:",optional"`
++		// UploadRate is the duration for which profiling data is uploaded.
++		UploadRate time.Duration `json:",default=15s"`
++		// CheckInterval is the interval to check if profiling should start.
++		CheckInterval time.Duration `json:",default=10s"`
++		// ProfilingDuration is the duration for which profiling data is collected.
++		ProfilingDuration time.Duration `json:",default=2m"`
++		// CpuThreshold the collection is allowed only when the current service cpu > CpuThreshold
++		CpuThreshold int64 `json:",default=700,range=[0:1000)"`
++
++		// ProfileType is the type of profiling to be performed.
++		ProfileType ProfileType
++	}
++
++	ProfileType struct {
++		// Logger is a flag to enable or disable logging.
++		Logger bool `json:",default=false"`
++		// CPU is a flag to disable CPU profiling.
++		CPU bool `json:",default=true"`
++		// Goroutines is a flag to disable goroutine profiling.
++		Goroutines bool `json:",default=true"`
++		// Memory is a flag to disable memory profiling.
++		Memory bool `json:",default=true"`
++		// Mutex is a flag to disable mutex profiling.
++		Mutex bool `json:",default=false"`
++		// Block is a flag to disable block profiling.
++		Block bool `json:",default=false"`
++	}
++
++	profiler interface {
++		Start() error
++		Stop() error
++	}
++
++	pyroscopeProfiler struct {
++		c        Config
++		profiler *pyroscope.Profiler
++	}
++)
++
++var (
++	once sync.Once
++
++	newProfiler = func(c Config) profiler {
++		return newPyroscopeProfiler(c)
++	}
++)
++
++// Start initializes the pyroscope profiler with the given configuration.
++func Start(c Config) {
++	// check if the profiling is enabled
++	if len(c.ServerAddr) == 0 {
++		return
++	}
++
++	// set default values for the configuration
++	if c.ProfilingDuration <= 0 {
++		c.ProfilingDuration = defaultProfilingDuration
++	}
++
++	// set default values for the configuration
++	if c.CheckInterval <= 0 {
++		c.CheckInterval = defaultCheckInterval
++	}
++
++	if c.UploadRate <= 0 {
++		c.UploadRate = defaultUploadRate
++	}
++
++	once.Do(func() {
++		logx.Info("continuous profiling started")
++
++		threading.GoSafe(func() {
++			startPyroscope(c, proc.Done())
++		})
++	})
++}
++
++// startPyroscope starts the pyroscope profiler with the given configuration.
++func startPyroscope(c Config, done <-chan struct{}) {
++	var (
++		pr                  profiler
++		err                 error
++		latestProfilingTime time.Time
++		intervalTicker      = time.NewTicker(c.CheckInterval)
++		profilingTicker     = time.NewTicker(c.ProfilingDuration)
++	)
++
++	defer profilingTicker.Stop()
++	defer intervalTicker.Stop()
++
++	for {
++		select {
++		case <-intervalTicker.C:
++			// Check if the machine is overloaded and if the profiler is not running
++			if pr == nil && isCpuOverloaded(c) {
++				pr = newProfiler(c)
++				if err := pr.Start(); err != nil {
++					logx.Errorf("failed to start profiler: %v", err)
++					continue
++				}
++
++				// record the latest profiling time
++				latestProfilingTime = time.Now()
++				logx.Infof("pyroscope profiler started.")
++			}
++		case <-profilingTicker.C:
++			// check if the profiling duration has passed
++			if !time.Now().After(latestProfilingTime.Add(c.ProfilingDuration)) {
++				continue
++			}
++
++			// check if the profiler is already running, if so, skip
++			if pr != nil {
++				if err = pr.Stop(); err != nil {
++					logx.Errorf("failed to stop profiler: %v", err)
++				}
++				logx.Infof("pyroscope profiler stopped.")
++				pr = nil
++			}
++		case <-done:
++			logx.Infof("continuous profiling stopped.")
++			return
++		}
++	}
++}
++
++// genPyroscopeConf generates the pyroscope configuration based on the given config.
++func genPyroscopeConf(c Config) pyroscope.Config {
++	pConf := pyroscope.Config{
++		UploadRate:        c.UploadRate,
++		ApplicationName:   c.Name,
++		BasicAuthUser:     c.AuthUser,     // http basic auth user
++		BasicAuthPassword: c.AuthPassword, // http basic auth password
++		ServerAddress:     c.ServerAddr,
++		Logger:            nil,
++		HTTPHeaders:       map[string]string{},
++		// you can provide static tags via a map:
++		Tags: map[string]string{
++			"name": c.Name,
++		},
++	}
++
++	if c.ProfileType.Logger {
++		pConf.Logger = logx.WithCallerSkip(0)
++	}
++
++	if c.ProfileType.CPU {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileCPU)
++	}
++	if c.ProfileType.Goroutines {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileGoroutines)
++	}
++	if c.ProfileType.Memory {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileAllocObjects, pyroscope.ProfileAllocSpace,
++			pyroscope.ProfileInuseObjects, pyroscope.ProfileInuseSpace)
++	}
++	if c.ProfileType.Mutex {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileMutexCount, pyroscope.ProfileMutexDuration)
++	}
++	if c.ProfileType.Block {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileBlockCount, pyroscope.ProfileBlockDuration)
++	}
++
++	logx.Infof("applicationName: %s", pConf.ApplicationName)
++
++	return pConf
++}
++
++// isCpuOverloaded checks the machine performance based on the given configuration.
++func isCpuOverloaded(c Config) bool {
++	currentValue := stat.CpuUsage()
++	if currentValue >= c.CpuThreshold {
++		logx.Infof("continuous profiling cpu overload, cpu: %d", currentValue)
++		return true
++	}
++
++	return false
++}
++
++func newPyroscopeProfiler(c Config) profiler {
++	return &pyroscopeProfiler{
++		c: c,
++	}
++}
++
++func (p *pyroscopeProfiler) Start() error {
++	pConf := genPyroscopeConf(p.c)
++	// set mutex and block profile rate
++	setFraction(p.c)
++	prof, err := pyroscope.Start(pConf)
++	if err != nil {
++		resetFraction(p.c)
++		return err
++	}
++
++	p.profiler = prof
++	return nil
++}
++
++func (p *pyroscopeProfiler) Stop() error {
++	if p.profiler == nil {
++		return nil
++	}
++
++	if err := p.profiler.Stop(); err != nil {
++		return err
++	}
++
++	resetFraction(p.c)
++	p.profiler = nil
++
++	return nil
++}
++
++func setFraction(c Config) {
++	// These 2 lines are only required if you're using mutex or block profiling
++	if c.ProfileType.Mutex {
++		runtime.SetMutexProfileFraction(10) // 10/seconds
++	}
++	if c.ProfileType.Block {
++		runtime.SetBlockProfileRate(1000 * 1000) //  1/millisecond
++	}
++}
++
++func resetFraction(c Config) {
++	// These 2 lines are only required if you're using mutex or block profiling
++	if c.ProfileType.Mutex {
++		runtime.SetMutexProfileFraction(0)
++	}
++	if c.ProfileType.Block {
++		runtime.SetBlockProfileRate(0)
++	}
++}
+diff --git a/readme-cn.md b/readme-cn.md
+index 2c3ba1876e32ca39eaa7120bd0291e285a5727ed..9a814a6a0f30269177148e1ec5ce39fa28f60b58 100644
+--- a/readme-cn.md
++++ b/readme-cn.md
+@@ -175,7 +175,7 @@ GO111MODULE=on GOPROXY=https://goproxy.cn/,direct go get -u github.com/zeromicro
+ 
+ * API 文档
+ 
+-  [https://go-zero.dev/cn/](https://go-zero.dev/cn/)
++  [https://go-zero.dev](https://go-zero.dev)
+ 
+ * awesome 系列（更多文章见『微服务实践』公众号）
+ 
+@@ -305,6 +305,9 @@ go-zero 已被许多公司用于生产部署，接入场景如在线教育、电
+ >107. 深圳市聚货通信息科技有限公司
+ >108. 浙江银盾云科技有限公司
+ >109. 南京造世网络科技有限公司
++>110. 温州飞儿云信息技术有限公司
++>111. 统信软件
++>112. 深圳坐标软件集团有限公司
+ 
+ 如果贵公司也已使用 go-zero，欢迎在 [登记地址](https://github.com/zeromicro/go-zero/issues/602) 登记，仅仅为了推广，不做其它用途。
+ 
+diff --git a/rest/handler/authhandler.go b/rest/handler/authhandler.go
+index f72e2113a96f4e54f25427d98b432e022d4e18cc..ab781bbfa2a9a827023e02dd204a5642bf821030 100644
+--- a/rest/handler/authhandler.go
++++ b/rest/handler/authhandler.go
+@@ -7,7 +7,7 @@ import (
+ 	"net/http/httputil"
+ 
+ 	"github.com/golang-jwt/jwt/v4"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/rest/internal/response"
+ 	"github.com/zeromicro/go-zero/rest/token"
+ )
+@@ -100,7 +100,7 @@ func WithUnauthorizedCallback(callback UnauthorizedCallback) AuthorizeOption {
+ func detailAuthLog(r *http.Request, reason string) {
+ 	// discard dump error, only for debug purpose
+ 	details, _ := httputil.DumpRequest(r, true)
+-	logx.Errorf("authorize failed: %s\n=> %+v", reason, string(details))
++	logc.Errorf(r.Context(), "authorize failed: %s\n=> %+v", reason, string(details))
+ }
+ 
+ func unauthorized(w http.ResponseWriter, r *http.Request, err error, callback UnauthorizedCallback) {
+diff --git a/rest/handler/breakerhandler.go b/rest/handler/breakerhandler.go
+index 05b85bc8d9a469cb4a660d83d03cb494a1d6c0f5..affa6010455ee27a0f424994e5e09fc288b39c13 100644
+--- a/rest/handler/breakerhandler.go
++++ b/rest/handler/breakerhandler.go
+@@ -6,7 +6,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/zeromicro/go-zero/core/breaker"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ 	"github.com/zeromicro/go-zero/rest/internal/response"
+@@ -22,7 +22,7 @@ func BreakerHandler(method, path string, metrics *stat.Metrics) func(http.Handle
+ 			promise, err := brk.Allow()
+ 			if err != nil {
+ 				metrics.AddDrop()
+-				logx.Errorf("[http] dropped, %s - %s - %s",
++				logc.Errorf(r.Context(), "[http] dropped, %s - %s - %s",
+ 					r.RequestURI, httpx.GetRemoteAddr(r), r.UserAgent())
+ 				w.WriteHeader(http.StatusServiceUnavailable)
+ 				return
+diff --git a/rest/handler/contentsecurityhandler.go b/rest/handler/contentsecurityhandler.go
+index bd095fe97476768ea76c024984bf967c242a4236..11da9ff6ca5623634c9bd45603909f46bde22344 100644
+--- a/rest/handler/contentsecurityhandler.go
++++ b/rest/handler/contentsecurityhandler.go
+@@ -5,7 +5,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/codec"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ 	"github.com/zeromicro/go-zero/rest/internal/security"
+ )
+@@ -34,11 +34,11 @@ func LimitContentSecurityHandler(limitBytes int64, decrypters map[string]codec.R
+ 			case http.MethodDelete, http.MethodGet, http.MethodPost, http.MethodPut:
+ 				header, err := security.ParseContentSecurity(decrypters, r)
+ 				if err != nil {
+-					logx.Errorf("Signature parse failed, X-Content-Security: %s, error: %s",
++					logc.Errorf(r.Context(), "Signature parse failed, X-Content-Security: %s, error: %s",
+ 						r.Header.Get(contentSecurity), err.Error())
+ 					executeCallbacks(w, r, next, strict, httpx.CodeSignatureInvalidHeader, callbacks)
+ 				} else if code := security.VerifySignature(r, header, tolerance); code != httpx.CodeSignaturePass {
+-					logx.Errorf("Signature verification failed, X-Content-Security: %s",
++					logc.Errorf(r.Context(), "Signature verification failed, X-Content-Security: %s",
+ 						r.Header.Get(contentSecurity))
+ 					executeCallbacks(w, r, next, strict, code, callbacks)
+ 				} else if r.ContentLength > 0 && header.Encrypted() {
+diff --git a/rest/handler/cryptionhandler.go b/rest/handler/cryptionhandler.go
+index 18ba85b326c8ca89caaeae49f4c5d38080b2ac2f..88832a40542bd425f63b7917cc90ac774ad174aa 100644
+--- a/rest/handler/cryptionhandler.go
++++ b/rest/handler/cryptionhandler.go
+@@ -3,6 +3,7 @@ package handler
+ import (
+ 	"bufio"
+ 	"bytes"
++	"context"
+ 	"encoding/base64"
+ 	"errors"
+ 	"io"
+@@ -10,7 +11,7 @@ import (
+ 	"net/http"
+ 
+ 	"github.com/zeromicro/go-zero/core/codec"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ )
+ 
+ const maxBytes = 1 << 20 // 1 MiB
+@@ -27,7 +28,7 @@ func LimitCryptionHandler(limitBytes int64, key []byte) func(http.Handler) http.
+ 	return func(next http.Handler) http.Handler {
+ 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 			cw := newCryptionResponseWriter(w)
+-			defer cw.flush(key)
++			defer cw.flush(r.Context(), key)
+ 
+ 			if r.ContentLength <= 0 {
+ 				next.ServeHTTP(cw, r)
+@@ -118,7 +119,7 @@ func (w *cryptionResponseWriter) WriteHeader(statusCode int) {
+ 	w.ResponseWriter.WriteHeader(statusCode)
+ }
+ 
+-func (w *cryptionResponseWriter) flush(key []byte) {
++func (w *cryptionResponseWriter) flush(ctx context.Context, key []byte) {
+ 	if w.buf.Len() == 0 {
+ 		return
+ 	}
+@@ -131,8 +132,8 @@ func (w *cryptionResponseWriter) flush(key []byte) {
+ 
+ 	body := base64.StdEncoding.EncodeToString(content)
+ 	if n, err := io.WriteString(w.ResponseWriter, body); err != nil {
+-		logx.Errorf("write response failed, error: %s", err)
++		logc.Errorf(ctx, "write response failed, error: %s", err)
+ 	} else if n < len(body) {
+-		logx.Errorf("actual bytes: %d, written bytes: %d", len(body), n)
++		logc.Errorf(ctx, "actual bytes: %d, written bytes: %d", len(body), n)
+ 	}
+ }
+diff --git a/rest/handler/sheddinghandler.go b/rest/handler/sheddinghandler.go
+index 80cfe12246d38519497a374f174720e09e8ad024..cbe41e7725d86f3a94afbbd9404e67457165ff9a 100644
+--- a/rest/handler/sheddinghandler.go
++++ b/rest/handler/sheddinghandler.go
+@@ -5,7 +5,7 @@ import (
+ 	"sync"
+ 
+ 	"github.com/zeromicro/go-zero/core/load"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ 	"github.com/zeromicro/go-zero/rest/internal/response"
+@@ -35,7 +35,7 @@ func SheddingHandler(shedder load.Shedder, metrics *stat.Metrics) func(http.Hand
+ 			if err != nil {
+ 				metrics.AddDrop()
+ 				sheddingStat.IncrementDrop()
+-				logx.Errorf("[http] dropped, %s - %s - %s",
++				logc.Errorf(r.Context(), "[http] dropped, %s - %s - %s",
+ 					r.RequestURI, httpx.GetRemoteAddr(r), r.UserAgent())
+ 				w.WriteHeader(http.StatusServiceUnavailable)
+ 				return
+diff --git a/rest/handler/tracehandler.go b/rest/handler/tracehandler.go
+index 7a11da4629a2491f3bfd358c2e1bd11eb4925585..5df49db2e5b4b39f1cbacef7ee805d9969105f26 100644
+--- a/rest/handler/tracehandler.go
++++ b/rest/handler/tracehandler.go
+@@ -29,8 +29,8 @@ func TraceHandler(serviceName, path string, opts ...TraceOption) func(http.Handl
+ 		opt(&options)
+ 	}
+ 
+-	ignorePaths := collection.NewSet()
+-	ignorePaths.AddStr(options.traceIgnorePaths...)
++	ignorePaths := collection.NewSet[string]()
++	ignorePaths.Add(options.traceIgnorePaths...)
+ 
+ 	return func(next http.Handler) http.Handler {
+ 		tracer := otel.Tracer(trace.TraceName)
+diff --git a/rest/httpx/responses.go b/rest/httpx/responses.go
+index f1f4b16da77880f8b18ad9abcc12ec740fca6159..dc1a7ecedcdbb3527da9dafe8ec66aef105c8c9f 100644
+--- a/rest/httpx/responses.go
++++ b/rest/httpx/responses.go
+@@ -1,15 +1,15 @@
+ package httpx
+ 
+ import (
+-	"bytes"
+ 	"context"
+-	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+ 	"net/http"
+ 	"sync"
+ 
++	"github.com/zeromicro/go-zero/core/jsonx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/rest/internal/errcode"
+ 	"github.com/zeromicro/go-zero/rest/internal/header"
+@@ -120,7 +120,7 @@ func WriteJson(w http.ResponseWriter, code int, v any) {
+ // WriteJsonCtx writes v as json string into w with code.
+ func WriteJsonCtx(ctx context.Context, w http.ResponseWriter, code int, v any) {
+ 	if err := doWriteJson(w, code, v); err != nil {
+-		logx.WithContext(ctx).Error(err)
++		logc.Error(ctx, err)
+ 	}
+ }
+ 
+@@ -172,28 +172,8 @@ func doHandleError(w http.ResponseWriter, err error, handler func(error) (int, a
+ 	}
+ }
+ 
+-func doMarshalJson(v any) ([]byte, error) {
+-	// why not use json.Marshal?  https://github.com/golang/go/issues/28453
+-	// it change the behavior of json.Marshal, like & -> \u0026, < -> \u003c, > -> \u003e
+-	// which is not what we want in logic response
+-	buf := &bytes.Buffer{}
+-	enc := json.NewEncoder(buf)
+-	enc.SetEscapeHTML(false)
+-	if err := enc.Encode(v); err != nil {
+-		return nil, err
+-	}
+-
+-	bs := buf.Bytes()
+-	// Remove trailing newline added by json.Encoder.Encode
+-	if len(bs) > 0 && bs[len(bs)-1] == '\n' {
+-		bs = bs[:len(bs)-1]
+-	}
+-
+-	return bs, nil
+-}
+-
+ func doWriteJson(w http.ResponseWriter, code int, v any) error {
+-	bs, err := doMarshalJson(v)
++	bs, err := jsonx.Marshal(v)
+ 	if err != nil {
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+ 		return fmt.Errorf("marshal json failed, error: %w", err)
+diff --git a/rest/internal/security/contentsecurity.go b/rest/internal/security/contentsecurity.go
+index 5e3bbb02d6ba21aeb3d851871c19fdecf0b65c20..c580c88c0508685d22c786390ee77f317b25a546 100644
+--- a/rest/internal/security/contentsecurity.go
++++ b/rest/internal/security/contentsecurity.go
+@@ -14,7 +14,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/core/codec"
+ 	"github.com/zeromicro/go-zero/core/iox"
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ )
+ 
+@@ -123,7 +123,7 @@ func VerifySignature(r *http.Request, securityHeader *ContentSecurityHeader, tol
+ 		return httpx.CodeSignaturePass
+ 	}
+ 
+-	logx.Infof("signature different, expect: %s, actual: %s",
++	logc.Infof(r.Context(), "signature different, expect: %s, actual: %s",
+ 		securityHeader.Signature, actualSignature)
+ 
+ 	return httpx.CodeSignatureInvalidToken
+diff --git a/tools/goctl/api/dartgen/vars.go b/tools/goctl/api/dartgen/vars.go
+index c34d364a4d3f2d763c5e9c00b085283d701800de..2488c5153a6f975a352b34dcdab1d1c0b2549a63 100644
+--- a/tools/goctl/api/dartgen/vars.go
++++ b/tools/goctl/api/dartgen/vars.go
+@@ -32,7 +32,7 @@ import '../vars/vars.dart';
+ /// Send GET request.
+ ///
+ /// ok: the function that will be called on success.
+-/// fail：the fuction that will be called on failure.
++/// fail：the function that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiGet(String path,
+     {Map<String, String> header,
+@@ -47,7 +47,7 @@ Future apiGet(String path,
+ ///
+ /// data: the data to post, it will be marshaled to json automatically.
+ /// ok: the function that will be called on success.
+-/// fail：the fuction that will be called on failure.
++/// fail：the function that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiPost(String path, dynamic data,
+     {Map<String, String> header,
+diff --git a/tools/goctl/api/docgen/gen.go b/tools/goctl/api/docgen/gen.go
+index 03179b921e3114d2b2487f5a670ffa079a11c7b2..c463fdfb518a47b5a484d804d9c20b90a96bc7bc 100644
+--- a/tools/goctl/api/docgen/gen.go
++++ b/tools/goctl/api/docgen/gen.go
+@@ -36,7 +36,7 @@ func DocCommand(_ *cobra.Command, _ []string) error {
+ 	}
+ 
+ 	if !pathx.FileExists(dir) {
+-		return fmt.Errorf("dir %s not exsit", dir)
++		return fmt.Errorf("dir %s not exist", dir)
+ 	}
+ 
+ 	dir, err := filepath.Abs(dir)
+diff --git a/tools/goctl/api/gogen/genhandlers.go b/tools/goctl/api/gogen/genhandlers.go
+index 54d918b72af90973eee44fc816fa5b0d3aea19b0..a8008c3df49618f3ae900ee092f296a9ed5dad63 100644
+--- a/tools/goctl/api/gogen/genhandlers.go
++++ b/tools/goctl/api/gogen/genhandlers.go
+@@ -38,9 +38,11 @@ func genHandler(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.
+ 	}
+ 
+ 	var builtinTemplate = handlerTemplate
++	var templateFile = handlerTemplateFile
+ 	sse := group.GetAnnotation("sse")
+ 	if sse == "true" {
+ 		builtinTemplate = sseHandlerTemplate
++		templateFile = sseHandlerTemplateFile
+ 	}
+ 
+ 	return genFile(fileGenConfig{
+@@ -49,7 +51,7 @@ func genHandler(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.
+ 		filename:        filename + ".go",
+ 		templateName:    "handlerTemplate",
+ 		category:        category,
+-		templateFile:    handlerTemplateFile,
++		templateFile:    templateFile,
+ 		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"PkgName":        pkgName,
+diff --git a/tools/goctl/api/gogen/genlogic.go b/tools/goctl/api/gogen/genlogic.go
+index 39aeef75f12845b60da908285fa9e846b49899a9..99d652b826a593c3de07229ed1dc4313b0e88d7e 100644
+--- a/tools/goctl/api/gogen/genlogic.go
++++ b/tools/goctl/api/gogen/genlogic.go
+@@ -61,9 +61,11 @@ func genLogicByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group
+ 
+ 	subDir := getLogicFolderPath(group, route)
+ 	builtinTemplate := logicTemplate
++	templateFile := logicTemplateFile
+ 	sse := group.GetAnnotation("sse")
+ 	if sse == "true" {
+ 		builtinTemplate = sseLogicTemplate
++		templateFile = sseLogicTemplateFile
+ 		responseString = "error"
+ 		returnString = "return nil"
+ 		resp := responseGoTypeName(route, typesPacket)
+@@ -80,7 +82,7 @@ func genLogicByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group
+ 		filename:        goFile + ".go",
+ 		templateName:    "logicTemplate",
+ 		category:        category,
+-		templateFile:    logicTemplateFile,
++		templateFile:    templateFile,
+ 		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"pkgName":      subDir[strings.LastIndex(subDir, "/")+1:],
+diff --git a/tools/goctl/api/gogen/integration_test.tpl b/tools/goctl/api/gogen/integration_test.tpl
+index e64c2f3e2c499721fc3db9e7e93854e1eee513a5..42bb3fe218b99d693eab6d81a016c3ead65be53a 100644
+--- a/tools/goctl/api/gogen/integration_test.tpl
++++ b/tools/goctl/api/gogen/integration_test.tpl
+@@ -31,20 +31,16 @@ func TestServerIntegration(t *testing.T) {
+ 			Port: 0, // Use random available port
+ 		},
+ 	}
+-	
++
+ 	server := rest.MustNewServer(c.RestConf)
+ 	defer server.Stop()
+ 
+ 	ctx := svc.NewServiceContext(c)
+ 	handler.RegisterHandlers(server, ctx)
+ 
+-	// Start server in background
+-	go func() {
+-		server.Start()
+-	}()
+-
+-	// Wait for server to start
+-	time.Sleep(100 * time.Millisecond)
++	// Create serverless wrapper for testing
++	serverless, err := rest.NewServerless(server)
++	require.NoError(t, err)
+ 
+ 	tests := []struct {
+ 		name           string
+@@ -56,7 +52,7 @@ func TestServerIntegration(t *testing.T) {
+ 	}{
+ 		{
+ 			name:           "health check",
+-			method:         "GET",
++			method:         http.MethodGet,
+ 			path:           "/health",
+ 			expectedStatus: http.StatusNotFound, // Adjust based on actual routes
+ 			setup:          func() {},
+@@ -72,7 +68,7 @@ func TestServerIntegration(t *testing.T) {
+ 		},
+ 		{{end}}{{end}}{
+ 			name:           "not found route",
+-			method:         "GET", 
++			method:         http.MethodGet,
+ 			path:           "/nonexistent",
+ 			expectedStatus: http.StatusNotFound,
+ 			setup:          func() {},
+@@ -87,10 +83,10 @@ func TestServerIntegration(t *testing.T) {
+ 			require.NoError(t, err)
+ 
+ 			rr := httptest.NewRecorder()
+-			server.ServeHTTP(rr, req)
++			serverless.Serve(rr, req)
+ 
+ 			assert.Equal(t, tt.expectedStatus, rr.Code)
+-			
++
+ 			// TODO: Add response body assertions
+ 			t.Logf("Response: %s", rr.Body.String())
+ 		})
+@@ -100,13 +96,13 @@ func TestServerIntegration(t *testing.T) {
+ func TestServerLifecycle(t *testing.T) {
+ 	c := config.Config{
+ 		RestConf: rest.RestConf{
+-			Host: "127.0.0.1", 
++			Host: "127.0.0.1",
+ 			Port: 0,
+ 		},
+ 	}
+ 
+ 	server := rest.MustNewServer(c.RestConf)
+-	
++
+ 	// Test server can start and stop without errors
+ 	ctx := svc.NewServiceContext(c)
+ 	handler.RegisterHandlers(server, ctx)
+diff --git a/tools/goctl/api/parser/g4/ast/service.go b/tools/goctl/api/parser/g4/ast/service.go
+index fb760ec2de559d7f24ac1c698a818d722106c7f4..70b48373c0a81a547c64fbc07c9e91a50f6975a9 100644
+--- a/tools/goctl/api/parser/g4/ast/service.go
++++ b/tools/goctl/api/parser/g4/ast/service.go
+@@ -268,7 +268,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 				v.panic(lit.Expr(), fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit.Expr().Text()))
+ 			}
+ 		default:
+-			v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
++			v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
+ 		}
+ 	case *Literal:
+ 		lit := dataType.Literal.Text()
+@@ -276,7 +276,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 			v.panic(dataType.Literal, fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit))
+ 		}
+ 	default:
+-		v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
++		v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
+ 	}
+ 
+ 	return &Body{
+diff --git a/tools/goctl/api/parser/g4/ast/type.go b/tools/goctl/api/parser/g4/ast/type.go
+index 7fe1202ae82acc0b00941cf9cb659e18aa4ce997..f0cadf9b229d9e50f55e513db52ca588bdf60072 100644
+--- a/tools/goctl/api/parser/g4/ast/type.go
++++ b/tools/goctl/api/parser/g4/ast/type.go
+@@ -190,7 +190,7 @@ func (v *ApiVisitor) VisitTypeBlockStruct(ctx *api.TypeBlockStructContext) any {
+ 		structExpr := v.newExprWithToken(ctx.GetStructToken())
+ 		structTokenText := ctx.GetStructToken().GetText()
+ 		if structTokenText != "struct" {
+-			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found imput '%s'", structTokenText))
++			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found input '%s'", structTokenText))
+ 		}
+ 
+ 		if api.IsGolangKeyWord(structTokenText, "struct") {
+diff --git a/tools/goctl/api/parser/parser.go b/tools/goctl/api/parser/parser.go
+index 7c3642325a20404781e4587f86577ee094929afa..a41c0044b51a0023e8f8e2eb2ad51f38800414a5 100644
+--- a/tools/goctl/api/parser/parser.go
++++ b/tools/goctl/api/parser/parser.go
+@@ -18,7 +18,7 @@ type parser struct {
+ }
+ 
+ // Parse parses the api file.
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ func Parse(filename string) (*spec.ApiSpec, error) {
+ 	if env.UseExperimental() {
+@@ -63,14 +63,14 @@ func parseContent(content string, skipCheckTypeDeclaration bool, filename ...str
+ 	return apiSpec, nil
+ }
+ 
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContent parses the api content
+ func ParseContent(content string, filename ...string) (*spec.ApiSpec, error) {
+ 	return parseContent(content, false, filename...)
+ }
+ 
+-// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContentWithParserSkipCheckTypeDeclaration parses the api content with skip check type declaration
+ func ParseContentWithParserSkipCheckTypeDeclaration(content string, filename ...string) (*spec.ApiSpec, error) {
+@@ -227,7 +227,7 @@ func (p parser) astTypeToSpec(in ast.DataType) spec.Type {
+ 		return spec.PointerType{RawName: v.PointerExpr.Text(), Type: spec.DefineStruct{RawName: raw}}
+ 	}
+ 
+-	panic(fmt.Sprintf("unspported type %+v", in))
++	panic(fmt.Sprintf("unsupported type %+v", in))
+ }
+ 
+ func (p parser) stringExprs(docs []ast.Expr) []string {
+diff --git a/tools/goctl/api/swagger/annotation.go b/tools/goctl/api/swagger/annotation.go
+index c019ba163cc5fd1dbfbd119571765b44662b933d..cd6736ea9ce34fb3be5aa62f6b4befcef871c952 100644
+--- a/tools/goctl/api/swagger/annotation.go
++++ b/tools/goctl/api/swagger/annotation.go
+@@ -8,70 +8,71 @@ import (
+ )
+ 
+ func getBoolFromKVOrDefault(properties map[string]string, key string, def bool) bool {
+-	if len(properties) == 0 {
+-		return def
+-	}
+-	md := metadata.New(properties)
+-	val := md.Get(key)
+-	if len(val) == 0 {
+-		return def
+-	}
+-	//I think this function and those below should handle error, but they didn't.
+-	//Since a default value (def) is provided, any parsing errors will result in the default being returned.
+-	str, err := strconv.Unquote(val[0])
+-	if err != nil || len(str) == 0 {
+-		return def
+-	}
+-	res, _ := strconv.ParseBool(str)
+-	return res
++	return getOrDefault(properties, key, def, func(str string, def bool) bool {
++		res, err := strconv.ParseBool(str)
++		if err != nil {
++			return def
++		}
++
++		return res
++	})
+ }
+ 
+-func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
+-	if len(properties) == 0 {
+-		return def
+-	}
+-	md := metadata.New(properties)
+-	val := md.Get(key)
+-	if len(val) == 0 {
+-		return def
++func getFirstUsableString(def ...string) string {
++	if len(def) == 0 {
++		return ""
+ 	}
+-	str, err := strconv.Unquote(val[0])
+-	if err != nil || len(str) == 0 {
+-		return def
++
++	for _, val := range def {
++		// Try to unquote if it's a quoted string
++		if str, err := strconv.Unquote(val); err == nil && len(str) != 0 {
++			return str
++		}
++
++		// Otherwise, use the value as-is if it's not empty
++		if len(val) != 0 {
++			return val
++		}
+ 	}
+-	return str
++
++	return ""
+ }
+ 
+ func getListFromInfoOrDefault(properties map[string]string, key string, def []string) []string {
++	return getOrDefault(properties, key, def, func(str string, def []string) []string {
++		resp := util.FieldsAndTrimSpace(str, commaRune)
++		if len(resp) == 0 {
++			return def
++		}
++		return resp
++	})
++}
++
++// getOrDefault abstracts the common logic for fetching, unquoting, and defaulting.
++func getOrDefault[T any](properties map[string]string, key string, def T, convert func(string, T) T) T {
+ 	if len(properties) == 0 {
+ 		return def
+ 	}
++
+ 	md := metadata.New(properties)
+ 	val := md.Get(key)
+ 	if len(val) == 0 {
+ 		return def
+ 	}
+ 
+-	str, err := strconv.Unquote(val[0])
+-	if err != nil || len(str) == 0 {
+-		return def
++	str := val[0]
++	if unquoted, err := strconv.Unquote(str); err == nil {
++		str = unquoted
+ 	}
+-	resp := util.FieldsAndTrimSpace(str, commaRune)
+-	if len(resp) == 0 {
++	if len(str) == 0 {
+ 		return def
+ 	}
+-	return resp
++
++	return convert(str, def)
+ }
+ 
+-func getFirstUsableString(def ...string) string {
+-	if len(def) == 0 {
+-		return ""
+-	}
+-	for _, val := range def {
+-		str, err := strconv.Unquote(val)
+-		if err == nil && len(str) != 0 {
+-			return str
+-		}
+-	}
+-	return ""
++func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
++	return getOrDefault(properties, key, def, func(str string, def string) string {
++		return str
++	})
+ }
+diff --git a/tools/goctl/api/swagger/parameter.go b/tools/goctl/api/swagger/parameter.go
+index 1683161acd003c853f9c00f45c8d664cda6cc734..0530bbcf75507768c2f54fb43016cba8b9804316 100644
+--- a/tools/goctl/api/swagger/parameter.go
++++ b/tools/goctl/api/swagger/parameter.go
+@@ -8,28 +8,37 @@ import (
+ 	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ )
+ 
+-func isPostJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
+-	if !strings.EqualFold(method, http.MethodPost) {
++func isRequestBodyJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
++	// Support HTTP methods that commonly use request bodies with JSON
++	// POST, PUT, PATCH are standard methods with bodies
++	// DELETE can also have a body (though less common)
++	method = strings.ToUpper(method)
++	if method != http.MethodPost && method != http.MethodPut &&
++		method != http.MethodPatch && method != http.MethodDelete {
+ 		return "", false
+ 	}
++
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return "", false
+ 	}
+-	var isPostJson bool
++
++	var hasJsonField bool
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		jsonTag, _ := tag.Get(tagJson)
+-		if !isPostJson {
+-			isPostJson = jsonTag != nil
++		if !hasJsonField {
++			hasJsonField = jsonTag != nil
+ 		}
+ 	})
+-	return structType.RawName, isPostJson
++
++	return structType.RawName, hasJsonField
+ }
+ 
+ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Parameter {
+ 	if tp == nil {
+ 		return []spec.Parameter{}
+ 	}
++
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return []spec.Parameter{}
+@@ -43,15 +52,13 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		headerTag, _ := tag.Get(tagHeader)
+ 		hasHeader := headerTag != nil
+-
+ 		pathParameterTag, _ := tag.Get(tagPath)
+ 		hasPathParameter := pathParameterTag != nil
+-
+ 		formTag, _ := tag.Get(tagForm)
+ 		hasForm := formTag != nil
+-
+ 		jsonTag, _ := tag.Get(tagJson)
+ 		hasJson := jsonTag != nil
++
+ 		if hasHeader {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(headerTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -75,6 +82,7 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
++
+ 		if hasPathParameter {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(pathParameterTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -98,6 +106,7 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
++
+ 		if hasForm {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(formTag.Options)
+ 			if strings.EqualFold(method, http.MethodGet) {
+@@ -145,8 +154,8 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 					},
+ 				})
+ 			}
+-
+ 		}
++
+ 		if hasJson {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(jsonTag.Options)
+ 			if required {
+@@ -179,9 +188,10 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			properties[jsonTag.Name] = schema
+ 		}
+ 	})
++
+ 	if len(properties) > 0 {
+ 		if ctx.UseDefinitions {
+-			structName, ok := isPostJson(ctx, method, tp)
++			structName, ok := isRequestBodyJson(ctx, method, tp)
+ 			if ok {
+ 				resp = append(resp, spec.Parameter{
+ 					ParamProps: spec.ParamProps{
+@@ -213,5 +223,6 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			})
+ 		}
+ 	}
++
+ 	return resp
+ }
+diff --git a/tools/goctl/api/swagger/path.go b/tools/goctl/api/swagger/path.go
+index f76134c0d53d1b97b3b3a97b0d522b26a8457d9f..19dfe4ad22aae29d6aeaa549444ab9b536cfd55c 100644
+--- a/tools/goctl/api/swagger/path.go
++++ b/tools/goctl/api/swagger/path.go
+@@ -19,7 +19,11 @@ func spec2Paths(ctx Context, srv apiSpec.Service) *spec.Paths {
+ 		for _, route := range group.Routes {
+ 			routPath := pathVariable2SwaggerVariable(ctx, route.Path)
+ 			if len(prefix) > 0 && prefix != "." {
+-				routPath = "/" + path.Clean(prefix) + routPath
++				if routPath == "/" {
++					routPath = "/" + path.Clean(prefix)
++				} else {
++					routPath = "/" + path.Clean(prefix) + routPath
++				}
+ 			}
+ 			pathItem := spec2Path(ctx, group, route)
+ 			existPathItem, ok := paths.Paths[routPath]
+diff --git a/tools/goctl/api/swagger/properties.go b/tools/goctl/api/swagger/properties.go
+index e5bf6d204af8901aa6e07e721efd43affca93eec..bf263fb5a101501c2dd0272b5860b221ef939c36 100644
+--- a/tools/goctl/api/swagger/properties.go
++++ b/tools/goctl/api/swagger/properties.go
+@@ -70,15 +70,40 @@ func propertiesFromType(ctx Context, tp apiSpec.Type) (spec.SchemaProperties, []
+ 			switch sampleTypeFromGoType(ctx, member.Type) {
+ 			case swaggerTypeArray:
+ 				schema.Items = itemsFromGoType(ctx, member.Type)
++				// Special handling for arrays with useDefinitions
++				if ctx.UseDefinitions {
++					// For arrays, check if the array element (not the array itself) contains a struct
++					if arrayType, ok := member.Type.(apiSpec.ArrayType); ok {
++						if structName, containsStruct := containsStruct(arrayType.Value); containsStruct {
++							// Set the $ref inside the items, not at the schema level
++							schema.Items = &spec.SchemaOrArray{
++								Schema: &spec.Schema{
++									SchemaProps: spec.SchemaProps{
++										Ref: spec.MustCreateRef(getRefName(structName)),
++									},
++								},
++							}
++						}
++					}
++				}
+ 			case swaggerTypeObject:
+ 				p, r := propertiesFromType(ctx, member.Type)
+ 				schema.Properties = p
+ 				schema.Required = r
+-			}
+-			if ctx.UseDefinitions {
+-				structName, containsStruct := containsStruct(member.Type)
+-				if containsStruct {
+-					schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++				// For objects with useDefinitions, set $ref at schema level
++				if ctx.UseDefinitions {
++					structName, containsStruct := containsStruct(member.Type)
++					if containsStruct {
++						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++					}
++				}
++			default:
++				// For non-array, non-object types, apply useDefinitions logic
++				if ctx.UseDefinitions {
++					structName, containsStruct := containsStruct(member.Type)
++					if containsStruct {
++						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
++					}
+ 				}
+ 			}
+ 
+diff --git a/tools/goctl/change.md b/tools/goctl/change.md
+index a9de4e4f937cec9627d73711d2d1665ddc0399de..86abd0a2d6a21ff2be9de97d7eb7d9758532fe07 100644
+--- a/tools/goctl/change.md
++++ b/tools/goctl/change.md
+@@ -11,7 +11,7 @@
+ ## swagger
+ 1. [bug fix] remove example generation when request body are `query`, `path` and `header`
+ - it not supported in api spec 2.0
+-- it's will generate example when request body is json format.
++- it will generate example when request body is json format.
+ 2. [features] swagger generation supported definitions
+ - supported response definitions
+ - supported json request body definitions
+diff --git a/tools/goctl/docker/docker.go b/tools/goctl/docker/docker.go
+index 3859697a6b0f3a97c55104d5a7639106ef3cbd30..807329f9ccf4e941f27b75fd2963787a3364bb5f 100644
+--- a/tools/goctl/docker/docker.go
++++ b/tools/goctl/docker/docker.go
+@@ -73,6 +73,7 @@ func dockerCommand(_ *cobra.Command, _ []string) (err error) {
+ 
+ 	base := varStringBase
+ 	port := varIntPort
++	etcDir := filepath.Join(filepath.Dir(goFile), etcDir)
+ 	if _, err := os.Stat(etcDir); os.IsNotExist(err) {
+ 		return generateDockerfile(goFile, base, port, version, timezone)
+ 	}
+@@ -170,7 +171,7 @@ func generateDockerfile(goFile, base string, port int, version, timezone string,
+ 	t := template.Must(template.New("dockerfile").Parse(text))
+ 	return t.Execute(out, Docker{
+ 		Chinese:     env.InChina(),
+-		GoMainFrom:  path.Join(projPath, goFile),
++		GoMainFrom:  path.Join(projPath, filepath.Base(goFile)),
+ 		GoRelPath:   projPath,
+ 		GoFile:      goFile,
+ 		ExeFile:     exeName,
+diff --git a/tools/goctl/go.mod b/tools/goctl/go.mod
+index 41e24613e0e87e6d8c27b2a3e34a1c78419147f6..20b546f652c2fae968468c73af63dc8d214913b7 100644
+--- a/tools/goctl/go.mod
++++ b/tools/goctl/go.mod
+@@ -16,7 +16,7 @@ require (
+ 	github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1
+ 	github.com/zeromicro/antlr v0.0.1
+ 	github.com/zeromicro/ddl-parser v1.0.5
+-	github.com/zeromicro/go-zero v1.9.0
++	github.com/zeromicro/go-zero v1.9.2
+ 	golang.org/x/text v0.22.0
+ 	google.golang.org/grpc v1.65.0
+ 	google.golang.org/protobuf v1.36.5
+@@ -47,8 +47,8 @@ require (
+ 	github.com/google/go-cmp v0.6.0 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+-	github.com/grafana/pyroscope-go v1.2.4 // indirect
+-	github.com/grafana/pyroscope-go/godeltaprof v0.1.8 // indirect
++	github.com/grafana/pyroscope-go v1.2.7 // indirect
++	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
+ 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+ 	github.com/jackc/pgpassfile v1.0.0 // indirect
+@@ -72,7 +72,7 @@ require (
+ 	github.com/prometheus/client_model v0.6.1 // indirect
+ 	github.com/prometheus/common v0.62.0 // indirect
+ 	github.com/prometheus/procfs v0.15.1 // indirect
+-	github.com/redis/go-redis/v9 v9.12.1 // indirect
++	github.com/redis/go-redis/v9 v9.15.0 // indirect
+ 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+ 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+ 	github.com/yuin/gopher-lua v1.1.1 // indirect
+diff --git a/tools/goctl/go.sum b/tools/goctl/go.sum
+index bbdf86633d020dedf9cb68663874b9a6ae2d1b0c..1fde4d973296c8abe9f2609a9902d898b8fb7060 100644
+--- a/tools/goctl/go.sum
++++ b/tools/goctl/go.sum
+@@ -75,10 +75,10 @@ github.com/gookit/assert v0.1.1 h1:lh3GcawXe/p+cU7ESTZ5Ui3Sm/x8JWpIis4/1aF0mY0=
+ github.com/gookit/assert v0.1.1/go.mod h1:jS5bmIVQZTIwk42uXl4lyj4iaaxx32tqH16CFj0VX2E=
+ github.com/gookit/color v1.6.0 h1:JjJXBTk1ETNyqyilJhkTXJYYigHG24TM9Xa2M1xAhRA=
+ github.com/gookit/color v1.6.0/go.mod h1:9ACFc7/1IpHGBW8RwuDm/0YEnhg3dwwXpoMsmtyHfjs=
+-github.com/grafana/pyroscope-go v1.2.4 h1:B22GMXz+O0nWLatxLuaP7o7L9dvP0clLvIpmeEQQM0Q=
+-github.com/grafana/pyroscope-go v1.2.4/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8 h1:iwOtYXeeVSAeYefJNaxDytgjKtUuKQbJqgAIjlnicKg=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.8/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
++github.com/grafana/pyroscope-go v1.2.7 h1:VWBBlqxjyR0Cwk2W6UrE8CdcdD80GOFNutj0Kb1T8ac=
++github.com/grafana/pyroscope-go v1.2.7/go.mod h1:o/bpSLiJYYP6HQtvcoVKiE9s5RiNgjYTj1DhiddP2Pc=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9 h1:c1Us8i6eSmkW+Ez05d3co8kasnuOY813tbMN8i/a3Og=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.9/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0/go.mod h1:P+Lt/0by1T8bfcF3z737NnSbmxQAppXMRziHUxPOC8k=
+ github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 h1:2VTzZjLZBgl62/EtslCrtky5vbi9dd7HrQPQIx6wqiw=
+@@ -148,8 +148,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.12.1 h1:k5iquqv27aBtnTm2tIkROUDp8JBXhXZIVu1InSgvovg=
+-github.com/redis/go-redis/v9 v9.12.1/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.15.0 h1:2jdes0xJxer4h3NUZrZ4OGSntGlXp4WbXju2nOTRXto=
++github.com/redis/go-redis/v9 v9.15.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rogpeppe/go-internal v1.11.0 h1:cWPaGQEPrBb5/AsnsZesgZZ9yb1OQ+GOISoDNXVBh4M=
+ github.com/rogpeppe/go-internal v1.11.0/go.mod h1:ddIwULY96R17DhadqLgMfk9H9tvdUzkipdSkR5nkCZA=
+ github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+@@ -185,8 +185,8 @@ github.com/zeromicro/antlr v0.0.1 h1:CQpIn/dc0pUjgGQ81y98s/NGOm2Hfru2NNio2I9mQgk
+ github.com/zeromicro/antlr v0.0.1/go.mod h1:nfpjEwFR6Q4xGDJMcZnCL9tEfQRgszMwu3rDz2Z+p5M=
+ github.com/zeromicro/ddl-parser v1.0.5 h1:LaVqHdzMTjasua1yYpIYaksxKqRzFrEukj2Wi2EbWaQ=
+ github.com/zeromicro/ddl-parser v1.0.5/go.mod h1:ISU/8NuPyEpl9pa17Py9TBPetMjtsiHrb9f5XGiYbo8=
+-github.com/zeromicro/go-zero v1.9.0 h1:hlVtQCSHPszQdcwZTawzGwTej1G2mhHybYzMRLuwCt4=
+-github.com/zeromicro/go-zero v1.9.0/go.mod h1:TMyCxiaOjLQ3YxyYlJrejaQZF40RlzQ3FVvFu5EbcV4=
++github.com/zeromicro/go-zero v1.9.2 h1:ZXOXBIcazZ1pWAMiHyVnDQ3Sxwy7DYPzjE89Qtj9vqM=
++github.com/zeromicro/go-zero v1.9.2/go.mod h1:k8YBMEFZKjTd4q/qO5RCW+zDgUlNyAs5vue3P4/Kmn0=
+ go.etcd.io/etcd/api/v3 v3.5.15 h1:3KpLJir1ZEBrYuV2v+Twaa/e2MdDCEZ/70H+lzEiwsk=
+ go.etcd.io/etcd/api/v3 v3.5.15/go.mod h1:N9EhGzXq58WuMllgH9ZvnEr7SI9pS0k0+DHZezGp7jM=
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5fWlA=
+diff --git a/tools/goctl/internal/version/version.go b/tools/goctl/internal/version/version.go
+index ade8716fce811f19fb9deb39dd5420d8aca6f3b5..dda268ecd4116b486e8000c795ee6c6f1316468a 100644
+--- a/tools/goctl/internal/version/version.go
++++ b/tools/goctl/internal/version/version.go
+@@ -6,7 +6,7 @@ import (
+ )
+ 
+ // BuildVersion is the version of goctl.
+-const BuildVersion = "1.9.1-alpha"
++const BuildVersion = "1.9.2"
+ 
+ var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-beta": 2, "beta": 3, "released": 4, "": 5}
+ 
+diff --git a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+index 8de49a5900ed36440fe1a53dd6413b2208a586f2..c04c36ed51fdfdd496d4b63dfc00fa0564f6f718 100644
+--- a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
++++ b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+@@ -5,7 +5,7 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ )
+ 
+-// BeforeCommands run before comamnd run to show some migration notes
++// BeforeCommands run before command run to show some migration notes
+ func BeforeCommands(dir, style string) error {
+ 	if err := migrateBefore1_3_4(dir, style); err != nil {
+ 		return err
+diff --git a/tools/goctl/model/sql/test/sqlconn.go b/tools/goctl/model/sql/test/sqlconn.go
+index da90d9ff4343a6f790dff8d5b0cd160a6f4d0fa1..748f3b10873ab24296031032b344503b34a4e0ec 100644
+--- a/tools/goctl/model/sql/test/sqlconn.go
++++ b/tools/goctl/model/sql/test/sqlconn.go
+@@ -99,12 +99,12 @@ func (conn *MockConn) RawDB() (*sql.DB, error) {
+ 	return conn.db, nil
+ }
+ 
+-// Transact is the implemention of sqlx.SqlConn, nothing to do
++// Transact is the implementation of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) Transact(func(session sqlx.Session) error) error {
+ 	return nil
+ }
+ 
+-// TransactCtx is the implemention of sqlx.SqlConn, nothing to do
++// TransactCtx is the implementation of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) TransactCtx(ctx context.Context, fn func(context.Context, sqlx.Session) error) error {
+ 	return nil
+ }
+diff --git a/tools/goctl/pkg/protoc/protoc.go b/tools/goctl/pkg/protoc/protoc.go
+index 0db64de9f241d0dd8143d2325148d7a90f2c593f..089e357bc3dc147f49491a37f9d11fb14115937b 100644
+--- a/tools/goctl/pkg/protoc/protoc.go
++++ b/tools/goctl/pkg/protoc/protoc.go
+@@ -43,7 +43,7 @@ func Install(cacheDir string) (string, error) {
+ 		case vars.OsLinux:
+ 			downloadUrl = url[fmt.Sprintf("%s_%d", vars.OsLinux, bit)]
+ 		default:
+-			return "", fmt.Errorf("unsupport OS: %q", goos)
++			return "", fmt.Errorf("unsupported OS: %q", goos)
+ 		}
+ 
+ 		err := downloader.Download(downloadUrl, tempFile)
+diff --git a/tools/goctl/util/string.go b/tools/goctl/util/string.go
+index 707f2c75c88d77ef90661236970ddf6da78e2f44..05c76916e8c94d33b44563c784db500fa8819daf 100644
+--- a/tools/goctl/util/string.go
++++ b/tools/goctl/util/string.go
+@@ -2,7 +2,6 @@ package util
+ 
+ import (
+ 	"slices"
+-	"strconv"
+ 	"strings"
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/console"
+@@ -130,14 +129,3 @@ func FieldsAndTrimSpace(s string, f func(r rune) bool) []string {
+ 	}
+ 	return resp
+ }
+-
+-//Deprecated: This function implementation is incomplete and does not properly handle exceptional input cases.
+-//We strongly recommend using the standard library's strconv.Unquote function instead,
+-//which provides robust error handling and comprehensive support for various input formats.
+-func Unquote(s string) string {
+-	ns, err := strconv.Unquote(s)
+-	if err != nil {
+-		return ""
+-	}
+-	return ns
+-}
+diff --git a/zrpc/internal/serverinterceptors/recoverinterceptor.go b/zrpc/internal/serverinterceptors/recoverinterceptor.go
+index 84c4632a1599d3504087ffd2320ef5e542237554..8e5afda440602f2a72d692be3057f8d64f0f8b54 100644
+--- a/zrpc/internal/serverinterceptors/recoverinterceptor.go
++++ b/zrpc/internal/serverinterceptors/recoverinterceptor.go
+@@ -4,7 +4,7 @@ import (
+ 	"context"
+ 	"runtime/debug"
+ 
+-	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+@@ -14,7 +14,7 @@ import (
+ func StreamRecoverInterceptor(svr any, stream grpc.ServerStream, _ *grpc.StreamServerInfo,
+ 	handler grpc.StreamHandler) (err error) {
+ 	defer handleCrash(func(r any) {
+-		err = toPanicError(r)
++		err = toPanicError(context.Background(), r)
+ 	})
+ 
+ 	return handler(svr, stream)
+@@ -24,7 +24,7 @@ func StreamRecoverInterceptor(svr any, stream grpc.ServerStream, _ *grpc.StreamS
+ func UnaryRecoverInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo,
+ 	handler grpc.UnaryHandler) (resp any, err error) {
+ 	defer handleCrash(func(r any) {
+-		err = toPanicError(r)
++		err = toPanicError(ctx, r)
+ 	})
+ 
+ 	return handler(ctx, req)
+@@ -36,7 +36,7 @@ func handleCrash(handler func(any)) {
+ 	}
+ }
+ 
+-func toPanicError(r any) error {
+-	logx.Errorf("%+v\n\n%s", r, debug.Stack())
++func toPanicError(ctx context.Context, r any) error {
++	logc.Errorf(ctx, "%+v\n\n%s", r, debug.Stack())
+ 	return status.Errorf(codes.Internal, "panic: %v", r)
+ }
+diff --git a/zrpc/internal/serverinterceptors/statinterceptor.go b/zrpc/internal/serverinterceptors/statinterceptor.go
+index b31bf7ffa77a973c7fd8ee66ee4e9c74d6c5bef4..895addc94f4d5ca671c9492c564921bc011eb694 100644
+--- a/zrpc/internal/serverinterceptors/statinterceptor.go
++++ b/zrpc/internal/serverinterceptors/statinterceptor.go
+@@ -43,8 +43,8 @@ func SetSlowThreshold(threshold time.Duration) {
+ 
+ // UnaryStatInterceptor returns a func that uses given metrics to report stats.
+ func UnaryStatInterceptor(metrics *stat.Metrics, conf StatConf) grpc.UnaryServerInterceptor {
+-	staticNotLoggingContentMethods := collection.NewSet()
+-	staticNotLoggingContentMethods.AddStr(conf.IgnoreContentMethods...)
++	staticNotLoggingContentMethods := collection.NewSet[string]()
++	staticNotLoggingContentMethods.Add(conf.IgnoreContentMethods...)
+ 
+ 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo,
+ 		handler grpc.UnaryHandler) (resp any, err error) {
+@@ -68,7 +68,7 @@ func isSlow(duration, durationThreshold time.Duration) bool {
+ }
+ 
+ func logDuration(ctx context.Context, method string, req any, duration time.Duration,
+-	ignoreMethods *collection.Set, durationThreshold time.Duration) {
++	ignoreMethods *collection.Set[string], durationThreshold time.Duration) {
+ 	var addr string
+ 	client, ok := peer.FromContext(ctx)
+ 	if ok {
+@@ -92,7 +92,7 @@ func logDuration(ctx context.Context, method string, req any, duration time.Dura
+ 	}
+ }
+ 
+-func shouldLogContent(method string, ignoreMethods *collection.Set) bool {
++func shouldLogContent(method string, ignoreMethods *collection.Set[string]) bool {
+ 	_, ok := ignoreContentMethods.Load(method)
+ 	return !ok && !ignoreMethods.Contains(method)
+ }
+diff --git a/zrpc/resolver/internal/discovbuilder.go b/zrpc/resolver/internal/discovbuilder.go
+index cf432e23e5ba3af9823c1849dd14eee4dece8707..a39c62f0b9d849ea6d4e94be308c599a2d61364a 100644
+--- a/zrpc/resolver/internal/discovbuilder.go
++++ b/zrpc/resolver/internal/discovbuilder.go
+@@ -37,9 +37,24 @@ func (b *discovBuilder) Build(target resolver.Target, cc resolver.ClientConn, _
+ 	sub.AddListener(update)
+ 	update()
+ 
+-	return &nopResolver{cc: cc}, nil
++	return &discovResolver{
++		cc:  cc,
++		sub: sub,
++	}, nil
+ }
+ 
+ func (b *discovBuilder) Scheme() string {
+ 	return DiscovScheme
+ }
++
++type discovResolver struct {
++	cc  resolver.ClientConn
++	sub *discov.Subscriber
++}
++
++func (r *discovResolver) Close() {
++	r.sub.Close()
++}
++
++func (r *discovResolver) ResolveNow(_ resolver.ResolveNowOptions) {
++}
+diff --git a/zrpc/resolver/internal/kubebuilder.go b/zrpc/resolver/internal/kubebuilder.go
+index 2392cc67a24412f1f8427571529934a9af2a46d1..90ef397c425e02a7f735ace18c1d4f619c8dd963 100644
+--- a/zrpc/resolver/internal/kubebuilder.go
++++ b/zrpc/resolver/internal/kubebuilder.go
+@@ -1,3 +1,5 @@
++//go:build !no_k8s
++
+ package internal
+ 
+ import (
+@@ -6,7 +8,6 @@ import (
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/logx"
+-	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ 	"github.com/zeromicro/go-zero/zrpc/resolver/internal/kube"
+ 	"google.golang.org/grpc/resolver"
+@@ -21,6 +22,24 @@ const (
+ 	nameSelector   = "metadata.name="
+ )
+ 
++type kubeResolver struct {
++	cc     resolver.ClientConn
++	inf    informers.SharedInformerFactory
++	stopCh chan struct{}
++}
++
++func (r *kubeResolver) Close() {
++	close(r.stopCh)
++}
++
++func (r *kubeResolver) ResolveNow(_ resolver.ResolveNowOptions) {}
++
++func (r *kubeResolver) start() {
++	threading.GoSafe(func() {
++		r.inf.Start(r.stopCh)
++	})
++}
++
+ type kubeBuilder struct{}
+ 
+ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+@@ -41,10 +60,13 @@ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+ 	}
+ 
+ 	if svc.Port == 0 {
+-		endpoints, err := cs.CoreV1().Endpoints(svc.Namespace).Get(context.Background(), svc.Name, v1.GetOptions{})
++		// getting endpoints is only to get the port
++		endpoints, err := cs.CoreV1().Endpoints(svc.Namespace).Get(
++			context.Background(), svc.Name, v1.GetOptions{})
+ 		if err != nil {
+ 			return nil, err
+ 		}
++
+ 		svc.Port = int(endpoints.Subsets[0].Ports[0].Port)
+ 	}
+ 
+@@ -73,17 +95,24 @@ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+ 		return nil, err
+ 	}
+ 
+-	threading.GoSafe(func() {
+-		inf.Start(proc.Done())
+-	})
+-	endpoints, err := cs.CoreV1().Endpoints(svc.Namespace).Get(context.Background(), svc.Name, v1.GetOptions{})
++	// get the initial endpoints, cannot use the previous endpoints,
++	// because the endpoints may be updated before/after the informer is started.
++	endpoints, err := cs.CoreV1().Endpoints(svc.Namespace).Get(
++		context.Background(), svc.Name, v1.GetOptions{})
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 
+ 	handler.Update(endpoints)
+ 
+-	return &nopResolver{cc: cc}, nil
++	r := &kubeResolver{
++		cc:     cc,
++		inf:    inf,
++		stopCh: make(chan struct{}),
++	}
++	r.start()
++
++	return r, nil
+ }
+ 
+ func (b *kubeBuilder) Scheme() string {
+diff --git a/zrpc/resolver/internal/register.go b/zrpc/resolver/internal/register.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..364b2c9adaf6a193ca493e842909fe8c96a3f5db
+--- /dev/null
++++ b/zrpc/resolver/internal/register.go
+@@ -0,0 +1,8 @@
++//go:build no_k8s
++
++package internal
++
++// RegisterResolver registers the direct, etcd and discov schemes to the resolver.
++func RegisterResolver() {
++	register()
++}
+diff --git a/zrpc/resolver/internal/register_k8s.go b/zrpc/resolver/internal/register_k8s.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cac14691976abc8e71f40942491d5702746053d
+--- /dev/null
++++ b/zrpc/resolver/internal/register_k8s.go
+@@ -0,0 +1,13 @@
++//go:build !no_k8s
++
++package internal
++
++import "google.golang.org/grpc/resolver"
++
++var k8sResolverBuilder kubeBuilder
++
++// RegisterResolver registers the direct, etcd, discov and k8s schemes to the resolver.
++func RegisterResolver() {
++	register()
++	resolver.Register(&k8sResolverBuilder)
++}
+diff --git a/zrpc/resolver/internal/resolver.go b/zrpc/resolver/internal/resolver.go
+index 2d64ccc84664dc3ed8f8bce2ce08ce1fb1c4ccf6..7868eca8cecfc37c77f46618ddb9f16d3739d00a 100644
+--- a/zrpc/resolver/internal/resolver.go
++++ b/zrpc/resolver/internal/resolver.go
+@@ -28,15 +28,12 @@ var (
+ 	directResolverBuilder directBuilder
+ 	discovResolverBuilder discovBuilder
+ 	etcdResolverBuilder   etcdBuilder
+-	k8sResolverBuilder    kubeBuilder
+ )
+ 
+-// RegisterResolver registers the direct and discov schemes to the resolver.
+-func RegisterResolver() {
++func register() {
+ 	resolver.Register(&directResolverBuilder)
+ 	resolver.Register(&discovResolverBuilder)
+ 	resolver.Register(&etcdResolverBuilder)
+-	resolver.Register(&k8sResolverBuilder)
+ }
+ 
+ type nopResolver struct {

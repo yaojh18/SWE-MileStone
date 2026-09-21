@@ -1,0 +1,1249 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.asf.yaml b/.asf.yaml
+index 4f41badc91d2e5b4215be992b8b2a49da192a894..db8c17d077dddb22cf7e99898243f6c9b5892983 100644
+--- a/.asf.yaml
++++ b/.asf.yaml
+@@ -37,15 +37,51 @@ github:
+     # Enable GitHub Discussions for community discussions
+     discussions: true
+   protected_branches:
+-    master: {}
+-    2.5.x: {}
+-    2.6.x: {}
+-    2.7.x: {}
+-    3.0: {}
+-    3.1: {}
+-    3.2: {}
+-    3.3: {}
+-    3.4: {}
++    master: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.5.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.6.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.7.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.0: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.1: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.2: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.3: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.4: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
+   labels:
+     - java
+     - rpc
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertManager.java b/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertManager.java
+index 8bb0c492ec16b61114f9cdd47b7b83e60f443e50..608fff2d8716f692e7f1b4598a49409f0a473e9a 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertManager.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertManager.java
+@@ -32,8 +32,8 @@ public class CertManager {
+ 
+     public ProviderCert getProviderConnectionConfig(URL localAddress, SocketAddress remoteAddress) {
+         for (CertProvider certProvider : certProviders) {
+-            if (certProvider.isSupport(localAddress)) {
+-                ProviderCert cert = certProvider.getProviderConnectionConfig(localAddress);
++            if (certProvider.isSupport(localAddress, remoteAddress)) {
++                ProviderCert cert = certProvider.getProviderConnectionConfig(localAddress, remoteAddress);
+                 if (cert != null) {
+                     return cert;
+                 }
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertProvider.java b/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertProvider.java
+index dad514f9b256733ac4d43a8a3f0e830ffc15a8f4..1c80158ee37987a6c627b2aabeab9b96949d32d6 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertProvider.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/ssl/CertProvider.java
+@@ -20,11 +20,21 @@ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.extension.ExtensionScope;
+ import org.apache.dubbo.common.extension.SPI;
+ 
++import java.net.SocketAddress;
++
+ @SPI(scope = ExtensionScope.FRAMEWORK)
+ public interface CertProvider {
+     boolean isSupport(URL address);
+ 
++    default boolean isSupport(URL address, SocketAddress remoteAddress) {
++        return isSupport(address);
++    }
++
+     ProviderCert getProviderConnectionConfig(URL localAddress);
+ 
++    default ProviderCert getProviderConnectionConfig(URL localAddress, SocketAddress remoteAddress) {
++        return getProviderConnectionConfig(localAddress);
++    }
++
+     Cert getConsumerConnectionConfig(URL remoteAddress);
+ }
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3e357d55ea31ae458c0d0e1e74a143bfd751d5ee 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,7 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistryDirectory.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistryDirectory.java
+index d77c72bbc9d96dbbda65a1d760b1d71a74682c26..0eb58fcf58e653f9a0348d964b9fda807ecff34e 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistryDirectory.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistryDirectory.java
+@@ -343,6 +343,17 @@ public class ServiceDiscoveryRegistryDirectory<T> extends DynamicDirectory<T> {
+                 return;
+             }
+ 
++            int originSize = invokerUrls.size();
++            invokerUrls = invokerUrls.stream().distinct().collect(Collectors.toList());
++            if (invokerUrls.size() != originSize) {
++                logger.info("Received duplicated invoker urls changed event from registry. "
++                        + "Registry type: instance. "
++                        + "Service Key: "
++                        + getConsumerUrl().getServiceKey() + ". "
++                        + "Notify Urls Size : " + originSize + ". "
++                        + "Distinct Urls Size: " + invokerUrls.size() + ".");
++            }
++
+             // use local reference to avoid NPE as this.urlInvokerMap will be set null concurrently at
+             // destroyAllInvokers().
+             Map<ProtocolServiceKeyWithAddress, Invoker<T>> localUrlInvokerMap = this.urlInvokerMap;
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryDirectory.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryDirectory.java
+index 7d479951ba735ec21f27ebf71adc4953d01d9916..77b661d84f6c3ba7561acf73264bee2e24f77c7d 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryDirectory.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryDirectory.java
+@@ -310,6 +310,17 @@ public class RegistryDirectory<T> extends DynamicDirectory<T> {
+                 return;
+             }
+ 
++            int originSize = invokerUrls.size();
++            invokerUrls = invokerUrls.stream().distinct().collect(Collectors.toList());
++            if (invokerUrls.size() != originSize) {
++                logger.info("Received duplicated invoker urls changed event from registry. "
++                        + "Registry type: interface. "
++                        + "Service Key: "
++                        + getConsumerUrl().getServiceKey() + ". "
++                        + "Notify Urls Size : " + originSize + ". "
++                        + "Distinct Urls Size: " + invokerUrls.size() + ".");
++            }
++
+             // use local reference to avoid NPE as this.urlInvokerMap will be set null concurrently at
+             // destroyAllInvokers().
+             Map<URL, Invoker<T>> localUrlInvokerMap = this.urlInvokerMap;
+diff --git a/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapper.java b/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapper.java
+index 5200f022b544d59527c74f42537e14c7272d24cd..b752925553181f5b7d183876f5594f3abd0d4995 100644
+--- a/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapper.java
++++ b/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapper.java
+@@ -110,9 +110,10 @@ public class NacosNamingServiceWrapper {
+         }
+     }
+ 
+-    public List<Instance> getAllInstances(String serviceName, String group) throws NacosException {
+-        return apply(
+-                () -> nacosConnectionManager.getNamingService().getAllInstances(handleInnerSymbol(serviceName), group));
++    public List<Instance> getAllInstancesWithoutSubscription(String serviceName, String group) throws NacosException {
++        return apply(() -> nacosConnectionManager
++                .getNamingService()
++                .getAllInstances(handleInnerSymbol(serviceName), group, false));
+     }
+ 
+     public void registerInstance(String serviceName, String group, Instance instance) throws NacosException {
+diff --git a/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosRegistry.java b/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosRegistry.java
+index b2e934c194845b42addf6a8647c1bcf7ae5e1ec5..573affda2ba52f13281d4515e0a7a0083bd64514 100644
+--- a/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosRegistry.java
++++ b/dubbo-registry/dubbo-registry-nacos/src/main/java/org/apache/dubbo/registry/nacos/NacosRegistry.java
+@@ -161,8 +161,8 @@ public class NacosRegistry extends FailbackRegistry {
+             List<URL> urls = new LinkedList<>();
+             Set<String> serviceNames = getServiceNames(url, null);
+             for (String serviceName : serviceNames) {
+-                List<Instance> instances =
+-                        namingService.getAllInstances(serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP));
++                List<Instance> instances = namingService.getAllInstancesWithoutSubscription(
++                        serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP));
+                 urls.addAll(buildURLs(url, instances));
+             }
+             return urls;
+@@ -270,8 +270,8 @@ public class NacosRegistry extends FailbackRegistry {
+                  * in https://github.com/apache/dubbo/issues/5978
+                  */
+                 for (String serviceName : serviceNames) {
+-                    List<Instance> instances =
+-                            namingService.getAllInstances(serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP));
++                    List<Instance> instances = namingService.getAllInstancesWithoutSubscription(
++                            serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP));
+                     notifySubscriber(url, serviceName, listener, instances);
+                 }
+                 for (String serviceName : serviceNames) {
+@@ -280,8 +280,8 @@ public class NacosRegistry extends FailbackRegistry {
+             } else {
+                 for (String serviceName : serviceNames) {
+                     List<Instance> instances = new LinkedList<>();
+-                    instances.addAll(
+-                            namingService.getAllInstances(serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP)));
++                    instances.addAll(namingService.getAllInstancesWithoutSubscription(
++                            serviceName, getUrl().getGroup(Constants.DEFAULT_GROUP)));
+                     String serviceInterface = serviceName;
+                     String[] segments = serviceName.split(SERVICE_NAME_SEPARATOR, -1);
+                     if (segments.length == 4) {
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/Constants.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/Constants.java
+index 0a0ba1cd9f7826c3061cd6e73e82af669649e24c..87168d17aa2f0e2c8eef7c94309fefe168d41295 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/Constants.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/Constants.java
+@@ -174,6 +174,7 @@ public interface Constants {
+ 
+     List<String> REST_SERVER = Arrays.asList("jetty", "tomcat", "netty");
+     String CONTENT_LENGTH_KEY = "content-length";
++    String SSL_SESSION_KEY = "ssl-session";
+ 
+     String CONNECTION_HANDLER_NAME = "connectionHandler";
+ }
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/api/pu/AbstractPortUnificationServer.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/api/pu/AbstractPortUnificationServer.java
+index 4431e8e9b987d423ba9ebab08ed09b6c0255eb2a..c3a1513328e2e52d52df8cd730d2cda76599101b 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/api/pu/AbstractPortUnificationServer.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/api/pu/AbstractPortUnificationServer.java
+@@ -38,39 +38,51 @@ public abstract class AbstractPortUnificationServer extends AbstractServer {
+     /**
+      * extension name -> activate WireProtocol
+      */
+-    private final Map<String, WireProtocol> protocols;
++    private volatile Map<String, WireProtocol> protocols;
+ 
+     /*
+     protocol name --> URL object
+     wire protocol will get url object to config server pipeline for channel
+      */
+-    private final Map<String, URL> supportedUrls = new ConcurrentHashMap<>();
++    private Map<String, URL> supportedUrls;
+ 
+     /*
+     protocol name --> ChannelHandler object
+     wire protocol will get handler to config server pipeline for channel
+     (for triple protocol, it's a default handler that do nothing)
+      */
+-    private final Map<String, ChannelHandler> supportedHandlers = new ConcurrentHashMap<>();
++    private Map<String, ChannelHandler> supportedHandlers;
+ 
+     public AbstractPortUnificationServer(URL url, ChannelHandler handler) throws RemotingException {
+         super(url, handler);
+-        ExtensionLoader<WireProtocol> loader = url.getOrDefaultFrameworkModel().getExtensionLoader(WireProtocol.class);
+-        Map<String, WireProtocol> protocols = loader.getActivateExtension(url, new String[0]).stream()
++    }
++
++    public Map<String, WireProtocol> getProtocols() {
++        return protocols;
++    }
++
++    @Override
++    protected final void doOpen() {
++        // initialize supportedUrls and supportedHandlers before potential usage to avoid NPE.
++        supportedUrls = new ConcurrentHashMap<>();
++        supportedHandlers = new ConcurrentHashMap<>();
++
++        ExtensionLoader<WireProtocol> loader =
++                getUrl().getOrDefaultFrameworkModel().getExtensionLoader(WireProtocol.class);
++        Map<String, WireProtocol> protocols = loader.getActivateExtension(getUrl(), new String[0]).stream()
+                 .collect(Collectors.toConcurrentMap(loader::getExtensionName, Function.identity()));
+         // load extra protocols
+-        String extraProtocols = url.getParameter(EXT_PROTOCOL);
++        String extraProtocols = getUrl().getParameter(EXT_PROTOCOL);
+         if (StringUtils.isNotEmpty(extraProtocols)) {
+             Arrays.stream(extraProtocols.split(COMMA_SEPARATOR)).forEach(p -> {
+                 protocols.put(p, loader.getExtension(p));
+             });
+         }
+         this.protocols = protocols;
++        doOpen0();
+     }
+ 
+-    public Map<String, WireProtocol> getProtocols() {
+-        return protocols;
+-    }
++    protected abstract void doOpen0();
+ 
+     /*
+     This method registers URL object and corresponding channel handler to pu server.
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/AbstractTimerTask.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/AbstractTimerTask.java
+index e9c1dfeada79ea2872e0c848da95bffe221b3ae8..13d5b12eb91199deb8bcb0451bd4b62568cdf8e8 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/AbstractTimerTask.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/AbstractTimerTask.java
+@@ -45,7 +45,7 @@ public abstract class AbstractTimerTask implements TimerTask {
+         this.channelProvider = channelProvider;
+         this.hashedWheelTimer = hashedWheelTimer;
+         this.tick = tick;
+-        start();
++        // do not start here because inheritor should set additional timeout parameters before doing task.
+     }
+ 
+     static Long lastRead(Channel channel) {
+@@ -60,7 +60,7 @@ public abstract class AbstractTimerTask implements TimerTask {
+         return System.currentTimeMillis();
+     }
+ 
+-    private void start() {
++    protected void start() {
+         this.timeout = hashedWheelTimer.newTimeout(this, tick, TimeUnit.MILLISECONDS);
+     }
+ 
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/CloseTimerTask.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/CloseTimerTask.java
+index ac75bb6432583ffb2316168a896e21166afe07df..a4cf662deb94576724f06d23484e0318141d1870 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/CloseTimerTask.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/CloseTimerTask.java
+@@ -37,6 +37,7 @@ public class CloseTimerTask extends AbstractTimerTask {
+             ChannelProvider channelProvider, HashedWheelTimer hashedWheelTimer, Long tick, int closeTimeout) {
+         super(channelProvider, hashedWheelTimer, tick);
+         this.closeTimeout = closeTimeout;
++        start();
+     }
+ 
+     @Override
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/HeartbeatTimerTask.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/HeartbeatTimerTask.java
+index 6c3c3eaad13eb9425ebe55c6914ae703fc70fcb0..a29d31c180ec63d3198496941b511c2146dd8d57 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/HeartbeatTimerTask.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/HeartbeatTimerTask.java
+@@ -39,6 +39,7 @@ public class HeartbeatTimerTask extends AbstractTimerTask {
+             ChannelProvider channelProvider, HashedWheelTimer hashedWheelTimer, Long heartbeatTick, int heartbeat) {
+         super(channelProvider, hashedWheelTimer, heartbeatTick);
+         this.heartbeat = heartbeat;
++        start();
+     }
+ 
+     @Override
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/ReconnectTimerTask.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/ReconnectTimerTask.java
+index 354df1b68955c38e46f03b4ea7b278961974b565..3bf99d8d70da47f9d36e01dafddabeb68db0fc76 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/ReconnectTimerTask.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/exchange/support/header/ReconnectTimerTask.java
+@@ -41,6 +41,7 @@ public class ReconnectTimerTask extends AbstractTimerTask {
+             int idleTimeout) {
+         super(channelProvider, hashedWheelTimer, heartbeatTimeoutTick);
+         this.idleTimeout = idleTimeout;
++        start();
+     }
+ 
+     @Override
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractClient.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractClient.java
+index 5b842d33affee75ece3ae431b380afc51a0b9f24..3d203b5894d75659d3c7e48121909f491a65d0a1 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractClient.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractClient.java
+@@ -53,7 +53,7 @@ import static org.apache.dubbo.remoting.utils.UrlUtils.getIdleTimeout;
+  */
+ public abstract class AbstractClient extends AbstractEndpoint implements Client {
+ 
+-    private final Lock connectLock = new ReentrantLock();
++    private Lock connectLock;
+ 
+     private final boolean needReconnect;
+ 
+@@ -67,6 +67,10 @@ public abstract class AbstractClient extends AbstractEndpoint implements Client
+ 
+     public AbstractClient(URL url, ChannelHandler handler) throws RemotingException {
+         super(url, handler);
++
++        // initialize connectLock before calling connect()
++        connectLock = new ReentrantLock();
++
+         // set default needReconnect true when channel is not connected
+         needReconnect = url.getParameter(Constants.SEND_RECONNECT_KEY, true);
+ 
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
+index 1977d2b52ff593e7454f27ea4d9d280fe55aebf6..effdd73561d75b0b8d30f3f738ae46d0e4fcaaed 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
+@@ -196,10 +196,7 @@ public abstract class AbstractServer extends AbstractEndpoint implements Remotin
+     @Override
+     public void disconnected(Channel ch) throws RemotingException {
+         if (getChannelsSize() == 0) {
+-            logger.warn(
+-                    INTERNAL_ERROR,
+-                    "unknown error in remoting module",
+-                    "",
++            logger.info(
+                     "All clients has disconnected from " + ch.getLocalAddress() + ". You can graceful shutdown now.");
+         }
+         super.disconnected(ch);
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/MultiMessageHandler.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/MultiMessageHandler.java
+index 9cb55fb5143b40252a87194d78b6258407bef48e..fb0073d9123e66ed32ee5169e178c8edf4e6f3b5 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/MultiMessageHandler.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/MultiMessageHandler.java
+@@ -37,7 +37,6 @@ public class MultiMessageHandler extends AbstractChannelHandlerDelegate {
+         super(handler);
+     }
+ 
+-    @SuppressWarnings("unchecked")
+     @Override
+     public void received(Channel channel, Object message) throws RemotingException {
+         if (message instanceof MultiMessage) {
+diff --git a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyHttp3Server.java b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyHttp3Server.java
+index e9a8634f25fdbff75415eefadccf085242899b37..d93dd6ece9691bb522b54b299c503ece09644759 100644
+--- a/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyHttp3Server.java
++++ b/dubbo-remoting/dubbo-remoting-http3/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyHttp3Server.java
+@@ -57,20 +57,23 @@ public class NettyHttp3Server extends AbstractServer {
+     private EventLoopGroup bossGroup;
+     private io.netty.channel.Channel channel;
+ 
+-    private final Consumer<ChannelPipeline> pipelineConfigurator;
+-    private final int serverShutdownTimeoutMills;
++    private Consumer<ChannelPipeline> pipelineConfigurator;
++    private int serverShutdownTimeoutMills;
+ 
+-    @SuppressWarnings("unchecked")
+     public NettyHttp3Server(URL url, ChannelHandler handler) throws RemotingException {
+         super(url, ChannelHandlers.wrap(handler, url));
+-        pipelineConfigurator = (Consumer<ChannelPipeline>) getUrl().getAttribute(PIPELINE_CONFIGURATOR_KEY);
+-        Objects.requireNonNull(pipelineConfigurator, "pipelineConfigurator should be set");
+-        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
+     }
+ 
+     @Override
++    @SuppressWarnings("unchecked")
+     protected void doOpen() throws Throwable {
+         bootstrap = new Bootstrap();
++
++        // initialize pipelineConfigurator and serverShutdownTimeoutMills before potential usage to avoid NPE.
++        pipelineConfigurator = (Consumer<ChannelPipeline>) getUrl().getAttribute(PIPELINE_CONFIGURATOR_KEY);
++        Objects.requireNonNull(pipelineConfigurator, "pipelineConfigurator should be set");
++        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
++
+         bossGroup = NettyEventLoopFactory.eventLoopGroup(1, EVENT_LOOP_BOSS_POOL_NAME);
+         NettyServerHandler nettyServerHandler = new NettyServerHandler(getUrl(), this);
+         channels = nettyServerHandler.getChannels();
+diff --git a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
+index dedf9cb85672a47b345cb3f3fcdfa70ebc611dd0..91febacab713bcda1a850519be1ec5f33bfd6613 100644
+--- a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
+@@ -32,7 +32,6 @@ import java.net.InetSocketAddress;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Map;
+-import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
+ 
+@@ -56,7 +55,8 @@ import static org.apache.dubbo.remoting.Constants.EVENT_LOOP_WORKER_POOL_NAME;
+  */
+ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+ 
+-    private Map<String, Channel> dubboChannels = new ConcurrentHashMap<>(); // <ip:port, channel>
++    // <ip:port, channel>
++    private Map<String, Channel> dubboChannels;
+ 
+     private ServerBootstrap bootstrap;
+ 
+@@ -85,7 +85,7 @@ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+     }
+ 
+     @Override
+-    protected void doOpen() {
++    protected void doOpen0() {
+         NettyHelper.setNettyLoggerFactory();
+         ExecutorService boss = Executors.newCachedThreadPool(new NamedThreadFactory(EVENT_LOOP_BOSS_POOL_NAME, true));
+         ExecutorService worker =
+@@ -95,6 +95,7 @@ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+         bootstrap = new ServerBootstrap(channelFactory);
+ 
+         final NettyHandler nettyHandler = new NettyHandler(getUrl(), this);
++        // set dubboChannels
+         dubboChannels = nettyHandler.getChannels();
+         // https://issues.jboss.org/browse/NETTY-365
+         // https://issues.jboss.org/browse/NETTY-379
+diff --git a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
+index 42a23464819ae87b181a704356d8c14f4c06a1f2..3b7f4be7a0557742a8fc246ef24659eafea06c3a 100644
+--- a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
+@@ -57,7 +57,8 @@ public class NettyServer extends AbstractServer implements RemotingServer {
+ 
+     private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(NettyServer.class);
+ 
+-    private Map<String, Channel> channels; // <ip:port, channel>
++    // <ip:port, channel>
++    private Map<String, Channel> channels;
+ 
+     private ServerBootstrap bootstrap;
+ 
+@@ -78,6 +79,7 @@ public class NettyServer extends AbstractServer implements RemotingServer {
+         bootstrap = new ServerBootstrap(channelFactory);
+ 
+         final NettyHandler nettyHandler = new NettyHandler(getUrl(), this);
++        // set channels
+         channels = nettyHandler.getChannels();
+         // https://issues.jboss.org/browse/NETTY-365
+         // https://issues.jboss.org/browse/NETTY-379
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyChannel.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyChannel.java
+index 715438a73897ca725d37ecbb270c4fd193d544e0..b9eda700f7ae0834d4b9facafdd75625a08e7a7c 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyChannel.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyChannel.java
+@@ -45,6 +45,7 @@ import io.netty.channel.Channel;
+ import io.netty.channel.ChannelFuture;
+ import io.netty.channel.ChannelFutureListener;
+ import io.netty.handler.codec.EncoderException;
++import io.netty.util.ReferenceCountUtil;
+ 
+ import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_ENCODE_IN_IO_THREAD;
+ import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_TIMEOUT;
+@@ -194,10 +195,11 @@ final class NettyChannel extends AbstractChannel {
+ 
+         boolean success = true;
+         int timeout = 0;
++        ByteBuf buf = null;
+         try {
+             Object outputMessage = message;
+             if (!encodeInIOThread) {
+-                ByteBuf buf = channel.alloc().buffer();
++                buf = channel.alloc().buffer();
+                 ChannelBuffer buffer = new NettyBackedChannelBuffer(buf);
+                 codec.encode(this, buffer, message);
+                 outputMessage = buf;
+@@ -230,6 +232,10 @@ final class NettyChannel extends AbstractChannel {
+             }
+         } catch (Throwable e) {
+             removeChannelIfDisconnected(channel);
++            if (buf != null) {
++                // Release the ByteBuf if an exception occurs
++                ReferenceCountUtil.safeRelease(buf);
++            }
+             throw new RemotingException(
+                     this,
+                     "Failed to send message " + PayloadDropper.getRequestWithoutData(message) + " to "
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServer.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServer.java
+index 5786f3a9db98166888837ec99b4df14545a33a24..8bbdfb188fc331fa2187fc324fa69e3491817366 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServer.java
+@@ -57,7 +57,7 @@ import static org.apache.dubbo.remoting.Constants.EVENT_LOOP_WORKER_POOL_NAME;
+  */
+ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+ 
+-    private final int serverShutdownTimeoutMills;
++    private int serverShutdownTimeoutMills;
+     /**
+      * netty server bootstrap.
+      */
+@@ -69,16 +69,10 @@ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+ 
+     private EventLoopGroup bossGroup;
+     private EventLoopGroup workerGroup;
+-    private final Map<String, Channel> dubboChannels = new ConcurrentHashMap<>();
++    private Map<String, Channel> dubboChannels;
+ 
+     public NettyPortUnificationServer(URL url, ChannelHandler handler) throws RemotingException {
+         super(url, ChannelHandlers.wrap(handler, url));
+-
+-        // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREADPOOL_KEY in
+-        // CommonConstants.
+-        // the handler will be wrapped: MultiMessageHandler->HeartbeatHandler->handler
+-        // read config before destroy
+-        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
+     }
+ 
+     @Override
+@@ -100,9 +94,18 @@ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+     }
+ 
+     @Override
+-    public void doOpen() throws Throwable {
++    public void doOpen0() {
+         bootstrap = new ServerBootstrap();
+ 
++        // initialize dubboChannels and serverShutdownTimeoutMills before potential usage to avoid NPE.
++        dubboChannels = new ConcurrentHashMap<>();
++
++        // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREADPOOL_KEY in
++        // CommonConstants.
++        // the handler will be wrapped: MultiMessageHandler->HeartbeatHandler->handler
++        // read config before destroy
++        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
++
+         bossGroup = NettyEventLoopFactory.eventLoopGroup(1, EVENT_LOOP_BOSS_POOL_NAME);
+         workerGroup = NettyEventLoopFactory.eventLoopGroup(
+                 getUrl().getPositiveParameter(IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS),
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServerHandler.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServerHandler.java
+index 69c6738c0d1c2129db006e7ce55bd2d4819a186e..ce23587b054c24c7fd0bda4167b16c6d45ae1070 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServerHandler.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyPortUnificationServerHandler.java
+@@ -20,9 +20,11 @@ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.io.Bytes;
+ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.common.ssl.AuthPolicy;
+ import org.apache.dubbo.common.ssl.CertManager;
+ import org.apache.dubbo.common.ssl.ProviderCert;
+ import org.apache.dubbo.remoting.ChannelHandler;
++import org.apache.dubbo.remoting.Constants;
+ import org.apache.dubbo.remoting.api.ProtocolDetector;
+ import org.apache.dubbo.remoting.api.WireProtocol;
+ import org.apache.dubbo.remoting.buffer.ChannelBuffer;
+@@ -44,7 +46,9 @@ import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
+ import io.netty.handler.ssl.SslContext;
+ import io.netty.handler.ssl.SslHandler;
+ import io.netty.handler.ssl.SslHandshakeCompletionEvent;
++import io.netty.util.AttributeKey;
+ 
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CONFIG_SSL_CONNECT_INSECURE;
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.INTERNAL_ERROR;
+ 
+ public class NettyPortUnificationServerHandler extends ByteToMessageDecoder {
+@@ -57,6 +61,7 @@ public class NettyPortUnificationServerHandler extends ByteToMessageDecoder {
+     private final Map<String, WireProtocol> protocols;
+     private final Map<String, URL> urlMapper;
+     private final Map<String, ChannelHandler> handlerMapper;
++    private static final AttributeKey<SSLSession> SSL_SESSION_KEY = AttributeKey.valueOf(Constants.SSL_SESSION_KEY);
+ 
+     public NettyPortUnificationServerHandler(
+             URL url,
+@@ -91,6 +96,7 @@ public class NettyPortUnificationServerHandler extends ByteToMessageDecoder {
+                 SSLSession session =
+                         ctx.pipeline().get(SslHandler.class).engine().getSession();
+                 LOGGER.info("TLS negotiation succeed with session: " + session);
++                ctx.channel().attr(SSL_SESSION_KEY).set(session);
+             } else {
+                 LOGGER.error(
+                         INTERNAL_ERROR,
+@@ -118,8 +124,27 @@ public class NettyPortUnificationServerHandler extends ByteToMessageDecoder {
+         ProviderCert providerConnectionConfig =
+                 certManager.getProviderConnectionConfig(url, ctx.channel().remoteAddress());
+ 
+-        if (providerConnectionConfig != null && isSsl(in)) {
+-            enableSsl(ctx, providerConnectionConfig);
++        if (providerConnectionConfig != null && canDetectSsl(in)) {
++            if (isSsl(in)) {
++                enableSsl(ctx, providerConnectionConfig);
++            } else {
++                // check server should load TLS or not
++                if (providerConnectionConfig.getAuthPolicy() != AuthPolicy.NONE) {
++                    byte[] preface = new byte[in.readableBytes()];
++                    in.readBytes(preface);
++                    LOGGER.error(
++                            CONFIG_SSL_CONNECT_INSECURE,
++                            "client request server without TLS",
++                            "",
++                            String.format(
++                                    "Downstream=%s request without TLS preface, but server require it. " + "preface=%s",
++                                    ctx.channel().remoteAddress(), Bytes.bytes2hex(preface)));
++
++                    // Untrusted connection; discard everything and close the connection.
++                    in.clear();
++                    ctx.close();
++                }
++            }
+         } else {
+             detectProtocol(ctx, url, channel, in);
+         }
+@@ -146,6 +171,11 @@ public class NettyPortUnificationServerHandler extends ByteToMessageDecoder {
+         p.remove(this);
+     }
+ 
++    private boolean canDetectSsl(ByteBuf buf) {
++        // at least 5 bytes to determine if data is encrypted
++        return detectSsl && buf.readableBytes() >= 5;
++    }
++
+     private boolean isSsl(ByteBuf buf) {
+         // at least 5 bytes to determine if data is encrypted
+         if (detectSsl && buf.readableBytes() >= 5) {
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServer.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServer.java
+index 504931c90f20168885eeb7bea36571bcdd311392..b5a7b29c659593916e026299475e7a650a8939da 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServer.java
+@@ -78,16 +78,13 @@ public class NettyServer extends AbstractServer {
+ 
+     private EventLoopGroup bossGroup;
+     private EventLoopGroup workerGroup;
+-    private final int serverShutdownTimeoutMills;
++    private int serverShutdownTimeoutMills;
+ 
+     public NettyServer(URL url, ChannelHandler handler) throws RemotingException {
+         // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREAD_POOL_KEY in
+         // CommonConstants.
+         // the handler will be wrapped: MultiMessageHandler->HeartbeatHandler->handler
+         super(url, ChannelHandlers.wrap(handler, url));
+-
+-        // read config before destroy
+-        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
+     }
+ 
+     /**
+@@ -99,6 +96,10 @@ public class NettyServer extends AbstractServer {
+     protected void doOpen() throws Throwable {
+         bootstrap = new ServerBootstrap();
+ 
++        // initialize serverShutdownTimeoutMills before potential usage to avoid NPE.
++        // read config before destroy
++        serverShutdownTimeoutMills = ConfigurationUtils.getServerShutdownTimeout(getUrl().getOrDefaultModuleModel());
++
+         bossGroup = createBossGroup();
+         workerGroup = createWorkerGroup();
+ 
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServerHandler.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServerHandler.java
+index c0eac5df9702b61917c6df6a15e18f99ffacd0dd..e42fbcd7ab92237f402f15a57cb26973dcfb7406 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServerHandler.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/NettyServerHandler.java
+@@ -22,6 +22,9 @@ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.utils.NetUtils;
+ import org.apache.dubbo.remoting.Channel;
+ import org.apache.dubbo.remoting.ChannelHandler;
++import org.apache.dubbo.remoting.Constants;
++
++import javax.net.ssl.SSLSession;
+ 
+ import java.util.Map;
+ import java.util.concurrent.ConcurrentHashMap;
+@@ -29,7 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
+ import io.netty.channel.ChannelDuplexHandler;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelPromise;
++import io.netty.handler.ssl.SslHandshakeCompletionEvent;
+ import io.netty.handler.timeout.IdleStateEvent;
++import io.netty.util.AttributeKey;
+ 
+ /**
+  * NettyServerHandler.
+@@ -43,6 +48,8 @@ public class NettyServerHandler extends ChannelDuplexHandler {
+      */
+     private final Map<String, Channel> channels = new ConcurrentHashMap<>();
+ 
++    private static final AttributeKey<SSLSession> SSL_SESSION_KEY = AttributeKey.valueOf(Constants.SSL_SESSION_KEY);
++
+     private final URL url;
+ 
+     private final ChannelHandler handler;
+@@ -128,6 +135,15 @@ public class NettyServerHandler extends ChannelDuplexHandler {
+             }
+         }
+         super.userEventTriggered(ctx, evt);
++        if (evt instanceof SslHandshakeCompletionEvent) {
++            SslHandshakeCompletionEvent handshakeEvent = (SslHandshakeCompletionEvent) evt;
++            if (handshakeEvent.isSuccess()) {
++                NettyChannel channel = NettyChannel.getOrAddChannel(ctx.channel(), url, handler);
++                channel.setAttribute(
++                        Constants.SSL_SESSION_KEY,
++                        ctx.channel().attr(SSL_SESSION_KEY).get());
++            }
++        }
+     }
+ 
+     @Override
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslClientTlsHandler.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslClientTlsHandler.java
+index 9918d171ee3e81ed13ac1191eacb45152b5a129e..fd3f2458845dcdb85420060baf13b14c285d4536 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslClientTlsHandler.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslClientTlsHandler.java
+@@ -19,6 +19,7 @@ package org.apache.dubbo.remoting.transport.netty4.ssl;
+ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.remoting.Constants;
+ 
+ import javax.net.ssl.SSLEngine;
+ import javax.net.ssl.SSLSession;
+@@ -28,13 +29,14 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
+ import io.netty.handler.ssl.SslContext;
+ import io.netty.handler.ssl.SslHandler;
+ import io.netty.handler.ssl.SslHandshakeCompletionEvent;
++import io.netty.util.AttributeKey;
+ 
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.INTERNAL_ERROR;
+ 
+ public class SslClientTlsHandler extends ChannelInboundHandlerAdapter {
+ 
+     private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(SslClientTlsHandler.class);
+-
++    private static final AttributeKey<SSLSession> SSL_SESSION_KEY = AttributeKey.valueOf(Constants.SSL_SESSION_KEY);
+     private final SslContext sslContext;
+ 
+     public SslClientTlsHandler(URL url) {
+@@ -60,6 +62,7 @@ public class SslClientTlsHandler extends ChannelInboundHandlerAdapter {
+                         ctx.pipeline().get(SslHandler.class).engine().getSession();
+                 logger.info("TLS negotiation succeed with: " + session.getPeerHost());
+                 ctx.pipeline().remove(this);
++                ctx.channel().attr(SSL_SESSION_KEY).set(session);
+             } else {
+                 logger.error(
+                         INTERNAL_ERROR,
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslServerTlsHandler.java b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslServerTlsHandler.java
+index 519c45c6de9c73b9f7c665c9dfbc3d5222d86272..00b1a0c30beeab48ffeb3ccfc07c7f51f5f85090 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslServerTlsHandler.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/main/java/org/apache/dubbo/remoting/transport/netty4/ssl/SslServerTlsHandler.java
+@@ -22,6 +22,7 @@ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.ssl.AuthPolicy;
+ import org.apache.dubbo.common.ssl.CertManager;
+ import org.apache.dubbo.common.ssl.ProviderCert;
++import org.apache.dubbo.remoting.Constants;
+ 
+ import javax.net.ssl.SSLSession;
+ 
+@@ -34,6 +35,7 @@ import io.netty.handler.codec.ByteToMessageDecoder;
+ import io.netty.handler.ssl.SslContext;
+ import io.netty.handler.ssl.SslHandler;
+ import io.netty.handler.ssl.SslHandshakeCompletionEvent;
++import io.netty.util.AttributeKey;
+ 
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.INTERNAL_ERROR;
+ 
+@@ -43,6 +45,7 @@ public class SslServerTlsHandler extends ByteToMessageDecoder {
+     private final URL url;
+ 
+     private final boolean sslDetected;
++    private static final AttributeKey<SSLSession> SSL_SESSION_KEY = AttributeKey.valueOf(Constants.SSL_SESSION_KEY);
+ 
+     public SslServerTlsHandler(URL url) {
+         this.url = url;
+@@ -74,6 +77,7 @@ public class SslServerTlsHandler extends ByteToMessageDecoder {
+                 logger.info("TLS negotiation succeed with: " + session.getPeerHost());
+                 // Remove after handshake success.
+                 ctx.pipeline().remove(this);
++                ctx.channel().attr(SSL_SESSION_KEY).set(session);
+             } else {
+                 logger.error(
+                         INTERNAL_ERROR,
+diff --git a/dubbo-rpc/dubbo-rpc-dubbo/src/main/java/org/apache/dubbo/rpc/protocol/dubbo/DecodeableRpcInvocation.java b/dubbo-rpc/dubbo-rpc-dubbo/src/main/java/org/apache/dubbo/rpc/protocol/dubbo/DecodeableRpcInvocation.java
+index aafad861f0c960bd712e2fa75380ae21c3231477..3a7d6e84005bff48535a7a125f90dd8d369161de 100644
+--- a/dubbo-rpc/dubbo-rpc-dubbo/src/main/java/org/apache/dubbo/rpc/protocol/dubbo/DecodeableRpcInvocation.java
++++ b/dubbo-rpc/dubbo-rpc-dubbo/src/main/java/org/apache/dubbo/rpc/protocol/dubbo/DecodeableRpcInvocation.java
+@@ -125,6 +125,10 @@ public class DecodeableRpcInvocation extends RpcInvocation implements Codec, Dec
+     public Object decode(Channel channel, InputStream input) throws IOException {
+         int contentLength = input.available();
+         getAttributes().put(Constants.CONTENT_LENGTH_KEY, contentLength);
++        Object sslSession = channel.getAttribute(Constants.SSL_SESSION_KEY);
++        if (null != sslSession) {
++            put(Constants.SSL_SESSION_KEY, sslSession);
++        }
+ 
+         ObjectInput in = CodecSupport.getSerialization(serializationType).deserialize(channel.getUrl(), input);
+         this.put(SERIALIZATION_ID_KEY, serializationType);
+diff --git a/dubbo-rpc/dubbo-rpc-triple/pom.xml b/dubbo-rpc/dubbo-rpc-triple/pom.xml
+index 5d0a0140c4ca36150358e6794b35d70d471631b8..c4634b3c91ba93037ab38e4999dfb371a6ba6d1f 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/pom.xml
++++ b/dubbo-rpc/dubbo-rpc-triple/pom.xml
+@@ -129,6 +129,12 @@
+       <version>${project.parent.version}</version>
+       <optional>true</optional>
+     </dependency>
++    <dependency>
++      <groupId>org.apache.dubbo</groupId>
++      <artifactId>dubbo-cluster</artifactId>
++      <version>${project.parent.version}</version>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+   <build>
+     <plugins>
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
+index 6a26fbc32f2a23ecfdfd4122bcb829daedbfe8e2..45c59f3e3cdf1a6fb85479dd41ed34d736afc773 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TripleInvoker.java
+@@ -152,12 +152,17 @@ public class TripleInvoker<T> extends AbstractInvoker<T> {
+         ServiceDescriptor serviceDescriptor = consumerModel.getServiceModel();
+         MethodDescriptor methodDescriptor =
+                 serviceDescriptor.getMethod(invocation.getMethodName(), invocation.getParameterTypes());
+-        if (methodDescriptor == null
+-                && RpcUtils.isGenericCall(
+-                        ((RpcInvocation) invocation).getParameterTypesDesc(), invocation.getMethodName())) {
+-            // Only reach when server generic
+-            methodDescriptor = ServiceDescriptorInternalCache.genericService()
+-                    .getMethod(invocation.getMethodName(), invocation.getParameterTypes());
++        if (methodDescriptor == null) {
++            if (RpcUtils.isGenericCall(
++                    ((RpcInvocation) invocation).getParameterTypesDesc(), invocation.getMethodName())) {
++                // Only reach when server generic
++                methodDescriptor = ServiceDescriptorInternalCache.genericService()
++                        .getMethod(invocation.getMethodName(), invocation.getParameterTypes());
++            } else if (RpcUtils.isEcho(
++                    ((RpcInvocation) invocation).getParameterTypesDesc(), invocation.getMethodName())) {
++                methodDescriptor = ServiceDescriptorInternalCache.echoService()
++                        .getMethod(invocation.getMethodName(), invocation.getParameterTypes());
++            }
+         }
+         ExecutorService callbackExecutor =
+                 isSync(methodDescriptor, invocation) ? new ThreadlessExecutor() : streamExecutor;
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
+index 036739f019a81f88f6764131527b4f32dedbb028..39b0df645a8d877340e0c4fdb852881102c3985e 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/AbstractTripleClientStream.java
+@@ -19,6 +19,7 @@ package org.apache.dubbo.rpc.protocol.tri.stream;
+ import org.apache.dubbo.common.constants.CommonConstants;
+ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.remoting.Constants;
+ import org.apache.dubbo.remoting.http12.HttpHeaderNames;
+ import org.apache.dubbo.rpc.TriRpcStatus;
+ import org.apache.dubbo.rpc.model.FrameworkModel;
+@@ -38,6 +39,8 @@ import org.apache.dubbo.rpc.protocol.tri.transport.AbstractH2TransportListener;
+ import org.apache.dubbo.rpc.protocol.tri.transport.H2TransportListener;
+ import org.apache.dubbo.rpc.protocol.tri.transport.TripleWriteQueue;
+ 
++import javax.net.ssl.SSLSession;
++
+ import java.io.IOException;
+ import java.net.SocketAddress;
+ import java.nio.charset.StandardCharsets;
+@@ -56,6 +59,7 @@ import io.netty.channel.ChannelFuture;
+ import io.netty.handler.codec.http2.Http2Error;
+ import io.netty.handler.codec.http2.Http2Headers;
+ import io.netty.handler.codec.http2.Http2StreamChannel;
++import io.netty.util.AttributeKey;
+ import io.netty.util.ReferenceCountUtil;
+ 
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.PROTOCOL_FAILED_RESPONSE;
+@@ -69,6 +73,7 @@ public abstract class AbstractTripleClientStream extends AbstractStream implemen
+ 
+     private static final ErrorTypeAwareLogger LOGGER =
+             LoggerFactory.getErrorTypeAwareLogger(AbstractTripleClientStream.class);
++    private static final AttributeKey<SSLSession> SSL_SESSION_KEY = AttributeKey.valueOf(Constants.SSL_SESSION_KEY);
+ 
+     private final ClientStream.Listener listener;
+     protected final TripleWriteQueue writeQueue;
+@@ -147,6 +152,11 @@ public abstract class AbstractTripleClientStream extends AbstractStream implemen
+         return parent.remoteAddress();
+     }
+ 
++    @Override
++    public SSLSession getSslSession() {
++        return parent.attr(SSL_SESSION_KEY).get();
++    }
++
+     @Override
+     public ChannelFuture sendMessage(byte[] message, int compressFlag) {
+         ChannelFuture checkResult = preCheck();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/Stream.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/Stream.java
+index 05b55e5224cee1a371bf7b8353e5638cb9caede0..2ff8d7c831574a917d16f53e5bf4eaa2896e31f8 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/Stream.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/stream/Stream.java
+@@ -18,6 +18,8 @@ package org.apache.dubbo.rpc.protocol.tri.stream;
+ 
+ import org.apache.dubbo.rpc.TriRpcStatus;
+ 
++import javax.net.ssl.SSLSession;
++
+ import java.net.SocketAddress;
+ 
+ import io.netty.handler.codec.http2.Http2Headers;
+@@ -74,6 +76,13 @@ public interface Stream {
+      */
+     SocketAddress remoteAddress();
+ 
++    /**
++     * Get ssl session.
++     *
++     * @return ssl session
++     */
++    SSLSession getSslSession();
++
+     /**
+      * Request n message from remote peer.
+      *
+diff --git a/dubbo-serialization/dubbo-serialization-fastjson2/src/main/java/org/apache/dubbo/common/serialize/fastjson2/Fastjson2ScopeModelInitializer.java b/dubbo-serialization/dubbo-serialization-fastjson2/src/main/java/org/apache/dubbo/common/serialize/fastjson2/Fastjson2ScopeModelInitializer.java
+index fad45c6e996f4250f93fca26d63858c46ed97c93..c405d019e19c87332511dbb9f5063ecd5fdfa0d3 100644
+--- a/dubbo-serialization/dubbo-serialization-fastjson2/src/main/java/org/apache/dubbo/common/serialize/fastjson2/Fastjson2ScopeModelInitializer.java
++++ b/dubbo-serialization/dubbo-serialization-fastjson2/src/main/java/org/apache/dubbo/common/serialize/fastjson2/Fastjson2ScopeModelInitializer.java
+@@ -17,20 +17,38 @@
+ package org.apache.dubbo.common.serialize.fastjson2;
+ 
+ import org.apache.dubbo.common.beans.factory.ScopeBeanFactory;
++import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.rpc.model.FrameworkModel;
+ import org.apache.dubbo.rpc.model.ScopeModelInitializer;
+ 
++import java.util.Arrays;
++
+ public class Fastjson2ScopeModelInitializer implements ScopeModelInitializer {
+ 
+     @Override
+     public void initializeFrameworkModel(FrameworkModel frameworkModel) {
+-        Class<?> aClass = null;
++        boolean classExist = false;
+         try {
+-            aClass = com.alibaba.fastjson2.JSONB.class;
++            for (String className : Arrays.asList(
++                    "com.alibaba.fastjson2.JSONB",
++                    "com.alibaba.fastjson2.reader.ObjectReaderCreatorASM",
++                    "com.alibaba.fastjson2.writer.ObjectWriterCreatorASM",
++                    "com.alibaba.fastjson2.JSONValidator",
++                    "com.alibaba.fastjson2.JSONFactory",
++                    "com.alibaba.fastjson2.JSONWriter",
++                    "com.alibaba.fastjson2.util.TypeUtils",
++                    "com.alibaba.fastjson2.filter.ContextAutoTypeBeforeHandler")) {
++                Class<?> aClass =
++                        ClassUtils.forName(className, Thread.currentThread().getContextClassLoader());
++                if (aClass == null) {
++                    throw new ClassNotFoundException(className);
++                }
++            }
++            classExist = true;
+         } catch (Throwable ignored) {
+         }
+ 
+-        if (aClass != null) {
++        if (classExist) {
+             ScopeBeanFactory beanFactory = frameworkModel.getBeanFactory();
+             beanFactory.registerBean(Fastjson2CreatorManager.class);
+             beanFactory.registerBean(Fastjson2SecurityManager.class);
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md b/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
+index a753c9ef36b9c44cd87c87392a2a0b641b3dea2c..73c20b7bc7e16119fc5b95fa5ab590969ac08b05 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
++++ b/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
+@@ -100,7 +100,7 @@ Suppose a Spring Boot Web application did not specify `management.server.port`,
+ ```
+ 
+ 
+- `memory`, `load`,  `threadpool` and `server` are Dubbo's build-in `StatusChecker`s in above example. 
++ `memory`, `load`,  `threadpool` and `server` are Dubbo's built-in `StatusChecker`s in above example. 
+  Dubbo allows the application to extend `StatusChecker`'s SPI. 
+ 
+ Default , `memory` and `load` will be added into Dubbo's `HealthIndicator` , it could be overridden by 
+@@ -118,11 +118,11 @@ externalized configuration [`StatusChecker`'s defaults](#statuschecker-defaults)
+ 
+ 
+ 
+-### Build-in `StatusChecker`s
++### Built-in `StatusChecker`s
+ 
+ 
+ 
+- `META-INF/dubbo/internal/org.apache.dubbo.common.status.StatusChecker` declares Build-in `StatusChecker`s as follow :
++ `META-INF/dubbo/internal/org.apache.dubbo.common.status.StatusChecker` declares built-in `StatusChecker`s as follow :
+ 
+ ```properties
+ registry=org.apache.dubbo.registry.status.RegistryStatusChecker
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java b/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
+index 5e856b2929ef987d2fa2913d9b472ccdeee06f8e..eb2676d3179b4dc02fd9148f4d78565a3f46e50e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
+@@ -30,8 +30,6 @@ import org.springframework.util.MultiValueMap;
+  * Groups {@link ObservationHandler ObservationHandlers} by type.
+  * copy from {@link org.springframework.boot.actuate.autoconfigure.observation.ObservationHandlerGrouping}
+  * this class is available starting from Boot 3.0. It's not available if you're using Boot < 3.0
+- *
+- * @author Andy Wilkinson
+  */
+ class ObservationHandlerGrouping {
+ 
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..d0df68f2b9af4d3071d4dce788a7c22e1264e62c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -165,7 +165,6 @@
+ 
+     <!-- For unify spring boot 3 version -->
+     <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+@@ -497,7 +496,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +645,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

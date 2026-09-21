@@ -1,0 +1,970 @@
+diff --git a/core/breaker/breaker.go b/core/breaker/breaker.go
+index 9fc4a48321df4a94196ea1888a47affd0a4aa30e..be85e5dbc9f5fa906ce5b6db245b96a617ab21fa 100644
+--- a/core/breaker/breaker.go
++++ b/core/breaker/breaker.go
+@@ -7,7 +7,6 @@ import (
+ 	"sync"
+ 	"time"
+ 
+-	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+@@ -200,7 +199,7 @@ func (ew *errorWindow) add(reason string) {
+ 	ew.lock.Lock()
+ 	ew.reasons[ew.index] = fmt.Sprintf("%s %s", time.Now().Format(timeFormat), reason)
+ 	ew.index = (ew.index + 1) % numHistoryReasons
+-	ew.count = mathx.MinInt(ew.count+1, numHistoryReasons)
++	ew.count = min(ew.count+1, numHistoryReasons)
+ 	ew.lock.Unlock()
+ }
+ 
+diff --git a/core/collection/ring.go b/core/collection/ring.go
+index 8218d60dcb20b93b1f38365a7e818f1848753db7..e43379c1f40636429d758d7ef6b5c4e397bc7515 100644
+--- a/core/collection/ring.go
++++ b/core/collection/ring.go
+@@ -1,6 +1,8 @@
+ package collection
+ 
+-import "sync"
++import (
++	"sync"
++)
+ 
+ // A Ring can be used as fixed size ring.
+ type Ring struct {
+@@ -25,8 +27,14 @@ func (r *Ring) Add(v any) {
+ 	r.lock.Lock()
+ 	defer r.lock.Unlock()
+ 
+-	r.elements[r.index%len(r.elements)] = v
++	rlen := len(r.elements)
++	r.elements[r.index%rlen] = v
+ 	r.index++
++
++	// prevent ring index overflow
++	if r.index >= rlen<<1 {
++		r.index -= rlen
++	}
+ }
+ 
+ // Take takes all items from r.
+@@ -36,16 +44,18 @@ func (r *Ring) Take() []any {
+ 
+ 	var size int
+ 	var start int
+-	if r.index > len(r.elements) {
+-		size = len(r.elements)
+-		start = r.index % len(r.elements)
++	rlen := len(r.elements)
++
++	if r.index > rlen {
++		size = rlen
++		start = r.index % rlen
+ 	} else {
+ 		size = r.index
+ 	}
+ 
+ 	elements := make([]any, size)
+ 	for i := 0; i < size; i++ {
+-		elements[i] = r.elements[(start+i)%len(r.elements)]
++		elements[i] = r.elements[(start+i)%rlen]
+ 	}
+ 
+ 	return elements
+diff --git a/core/collection/set.go b/core/collection/set.go
+index b65e33fbdcf87ebd10f4a10ada1e981bd0bbecd6..41fbb3cb547d39500a8fd386f3345e3f18464eb2 100644
+--- a/core/collection/set.go
++++ b/core/collection/set.go
+@@ -1,235 +1,53 @@
+ package collection
+ 
+-import (
+-	"github.com/zeromicro/go-zero/core/lang"
+-	"github.com/zeromicro/go-zero/core/logx"
+-)
++import "github.com/zeromicro/go-zero/core/lang"
+ 
+-const (
+-	unmanaged = iota
+-	untyped
+-	intType
+-	int64Type
+-	uintType
+-	uint64Type
+-	stringType
+-)
+-
+-// Set is not thread-safe, for concurrent use, make sure to use it with synchronization.
+-type Set struct {
+-	data map[any]lang.PlaceholderType
+-	tp   int
+-}
+-
+-// NewSet returns a managed Set, can only put the values with the same type.
+-func NewSet() *Set {
+-	return &Set{
+-		data: make(map[any]lang.PlaceholderType),
+-		tp:   untyped,
+-	}
+-}
+-
+-// NewUnmanagedSet returns an unmanaged Set, which can put values with different types.
+-func NewUnmanagedSet() *Set {
+-	return &Set{
+-		data: make(map[any]lang.PlaceholderType),
+-		tp:   unmanaged,
+-	}
+-}
+-
+-// Add adds i into s.
+-func (s *Set) Add(i ...any) {
+-	for _, each := range i {
+-		s.add(each)
+-	}
++// Set is a type-safe generic set collection.
++// It's not thread-safe, use with synchronization for concurrent access.
++type Set[T comparable] struct {
++	data map[T]lang.PlaceholderType
+ }
+ 
+-// AddInt adds int values ii into s.
+-func (s *Set) AddInt(ii ...int) {
+-	for _, each := range ii {
+-		s.add(each)
++// NewSet returns a new type-safe set.
++func NewSet[T comparable]() *Set[T] {
++	return &Set[T]{
++		data: make(map[T]lang.PlaceholderType),
+ 	}
+ }
+ 
+-// AddInt64 adds int64 values ii into s.
+-func (s *Set) AddInt64(ii ...int64) {
+-	for _, each := range ii {
+-		s.add(each)
++// Add adds items to the set. Duplicates are automatically ignored.
++func (s *Set[T]) Add(items ...T) {
++	for _, item := range items {
++		s.data[item] = lang.Placeholder
+ 	}
+ }
+ 
+-// AddUint adds uint values ii into s.
+-func (s *Set) AddUint(ii ...uint) {
+-	for _, each := range ii {
+-		s.add(each)
+-	}
+-}
+-
+-// AddUint64 adds uint64 values ii into s.
+-func (s *Set) AddUint64(ii ...uint64) {
+-	for _, each := range ii {
+-		s.add(each)
+-	}
++// Clear removes all items from the set.
++func (s *Set[T]) Clear() {
++	clear(s.data)
+ }
+ 
+-// AddStr adds string values ss into s.
+-func (s *Set) AddStr(ss ...string) {
+-	for _, each := range ss {
+-		s.add(each)
+-	}
+-}
+-
+-// Contains checks if i is in s.
+-func (s *Set) Contains(i any) bool {
+-	if len(s.data) == 0 {
+-		return false
+-	}
+-
+-	s.validate(i)
+-	_, ok := s.data[i]
++// Contains checks if an item exists in the set.
++func (s *Set[T]) Contains(item T) bool {
++	_, ok := s.data[item]
+ 	return ok
+ }
+ 
+-// Keys returns the keys in s.
+-func (s *Set) Keys() []any {
+-	var keys []any
+-
+-	for key := range s.data {
+-		keys = append(keys, key)
+-	}
+-
+-	return keys
+-}
+-
+-// KeysInt returns the int keys in s.
+-func (s *Set) KeysInt() []int {
+-	var keys []int
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(int); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysInt64 returns int64 keys in s.
+-func (s *Set) KeysInt64() []int64 {
+-	var keys []int64
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(int64); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysUint returns uint keys in s.
+-func (s *Set) KeysUint() []uint {
+-	var keys []uint
+-
+-	for key := range s.data {
+-		if intKey, ok := key.(uint); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
++// Count returns the number of items in the set.
++func (s *Set[T]) Count() int {
++	return len(s.data)
+ }
+ 
+-// KeysUint64 returns uint64 keys in s.
+-func (s *Set) KeysUint64() []uint64 {
+-	var keys []uint64
+-
++// Keys returns all elements in the set as a slice.
++func (s *Set[T]) Keys() []T {
++	keys := make([]T, 0, len(s.data))
+ 	for key := range s.data {
+-		if intKey, ok := key.(uint64); ok {
+-			keys = append(keys, intKey)
+-		}
+-	}
+-
+-	return keys
+-}
+-
+-// KeysStr returns string keys in s.
+-func (s *Set) KeysStr() []string {
+-	var keys []string
+-
+-	for key := range s.data {
+-		if strKey, ok := key.(string); ok {
+-			keys = append(keys, strKey)
+-		}
++		keys = append(keys, key)
+ 	}
+-
+ 	return keys
+ }
+ 
+-// Remove removes i from s.
+-func (s *Set) Remove(i any) {
+-	s.validate(i)
+-	delete(s.data, i)
+-}
+-
+-// Count returns the number of items in s.
+-func (s *Set) Count() int {
+-	return len(s.data)
+-}
+-
+-func (s *Set) add(i any) {
+-	switch s.tp {
+-	case unmanaged:
+-		// do nothing
+-	case untyped:
+-		s.setType(i)
+-	default:
+-		s.validate(i)
+-	}
+-	s.data[i] = lang.Placeholder
+-}
+-
+-func (s *Set) setType(i any) {
+-	// s.tp can only be untyped here
+-	switch i.(type) {
+-	case int:
+-		s.tp = intType
+-	case int64:
+-		s.tp = int64Type
+-	case uint:
+-		s.tp = uintType
+-	case uint64:
+-		s.tp = uint64Type
+-	case string:
+-		s.tp = stringType
+-	}
+-}
+-
+-func (s *Set) validate(i any) {
+-	if s.tp == unmanaged {
+-		return
+-	}
+-
+-	switch i.(type) {
+-	case int:
+-		if s.tp != intType {
+-			logx.Errorf("element is int, but set contains elements with type %d", s.tp)
+-		}
+-	case int64:
+-		if s.tp != int64Type {
+-			logx.Errorf("element is int64, but set contains elements with type %d", s.tp)
+-		}
+-	case uint:
+-		if s.tp != uintType {
+-			logx.Errorf("element is uint, but set contains elements with type %d", s.tp)
+-		}
+-	case uint64:
+-		if s.tp != uint64Type {
+-			logx.Errorf("element is uint64, but set contains elements with type %d", s.tp)
+-		}
+-	case string:
+-		if s.tp != stringType {
+-			logx.Errorf("element is string, but set contains elements with type %d", s.tp)
+-		}
+-	}
++// Remove removes an item from the set.
++func (s *Set[T]) Remove(item T) {
++	delete(s.data, item)
+ }
+diff --git a/core/errorx/batcherror.go b/core/errorx/batcherror.go
+index 92ae644d41d10da34cd297796ac82e56d7eb5c43..60cba03f3b05c14ff9fcba54e759782e0dde6810 100644
+--- a/core/errorx/batcherror.go
++++ b/core/errorx/batcherror.go
+@@ -1,18 +1,21 @@
+ package errorx
+ 
+-import "bytes"
+-
+-type (
+-	// A BatchError is an error that can hold multiple errors.
+-	BatchError struct {
+-		errs errorArray
+-	}
+-
+-	errorArray []error
++import (
++	"errors"
++	"sync"
+ )
+ 
+-// Add adds errs to be, nil errors are ignored.
++// BatchError is an error that can hold multiple errors.
++type BatchError struct {
++	errs []error
++	lock sync.RWMutex
++}
++
++// Add adds one or more non-nil errors to the BatchError instance.
+ func (be *BatchError) Add(errs ...error) {
++	be.lock.Lock()
++	defer be.lock.Unlock()
++
+ 	for _, err := range errs {
+ 		if err != nil {
+ 			be.errs = append(be.errs, err)
+@@ -20,33 +23,20 @@ func (be *BatchError) Add(errs ...error) {
+ 	}
+ }
+ 
+-// Err returns an error that represents all errors.
++// Err returns an error that represents all accumulated errors.
++// It returns nil if there are no errors.
+ func (be *BatchError) Err() error {
+-	switch len(be.errs) {
+-	case 0:
+-		return nil
+-	case 1:
+-		return be.errs[0]
+-	default:
+-		return be.errs
+-	}
+-}
++	be.lock.RLock()
++	defer be.lock.RUnlock()
+ 
+-// NotNil checks if any error inside.
+-func (be *BatchError) NotNil() bool {
+-	return len(be.errs) > 0
++	// If there are no non-nil errors, errors.Join(...) returns nil.
++	return errors.Join(be.errs...)
+ }
+ 
+-// Error returns a string that represents inside errors.
+-func (ea errorArray) Error() string {
+-	var buf bytes.Buffer
+-
+-	for i := range ea {
+-		if i > 0 {
+-			buf.WriteByte('\n')
+-		}
+-		buf.WriteString(ea[i].Error())
+-	}
++// NotNil checks if there is at least one error inside the BatchError.
++func (be *BatchError) NotNil() bool {
++	be.lock.RLock()
++	defer be.lock.RUnlock()
+ 
+-	return buf.String()
++	return len(be.errs) > 0
+ }
+diff --git a/core/fx/parallel.go b/core/fx/parallel.go
+index d5b173583513a779162dfbc965db550f64fa6771..74403913b409945ab8a12921fe5ca5824c4cbe43 100644
+--- a/core/fx/parallel.go
++++ b/core/fx/parallel.go
+@@ -1,6 +1,9 @@
+ package fx
+ 
+-import "github.com/zeromicro/go-zero/core/threading"
++import (
++	"github.com/zeromicro/go-zero/core/errorx"
++	"github.com/zeromicro/go-zero/core/threading"
++)
+ 
+ // Parallel runs fns parallelly and waits for done.
+ func Parallel(fns ...func()) {
+@@ -10,3 +13,20 @@ func Parallel(fns ...func()) {
+ 	}
+ 	group.Wait()
+ }
++
++func ParallelErr(fns ...func() error) error {
++	var be errorx.BatchError
++
++	group := threading.NewRoutineGroup()
++	for _, fn := range fns {
++		f := fn
++		group.RunSafe(func() {
++			if err := f(); err != nil {
++				be.Add(err)
++			}
++		})
++	}
++	group.Wait()
++
++	return be.Err()
++}
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index 5501190c24d7677ad7eb33d585c41a1e581f0447..3054419105e3049569dfe84fa71fb369db74e052 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -3,6 +3,7 @@ package mapping
+ import (
+ 	"fmt"
+ 	"reflect"
++	"slices"
+ 	"strings"
+ )
+ 
+@@ -128,18 +129,10 @@ func validateOptional(field reflect.StructField, value reflect.Value) error {
+ }
+ 
+ func validateOptions(value reflect.Value, opt *fieldOptions) error {
+-	var found bool
+ 	val := fmt.Sprint(value.Interface())
+-	for i := range opt.Options {
+-		if opt.Options[i] == val {
+-			found = true
+-			break
+-		}
+-	}
+-	if !found {
++	if !slices.Contains(opt.Options, val) {
+ 		return fmt.Errorf("field %q not in options", val)
+ 	}
+-
+ 	return nil
+ }
+ 
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index bf2bc912172eb7f5b5a4db82eacd7dd24c9be304..9f8824a9ce27e9c9e96bbabe75a8c4e04d442e4f 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -7,6 +7,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"reflect"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -15,7 +16,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/jsonx"
+ 	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/proc"
+-	"github.com/zeromicro/go-zero/core/stringx"
+ )
+ 
+ const (
+@@ -900,7 +900,7 @@ func (u *Unmarshaler) processNamedFieldWithValueFromString(fieldType reflect.Typ
+ 				valueKind.String())
+ 		}
+ 
+-		if !stringx.Contains(options, checkValue) {
++		if !slices.Contains(options, checkValue) {
+ 			return fmt.Errorf(`value "%s" for field %q is not defined in options "%v"`,
+ 				mapValue, key, options)
+ 		}
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index e74900c25b2d2f5222ca4158b88dfc1c4edd592e..575d8569a9d4754b59f4c65bf7893e4cd4fe948c 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -6,6 +6,7 @@ import (
+ 	"fmt"
+ 	"math"
+ 	"reflect"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -638,11 +639,11 @@ func validateValueInOptions(val any, options []string) error {
+ 	if len(options) > 0 {
+ 		switch v := val.(type) {
+ 		case string:
+-			if !stringx.Contains(options, v) {
++			if !slices.Contains(options, v) {
+ 				return fmt.Errorf(`error: value %q is not defined in options "%v"`, v, options)
+ 			}
+ 		default:
+-			if !stringx.Contains(options, Repr(v)) {
++			if !slices.Contains(options, Repr(v)) {
+ 				return fmt.Errorf(`error: value "%v" is not defined in options "%v"`, val, options)
+ 			}
+ 		}
+diff --git a/core/mathx/int.go b/core/mathx/int.go
+index 4c1fe63e90b1cb393ef830872eacd5677402d47b..0156706e370fd897222f7bdc43d93a7971100f04 100644
+--- a/core/mathx/int.go
++++ b/core/mathx/int.go
+@@ -1,19 +1,13 @@
+ package mathx
+ 
+ // MaxInt returns the larger one of a and b.
++// Deprecated: use builtin max instead.
+ func MaxInt(a, b int) int {
+-	if a > b {
+-		return a
+-	}
+-
+-	return b
++	return max(a, b)
+ }
+ 
+ // MinInt returns the smaller one of a and b.
++// Deprecated: use builtin min instead.
+ func MinInt(a, b int) int {
+-	if a < b {
+-		return a
+-	}
+-
+-	return b
++	return min(a, b)
+ }
+diff --git a/core/mr/mapreduce.go b/core/mr/mapreduce.go
+index edb328084ff23aea18925ed5e5646029e63a50b9..274f3c9b962f9a816db0fddd73e0547ebe169aa5 100644
+--- a/core/mr/mapreduce.go
++++ b/core/mr/mapreduce.go
+@@ -3,6 +3,9 @@ package mr
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
++	"runtime/debug"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 
+@@ -142,89 +145,6 @@ func MapReduceChan[T, U, V any](source <-chan T, mapper MapperFunc[T, U], reduce
+ 	return mapReduceWithPanicChan(source, panicChan, mapper, reducer, opts...)
+ }
+ 
+-// mapReduceWithPanicChan maps all elements from source, and reduce the output elements with given reducer.
+-func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, mapper MapperFunc[T, U],
+-	reducer ReducerFunc[U, V], opts ...Option) (val V, err error) {
+-	options := buildOptions(opts...)
+-	// output is used to write the final result
+-	output := make(chan V)
+-	defer func() {
+-		// reducer can only write once, if more, panic
+-		for range output {
+-			panic("more than one element written in reducer")
+-		}
+-	}()
+-
+-	// collector is used to collect data from mapper, and consume in reducer
+-	collector := make(chan U, options.workers)
+-	// if done is closed, all mappers and reducer should stop processing
+-	done := make(chan struct{})
+-	writer := newGuardedWriter(options.ctx, output, done)
+-	var closeOnce sync.Once
+-	// use atomic type to avoid data race
+-	var retErr errorx.AtomicError
+-	finish := func() {
+-		closeOnce.Do(func() {
+-			close(done)
+-			close(output)
+-		})
+-	}
+-	cancel := once(func(err error) {
+-		if err != nil {
+-			retErr.Set(err)
+-		} else {
+-			retErr.Set(ErrCancelWithNil)
+-		}
+-
+-		drain(source)
+-		finish()
+-	})
+-
+-	go func() {
+-		defer func() {
+-			drain(collector)
+-			if r := recover(); r != nil {
+-				panicChan.write(r)
+-			}
+-			finish()
+-		}()
+-
+-		reducer(collector, writer, cancel)
+-	}()
+-
+-	go executeMappers(mapperContext[T, U]{
+-		ctx: options.ctx,
+-		mapper: func(item T, w Writer[U]) {
+-			mapper(item, w, cancel)
+-		},
+-		source:    source,
+-		panicChan: panicChan,
+-		collector: collector,
+-		doneChan:  done,
+-		workers:   options.workers,
+-	})
+-
+-	select {
+-	case <-options.ctx.Done():
+-		cancel(context.DeadlineExceeded)
+-		err = context.DeadlineExceeded
+-	case v := <-panicChan.channel:
+-		// drain output here, otherwise for loop panic in defer
+-		drain(output)
+-		panic(v)
+-	case v, ok := <-output:
+-		if e := retErr.Load(); e != nil {
+-			err = e
+-		} else if ok {
+-			val = v
+-		} else {
+-			err = ErrReduceNoOutput
+-		}
+-	}
+-
+-	return
+-}
+-
+ // MapReduceVoid maps all elements generated from given generate,
+ // and reduce the output elements with given reducer.
+ func MapReduceVoid[T, U any](generate GenerateFunc[T], mapper MapperFunc[T, U],
+@@ -266,12 +186,16 @@ func buildOptions(opts ...Option) *mapReduceOptions {
+ 	return options
+ }
+ 
++func buildPanicInfo(r any, stack []byte) string {
++	return fmt.Sprintf("%+v\n\n%s", r, strings.TrimSpace(string(stack)))
++}
++
+ func buildSource[T any](generate GenerateFunc[T], panicChan *onceChan) chan T {
+ 	source := make(chan T)
+ 	go func() {
+ 		defer func() {
+ 			if r := recover(); r != nil {
+-				panicChan.write(r)
++				panicChan.write(buildPanicInfo(r, debug.Stack()))
+ 			}
+ 			close(source)
+ 		}()
+@@ -318,7 +242,7 @@ func executeMappers[T, U any](mCtx mapperContext[T, U]) {
+ 				defer func() {
+ 					if r := recover(); r != nil {
+ 						atomic.AddInt32(&failed, 1)
+-						mCtx.panicChan.write(r)
++						mCtx.panicChan.write(buildPanicInfo(r, debug.Stack()))
+ 					}
+ 					wg.Done()
+ 					<-pool
+@@ -330,6 +254,89 @@ func executeMappers[T, U any](mCtx mapperContext[T, U]) {
+ 	}
+ }
+ 
++// mapReduceWithPanicChan maps all elements from source, and reduce the output elements with given reducer.
++func mapReduceWithPanicChan[T, U, V any](source <-chan T, panicChan *onceChan, mapper MapperFunc[T, U],
++	reducer ReducerFunc[U, V], opts ...Option) (val V, err error) {
++	options := buildOptions(opts...)
++	// output is used to write the final result
++	output := make(chan V)
++	defer func() {
++		// reducer can only write once, if more, panic
++		for range output {
++			panic("more than one element written in reducer")
++		}
++	}()
++
++	// collector is used to collect data from mapper, and consume in reducer
++	collector := make(chan U, options.workers)
++	// if done is closed, all mappers and reducer should stop processing
++	done := make(chan struct{})
++	writer := newGuardedWriter(options.ctx, output, done)
++	var closeOnce sync.Once
++	// use atomic type to avoid data race
++	var retErr errorx.AtomicError
++	finish := func() {
++		closeOnce.Do(func() {
++			close(done)
++			close(output)
++		})
++	}
++	cancel := once(func(err error) {
++		if err != nil {
++			retErr.Set(err)
++		} else {
++			retErr.Set(ErrCancelWithNil)
++		}
++
++		drain(source)
++		finish()
++	})
++
++	go func() {
++		defer func() {
++			drain(collector)
++			if r := recover(); r != nil {
++				panicChan.write(buildPanicInfo(r, debug.Stack()))
++			}
++			finish()
++		}()
++
++		reducer(collector, writer, cancel)
++	}()
++
++	go executeMappers(mapperContext[T, U]{
++		ctx: options.ctx,
++		mapper: func(item T, w Writer[U]) {
++			mapper(item, w, cancel)
++		},
++		source:    source,
++		panicChan: panicChan,
++		collector: collector,
++		doneChan:  done,
++		workers:   options.workers,
++	})
++
++	select {
++	case <-options.ctx.Done():
++		cancel(context.DeadlineExceeded)
++		err = context.DeadlineExceeded
++	case v := <-panicChan.channel:
++		// drain output here, otherwise for loop panic in defer
++		drain(output)
++		panic(v)
++	case v, ok := <-output:
++		if e := retErr.Load(); e != nil {
++			err = e
++		} else if ok {
++			val = v
++		} else {
++			err = ErrReduceNoOutput
++		}
++	}
++
++	return
++}
++
+ func newOptions() *mapReduceOptions {
+ 	return &mapReduceOptions{
+ 		ctx:     context.Background(),
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index c8b0715aa054a2aeaefef52985472fa546412eb6..49434c83adf08716aaba2508e7a3e30e00c7b62a 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -1,9 +1,10 @@
+ package service
+ 
+ import (
++	"sync"
++
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+-	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ )
+ 
+@@ -35,7 +36,7 @@ type (
+ // NewServiceGroup returns a ServiceGroup.
+ func NewServiceGroup() *ServiceGroup {
+ 	sg := new(ServiceGroup)
+-	sg.stopOnce = syncx.Once(sg.doStop)
++	sg.stopOnce = sync.OnceFunc(sg.doStop)
+ 	return sg
+ }
+ 
+diff --git a/core/stringx/strings.go b/core/stringx/strings.go
+index 155c8b3ea136f8049ca1d2771233ea324b9d47ec..4d09e1b734fe9f415cb2b086601ccea09e29932a 100644
+--- a/core/stringx/strings.go
++++ b/core/stringx/strings.go
+@@ -2,6 +2,7 @@ package stringx
+ 
+ import (
+ 	"errors"
++	"slices"
+ 	"unicode"
+ 
+ 	"github.com/zeromicro/go-zero/core/lang"
+@@ -14,17 +15,6 @@ var (
+ 	ErrInvalidStopPosition = errors.New("stop position is invalid")
+ )
+ 
+-// Contains checks if str is in list.
+-func Contains(list []string, str string) bool {
+-	for _, each := range list {
+-		if each == str {
+-			return true
+-		}
+-	}
+-
+-	return false
+-}
+-
+ // Filter filters chars from s with given filter function.
+ func Filter(s string, filter func(r rune) bool) string {
+ 	var n int
+@@ -123,11 +113,7 @@ func Remove(strings []string, strs ...string) []string {
+ // Reverse reverses s.
+ func Reverse(s string) string {
+ 	runes := []rune(s)
+-
+-	for from, to := 0, len(runes)-1; from < to; from, to = from+1, to-1 {
+-		runes[from], runes[to] = runes[to], runes[from]
+-	}
+-
++	slices.Reverse(runes)
+ 	return string(runes)
+ }
+ 
+diff --git a/core/syncx/once.go b/core/syncx/once.go
+deleted file mode 100644
+index 8915eca5838f5e8461fadc725e5da33d892062f8..0000000000000000000000000000000000000000
+--- a/core/syncx/once.go
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package syncx
+-
+-import "sync"
+-
+-// Once returns a func that guarantees fn can only called once.
+-func Once(fn func()) func() {
+-	once := new(sync.Once)
+-	return func() {
+-		once.Do(fn)
+-	}
+-}
+diff --git a/core/utils/version.go b/core/utils/version.go
+index 2368fa910c54d994436b326b39c02380122d3414..b278451847146294c1bb0fbd10d8f880ef87115c 100644
+--- a/core/utils/version.go
++++ b/core/utils/version.go
+@@ -1,10 +1,10 @@
+ package utils
+ 
+ import (
++	"cmp"
+ 	"strconv"
+ 	"strings"
+ 
+-	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+ )
+ 
+@@ -39,7 +39,7 @@ func compare(v1, v2 string) int {
+ 	fields1, fields2 := strings.Split(v1, "."), strings.Split(v2, ".")
+ 	ver1, ver2 := strsToInts(fields1), strsToInts(fields2)
+ 	ver1len, ver2len := len(ver1), len(ver2)
+-	shorter := mathx.MinInt(ver1len, ver2len)
++	shorter := min(ver1len, ver2len)
+ 
+ 	for i := 0; i < shorter; i++ {
+ 		if ver1[i] == ver2[i] {
+@@ -50,14 +50,7 @@ func compare(v1, v2 string) int {
+ 			return 1
+ 		}
+ 	}
+-
+-	if ver1len < ver2len {
+-		return -1
+-	} else if ver1len == ver2len {
+-		return 0
+-	} else {
+-		return 1
+-	}
++	return cmp.Compare(ver1len, ver2len)
+ }
+ 
+ func strsToInts(strs []string) []int64 {
+diff --git a/rest/handler/tracehandler.go b/rest/handler/tracehandler.go
+index 7a11da4629a2491f3bfd358c2e1bd11eb4925585..5df49db2e5b4b39f1cbacef7ee805d9969105f26 100644
+--- a/rest/handler/tracehandler.go
++++ b/rest/handler/tracehandler.go
+@@ -29,8 +29,8 @@ func TraceHandler(serviceName, path string, opts ...TraceOption) func(http.Handl
+ 		opt(&options)
+ 	}
+ 
+-	ignorePaths := collection.NewSet()
+-	ignorePaths.AddStr(options.traceIgnorePaths...)
++	ignorePaths := collection.NewSet[string]()
++	ignorePaths.Add(options.traceIgnorePaths...)
+ 
+ 	return func(next http.Handler) http.Handler {
+ 		tracer := otel.Tracer(trace.TraceName)
+diff --git a/zrpc/internal/serverinterceptors/statinterceptor.go b/zrpc/internal/serverinterceptors/statinterceptor.go
+index b31bf7ffa77a973c7fd8ee66ee4e9c74d6c5bef4..895addc94f4d5ca671c9492c564921bc011eb694 100644
+--- a/zrpc/internal/serverinterceptors/statinterceptor.go
++++ b/zrpc/internal/serverinterceptors/statinterceptor.go
+@@ -43,8 +43,8 @@ func SetSlowThreshold(threshold time.Duration) {
+ 
+ // UnaryStatInterceptor returns a func that uses given metrics to report stats.
+ func UnaryStatInterceptor(metrics *stat.Metrics, conf StatConf) grpc.UnaryServerInterceptor {
+-	staticNotLoggingContentMethods := collection.NewSet()
+-	staticNotLoggingContentMethods.AddStr(conf.IgnoreContentMethods...)
++	staticNotLoggingContentMethods := collection.NewSet[string]()
++	staticNotLoggingContentMethods.Add(conf.IgnoreContentMethods...)
+ 
+ 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo,
+ 		handler grpc.UnaryHandler) (resp any, err error) {
+@@ -68,7 +68,7 @@ func isSlow(duration, durationThreshold time.Duration) bool {
+ }
+ 
+ func logDuration(ctx context.Context, method string, req any, duration time.Duration,
+-	ignoreMethods *collection.Set, durationThreshold time.Duration) {
++	ignoreMethods *collection.Set[string], durationThreshold time.Duration) {
+ 	var addr string
+ 	client, ok := peer.FromContext(ctx)
+ 	if ok {
+@@ -92,7 +92,7 @@ func logDuration(ctx context.Context, method string, req any, duration time.Dura
+ 	}
+ }
+ 
+-func shouldLogContent(method string, ignoreMethods *collection.Set) bool {
++func shouldLogContent(method string, ignoreMethods *collection.Set[string]) bool {
+ 	_, ok := ignoreContentMethods.Load(method)
+ 	return !ok && !ignoreMethods.Contains(method)
+ }

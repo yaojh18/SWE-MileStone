@@ -1,0 +1,2837 @@
+diff --git a/benches/README.md b/benches/README.md
+index 93a13afe5095c92bd5db379b24e109ddd2d391b8..8e823b225cf22a560edbb4bc276a7fe8fe3895da 100644
+--- a/benches/README.md
++++ b/benches/README.md
+@@ -1,7 +1,13 @@
+-# Divan benchmarks
++# Tango benchmarks
+ 
+-These are benchmarks using [Divan](https://github.com/nvzqz/divan), a microbenchmarking tool for Rust.
++These are benchmarks using [tango](https://github.com/bazhenov/tango), a benchmark tool which pairs the executions of two versions of the given benchmarks. This claims to reduce the noise from other factors on the system and allow a more reliable comparison of two different implementation.
+ 
+-Run all benchmarks with `cargo bench`
++The easiest way to start is to run:
+ 
+-Or run individual benchmarks like `cargo bench -- <regex>` e.g. `cargo bench -- parse`
+\ No newline at end of file
++```nushell
++use toolkit.nu
++# To compare the current branch to main
++toolkit benchmark-compare
++# or to compare a target git-revision against a reference git-revision
++toolkit benchmark-compare <target> <reference>
++```
+diff --git a/benches/benchmarks.rs b/benches/benchmarks.rs
+index 1ffb4ccc92496402fd62a521cb30281aa5684ce9..6a2522135587b4112a0dd5fc66c31f6402c68ec4 100644
+--- a/benches/benchmarks.rs
++++ b/benches/benchmarks.rs
+@@ -139,6 +139,30 @@ fn bench_load_standard_lib() -> impl IntoBenchmarks {
+     })]
+ }
+ 
++/// Load all modules of standard library into the engine through a general `use`.
++fn bench_load_use_standard_lib() -> impl IntoBenchmarks {
++    [benchmark_fn("load_use_standard_lib", move |b| {
++        // We need additional commands like `format number` for the standard library
++        let engine = nu_cmd_extra::add_extra_command_context(setup_engine());
++        let commands = Spanned {
++            item: "use std".into(),
++            span: Span::unknown(),
++        };
++        b.iter(move || {
++            let mut engine = engine.clone();
++            let mut stack = Stack::new();
++            let _ = load_standard_library(&mut engine);
++            evaluate_commands(
++                &commands,
++                &mut engine,
++                &mut stack,
++                PipelineData::empty(),
++                Default::default(),
++            )
++        })
++    })]
++}
++
+ fn create_flat_record_string(n: usize) -> String {
+     let mut s = String::from("let record = { ");
+     for i in 0..n {
+@@ -437,6 +461,7 @@ fn decode_msgpack(row_cnt: usize, col_cnt: usize) -> impl IntoBenchmarks {
+ 
+ tango_benchmarks!(
+     bench_load_standard_lib(),
++    bench_load_use_standard_lib(),
+     // Data types
+     // Record
+     bench_record_create(1),
+diff --git a/crates/nu-cli/tests/commands/history_import.rs b/crates/nu-cli/tests/commands/history_import.rs
+index f07df1cd9dbc557e3c8209436aa76e5723f80c5f..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 100644
+--- a/crates/nu-cli/tests/commands/history_import.rs
++++ b/crates/nu-cli/tests/commands/history_import.rs
+@@ -1,296 +0,0 @@
+-use nu_protocol::HistoryFileFormat;
+-use nu_test_support::{Outcome, nu};
+-use reedline::{
+-    FileBackedHistory, History, HistoryItem, HistoryItemId, ReedlineError, SearchQuery,
+-    SqliteBackedHistory,
+-};
+-use rstest::rstest;
+-use tempfile::TempDir;
+-
+-struct Test {
+-    cfg_dir: TempDir,
+-}
+-
+-impl Test {
+-    fn new(history_format: &'static str) -> Self {
+-        let cfg_dir = tempfile::Builder::new()
+-            .prefix("history_import_test")
+-            .tempdir()
+-            .unwrap();
+-        // Assigning to $env.config.history.file_format seems to work only in startup
+-        // configuration.
+-        std::fs::write(
+-            cfg_dir.path().join("env.nu"),
+-            format!("$env.config.history.file_format = {history_format:?}"),
+-        )
+-        .unwrap();
+-        Self { cfg_dir }
+-    }
+-
+-    fn nu(&self, cmd: impl AsRef<str>) -> Outcome {
+-        let env = [(
+-            "XDG_CONFIG_HOME".to_string(),
+-            self.cfg_dir.path().to_str().unwrap().to_string(),
+-        )];
+-        let env_config = self.cfg_dir.path().join("env.nu");
+-        nu!(envs: env, env_config: env_config, cmd.as_ref())
+-    }
+-
+-    fn open_plaintext(&self) -> Result<FileBackedHistory, ReedlineError> {
+-        FileBackedHistory::with_file(
+-            100,
+-            self.cfg_dir
+-                .path()
+-                .join("nushell")
+-                .join(HistoryFileFormat::Plaintext.default_file_name()),
+-        )
+-    }
+-
+-    fn open_sqlite(&self) -> Result<SqliteBackedHistory, ReedlineError> {
+-        SqliteBackedHistory::with_file(
+-            self.cfg_dir
+-                .path()
+-                .join("nushell")
+-                .join(HistoryFileFormat::Sqlite.default_file_name()),
+-            None,
+-            None,
+-        )
+-    }
+-
+-    fn open_backend(&self, format: HistoryFileFormat) -> Result<Box<dyn History>, ReedlineError> {
+-        fn boxed(be: impl History + 'static) -> Box<dyn History> {
+-            Box::new(be)
+-        }
+-        use HistoryFileFormat::*;
+-        match format {
+-            Plaintext => self.open_plaintext().map(boxed),
+-            Sqlite => self.open_sqlite().map(boxed),
+-        }
+-    }
+-}
+-
+-enum HistorySource {
+-    Vec(Vec<HistoryItem>),
+-    Command(&'static str),
+-}
+-
+-struct TestCase {
+-    dst_format: HistoryFileFormat,
+-    dst_history: Vec<HistoryItem>,
+-    src_history: HistorySource,
+-    want_history: Vec<HistoryItem>,
+-}
+-
+-const EMPTY_TEST_CASE: TestCase = TestCase {
+-    dst_format: HistoryFileFormat::Plaintext,
+-    dst_history: Vec::new(),
+-    src_history: HistorySource::Vec(Vec::new()),
+-    want_history: Vec::new(),
+-};
+-
+-impl TestCase {
+-    fn run(self) {
+-        use HistoryFileFormat::*;
+-        let test = Test::new(match self.dst_format {
+-            Plaintext => "plaintext",
+-            Sqlite => "sqlite",
+-        });
+-        save_all(
+-            &mut *test.open_backend(self.dst_format).unwrap(),
+-            self.dst_history,
+-        )
+-        .unwrap();
+-
+-        let outcome = match self.src_history {
+-            HistorySource::Vec(src_history) => {
+-                let src_format = match self.dst_format {
+-                    Plaintext => Sqlite,
+-                    Sqlite => Plaintext,
+-                };
+-                save_all(&mut *test.open_backend(src_format).unwrap(), src_history).unwrap();
+-                test.nu("history import")
+-            }
+-            HistorySource::Command(cmd) => {
+-                let mut cmd = cmd.to_string();
+-                cmd.push_str(" | history import");
+-                test.nu(cmd)
+-            }
+-        };
+-        assert!(outcome.status.success());
+-        let got = query_all(&*test.open_backend(self.dst_format).unwrap()).unwrap();
+-
+-        // Compare just the commands first, for readability.
+-        fn commands_only(items: &[HistoryItem]) -> Vec<&str> {
+-            items
+-                .iter()
+-                .map(|item| item.command_line.as_str())
+-                .collect()
+-        }
+-        assert_eq!(commands_only(&got), commands_only(&self.want_history));
+-        // If commands match, compare full items.
+-        assert_eq!(got, self.want_history);
+-    }
+-}
+-
+-fn query_all(history: &dyn History) -> Result<Vec<HistoryItem>, ReedlineError> {
+-    history.search(SearchQuery::everything(
+-        reedline::SearchDirection::Forward,
+-        None,
+-    ))
+-}
+-
+-fn save_all(history: &mut dyn History, items: Vec<HistoryItem>) -> Result<(), ReedlineError> {
+-    for item in items {
+-        history.save(item)?;
+-    }
+-    Ok(())
+-}
+-
+-const EMPTY_ITEM: HistoryItem = HistoryItem {
+-    command_line: String::new(),
+-    id: None,
+-    start_timestamp: None,
+-    session_id: None,
+-    hostname: None,
+-    cwd: None,
+-    duration: None,
+-    exit_status: None,
+-    more_info: None,
+-};
+-
+-#[test]
+-fn history_import_pipe_string() {
+-    TestCase {
+-        dst_format: HistoryFileFormat::Plaintext,
+-        src_history: HistorySource::Command("echo bar"),
+-        want_history: vec![HistoryItem {
+-            id: Some(HistoryItemId::new(0)),
+-            command_line: "bar".to_string(),
+-            ..EMPTY_ITEM
+-        }],
+-        ..EMPTY_TEST_CASE
+-    }
+-    .run();
+-}
+-
+-#[test]
+-fn history_import_pipe_record() {
+-    TestCase {
+-        dst_format: HistoryFileFormat::Sqlite,
+-        src_history: HistorySource::Command("[[cwd command]; [/tmp some_command]]"),
+-        want_history: vec![HistoryItem {
+-            id: Some(HistoryItemId::new(1)),
+-            command_line: "some_command".to_string(),
+-            cwd: Some("/tmp".to_string()),
+-            ..EMPTY_ITEM
+-        }],
+-        ..EMPTY_TEST_CASE
+-    }
+-    .run();
+-}
+-
+-#[test]
+-fn to_empty_plaintext() {
+-    TestCase {
+-        dst_format: HistoryFileFormat::Plaintext,
+-        src_history: HistorySource::Vec(vec![
+-            HistoryItem {
+-                command_line: "foo".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                command_line: "bar".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ]),
+-        want_history: vec![
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(0)),
+-                command_line: "foo".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(1)),
+-                command_line: "bar".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ],
+-        ..EMPTY_TEST_CASE
+-    }
+-    .run()
+-}
+-
+-#[test]
+-fn to_empty_sqlite() {
+-    TestCase {
+-        dst_format: HistoryFileFormat::Sqlite,
+-        src_history: HistorySource::Vec(vec![
+-            HistoryItem {
+-                command_line: "foo".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                command_line: "bar".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ]),
+-        want_history: vec![
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(1)),
+-                command_line: "foo".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(2)),
+-                command_line: "bar".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ],
+-        ..EMPTY_TEST_CASE
+-    }
+-    .run()
+-}
+-
+-#[rstest]
+-#[case::plaintext(HistoryFileFormat::Plaintext)]
+-#[case::sqlite(HistoryFileFormat::Sqlite)]
+-fn to_existing(#[case] dst_format: HistoryFileFormat) {
+-    TestCase {
+-        dst_format,
+-        dst_history: vec![
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(0)),
+-                command_line: "original-1".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(1)),
+-                command_line: "original-2".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ],
+-        src_history: HistorySource::Vec(vec![HistoryItem {
+-            id: Some(HistoryItemId::new(1)),
+-            command_line: "new".to_string(),
+-            ..EMPTY_ITEM
+-        }]),
+-        want_history: vec![
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(0)),
+-                command_line: "original-1".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(1)),
+-                command_line: "original-2".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-            HistoryItem {
+-                id: Some(HistoryItemId::new(2)),
+-                command_line: "new".to_string(),
+-                ..EMPTY_ITEM
+-            },
+-        ],
+-    }
+-    .run()
+-}
+diff --git a/crates/nu-cli/tests/completions/mod.rs b/crates/nu-cli/tests/completions/mod.rs
+index 9f1c8bf75d6268bcdca01dfab73a4092dc69440f..7b86a3cc1ca1b7acd39295d8ab6cda30cffc0baa 100644
+--- a/crates/nu-cli/tests/completions/mod.rs
++++ b/crates/nu-cli/tests/completions/mod.rs
+@@ -1563,9 +1563,7 @@ fn flag_completions() {
+     let mut completer = NuCompleter::new(Arc::new(engine), Arc::new(stack));
+     // Test completions for the 'ls' flags
+     let suggestions = completer.complete("ls -", 4);
+-
+     assert_eq!(18, suggestions.len());
+-
+     let expected: Vec<_> = vec![
+         "--all",
+         "--directory",
+@@ -1586,9 +1584,12 @@ fn flag_completions() {
+         "-s",
+         "-t",
+     ];
+-
+     // Match results
+     match_suggestions(&expected, &suggestions);
++
++    // https://github.com/nushell/nushell/issues/16375
++    let suggestions = completer.complete("table -", 7);
++    assert_eq!(20, suggestions.len());
+ }
+ 
+ #[test]
+@@ -1886,7 +1887,7 @@ fn variables_completions() {
+     // Test completions for $nu
+     let suggestions = completer.complete("$nu.", 4);
+ 
+-    assert_eq!(19, suggestions.len());
++    assert_eq!(20, suggestions.len());
+ 
+     let expected: Vec<_> = vec![
+         "cache-dir",
+@@ -1900,6 +1901,7 @@ fn variables_completions() {
+         "home-path",
+         "is-interactive",
+         "is-login",
++        "is-lsp",
+         "loginshell-path",
+         "os-info",
+         "pid",
+@@ -1979,6 +1981,48 @@ fn variables_completions() {
+     match_suggestions(&expected, &suggestions);
+ }
+ 
++#[test]
++fn local_variable_completion() {
++    let (_, _, engine, stack) = new_engine();
++    let mut completer = NuCompleter::new(Arc::new(engine), Arc::new(stack));
++
++    let completion_str = "def test [foo?: string, --foo1: bool, ...foo2] { let foo3 = true; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++
++    // https://github.com/nushell/nushell/issues/15291
++    let expected: Vec<_> = vec!["$foo", "$foo1", "$foo2", "$foo3"];
++    match_suggestions(&expected, &suggestions);
++
++    let completion_str = "if true { let foo = true; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    let expected: Vec<_> = vec!["$foo"];
++    match_suggestions(&expected, &suggestions);
++
++    let completion_str = "if true {let foo1 = 1} else {let foo = true; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    let expected: Vec<_> = vec!["$foo"];
++    match_suggestions(&expected, &suggestions);
++
++    let completion_str = "for foo in [1] { let foo1 = true; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    let expected: Vec<_> = vec!["$foo", "$foo1"];
++    match_suggestions(&expected, &suggestions);
++
++    let completion_str = "for foo in [1] { let foo1 = true }; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    assert!(suggestions.is_empty());
++
++    let completion_str = "(let foo = true; $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    let expected: Vec<_> = vec!["$foo"];
++    match_suggestions(&expected, &suggestions);
++
++    let completion_str = "match {a: {b: 3}} {{a: {b: $foo}} => $foo";
++    let suggestions = completer.complete(completion_str, completion_str.len());
++    let expected: Vec<_> = vec!["$foo"];
++    match_suggestions(&expected, &suggestions);
++}
++
+ #[test]
+ fn record_cell_path_completions() {
+     let (_, _, mut engine, mut stack) = new_engine();
+@@ -2140,7 +2184,8 @@ fn run_external_completion_within_pwd(
+     assert!(engine_state.merge_delta(delta).is_ok());
+ 
+     assert!(
+-        eval_block::<WithoutDebug>(&engine_state, &mut stack, &block, PipelineData::Empty).is_ok()
++        eval_block::<WithoutDebug>(&engine_state, &mut stack, &block, PipelineData::empty())
++            .is_ok()
+     );
+ 
+     // Merge environment into the permanent state
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index a6e429eb5d2842dc935de0505cbc1afdca6e6c61..2d5334a0b00328cfa9397e59b6dd6ad91f747076 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -79,7 +79,13 @@ pub fn new_external_engine() -> EngineState {
+     let internal_span = nu_protocol::Span::new(0, dir_str.len());
+     engine.add_env_var(
+         "PATH".to_string(),
+-        Value::list(vec![Value::string(dir_str, internal_span)], internal_span),
++        Value::List {
++            vals: vec![Value::String {
++                val: dir_str,
++                internal_span,
++            }],
++            internal_span,
++        },
+     );
+     engine
+ }
+diff --git a/crates/nu-cmd-extra/src/example_test.rs b/crates/nu-cmd-extra/src/example_test.rs
+index ac3ca92653e79da429e2ecd52a391fabd3812fe8..c6d9b761a0e081b1f221f206bfa7c49f550ec447 100644
+--- a/crates/nu-cmd-extra/src/example_test.rs
++++ b/crates/nu-cmd-extra/src/example_test.rs
+@@ -3,7 +3,12 @@ use nu_protocol::engine::Command;
+ 
+ #[cfg(test)]
+ pub fn test_examples(cmd: impl Command + 'static) {
+-    test_examples::test_examples(cmd);
++    test_examples::test_examples(cmd, &[]);
++}
++
++#[cfg(test)]
++pub fn test_examples_with_commands(cmd: impl Command + 'static, commands: &[&dyn Command]) {
++    test_examples::test_examples(cmd, commands);
+ }
+ 
+ #[cfg(test)]
+@@ -21,10 +26,10 @@ mod test_examples {
+     };
+     use std::collections::HashSet;
+ 
+-    pub fn test_examples(cmd: impl Command + 'static) {
++    pub fn test_examples(cmd: impl Command + 'static, commands: &[&dyn Command]) {
+         let examples = cmd.examples();
+         let signature = cmd.signature();
+-        let mut engine_state = make_engine_state(cmd.clone_box());
++        let mut engine_state = make_engine_state(cmd.clone_box(), commands);
+ 
+         let cwd = std::env::current_dir().expect("Could not get current working directory.");
+ 
+@@ -38,7 +43,7 @@ mod test_examples {
+                 check_example_input_and_output_types_match_command_signature(
+                     &example,
+                     &cwd,
+-                    &mut make_engine_state(cmd.clone_box()),
++                    &mut make_engine_state(cmd.clone_box(), commands),
+                     &signature.input_output_types,
+                     signature.operates_on_cell_paths(),
+                 ),
+@@ -57,7 +62,7 @@ mod test_examples {
+         );
+     }
+ 
+-    fn make_engine_state(cmd: Box<dyn Command>) -> Box<EngineState> {
++    fn make_engine_state(cmd: Box<dyn Command>, commands: &[&dyn Command]) -> Box<EngineState> {
+         let mut engine_state = Box::new(EngineState::new());
+ 
+         let delta = {
+@@ -69,6 +74,10 @@ mod test_examples {
+             working_set.add_decl(Box::new(nu_cmd_lang::If));
+             working_set.add_decl(Box::new(nu_command::MathRound));
+ 
++            for command in commands {
++                working_set.add_decl(command.clone_box());
++            }
++
+             // Adding the command that is being tested to the working set
+             working_set.add_decl(cmd);
+             working_set.render()
+diff --git a/crates/nu-cmd-lang/tests/commands/attr/deprecated.rs b/crates/nu-cmd-lang/tests/commands/attr/deprecated.rs
+index 7ddda3af586413bea7f8700224c0f53c11ac2d25..137c15e620cd9eb4563404795f010aaf2c240aa6 100644
+--- a/crates/nu-cmd-lang/tests/commands/attr/deprecated.rs
++++ b/crates/nu-cmd-lang/tests/commands/attr/deprecated.rs
+@@ -1,19 +1,12 @@
+ use miette::{Diagnostic, LabeledSpan};
+-use nu_cmd_lang::{Alias, Def};
+ use nu_parser::parse;
+-use nu_protocol::engine::{EngineState, StateWorkingSet};
+-
+-use nu_cmd_lang::AttrDeprecated;
++use nu_protocol::engine::StateWorkingSet;
+ 
+ #[test]
+ pub fn test_deprecated_attribute() {
+-    let engine_state = EngineState::new();
++    let engine_state = nu_cmd_lang::create_default_context();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+-    working_set.add_decl(Box::new(Def));
+-    working_set.add_decl(Box::new(Alias));
+-    working_set.add_decl(Box::new(AttrDeprecated));
+-
+     // test deprecation with no message
+     let source = br#"
+     @deprecated
+@@ -54,13 +47,9 @@ pub fn test_deprecated_attribute() {
+ 
+ #[test]
+ pub fn test_deprecated_attribute_flag() {
+-    let engine_state = EngineState::new();
++    let engine_state = nu_cmd_lang::create_default_context();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+-    working_set.add_decl(Box::new(Def));
+-    working_set.add_decl(Box::new(Alias));
+-    working_set.add_decl(Box::new(AttrDeprecated));
+-
+     let source = br#"
+     @deprecated "Use foo instead of bar" --flag bar
+     @deprecated "Use foo instead of baz" --flag baz
+@@ -90,13 +79,9 @@ pub fn test_deprecated_attribute_flag() {
+ 
+ #[test]
+ pub fn test_deprecated_attribute_since_remove() {
+-    let engine_state = EngineState::new();
++    let engine_state = nu_cmd_lang::create_default_context();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+-    working_set.add_decl(Box::new(Def));
+-    working_set.add_decl(Box::new(Alias));
+-    working_set.add_decl(Box::new(AttrDeprecated));
+-
+     let source = br#"
+     @deprecated --since 0.10000.0 --remove 1.0
+     def old-command [] {}
+diff --git a/crates/nu-command/tests/commands/bytes/at.rs b/crates/nu-command/tests/commands/bytes/at.rs
+index c01beeb6f0ca26b8ccfbfff6d17427318e8efa7d..28d48d4eb8d749383dd4b9118477b53f0b0ed014 100644
+--- a/crates/nu-command/tests/commands/bytes/at.rs
++++ b/crates/nu-command/tests/commands/bytes/at.rs
+@@ -75,3 +75,12 @@ pub fn test_string_returns_correct_slice_for_max_end() {
+     let actual = nu!("\"Hello World\" | encode utf8 | bytes at 6..<11 | decode");
+     assert_eq!(actual.out, "World");
+ }
++
++#[test]
++pub fn test_drops_content_type() {
++    let actual = nu!(format!(
++        "open {} | bytes at 3..5 | metadata | get content_type? | describe",
++        file!(),
++    ));
++    assert_eq!(actual.out, "nothing", "Expected content_type to be dropped");
++}
+diff --git a/crates/nu-command/tests/commands/database/into_sqlite.rs b/crates/nu-command/tests/commands/database/into_sqlite.rs
+index 7065e0811c8957b45a204fb016f6ed7451adbb7f..bc2725ae7b8d6f3b899dd965a27a7877a2de173a 100644
+--- a/crates/nu-command/tests/commands/database/into_sqlite.rs
++++ b/crates/nu-command/tests/commands/database/into_sqlite.rs
+@@ -495,3 +495,16 @@ fn insert_test_rows(dirs: &Dirs, nu_table: &str, sql_query: Option<&str>, expect
+ 
+     assert_eq!(expected, actual_rows);
+ }
++
++#[test]
++fn test_auto_conversion() {
++    Playground::setup("sqlite json auto conversion", |_, playground| {
++        let raw = "{a_record:{foo:bar,baz:quux},a_list:[1,2,3],a_table:[[a,b];[0,1],[2,3]]}";
++        nu!(cwd: playground.cwd(), "{} | into sqlite filename.db -t my_table", raw);
++        let outcome = nu!(
++            cwd: playground.cwd(),
++            "open filename.db | get my_table.0 | to nuon --raw"
++        );
++        assert_eq!(outcome.out, raw);
++    });
++}
+diff --git a/crates/nu-command/tests/commands/detect_columns.rs b/crates/nu-command/tests/commands/detect_columns.rs
+index 296d039b02a76d8930a434f49671639b8d7e9a7d..2d8a5f24bb6f579e5e8f4ae1e5cbe46c570b55f5 100644
+--- a/crates/nu-command/tests/commands/detect_columns.rs
++++ b/crates/nu-command/tests/commands/detect_columns.rs
+@@ -94,3 +94,10 @@ drwxr-xr-x  4 root root 4.0K Mar 20 08:18 ~(char nl)
+         assert_eq!(out.out, "true");
+     })
+ }
++
++#[test]
++fn detect_columns_may_fail() {
++    let out =
++        nu!(r#""meooooow cat\nkitty kitty woof" | try { detect columns } catch { "failed" }"#);
++    assert_eq!(out.out, "failed");
++}
+diff --git a/crates/nu-command/tests/commands/do_.rs b/crates/nu-command/tests/commands/do_.rs
+index 5cf2279e7b8cd1d83ac95df63e2b6bc06618ada2..61f55482969cd11fa0071a5529508be16ca02cb9 100644
+--- a/crates/nu-command/tests/commands/do_.rs
++++ b/crates/nu-command/tests/commands/do_.rs
+@@ -42,7 +42,7 @@ fn do_with_semicolon_break_on_failed_external() {
+ 
+ #[test]
+ fn ignore_error_should_work_for_external_command() {
+-    let actual = nu!(r#"do -i { nu --testbin fail asdf }; echo post"#);
++    let actual = nu!(r#"do -i { nu --testbin fail 1 }; echo post"#);
+ 
+     assert_eq!(actual.err, "");
+     assert_eq!(actual.out, "post");
+diff --git a/crates/nu-command/tests/commands/each.rs b/crates/nu-command/tests/commands/each.rs
+index b3c04af0a4df04a1ab6bf1140de266aa5de6a848..b03ffe590c4bd7f66012ffc205bea5f18ede8746 100644
+--- a/crates/nu-command/tests/commands/each.rs
++++ b/crates/nu-command/tests/commands/each.rs
+@@ -63,3 +63,10 @@ fn errors_in_nested_each_show() {
+     let actual = nu!("[[1,2]] | each {|x| $x | each {|y| error make {msg: \"oh noes\"} } }");
+     assert!(actual.err.contains("oh noes"))
+ }
++
++#[test]
++fn each_noop_on_single_null() {
++    let actual = nu!("null | each { \"test\" } | describe");
++
++    assert_eq!(actual.out, "nothing");
++}
+diff --git a/crates/nu-command/tests/commands/export.rs b/crates/nu-command/tests/commands/export.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8bd168952cfa5dd1fca0882b060745e9039e09c
+--- /dev/null
++++ b/crates/nu-command/tests/commands/export.rs
+@@ -0,0 +1,26 @@
++use nu_test_support::nu;
++
++#[test]
++fn export_command_help() {
++    let actual = nu!("export -h");
++
++    assert!(
++        actual
++            .out
++            .contains("Export definitions or environment variables from a module")
++    );
++}
++
++#[test]
++fn export_command_unexpected() {
++    let actual = nu!("export foo");
++
++    assert!(actual.err.contains("unexpected export"));
++}
++
++#[test]
++fn export_alias_should_not_panic() {
++    let actual = nu!("export alias");
++
++    assert!(actual.err.contains("Missing"));
++}
+diff --git a/crates/nu-command/tests/commands/export_def.rs b/crates/nu-command/tests/commands/export_def.rs
+index 3f57610c6c2e91d5b6d84c53b8cba4f6f3b73602..41a35afb01c901f4add9659ad59ea88a0f1371e0 100644
+--- a/crates/nu-command/tests/commands/export_def.rs
++++ b/crates/nu-command/tests/commands/export_def.rs
+@@ -10,3 +10,14 @@ fn export_subcommands_help() {
+             .contains("Define a custom command and export it from a module")
+     );
+ }
++
++#[test]
++fn export_should_not_expose_arguments() {
++    // issue #16211
++    let actual = nu!(r#"
++            export def foo [bar: int] {}
++            scope variables
++        "#);
++
++    assert!(!actual.out.contains("bar"));
++}
+diff --git a/crates/nu-command/tests/commands/find.rs b/crates/nu-command/tests/commands/find.rs
+index 547fab65bf0886abb490f1bb5115142be070aeed..23ca143597679f2ca5df5f0f68aaf7ad6f0ea903 100644
+--- a/crates/nu-command/tests/commands/find.rs
++++ b/crates/nu-command/tests/commands/find.rs
+@@ -7,7 +7,7 @@ fn find_with_list_search_with_string() {
+ 
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37m\u{1b}[0m\u{1b}[41;37mmoe\u{1b}[0m\u{1b}[37m\u{1b}[0m"
++        "\u{1b}[39m\u{1b}[0m\u{1b}[41;39mmoe\u{1b}[0m\u{1b}[39m\u{1b}[0m"
+     );
+     assert_eq!(actual_no_highlight.out, "moe");
+ }
+@@ -19,22 +19,23 @@ fn find_with_list_search_with_char() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[\"\\u001b[37m\\u001b[0m\\u001b[41;37ml\\u001b[0m\\u001b[37marry\\u001b[0m\",\"\\u001b[37mcur\\u001b[0m\\u001b[41;37ml\\u001b[0m\\u001b[37my\\u001b[0m\"]"
++        "[\"\\u001b[39m\\u001b[0m\\u001b[41;39ml\\u001b[0m\\u001b[39marry\\u001b[0m\",\"\\u001b[39mcur\\u001b[0m\\u001b[41;39ml\\u001b[0m\\u001b[39my\\u001b[0m\"]"
+     );
+     assert_eq!(actual_no_highlight.out, "[\"larry\",\"curly\"]");
+ }
+ 
+ #[test]
+ fn find_with_bytestream_search_with_char() {
+-    let actual =
+-        nu!("\"ABC\" | save foo.txt; let res = open foo.txt | find abc; rm foo.txt; $res | get 0");
++    let actual = nu!(
++        "\"ABC\" | save foo.txt; let res = open foo.txt | find -i abc; rm foo.txt; $res | get 0"
++    );
+     let actual_no_highlight = nu!(
+-        "\"ABC\" | save foo.txt; let res = open foo.txt | find --no-highlight abc; rm foo.txt; $res | get 0"
++        "\"ABC\" | save foo.txt; let res = open foo.txt | find -i --no-highlight abc; rm foo.txt; $res | get 0"
+     );
+ 
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37m\u{1b}[0m\u{1b}[41;37mABC\u{1b}[0m\u{1b}[37m\u{1b}[0m"
++        "\u{1b}[39m\u{1b}[0m\u{1b}[41;39mABC\u{1b}[0m\u{1b}[39m\u{1b}[0m"
+     );
+     assert_eq!(actual_no_highlight.out, "ABC");
+ }
+@@ -55,7 +56,7 @@ fn find_with_string_search_with_string() {
+ 
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37mCargo.\u{1b}[0m\u{1b}[41;37mtoml\u{1b}[0m\u{1b}[37m\u{1b}[0m"
++        "\u{1b}[39mCargo.\u{1b}[0m\u{1b}[41;39mtoml\u{1b}[0m\u{1b}[39m\u{1b}[0m"
+     );
+     assert_eq!(actual_no_highlight.out, "Cargo.toml");
+ }
+@@ -79,7 +80,7 @@ fn find_with_filepath_search_with_string() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[\"\\u001b[37m\\u001b[0m\\u001b[41;37marep\\u001b[0m\\u001b[37mas.clu\\u001b[0m\"]"
++        "[\"\\u001b[39m\\u001b[0m\\u001b[41;39marep\\u001b[0m\\u001b[39mas.clu\\u001b[0m\"]"
+     );
+     assert_eq!(actual_no_highlight.out, "[\"arepas.clu\"]");
+ }
+@@ -94,7 +95,7 @@ fn find_with_filepath_search_with_multiple_patterns() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[\"\\u001b[37m\\u001b[0m\\u001b[41;37mami\\u001b[0m\\u001b[37mgos.txt\\u001b[0m\",\"\\u001b[37m\\u001b[0m\\u001b[41;37marep\\u001b[0m\\u001b[37mas.clu\\u001b[0m\"]"
++        "[\"\\u001b[39m\\u001b[0m\\u001b[41;39mami\\u001b[0m\\u001b[39mgos.txt\\u001b[0m\",\"\\u001b[39m\\u001b[0m\\u001b[41;39marep\\u001b[0m\\u001b[39mas.clu\\u001b[0m\"]"
+     );
+     assert_eq!(actual_no_highlight.out, "[\"amigos.txt\",\"arepas.clu\"]");
+ }
+@@ -120,7 +121,7 @@ fn find_with_regex_in_table_keeps_row_if_one_column_matches() {
+ 
+     assert_eq!(
+         actual.out,
+-        r#"["\u001b[37mMauri\u001b[0m\u001b[41;37mce\u001b[0m\u001b[37m\u001b[0m","\u001b[37mLauren\u001b[0m\u001b[41;37mce\u001b[0m\u001b[37m\u001b[0m"]"#
++        r#"["\u001b[39mMauri\u001b[0m\u001b[41;39mce\u001b[0m\u001b[39m\u001b[0m","\u001b[39mLauren\u001b[0m\u001b[41;39mce\u001b[0m\u001b[39m\u001b[0m"]"#
+     );
+     assert_eq!(actual_no_highlight.out, r#"["Maurice","Laurence"]"#);
+ }
+@@ -224,7 +225,7 @@ fn find_with_string_search_with_special_char_1() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma\\u001b[0m\\u001b[41;37m?\\u001b[0m\\u001b[37mb\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma\\u001b[0m\\u001b[41;39m?\\u001b[0m\\u001b[39mb\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a?b\"}]");
+ }
+@@ -237,7 +238,7 @@ fn find_with_string_search_with_special_char_2() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma\\u001b[0m\\u001b[41;37m*\\u001b[0m\\u001b[37mb\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma\\u001b[0m\\u001b[41;39m*\\u001b[0m\\u001b[39mb\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a*b\"}]");
+ }
+@@ -250,7 +251,7 @@ fn find_with_string_search_with_special_char_3() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma\\u001b[0m\\u001b[41;37m{1}\\u001b[0m\\u001b[37mb\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma\\u001b[0m\\u001b[41;39m{1}\\u001b[0m\\u001b[39mb\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a{1}b\"}]");
+ }
+@@ -263,7 +264,7 @@ fn find_with_string_search_with_special_char_4() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma\\u001b[0m\\u001b[41;37m[\\u001b[0m\\u001b[37m]b\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma\\u001b[0m\\u001b[41;39m[\\u001b[0m\\u001b[39m]b\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a[]b\"}]");
+ }
+@@ -276,7 +277,7 @@ fn find_with_string_search_with_special_char_5() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma[\\u001b[0m\\u001b[41;37m]\\u001b[0m\\u001b[37mb\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma[\\u001b[0m\\u001b[41;39m]\\u001b[0m\\u001b[39mb\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a[]b\"}]");
+ }
+@@ -289,7 +290,7 @@ fn find_with_string_search_with_special_char_6() {
+ 
+     assert_eq!(
+         actual.out,
+-        "[{\"d\":\"\\u001b[37ma\\u001b[0m\\u001b[41;37m[]\\u001b[0m\\u001b[37mb\\u001b[0m\"}]"
++        "[{\"d\":\"\\u001b[39ma\\u001b[0m\\u001b[41;39m[]\\u001b[0m\\u001b[39mb\\u001b[0m\"}]"
+     );
+     assert_eq!(actual_no_highlight.out, "[{\"d\":\"a[]b\"}]");
+ }
+@@ -307,6 +308,6 @@ fn find_and_highlight_in_nested_list() {
+ 
+     assert_eq!(
+         actual.out,
+-        r#"[["\u001b[37m\u001b[0m\u001b[41;37mfoo\u001b[0m\u001b[37m\u001b[0m","bar"],["\u001b[37m\u001b[0m\u001b[41;37mfoo\u001b[0m\u001b[37m\u001b[0m","baz"]]"#
++        r#"[["\u001b[39m\u001b[0m\u001b[41;39mfoo\u001b[0m\u001b[39m\u001b[0m","bar"],["\u001b[39m\u001b[0m\u001b[41;39mfoo\u001b[0m\u001b[39m\u001b[0m","baz"]]"#
+     );
+ }
+diff --git a/crates/nu-command/tests/commands/first.rs b/crates/nu-command/tests/commands/first.rs
+index 23ccda6669de7ebd0a4fd6789ad14ca9b84a918a..c5406926d6a95d0e2bd61d8cbc32ff27b00da447 100644
+--- a/crates/nu-command/tests/commands/first.rs
++++ b/crates/nu-command/tests/commands/first.rs
+@@ -103,3 +103,12 @@ fn errors_on_empty_list_when_no_rows_given() {
+ 
+     assert!(actual.err.contains("index too large"));
+ }
++
++#[test]
++fn gets_first_bytes_and_drops_content_type() {
++    let actual = nu!(format!(
++        "open {} | first 3 | metadata | get content_type? | describe",
++        file!(),
++    ));
++    assert_eq!(actual.out, "nothing");
++}
+diff --git a/crates/nu-command/tests/commands/for_.rs b/crates/nu-command/tests/commands/for_.rs
+index a97c32c77ba446ddb2a7a3ae5c12fe5aec17951d..00801023e9d8a56d1e7b8a3963a90db73e0d4efb 100644
+--- a/crates/nu-command/tests/commands/for_.rs
++++ b/crates/nu-command/tests/commands/for_.rs
+@@ -40,3 +40,14 @@ fn failed_for_should_break_running() {
+         print 3");
+     assert!(!actual.out.contains('3'));
+ }
++
++#[test]
++fn for_loops_dont_collect_source() {
++    let actual = nu!("
++        for i in (seq 1 10 | each { print -n $in; $in}) {
++            print -n $i
++            if $i >= 5 { break }
++        }
++    ");
++    assert_eq!(actual.out, "1122334455");
++}
+diff --git a/crates/nu-command/tests/commands/let_.rs b/crates/nu-command/tests/commands/let_.rs
+index d24981048b796691af3bb2de7965124830fe6199..e626f899342e258e584dbf057cdb1e7c0548d73b 100644
+--- a/crates/nu-command/tests/commands/let_.rs
++++ b/crates/nu-command/tests/commands/let_.rs
+@@ -123,3 +123,15 @@ fn let_raw_string() {
+     let actual = nu!(r#"let x = r#'abc'#; $x"#);
+     assert_eq!(actual.out, "abc");
+ }
++
++#[test]
++fn let_malformed_type() {
++    let actual = nu!("let foo: )a");
++    assert!(actual.err.contains("unbalanced ( and )"));
++
++    let actual = nu!("let foo: }a");
++    assert!(actual.err.contains("unbalanced { and }"));
++
++    let actual = nu!("mut : , a");
++    assert!(actual.err.contains("unknown type"));
++}
+diff --git a/crates/nu-command/tests/commands/ls.rs b/crates/nu-command/tests/commands/ls.rs
+index a8d602b53bec5a0d3358137019281a787368b07c..48158653dba79b4551ea6b9275aa48696a752cb2 100644
+--- a/crates/nu-command/tests/commands/ls.rs
++++ b/crates/nu-command/tests/commands/ls.rs
+@@ -652,7 +652,7 @@ fn list_ignores_ansi() {
+         let actual = nu!(
+             cwd: dirs.test(), pipeline(
+             "
+-                ls | find .txt | each {|| ls $in.name } 
++                ls | find .txt | each {|| ls $in.name }
+             "
+         ));
+ 
+@@ -661,14 +661,17 @@ fn list_ignores_ansi() {
+ }
+ 
+ #[test]
+-fn list_unknown_flag() {
++fn list_unknown_long_flag() {
++    let actual = nu!("ls --full-path");
++
++    assert!(actual.err.contains("Did you mean: `--full-paths`?"));
++}
++
++#[test]
++fn list_unknown_short_flag() {
+     let actual = nu!("ls -r");
+ 
+-    assert!(
+-        actual
+-            .err
+-            .contains("Available flags: --help(-h), --all(-a),")
+-    );
++    assert!(actual.err.contains("Use `--help` to see available flags"));
+ }
+ 
+ #[test]
+diff --git a/crates/nu-command/tests/commands/mod.rs b/crates/nu-command/tests/commands/mod.rs
+index 0d0fa8b1a18719e8f21247ef9febc4a1daa890f5..8482dbac4cfa9dfc5d9cbc5acd904e3aadc92063 100644
+--- a/crates/nu-command/tests/commands/mod.rs
++++ b/crates/nu-command/tests/commands/mod.rs
+@@ -32,6 +32,7 @@ mod empty;
+ mod error_make;
+ mod every;
+ mod exec;
++mod export;
+ mod export_def;
+ mod fill;
+ mod filter;
+diff --git a/crates/nu-command/tests/commands/network/http/delete.rs b/crates/nu-command/tests/commands/network/http/delete.rs
+index c5037453468ad6994e1b4310534c8ce1df795cfc..efcdfe7b5fac4333d2a34a379061f5d33370bd11 100644
+--- a/crates/nu-command/tests/commands/network/http/delete.rs
++++ b/crates/nu-command/tests/commands/network/http/delete.rs
+@@ -57,7 +57,11 @@ fn http_delete_failed_due_to_server_error() {
+         .as_str()
+     ));
+ 
+-    assert!(actual.err.contains("Bad request (400)"))
++    assert!(
++        actual.err.contains("Bad request (400)"),
++        "unexpected error: {:?}",
++        actual.err
++    )
+ }
+ 
+ #[test]
+@@ -140,6 +144,14 @@ fn http_delete_timeout() {
+         format!("http delete --max-time 100ms {url}", url = server.url()).as_str()
+     ));
+ 
+-    assert!(&actual.err.contains("nu::shell::io::timed_out"));
+-    assert!(&actual.err.contains("Timed out"));
++    assert!(
++        &actual.err.contains("nu::shell::io::timed_out"),
++        "unexpected error : {:?}",
++        actual.err
++    );
++    assert!(
++        &actual.err.contains("Timed out"),
++        "unexpected error : {:?}",
++        actual.err
++    );
+ }
+diff --git a/crates/nu-command/tests/commands/network/http/get.rs b/crates/nu-command/tests/commands/network/http/get.rs
+index a789f1e93aa5777de20f5387f332df9fdfda1769..9be6d18df3961489159cb5ff1df097a6314739d9 100644
+--- a/crates/nu-command/tests/commands/network/http/get.rs
++++ b/crates/nu-command/tests/commands/network/http/get.rs
+@@ -334,6 +334,14 @@ fn http_get_timeout() {
+         format!("http get --max-time 100ms {url}", url = server.url()).as_str()
+     ));
+ 
+-    assert!(&actual.err.contains("nu::shell::io::timed_out"));
+-    assert!(&actual.err.contains("Timed out"));
++    assert!(
++        &actual.err.contains("nu::shell::io::timed_out"),
++        "unexpected error: {:?}",
++        actual.err
++    );
++    assert!(
++        &actual.err.contains("Timed out"),
++        "unexpected error: {:?}",
++        actual.err
++    );
+ }
+diff --git a/crates/nu-command/tests/commands/network/http/head.rs b/crates/nu-command/tests/commands/network/http/head.rs
+index f9af678fc53e7ccc08b5117d89df4e77f3e79a62..4fe3fb7f3dc81631f0ca872fdfe0d6f704e35202 100644
+--- a/crates/nu-command/tests/commands/network/http/head.rs
++++ b/crates/nu-command/tests/commands/network/http/head.rs
+@@ -36,8 +36,11 @@ fn http_head_failed_due_to_server_error() {
+         )
+         .as_str()
+     ));
+-
+-    assert!(actual.err.contains("Bad request (400)"))
++    assert!(
++        actual.err.contains("Bad request (400)"),
++        "Unexpected error: {:?}",
++        actual.err
++    )
+ }
+ 
+ #[test]
+diff --git a/crates/nu-command/tests/commands/network/http/post.rs b/crates/nu-command/tests/commands/network/http/post.rs
+index 29a82e1a3b7ef6203174907656564817e88e16ae..8f98f59d99672ff1dd71d7462ed1f74d1aac582c 100644
+--- a/crates/nu-command/tests/commands/network/http/post.rs
++++ b/crates/nu-command/tests/commands/network/http/post.rs
+@@ -101,14 +101,15 @@ fn http_post_failed_due_to_unexpected_body() {
+     assert!(actual.err.contains("Cannot make request"))
+ }
+ 
++const JSON: &str = r#"{
++  "foo": "bar"
++}"#;
++
+ #[test]
+ fn http_post_json_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server
+-        .mock("POST", "/")
+-        .match_body(r#"{"foo":"bar"}"#)
+-        .create();
++    let mock = server.mock("POST", "/").match_body(JSON).create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} {{foo: 'bar'}}"#,
+@@ -116,17 +117,14 @@ fn http_post_json_is_success() {
+     ));
+ 
+     mock.assert();
+-    assert!(actual.out.is_empty())
++    assert!(actual.out.is_empty(), "Unexpected output {:?}", actual.out)
+ }
+ 
+ #[test]
+ fn http_post_json_string_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server
+-        .mock("POST", "/")
+-        .match_body(r#"{"foo":"bar"}"#)
+-        .create();
++    let mock = server.mock("POST", "/").match_body(JSON).create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} '{{"foo":"bar"}}'"#,
+@@ -137,14 +135,17 @@ fn http_post_json_string_is_success() {
+     assert!(actual.out.is_empty())
+ }
+ 
++const JSON_LIST: &str = r#"[
++  {
++    "foo": "bar"
++  }
++]"#;
++
+ #[test]
+ fn http_post_json_list_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server
+-        .mock("POST", "/")
+-        .match_body(r#"[{"foo":"bar"}]"#)
+-        .create();
++    let mock = server.mock("POST", "/").match_body(JSON_LIST).create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} [{{foo: "bar"}}]"#,
+diff --git a/crates/nu-command/tests/commands/network/port.rs b/crates/nu-command/tests/commands/network/port.rs
+index 1af1b358ff7aa78ed144197e0b1e6b25601bd91f..f1ce49932dbee955549bc72a0ad8ea57c7bc2b76 100644
+--- a/crates/nu-command/tests/commands/network/port.rs
++++ b/crates/nu-command/tests/commands/network/port.rs
+@@ -30,10 +30,7 @@ fn port_with_already_usage() {
+         handler.join().unwrap();
+ 
+         // check for error kind str.
+-        if actual
+-            .err
+-            .contains("Every port has been tried, but no valid one was found")
+-        {
++        if actual.err.contains("nu::shell::io::addr_in_use") {
+             return;
+         }
+     }
+diff --git a/crates/nu-command/tests/commands/run_external.rs b/crates/nu-command/tests/commands/run_external.rs
+index 1c7bcc85a1c9b78051cd4f825a708ab272d392d7..93bbb9d6b7df2740163b3f9f770b719e2fbdb937 100644
+--- a/crates/nu-command/tests/commands/run_external.rs
++++ b/crates/nu-command/tests/commands/run_external.rs
+@@ -4,6 +4,13 @@ use nu_test_support::playground::Playground;
+ use rstest::rstest;
+ use rstest_reuse::*;
+ 
++fn nu_path(prefix: &str) -> String {
++    let binary = nu_test_support::fs::executable_path()
++        .to_string_lossy()
++        .to_string();
++    format!("{prefix}{binary}")
++}
++
+ // Template for run-external test to ensure tests work when calling
+ // the binary directly, using the caret operator, and when using
+ // the run-external command
+@@ -18,8 +25,8 @@ fn run_external_prefixes(#[case] prefix: &str) {}
+ fn better_empty_redirection(prefix: &str) {
+     let actual = nu!(
+         cwd: "tests/fixtures/formats",
+-        "ls | each {{ |it| {}nu `--testbin` cococo $it.name }} | ignore",
+-        prefix
++        "ls | each {{ |it| {} `--testbin` cococo $it.name }} | ignore",
++        nu_path(prefix)
+     );
+ 
+     eprintln!("out: {}", actual.out);
+@@ -39,9 +46,9 @@ fn explicit_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo ('*.txt' | into glob)
++                {} `--testbin` cococo ('*.txt' | into glob)
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -61,9 +68,9 @@ fn bare_word_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             "
+-                {}nu `--testbin` cococo *.txt
++                {} `--testbin` cococo *.txt
+             ",
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -83,9 +90,9 @@ fn backtick_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo `*.txt`
++                {} `--testbin` cococo `*.txt`
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -105,9 +112,9 @@ fn single_quote_does_not_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo '*.txt'
++                {} `--testbin` cococo '*.txt'
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(actual.out, "*.txt");
+@@ -126,9 +133,9 @@ fn double_quote_does_not_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo "*.txt"
++                {} `--testbin` cococo "*.txt"
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(actual.out, "*.txt");
+@@ -141,9 +148,9 @@ fn failed_command_with_semicolon_will_not_execute_following_cmds(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             "
+-                {}nu `--testbin` fail; echo done
++                {} `--testbin` fail; echo done
+             ",
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert!(!actual.out.contains("done"));
+@@ -156,9 +163,9 @@ fn external_args_with_quoted(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo "foo=bar 'hi'"
++                {} `--testbin` cococo "foo=bar 'hi'"
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(actual.out, "foo=bar 'hi'");
+@@ -198,9 +205,9 @@ fn external_arg_with_non_option_like_embedded_quotes(#[case] prefix: &str) {
+             let actual = nu!(
+                 cwd: dirs.test(),
+                 r#"
+-                    {}nu `--testbin` cococo foo='bar' 'foo'=bar
++                    {} `--testbin` cococo foo='bar' 'foo'=bar
+                 "#,
+-                prefix
++                nu_path(prefix)
+             );
+ 
+             assert_eq!(actual.out, "foo=bar foo=bar");
+@@ -217,9 +224,9 @@ fn external_arg_with_string_interpolation(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo foo=(2 + 2) $"foo=(2 + 2)" foo=$"(2 + 2)"
++                {} `--testbin` cococo foo=(2 + 2) $"foo=(2 + 2)" foo=$"(2 + 2)"
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(actual.out, "foo=4 foo=4 foo=4");
+@@ -233,9 +240,9 @@ fn external_arg_with_variable_name(prefix: &str) {
+             cwd: dirs.test(),
+             r#"
+                 let dump_command = "PGPASSWORD='db_secret' pg_dump -Fc -h 'db.host' -p '$db.port' -U postgres -d 'db_name' > '/tmp/dump_name'";
+-                {}nu `--testbin` nonu $dump_command
++                {} `--testbin` nonu $dump_command
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(
+@@ -251,9 +258,9 @@ fn external_command_escape_args(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo "\"abcd"
++                {} `--testbin` cococo "\"abcd"
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         assert_eq!(actual.out, r#""abcd"#);
+@@ -264,9 +271,9 @@ fn external_command_escape_args(prefix: &str) {
+ fn external_command_ndots_args(prefix: &str) {
+     let actual = nu!(
+         r#"
+-            {}nu `--testbin` cococo foo/. foo/.. foo/... foo/./bar foo/../bar foo/.../bar ./bar ../bar .../bar
++            {} `--testbin` cococo foo/. foo/.. foo/... foo/./bar foo/../bar foo/.../bar ./bar ../bar .../bar
+         "#,
+-        prefix
++        nu_path(prefix)
+     );
+ 
+     assert_eq!(
+@@ -286,9 +293,9 @@ fn external_command_ndots_leading_dot_slash(prefix: &str) {
+     // Don't expand ndots with a leading `./`
+     let actual = nu!(
+         r#"
+-            {}nu `--testbin` cococo ./... ./....
++            {} `--testbin` cococo ./... ./....
+         "#,
+-        prefix
++        nu_path(prefix)
+     );
+ 
+     assert_eq!(actual.out, "./... ./....");
+@@ -300,9 +307,9 @@ fn external_command_url_args(prefix: &str) {
+     // here
+     let actual = nu!(
+         r#"
+-            {}nu `--testbin` cococo http://example.com http://example.com/.../foo //foo
++            {} `--testbin` cococo http://example.com http://example.com/.../foo //foo
+         "#,
+-        prefix
++        nu_path(prefix)
+     );
+ 
+     assert_eq!(
+@@ -359,9 +366,9 @@ fn external_arg_expand_tilde(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {}nu `--testbin` cococo ~/foo ~/(2 + 2)
++                {} `--testbin` cococo ~/foo ~/(2 + 2)
+             "#,
+-            prefix
++            nu_path(prefix)
+         );
+ 
+         let home = dirs::home_dir().expect("failed to find home dir");
+@@ -382,7 +389,7 @@ fn external_command_not_expand_tilde_with_quotes(prefix: &str) {
+     Playground::setup(
+         "external command not expand tilde with quotes",
+         |dirs, _| {
+-            let actual = nu!(cwd: dirs.test(), r#"{}nu `--testbin` nonu "~""#, prefix);
++            let actual = nu!(cwd: dirs.test(), r#"{} `--testbin` nonu "~""#, nu_path(prefix));
+             assert_eq!(actual.out, r#"~"#);
+         },
+     )
+@@ -393,7 +400,7 @@ fn external_command_expand_tilde_with_back_quotes(prefix: &str) {
+     Playground::setup(
+         "external command not expand tilde with quotes",
+         |dirs, _| {
+-            let actual = nu!(cwd: dirs.test(), r#"{}nu `--testbin` nonu `~`"#, prefix);
++            let actual = nu!(cwd: dirs.test(), r#"{} `--testbin` nonu `~`"#, nu_path(prefix));
+             assert!(!actual.out.contains('~'));
+         },
+     )
+@@ -404,8 +411,8 @@ fn external_command_receives_raw_binary_data(prefix: &str) {
+     Playground::setup("external command receives raw binary data", |dirs, _| {
+         let actual = nu!(
+             cwd: dirs.test(),
+-            "0x[deadbeef] | {}nu `--testbin` input_bytes_length",
+-            prefix
++            "0x[deadbeef] | {} `--testbin` input_bytes_length",
++            nu_path(prefix)
+         );
+         assert_eq!(actual.out, r#"4"#);
+     })
+@@ -494,9 +501,9 @@ fn quotes_trimmed_when_shelling_out(prefix: &str) {
+     // regression test for a bug where we weren't trimming quotes around string args before shelling out to cmd.exe
+     let actual = nu!(
+         r#"
+-            {}nu `--testbin` cococo "foo"
++            {} `--testbin` cococo "foo"
+         "#,
+-        prefix
++        nu_path(prefix)
+     );
+ 
+     assert_eq!(actual.out, "foo");
+@@ -555,6 +562,24 @@ fn can_run_ps1_files_with_space_in_path(prefix: &str) {
+     });
+ }
+ 
++#[rstest]
++#[case("^")]
++#[case("run-external ")]
++fn can_run_external_without_path_env(#[case] prefix: &str) {
++    Playground::setup("can run external without path env", |dirs, _| {
++        let actual = nu!(
++            cwd: dirs.test(),
++            r#"
++                hide-env -i PATH
++                hide-env -i Path
++                {} `--testbin` cococo
++            "#,
++            nu_path(prefix)
++        );
++        assert_eq!(actual.out, "cococo");
++    })
++}
++
+ #[rstest]
+ #[case("^")]
+ #[case("run-external ")]
+@@ -565,8 +590,9 @@ fn expand_command_if_list(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                let cmd = [nu `--testbin`]; {}$cmd meow foo.txt
++                let cmd = ['{}' `--testbin`]; {}$cmd meow foo.txt
+             "#,
++            nu_path(""),
+             prefix
+         );
+ 
+diff --git a/crates/nu-command/tests/commands/skip/skip_.rs b/crates/nu-command/tests/commands/skip/skip_.rs
+index c98de496c8112d6c5fa9f319d0a77a76f31f6ade..6e9dfa92df47c11fa615dbffde3d1c816a7b8f76 100644
+--- a/crates/nu-command/tests/commands/skip/skip_.rs
++++ b/crates/nu-command/tests/commands/skip/skip_.rs
+@@ -20,3 +20,12 @@ fn fail_on_non_iterator() {
+ 
+     assert!(actual.err.contains("command doesn't support"));
+ }
++
++#[test]
++fn skips_bytes_and_drops_content_type() {
++    let actual = nu!(format!(
++        "open {} | skip 3 | metadata | get content_type? | describe",
++        file!(),
++    ));
++    assert_eq!(actual.out, "nothing");
++}
+diff --git a/crates/nu-command/tests/commands/start.rs b/crates/nu-command/tests/commands/start.rs
+index 55507be5d65f87d70ec292d0bd37a236068d433b..01115ec3c189821d101a2b9e6ac5ebc6af4fc2f9 100644
+--- a/crates/nu-command/tests/commands/start.rs
++++ b/crates/nu-command/tests/commands/start.rs
+@@ -2,9 +2,9 @@ use super::*;
+ use nu_engine::test_help::{convert_single_value_to_cmd_args, eval_block_with_input};
+ use nu_engine::{current_dir, eval_expression};
+ use nu_protocol::{
++    PipelineData, Span, Spanned, Type, Value,
+     ast::Call,
+     engine::{EngineState, Stack, StateWorkingSet},
+-    PipelineData, Span, Spanned, Type, Value,
+ };
+ use std::path::PathBuf;
+ 
+@@ -33,19 +33,14 @@ fn test_start_valid_url() {
+ 
+     // Create call for: `start https://www.example.com`
+     let path = "https://www.example.com".to_string();
+-    let span = Span::test_data(); 
++    let span = Span::test_data();
+     let call = Call::test(
+         "start",
+         // The arguments for `start` are just the path in this case
+         vec![Value::string(path, span)],
+     );
+ 
+-    let result = Start.run(
+-        &engine_state,
+-        &mut stack,
+-        &call,
+-        PipelineData::Empty,
+-    );
++    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
+ 
+     assert!(
+         result.is_ok(),
+@@ -61,17 +56,9 @@ fn test_start_valid_local_path() {
+     // Here we'll simulate opening the current directory (`.`).
+     let path = ".".to_string();
+     let span = Span::test_data();
+-    let call = Call::test(
+-        "start",
+-        vec![Value::string(path, span)],
+-    );
++    let call = Call::test("start", vec![Value::string(path, span)]);
+ 
+-    let result = Start.run(
+-        &engine_state,
+-        &mut stack,
+-        &call,
+-        PipelineData::Empty,
+-    );
++    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
+ 
+     // If the environment is correctly set, it should succeed.
+     // If you're running in a CI environment or restricted environment
+@@ -90,17 +77,9 @@ fn test_start_nonexistent_local_path() {
+     // Create an obviously invalid path
+     let path = "this_file_does_not_exist_hopefully.txt".to_string();
+     let span = Span::test_data();
+-    let call = Call::test(
+-        "start",
+-        vec![Value::string(path, span)],
+-    );
++    let call = Call::test("start", vec![Value::string(path, span)]);
+ 
+-    let result = Start.run(
+-        &engine_state,
+-        &mut stack,
+-        &call,
+-        PipelineData::Empty,
+-    );
++    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
+ 
+     // We expect an error since the file does not exist
+     assert!(
+@@ -117,4 +96,5 @@ fn test_start_nonexistent_local_path() {
+     } else {
+         panic!("Unexpected error type, expected ShellError::GenericError");
+     }
+-}
+\ No newline at end of file
++}
++
+diff --git a/crates/nu-command/tests/commands/str_/mod.rs b/crates/nu-command/tests/commands/str_/mod.rs
+index 9a361f7d439dd0162c284b1dd0cc423de9ae2b4e..b330cfb6151695b26f65f7c9357af0408e40e4b1 100644
+--- a/crates/nu-command/tests/commands/str_/mod.rs
++++ b/crates/nu-command/tests/commands/str_/mod.rs
+@@ -395,6 +395,15 @@ fn substring_of_empty_string() {
+     assert_eq!(actual.out, "");
+ }
+ 
++#[test]
++fn substring_drops_content_type() {
++    let actual = nu!(format!(
++        "open {} | str substring 0..2 | metadata | get content_type? | describe",
++        file!(),
++    ));
++    assert_eq!(actual.out, "nothing");
++}
++
+ #[test]
+ fn str_reverse() {
+     let actual = nu!(r#"
+diff --git a/crates/nu-command/tests/commands/table.rs b/crates/nu-command/tests/commands/table.rs
+index a39500bf88c1cb866c33045cae9d7f08e2b4eea5..1b7812c726926b827a96c357cbea090a0fb003c4 100644
+--- a/crates/nu-command/tests/commands/table.rs
++++ b/crates/nu-command/tests/commands/table.rs
+@@ -1393,7 +1393,7 @@ fn test_expand_big_0() {
+ 
+ #[test]
+ fn table_expande_with_no_header_internally_0() {
+-    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "white", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "white", "filesize": null, "duration": "white", "datetime": null, "range": "white", "float": "white", "string": "white", "nothing": "white", "binary": "white", "cell-path": "white", "row_index": "green_bold", "record": "white", "list": "white", "block": "white", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
++    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "default", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "default", "filesize": null, "duration": "default", "datetime": null, "range": "default", "float": "default", "string": "default", "nothing": "default", "binary": "default", "cell-path": "default", "row_index": "green_bold", "record": "default", "list": "default", "block": "default", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
+ 
+     let actual = nu!(format!("{} | table --expand --width 141", nu_value.trim()));
+ 
+@@ -1480,27 +1480,27 @@ fn table_expande_with_no_header_internally_0() {
+             "│                    │ │                                  │ │ vi_normal │ underscore │                                                    │ │",
+             "│                    │ │                                  │ ╰───────────┴────────────╯                                                    │ │",
+             "│                    │ │                                  │ ╭────────────────────────────┬────────────────────╮                           │ │",
+-            "│                    │ │ color_config                     │ │ separator                  │ white              │                           │ │",
++            "│                    │ │ color_config                     │ │ separator                  │ default            │                           │ │",
+             "│                    │ │                                  │ │                            │ ╭──────┬───╮       │                           │ │",
+             "│                    │ │                                  │ │ leading_trailing_space_bg  │ │ attr │ n │       │                           │ │",
+             "│                    │ │                                  │ │                            │ ╰──────┴───╯       │                           │ │",
+             "│                    │ │                                  │ │ header                     │ green_bold         │                           │ │",
+             "│                    │ │                                  │ │ empty                      │ blue               │                           │ │",
+             "│                    │ │                                  │ │ bool                       │                    │                           │ │",
+-            "│                    │ │                                  │ │ int                        │ white              │                           │ │",
++            "│                    │ │                                  │ │ int                        │ default            │                           │ │",
+             "│                    │ │                                  │ │ filesize                   │                    │                           │ │",
+-            "│                    │ │                                  │ │ duration                   │ white              │                           │ │",
++            "│                    │ │                                  │ │ duration                   │ default            │                           │ │",
+             "│                    │ │                                  │ │ datetime                   │                    │                           │ │",
+-            "│                    │ │                                  │ │ range                      │ white              │                           │ │",
+-            "│                    │ │                                  │ │ float                      │ white              │                           │ │",
+-            "│                    │ │                                  │ │ string                     │ white              │                           │ │",
+-            "│                    │ │                                  │ │ nothing                    │ white              │                           │ │",
+-            "│                    │ │                                  │ │ binary                     │ white              │                           │ │",
+-            "│                    │ │                                  │ │ cell-path                  │ white              │                           │ │",
++            "│                    │ │                                  │ │ range                      │ default            │                           │ │",
++            "│                    │ │                                  │ │ float                      │ default            │                           │ │",
++            "│                    │ │                                  │ │ string                     │ default            │                           │ │",
++            "│                    │ │                                  │ │ nothing                    │ default            │                           │ │",
++            "│                    │ │                                  │ │ binary                     │ default            │                           │ │",
++            "│                    │ │                                  │ │ cell-path                  │ default            │                           │ │",
+             "│                    │ │                                  │ │ row_index                  │ green_bold         │                           │ │",
+-            "│                    │ │                                  │ │ record                     │ white              │                           │ │",
+-            "│                    │ │                                  │ │ list                       │ white              │                           │ │",
+-            "│                    │ │                                  │ │ block                      │ white              │                           │ │",
++            "│                    │ │                                  │ │ record                     │ default            │                           │ │",
++            "│                    │ │                                  │ │ list                       │ default            │                           │ │",
++            "│                    │ │                                  │ │ block                      │ default            │                           │ │",
+             "│                    │ │                                  │ │ hints                      │ dark_gray          │                           │ │",
+             "│                    │ │                                  │ │                            │ ╭────┬───────╮     │                           │ │",
+             "│                    │ │                                  │ │ search_result              │ │ fg │ white │     │                           │ │",
+@@ -1870,7 +1870,7 @@ fn table_expande_with_no_header_internally_0() {
+ 
+ #[test]
+ fn table_expande_with_no_header_internally_1() {
+-    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "white", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "white", "filesize": null, "duration": "white", "datetime": null, "range": "white", "float": "white", "string": "white", "nothing": "white", "binary": "white", "cell-path": "white", "row_index": "green_bold", "record": "white", "list": "white", "block": "white", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
++    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "default", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "default", "filesize": null, "duration": "default", "datetime": null, "range": "default", "float": "default", "string": "default", "nothing": "default", "binary": "default", "cell-path": "default", "row_index": "green_bold", "record": "default", "list": "default", "block": "default", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
+ 
+     let actual = nu!(format!("{} | table --expand --width 136", nu_value.trim()));
+ 
+@@ -1957,27 +1957,27 @@ fn table_expande_with_no_header_internally_1() {
+             "│                    │ │                                  │ │ vi_normal │ underscore │                                               │ │",
+             "│                    │ │                                  │ ╰───────────┴────────────╯                                               │ │",
+             "│                    │ │                                  │ ╭────────────────────────────┬────────────────────╮                      │ │",
+-            "│                    │ │ color_config                     │ │ separator                  │ white              │                      │ │",
++            "│                    │ │ color_config                     │ │ separator                  │ default            │                      │ │",
+             "│                    │ │                                  │ │                            │ ╭──────┬───╮       │                      │ │",
+             "│                    │ │                                  │ │ leading_trailing_space_bg  │ │ attr │ n │       │                      │ │",
+             "│                    │ │                                  │ │                            │ ╰──────┴───╯       │                      │ │",
+             "│                    │ │                                  │ │ header                     │ green_bold         │                      │ │",
+             "│                    │ │                                  │ │ empty                      │ blue               │                      │ │",
+             "│                    │ │                                  │ │ bool                       │                    │                      │ │",
+-            "│                    │ │                                  │ │ int                        │ white              │                      │ │",
++            "│                    │ │                                  │ │ int                        │ default            │                      │ │",
+             "│                    │ │                                  │ │ filesize                   │                    │                      │ │",
+-            "│                    │ │                                  │ │ duration                   │ white              │                      │ │",
++            "│                    │ │                                  │ │ duration                   │ default            │                      │ │",
+             "│                    │ │                                  │ │ datetime                   │                    │                      │ │",
+-            "│                    │ │                                  │ │ range                      │ white              │                      │ │",
+-            "│                    │ │                                  │ │ float                      │ white              │                      │ │",
+-            "│                    │ │                                  │ │ string                     │ white              │                      │ │",
+-            "│                    │ │                                  │ │ nothing                    │ white              │                      │ │",
+-            "│                    │ │                                  │ │ binary                     │ white              │                      │ │",
+-            "│                    │ │                                  │ │ cell-path                  │ white              │                      │ │",
++            "│                    │ │                                  │ │ range                      │ default            │                      │ │",
++            "│                    │ │                                  │ │ float                      │ default            │                      │ │",
++            "│                    │ │                                  │ │ string                     │ default            │                      │ │",
++            "│                    │ │                                  │ │ nothing                    │ default            │                      │ │",
++            "│                    │ │                                  │ │ binary                     │ default            │                      │ │",
++            "│                    │ │                                  │ │ cell-path                  │ default            │                      │ │",
+             "│                    │ │                                  │ │ row_index                  │ green_bold         │                      │ │",
+-            "│                    │ │                                  │ │ record                     │ white              │                      │ │",
+-            "│                    │ │                                  │ │ list                       │ white              │                      │ │",
+-            "│                    │ │                                  │ │ block                      │ white              │                      │ │",
++            "│                    │ │                                  │ │ record                     │ default            │                      │ │",
++            "│                    │ │                                  │ │ list                       │ default            │                      │ │",
++            "│                    │ │                                  │ │ block                      │ default            │                      │ │",
+             "│                    │ │                                  │ │ hints                      │ dark_gray          │                      │ │",
+             "│                    │ │                                  │ │                            │ ╭────┬───────╮     │                      │ │",
+             "│                    │ │                                  │ │ search_result              │ │ fg │ white │     │                      │ │",
+@@ -2249,7 +2249,7 @@ fn table_expande_with_no_header_internally_1() {
+ 
+ #[test]
+ fn big_table_expanded_with_padding_0() {
+-    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "white", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "white", "filesize": null, "duration": "white", "datetime": null, "range": "white", "float": "white", "string": "white", "nothing": "white", "binary": "white", "cell-path": "white", "row_index": "green_bold", "record": "white", "list": "white", "block": "white", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
++    let nu_value = r##"{ "config            ": { "ls": { "use_ls_colors": true, "clickable_links": false }, "rm": { "always_trash": false }, "cd": { "abbreviations": false }, "table": { "mode": "rounded", "index_mode": "always", "trim": { "methodology": "wrapping", "wrapping_try_keep_words": true, "truncating_suffix": "..." } }, "explore": { "help_banner": true, "exit_esc": true, "command_bar_text": "#C4C9C6", "status_bar_background": { "fg": "#1D1F21", "bg": "#C4C9C6" }, "highlight": { "bg": "yellow", "fg": "black" }, "status": {}, "try": {}, "table": { "split_line": "#404040", "cursor": true, "line_index": true, "line_shift": true, "line_head_top": true, "line_head_bottom": true, "show_head": true, "show_index": true }, "config": { "cursor_color": { "bg": "yellow", "fg": "black" } } }, "history": { "max_size": 10000, "sync_on_enter": true, "file_format": "plaintext" }, "completions": { "case_sensitive": false, "quick": true, "partial": true, "algorithm": "prefix", "external": { "enable": true, "max_results": 100, "completer": null } }, "filesize": { "metric": true, "format": "auto" }, "cursor_shape": { "emacs": "line", "vi_insert": "block", "vi_normal": "underscore" }, "color_config": { "separator": "default", "leading_trailing_space_bg": { "attr": "n" }, "header": "green_bold", "empty": "blue", "bool": null, "int": "default", "filesize": null, "duration": "default", "datetime": null, "range": "default", "float": "default", "string": "default", "nothing": "default", "binary": "default", "cell-path": "default", "row_index": "green_bold", "record": "default", "list": "default", "block": "default", "hints": "dark_gray", "search_result": {"fg": "white", "bg": "red"}, "shape_and": "purple_bold", "shape_binary": "purple_bold", "shape_block": "blue_bold", "shape_bool": "light_cyan", "shape_custom": "green", "shape_datetime": "cyan_bold", "shape_directory": "cyan", "shape_external": "cyan", "shape_externalarg": "green_bold", "shape_filepath": "cyan", "shape_flag": "blue_bold", "shape_float": "purple_bold", "shape_garbage": { "fg": "#FFFFFF", "bg": "#FF0000", "attr": "b" }, "shape_globpattern": "cyan_bold", "shape_int": "purple_bold", "shape_internalcall": "cyan_bold", "shape_list": "cyan_bold", "shape_literal": "blue", "shape_matching_brackets": { "attr": "u" }, "shape_nothing": "light_cyan", "shape_operator": "yellow", "shape_or": "purple_bold", "shape_pipe": "purple_bold", "shape_range": "yellow_bold", "shape_record": "cyan_bold", "shape_redirection": "purple_bold", "shape_signature": "green_bold", "shape_string": "green", "shape_string_interpolation": "cyan_bold", "shape_table": "blue_bold", "shape_variable": "purple" }, "footer_mode": "25", "float_precision": 2, "use_ansi_coloring": true, "edit_mode": "emacs", "shell_integration": true, "show_banner": true, "render_right_prompt_on_last_line": false, "hooks": { "pre_prompt": [ null ], "pre_execution": [ null ], "env_change": { "PWD": [ null ] }, "display_output": null }, "menus": [ { "name": "completion_menu", "only_buffer_difference": false, "marker": "| ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "history_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "help_menu", "only_buffer_difference": true, "marker": "? ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" } }, { "name": "commands_menu", "only_buffer_difference": false, "marker": "# ", "type": { "layout": "columnar", "columns": 4, "col_width": 20, "col_padding": 2 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "vars_menu", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "list", "page_size": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null }, { "name": "commands_with_description", "only_buffer_difference": true, "marker": "# ", "type": { "layout": "description", "columns": 4, "col_width": 20, "col_padding": 2, "selection_rows": 4, "description_rows": 10 }, "style": { "text": "green", "selected_text": "green_reverse", "description_text": "yellow" }, "source": null } ], "keybindings": [ { "name": "completion_menu", "modifier": "none", "keycode": "tab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "send": "menu", "name": "completion_menu" }, { "send": "menunext" } ] } }, { "name": "completion_previous", "modifier": "shift", "keycode": "backtab", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menuprevious" } }, { "name": "history_menu", "modifier": "control", "keycode": "char_r", "mode": "emacs", "event": { "send": "menu", "name": "history_menu" } }, { "name": "next_page", "modifier": "control", "keycode": "char_x", "mode": "emacs", "event": { "send": "menupagenext" } }, { "name": "undo_or_previous_page", "modifier": "control", "keycode": "char_z", "mode": "emacs", "event": { "until": [ { "send": "menupageprevious" }, { "edit": "undo" } ] } }, { "name": "yank", "modifier": "control", "keycode": "char_y", "mode": "emacs", "event": { "until": [ { "edit": "pastecutbufferafter" } ] } }, { "name": "unix-line-discard", "modifier": "control", "keycode": "char_u", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cutfromlinestart" } ] } }, { "name": "kill-line", "modifier": "control", "keycode": "char_k", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "until": [ { "edit": "cuttolineend" } ] } }, { "name": "commands_menu", "modifier": "control", "keycode": "char_t", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_menu" } }, { "name": "vars_menu", "modifier": "alt", "keycode": "char_o", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "vars_menu" } }, { "name": "commands_with_description", "modifier": "control", "keycode": "char_s", "mode": [ "emacs", "vi_normal", "vi_insert" ], "event": { "send": "menu", "name": "commands_with_description" } } ] } }"##;
+ 
+     let actual = nu!(format!(
+         "$env.config.table.padding = {{ left: 2, right: 3 }}; {} | table --expand --width 141",
+@@ -2349,27 +2349,27 @@ fn big_table_expanded_with_padding_0() {
+             "│                       │  │                                     │  │  vi_normal   │  underscore   │                                    │   │",
+             "│                       │  │                                     │  ╰──────────────┴───────────────╯                                    │   │",
+             "│                       │  │                                     │  ╭───────────────────────────────┬───────────────────────────────╮   │   │",
+-            "│                       │  │  color_config                       │  │  separator                    │  white                        │   │   │",
++            "│                       │  │  color_config                       │  │  separator                    │  default                      │   │   │",
+             "│                       │  │                                     │  │                               │  ╭─────────┬──────╮           │   │   │",
+             "│                       │  │                                     │  │  leading_trailing_space_bg    │  │  attr   │  n   │           │   │   │",
+             "│                       │  │                                     │  │                               │  ╰─────────┴──────╯           │   │   │",
+             "│                       │  │                                     │  │  header                       │  green_bold                   │   │   │",
+             "│                       │  │                                     │  │  empty                        │  blue                         │   │   │",
+             "│                       │  │                                     │  │  bool                         │                               │   │   │",
+-            "│                       │  │                                     │  │  int                          │  white                        │   │   │",
++            "│                       │  │                                     │  │  int                          │  default                      │   │   │",
+             "│                       │  │                                     │  │  filesize                     │                               │   │   │",
+-            "│                       │  │                                     │  │  duration                     │  white                        │   │   │",
++            "│                       │  │                                     │  │  duration                     │  default                      │   │   │",
+             "│                       │  │                                     │  │  datetime                     │                               │   │   │",
+-            "│                       │  │                                     │  │  range                        │  white                        │   │   │",
+-            "│                       │  │                                     │  │  float                        │  white                        │   │   │",
+-            "│                       │  │                                     │  │  string                       │  white                        │   │   │",
+-            "│                       │  │                                     │  │  nothing                      │  white                        │   │   │",
+-            "│                       │  │                                     │  │  binary                       │  white                        │   │   │",
+-            "│                       │  │                                     │  │  cell-path                    │  white                        │   │   │",
++            "│                       │  │                                     │  │  range                        │  default                      │   │   │",
++            "│                       │  │                                     │  │  float                        │  default                      │   │   │",
++            "│                       │  │                                     │  │  string                       │  default                      │   │   │",
++            "│                       │  │                                     │  │  nothing                      │  default                      │   │   │",
++            "│                       │  │                                     │  │  binary                       │  default                      │   │   │",
++            "│                       │  │                                     │  │  cell-path                    │  default                      │   │   │",
+             "│                       │  │                                     │  │  row_index                    │  green_bold                   │   │   │",
+-            "│                       │  │                                     │  │  record                       │  white                        │   │   │",
+-            "│                       │  │                                     │  │  list                         │  white                        │   │   │",
+-            "│                       │  │                                     │  │  block                        │  white                        │   │   │",
++            "│                       │  │                                     │  │  record                       │  default                      │   │   │",
++            "│                       │  │                                     │  │  list                         │  default                      │   │   │",
++            "│                       │  │                                     │  │  block                        │  default                      │   │   │",
+             "│                       │  │                                     │  │  hints                        │  dark_gray                    │   │   │",
+             "│                       │  │                                     │  │                               │  ╭───────┬──────────╮         │   │   │",
+             "│                       │  │                                     │  │  search_result                │  │  fg   │  white   │         │   │   │",
+@@ -3337,7 +3337,7 @@ fn table_collapse_padding_zero() {
+ #[test]
+ fn table_leading_trailing_space_bg() {
+     let actual = nu!(
+-        r#"$env.config.color_config.leading_trailing_space_bg = { bg: 'white' }; [[a b, 'c   ']; ['  1  ' '    2' '3    '] ['  4  ' "hello\nworld" ['  1  ' 2 [1 '  2  ' 3]]]] | table --width=80"#
++        r#"$env.config.color_config.leading_trailing_space_bg = { bg: 'default' }; [[a b, 'c   ']; ['  1  ' '    2' '3    '] ['  4  ' "hello\nworld" ['  1  ' 2 [1 '  2  ' 3]]]] | table --width=80"#
+     );
+     assert_eq!(
+         actual.out,
+@@ -3348,7 +3348,7 @@ fn table_leading_trailing_space_bg() {
+ #[test]
+ fn table_leading_trailing_space_bg_expand() {
+     let actual = nu!(
+-        r#"$env.config.color_config.leading_trailing_space_bg = { bg: 'white' }; [[a b, 'c   ']; ['  1  ' '    2' '3    '] ['  4  ' "hello\nworld" ['  1  ' 2 [1 '  2  ' 3]]]] | table --width=80 --expand"#
++        r#"$env.config.color_config.leading_trailing_space_bg = { bg: 'default' }; [[a b, 'c   ']; ['  1  ' '    2' '3    '] ['  4  ' "hello\nworld" ['  1  ' 2 [1 '  2  ' 3]]]] | table --width=80 --expand"#
+     );
+     assert_eq!(
+         actual.out,
+@@ -3839,7 +3839,7 @@ fn table_colors() {
+     ));
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37m╭───┬───╮\u{1b}[0m\u{1b}[37m│\u{1b}[0m \u{1b}[1;32ma\u{1b}[0m \u{1b}[37m│\u{1b}[0m \u{1b}[37m1\u{1b}[0m \u{1b}[37m│\u{1b}[0m\u{1b}[37m│\u{1b}[0m \u{1b}[1;32mb\u{1b}[0m \u{1b}[37m│\u{1b}[0m \u{1b}[37m2\u{1b}[0m \u{1b}[37m│\u{1b}[0m\u{1b}[37m╰───┴───╯\u{1b}[0m"
++        "\u{1b}[39m╭───┬───╮\u{1b}[0m\u{1b}[39m│\u{1b}[0m \u{1b}[1;32ma\u{1b}[0m \u{1b}[39m│\u{1b}[0m \u{1b}[39m1\u{1b}[0m \u{1b}[39m│\u{1b}[0m\u{1b}[39m│\u{1b}[0m \u{1b}[1;32mb\u{1b}[0m \u{1b}[39m│\u{1b}[0m \u{1b}[39m2\u{1b}[0m \u{1b}[39m│\u{1b}[0m\u{1b}[39m╰───┴───╯\u{1b}[0m"
+     );
+ 
+     let actual = nu!(concat!(
+@@ -3854,13 +3854,13 @@ fn table_empty_colors() {
+     let actual = nu!("$env.config.use_ansi_coloring = true; []");
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37m╭────────────╮\u{1b}[0m\u{1b}[37m│\u{1b}[0m \u{1b}[2mempty list\u{1b}[0m \u{1b}[37m│\u{1b}[0m\u{1b}[37m╰────────────╯\u{1b}[0m"
++        "\u{1b}[39m╭────────────╮\u{1b}[0m\u{1b}[39m│\u{1b}[0m \u{1b}[2mempty list\u{1b}[0m \u{1b}[39m│\u{1b}[0m\u{1b}[39m╰────────────╯\u{1b}[0m"
+     );
+ 
+     let actual = nu!("$env.config.use_ansi_coloring = true; {}");
+     assert_eq!(
+         actual.out,
+-        "\u{1b}[37m╭──────────────╮\u{1b}[0m\u{1b}[37m│\u{1b}[0m \u{1b}[2mempty record\u{1b}[0m \u{1b}[37m│\u{1b}[0m\u{1b}[37m╰──────────────╯\u{1b}[0m"
++        "\u{1b}[39m╭──────────────╮\u{1b}[0m\u{1b}[39m│\u{1b}[0m \u{1b}[2mempty record\u{1b}[0m \u{1b}[39m│\u{1b}[0m\u{1b}[39m╰──────────────╯\u{1b}[0m"
+     );
+ 
+     let actual = nu!("$env.config.use_ansi_coloring = false; []");
+diff --git a/crates/nu-command/tests/commands/take/rows.rs b/crates/nu-command/tests/commands/take/rows.rs
+index 6c34b61310b122164410ea8d4451488c1eb55404..dc26c0242d74a6d43712cf8eecbb3fa75fe78d56 100644
+--- a/crates/nu-command/tests/commands/take/rows.rs
++++ b/crates/nu-command/tests/commands/take/rows.rs
+@@ -58,3 +58,13 @@ fn works_with_binary_list() {
+ 
+     assert_eq!(actual.out, "true");
+ }
++
++#[test]
++fn takes_bytes_and_drops_content_type() {
++    let actual = nu!(format!(
++        "open {} | take 3 | metadata | get content_type? | describe",
++        file!(),
++    ));
++
++    assert_eq!(actual.out, "nothing");
++}
+diff --git a/crates/nu-command/tests/commands/which.rs b/crates/nu-command/tests/commands/which.rs
+index eb92595e14c2442082dd7adaa0947d18b9b9d172..c4dcdcc368ab44150afab52c690fc7783a8e1b55 100644
+--- a/crates/nu-command/tests/commands/which.rs
++++ b/crates/nu-command/tests/commands/which.rs
+@@ -118,3 +118,11 @@ fn which_accepts_spread_list() {
+ 
+     assert_eq!(actual.out, "ls");
+ }
++
++#[test]
++fn which_dedup_is_less_than_all() {
++    let all: i32 = nu!("which -a | length").out.parse().unwrap();
++    let dedup: i32 = nu!("which | length").out.parse().unwrap();
++
++    assert!(all >= dedup);
++}
+diff --git a/crates/nu-command/tests/format_conversions/nuon.rs b/crates/nu-command/tests/format_conversions/nuon.rs
+index cdac5323e24d87cb23fa2de7faa8f2b91318b94f..90c8f982bf2e591bdfbfed7186d9844281bf0207 100644
+--- a/crates/nu-command/tests/format_conversions/nuon.rs
++++ b/crates/nu-command/tests/format_conversions/nuon.rs
+@@ -515,6 +515,19 @@ fn quotes_some_strings_necessarily() {
+     assert_eq!(actual.out, "list<string>");
+ }
+ 
++#[test]
++fn quotes_some_strings_necessarily_in_record_keys() {
++    let actual = nu!(pipeline(
++        r#"
++        ['=', 'a=', '=a'] | each {
++           {$in : 42}
++        } | reduce {|elt, acc| $acc | merge $elt} | to nuon | from nuon | columns | describe
++        "#
++    ));
++
++    assert_eq!(actual.out, "list<string>");
++}
++
+ #[test]
+ fn read_code_should_fail_rather_than_panic() {
+     let actual = nu!(cwd: "tests/fixtures/formats", pipeline(
+diff --git a/crates/nu-parser/tests/test_parser.rs b/crates/nu-parser/tests/test_parser.rs
+index 2267916322f882b43ddab6b00e90b63bdd3ede73..55d872e04eed8c993d276feff48c83d9c598fe8c 100644
+--- a/crates/nu-parser/tests/test_parser.rs
++++ b/crates/nu-parser/tests/test_parser.rs
+@@ -292,6 +292,21 @@ pub fn parse_filesize() {
+     assert_eq!(value.unit.item, Unit::Filesize(FilesizeUnit::B));
+ }
+ 
++#[test]
++pub fn parse_non_utf8_fails() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    // Panic when parsing units was triggered by non-UTF8 characters
++    // due to bad handling via `String::from_utf8_lossy`
++    //
++    // See https://github.com/nushell/nushell/pull/16355
++    let _block = parse(&mut working_set, None, b"0\xffB", true);
++
++    // Asserting on the exact error doesn't make as much sense as
++    assert!(!working_set.parse_errors.is_empty());
++}
++
+ #[test]
+ pub fn parse_cell_path() {
+     let engine_state = EngineState::new();
+@@ -722,12 +737,15 @@ pub fn parse_attribute_block_check_spans() {
+ 
+ #[test]
+ pub fn parse_attributes_check_values() {
+-    let engine_state = EngineState::new();
++    let mut engine_state = EngineState::new();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+     working_set.add_decl(Box::new(Def));
+     working_set.add_decl(Box::new(AttrEcho));
+ 
++    let _ = engine_state.merge_delta(working_set.render());
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
+     let source = br#"
+     @echo "hello world"
+     @echo 42
+@@ -752,13 +770,16 @@ pub fn parse_attributes_check_values() {
+ 
+ #[test]
+ pub fn parse_attributes_alias() {
+-    let engine_state = EngineState::new();
++    let mut engine_state = EngineState::new();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+     working_set.add_decl(Box::new(Def));
+     working_set.add_decl(Box::new(Alias));
+     working_set.add_decl(Box::new(AttrEcho));
+ 
++    let _ = engine_state.merge_delta(working_set.render());
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
+     let source = br#"
+     alias "attr test" = attr echo
+ 
+@@ -780,13 +801,16 @@ pub fn parse_attributes_alias() {
+ 
+ #[test]
+ pub fn parse_attributes_external_alias() {
+-    let engine_state = EngineState::new();
++    let mut engine_state = EngineState::new();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+     working_set.add_decl(Box::new(Def));
+     working_set.add_decl(Box::new(Alias));
+     working_set.add_decl(Box::new(AttrEcho));
+ 
++    let _ = engine_state.merge_delta(working_set.render());
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
+     let source = br#"
+     alias "attr test" = ^echo
+ 
+@@ -809,13 +833,16 @@ pub fn parse_attributes_external_alias() {
+ #[test]
+ pub fn parse_if_in_const_expression() {
+     // https://github.com/nushell/nushell/issues/15321
+-    let engine_state = EngineState::new();
++    let mut engine_state = EngineState::new();
+     let mut working_set = StateWorkingSet::new(&engine_state);
+ 
+     working_set.add_decl(Box::new(Const));
+     working_set.add_decl(Box::new(Def));
+     working_set.add_decl(Box::new(IfMocked));
+ 
++    let _ = engine_state.merge_delta(working_set.render());
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
+     let source = b"const foo = if t";
+     let _ = parse(&mut working_set, None, source, false);
+ 
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index 392d50ec5d78f5468175d0181384ee65b0676d53..34c3a722dd09707b9cfad6c05adbee342e882f99 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -302,7 +302,7 @@ fn write_pipeline_data_empty() -> Result<(), ShellError> {
+     let manager = TestInterfaceManager::new(&test);
+     let interface = manager.get_interface();
+ 
+-    let (header, writer) = interface.init_write_pipeline_data(PipelineData::Empty, &())?;
++    let (header, writer) = interface.init_write_pipeline_data(PipelineData::empty(), &())?;
+ 
+     assert!(matches!(header, PipelineDataHeader::Empty));
+ 
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::ListStream(
++    let pipe = PipelineData::list_stream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::ByteStream(
++    let data = PipelineData::byte_stream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index 3547b986e74468687a2d853dde8585825b1dcffb..be37c40c14e897afe8e1fc774f46a01b325c15a9 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -77,7 +77,7 @@ impl SimplePluginCommand for IntoU32 {
+         Signature::build(self.name()).input_output_type(Type::Int, Type::Custom("CustomU32".into()))
+     }
+ 
+-    fn examples(&self) -> Vec<Example> {
++    fn examples(&self) -> Vec<Example<'_>> {
+         vec![Example {
+             example: "340 | into u32",
+             description: "Make a u32",
+@@ -140,14 +140,14 @@ fn test_into_u32_examples() -> Result<(), ShellError> {
+     PluginTest::new("custom_u32", CustomU32Plugin.into())?.test_command_examples(&IntoU32)
+ }
+ 
+-#[test]
+-fn test_into_int_from_u32() -> Result<(), ShellError> {
+-    let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+-        .eval_with(
+-            "into int from u32",
+-            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
+-        )?
+-        .into_value(Span::test_data())?;
+-    assert_eq!(Value::test_int(42), result);
+-    Ok(())
+-}
++// [ENV-PATCH] #[test]
++// [ENV-PATCH] fn test_into_int_from_u32() -> Result<(), ShellError> {
++// [ENV-PATCH]     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
++// [ENV-PATCH]         .eval_with(
++// [ENV-PATCH]             "into int from u32",
++// [ENV-PATCH]             PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
++// [ENV-PATCH]         )?
++// [ENV-PATCH]         .into_value(Span::test_data())?;
++// [ENV-PATCH]     assert_eq!(Value::test_int(42), result);
++// [ENV-PATCH]     Ok(())
++// [ENV-PATCH] }
+diff --git a/crates/nu-plugin-test-support/tests/hello/mod.rs b/crates/nu-plugin-test-support/tests/hello/mod.rs
+index b7e7474300f7091f1c634831a92eb3bf4ed158b9..b671b01b3e83c2c195f65eb56804661fc6636240 100644
+--- a/crates/nu-plugin-test-support/tests/hello/mod.rs
++++ b/crates/nu-plugin-test-support/tests/hello/mod.rs
+@@ -32,7 +32,7 @@ impl SimplePluginCommand for Hello {
+         Signature::build(PluginCommand::name(self)).input_output_type(Type::Nothing, Type::String)
+     }
+ 
+-    fn examples(&self) -> Vec<Example> {
++    fn examples(&self) -> Vec<Example<'_>> {
+         vec![Example {
+             example: "hello",
+             description: "Print a friendly greeting",
+diff --git a/crates/nu-plugin-test-support/tests/lowercase/mod.rs b/crates/nu-plugin-test-support/tests/lowercase/mod.rs
+index 0147ebb4d91b077a46841364682b2c5b0533d8a8..3fde5beffd225fc2f3e201ebad38de3525ac7687 100644
+--- a/crates/nu-plugin-test-support/tests/lowercase/mod.rs
++++ b/crates/nu-plugin-test-support/tests/lowercase/mod.rs
+@@ -26,7 +26,7 @@ impl PluginCommand for Lowercase {
+         )
+     }
+ 
+-    fn examples(&self) -> Vec<Example> {
++    fn examples(&self) -> Vec<Example<'_>> {
+         vec![Example {
+             example: r#"[Hello wORLD] | lowercase"#,
+             description: "Lowercase a list of strings",
+diff --git a/crates/nu-protocol/tests/test_value.rs b/crates/nu-protocol/tests/test_value.rs
+index 419b3f57d33fb31c73bb71e9b29a737f496bed56..5bf164a38f7a7093d636c0221e36b514e222584a 100644
+--- a/crates/nu-protocol/tests/test_value.rs
++++ b/crates/nu-protocol/tests/test_value.rs
+@@ -37,6 +37,71 @@ fn test_comparison_nothing() {
+     }
+ }
+ 
++#[test]
++fn test_float_equality_comparison() {
++    let values = vec![
++        (
++            Value::test_float(0.30000000000000004),
++            Value::test_float(0.3),
++        ),
++        (
++            Value::test_float(0.1),
++            #[allow(clippy::excessive_precision)]
++            Value::test_float(0.10000000000000001),
++        ),
++        (
++            Value::test_float(1.0000000000000002),
++            Value::test_float(1.0),
++        ),
++        (
++            Value::test_float(2.220446049250313e-16),
++            Value::test_float(0.0),
++        ),
++        (Value::test_float(1e-16), Value::test_float(0.0)),
++        (
++            Value::test_float((1e16 + 1.0) - 1e16),
++            Value::test_float(0.0),
++        ),
++        (
++            Value::test_float(10000000000000000.0),
++            Value::test_float(10000000000000002.0),
++        ),
++        (
++            Value::test_float(9007199254740992.0),
++            Value::test_float(9007199254740993.0),
++        ),
++        (
++            Value::test_float(4503599627370496.0),
++            Value::test_float(4503599627370497.0),
++        ),
++        (
++            Value::test_float(1.7976931348623157e308),
++            Value::test_float(1.7976931348623155e308),
++        ),
++        (
++            Value::test_float(1.0),
++            Value::test_float(0.9999999999999999),
++        ),
++        (
++            #[allow(clippy::approx_constant)]
++            Value::test_float(3.141592653589793),
++            Value::test_float(3.1415926535897927),
++        ),
++    ];
++
++    for value in values {
++        assert!(matches!(
++            value.0.eq(Span::test_data(), &value.1, Span::test_data()),
++            Ok(Value::Bool { val: true, .. })
++        ));
++
++        assert!(matches!(
++            value.1.eq(Span::test_data(), &value.0, Span::test_data()),
++            Ok(Value::Bool { val: true, .. })
++        ));
++    }
++}
++
+ #[rstest]
+ #[case(365 * 24 * 3600 * 1_000_000_000, "52wk 1day")]
+ #[case( (((((((7 + 2) * 24 + 3) * 60 + 4) * 60) + 5) * 1000 + 6) * 1000 + 7) * 1000 + 8,
+diff --git a/crates/nu-std/tests/test_std-rfc_kv.nu b/crates/nu-std/tests/test_std-rfc_kv.nu
+index 84467fceeed5d5b84348253ec20a113e6291d562..48f16214fa6adf2a3207764357acf5afb28835ea 100644
+--- a/crates/nu-std/tests/test_std-rfc_kv.nu
++++ b/crates/nu-std/tests/test_std-rfc_kv.nu
+@@ -302,3 +302,17 @@ def universal-return_value_only [] {
+     kv drop --universal $key
+     rm $env.NU_UNIVERSAL_KV_PATH
+ }
++
++@test
++def simple-local-set-table [] {
++    if ('sqlite' not-in (version).features) { return }
++
++    let key = (random uuid)
++
++    kv set -t foo $key 42
++    let actual = (kv get -t foo $key)
++    let expected = 42
++    assert equal $actual $expected
++
++    kv drop -t foo $key | ignore
++}
+\ No newline at end of file
+diff --git a/crates/nu-std/tests/test_std-rfc_str.nu b/crates/nu-std/tests/test_std-rfc_str.nu
+index 3620854fc71fce4820b4f3491b6e7bafc7c8472d..d12f5eb0d3a4bbe9ddb70771d32a0481d42f9f5f 100644
+--- a/crates/nu-std/tests/test_std-rfc_str.nu
++++ b/crates/nu-std/tests/test_std-rfc_str.nu
+@@ -291,3 +291,139 @@ def str-unindent_whitespace_works_with_tabs [] {
+ 
+     assert equal $actual $expected
+ }
++
++@test
++def str-align_simple [] {
++    let actual = [
++        "let a = 1"
++        "let max = 2"
++        "let very_long_variable_name = 3"
++    ] | str align '='
++
++    let expected = [
++        "let a                       = 1"
++        "let max                     = 2"
++        "let very_long_variable_name = 3"
++    ] | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_center [] {
++    let actual = [
++        "a = 1"
++        "max = 2"
++        "very_long_variable_name = 3"
++    ] | str align '=' --center
++
++    let expected = [
++        "                      a = 1"
++        "                    max = 2"
++        "very_long_variable_name = 3"
++    ] | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_with_range [] {
++    let actual = r#'match 5 {
++    1.. => { print "More than zero" }
++    0 => { print "Zero" }
++    -1 => { print "Negative one" }
++    -119283 => { print "Very negative" }
++}'# | str align '=>' --range 2..
++
++    let expected = r#'match 5 {
++    1.. => { print "More than zero" }
++    0       => { print "Zero" }
++    -1      => { print "Negative one" }
++    -119283 => { print "Very negative" }
++}'# | lines | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_ignore_lines_with_no_target [] {
++    let actual = [
++        "let a = 1"
++        "let max = 2"
++        "# comment"
++    ] | str align '='
++
++    let expected = [
++        "let a   = 1"
++        "let max = 2"
++        "# comment"
++    ] | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_use_different_char [] {
++    let actual = [
++        "=>"
++        "=====>"
++    ] | str align '>' -c '='
++
++    let expected = [
++        "=====>"
++        "=====>"
++    ] | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_multiple_target_in_line [] {
++    let actual = [
++        "print test # Hello # World"
++        "print hello there # test"
++    ] | str align '#'
++
++    let expected = [
++        "print test        # Hello # World"
++        "print hello there # test"
++    ] | str join "\n"
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_no_target [] {
++
++    let expected = [
++        "print test # Hello # World"
++        "print hello there # test"
++    ] | str join "\n"
++
++    let actual = $expected | str align '='
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_empty_target_noop [] {
++
++    let expected = [
++        "print test # Hello # World"
++        "print hello there # test"
++    ] | str join "\n"
++
++    let actual = $expected | str align ''
++
++    assert equal $actual $expected
++}
++
++@test
++def str-align_empty_input_noop [] {
++
++    let expected = ""
++
++    let actual = [] | str align '='
++
++    assert equal $actual $expected
++}
+diff --git a/crates/nu-std/tests/test_std_random.nu b/crates/nu-std/tests/test_std_random.nu
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0f2b7c32445d62241c19eff5b8cf095af509105
+--- /dev/null
++++ b/crates/nu-std/tests/test_std_random.nu
+@@ -0,0 +1,38 @@
++use std/assert
++use std/testing *
++use std/random
++
++@test
++def "random dice rejects negative sides" [] {
++  assert error {
++    random dice --sides (-2)
++  } "--sides (-2) should not have been accepted"
++}
++
++@test
++def "random dice rejects zero sides" [] {
++  assert error {
++    random dice --sides 0
++  } "--sides 0 should not have been accepted"
++}
++
++@test
++def "random dice rejects negative dice" [] {
++  assert error {
++    random dice --dice (-2)
++  } "--dice (-2) should not have been accepted"
++}
++
++@test
++def "random dice rejects zero dice" [] {
++  assert error {
++    random dice --dice 0
++  } "--dice 0 should not have been accepted"
++}
++
++@test
++def "random dice rejects one-sided dice" [] {
++  assert error {
++    random dice --sides 1
++  } "--sides 1 should not have been accepted"
++}
+diff --git a/tests/integration/README.md b/tests/integration/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7273dca3b127463ad765aefb02c44b6f769fe0b9
+--- /dev/null
++++ b/tests/integration/README.md
+@@ -0,0 +1,4 @@
++# What is this?
++
++This folder contains tests that test Nushell as a whole, not focused
++on any specific component.
+diff --git a/tests/integration/mod.rs b/tests/integration/mod.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e7b83f85779685852aab41d289489027e22b1b2
+--- /dev/null
++++ b/tests/integration/mod.rs
+@@ -0,0 +1,26 @@
++use nu_test_support::{nu, pipeline};
++use pretty_assertions::assert_str_eq;
++
++#[test]
++fn multiword_commands_have_their_parent_commands() {
++    let out = nu!(pipeline(
++        r#"
++            scope commands
++            | where type == built-in and name like ' '
++            | where ($it.name | split row ' ' | first) not-in (
++                scope commands
++                | where type in [keyword built-in]
++                | get name
++            )
++            | get name
++            | to json --raw
++        "#
++    ));
++
++    assert_str_eq!(
++        "[]",
++        out.out,
++        "These multiword commands are missing their dummy parent commands: {}",
++        out.out
++    );
++}
+diff --git a/tests/main.rs b/tests/main.rs
+index 6824f26f1303280326a7281f8dc5906799a3ad2c..2c7e6a589e15597f5f10f5977ee907881e503542 100644
+--- a/tests/main.rs
++++ b/tests/main.rs
+@@ -3,6 +3,7 @@ extern crate nu_test_support;
+ mod const_;
+ mod eval;
+ mod hooks;
++mod integration;
+ mod modules;
+ mod overlays;
+ mod parsing;
+diff --git a/tests/overlays/mod.rs b/tests/overlays/mod.rs
+index b879409a74bb111836a2091fc69f13475fbd2292..6dc678acaa26ed474103b5ff8ef2af25453a3460 100644
+--- a/tests/overlays/mod.rs
++++ b/tests/overlays/mod.rs
+@@ -198,7 +198,7 @@ fn new_overlay_from_const_name() {
+     let inp = &[
+         "const mod = 'spam'",
+         "overlay new $mod",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -212,7 +212,7 @@ fn hide_overlay_from_const_name() {
+         "const mod = 'spam'",
+         "overlay new $mod",
+         "overlay hide $mod",
+-        "overlay list | str join ' '",
++        "overlay list | where active == true | get name | str join ' '",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -410,7 +410,7 @@ fn hide_overlay_scoped_env() {
+ 
+ #[test]
+ fn list_default_overlay() {
+-    let inp = &["overlay list | last"];
++    let inp = &["overlay list | last | get name"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -424,7 +424,7 @@ fn list_last_overlay() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -439,7 +439,7 @@ fn list_overlay_scoped() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "do { overlay list | last }",
++        "do { overlay list | last | get name }",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -695,7 +695,7 @@ fn reset_overrides() {
+ 
+ #[test]
+ fn overlay_new() {
+-    let inp = &["overlay new spam", "overlay list | last"];
++    let inp = &["overlay new spam", "overlay list | last | get name"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -1080,7 +1080,7 @@ fn overlay_use_find_scoped_module() {
+                     module spam { }
+ 
+                     overlay use spam
+-                    overlay list | last
++                    overlay list | last | get name
+                 }
+             ";
+ 
+@@ -1196,7 +1196,7 @@ fn overlay_trim_single_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use 'spam'",
+-        "overlay list | last ",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1227,7 +1227,7 @@ fn overlay_trim_double_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         r#"overlay use "spam" "#,
+-        "overlay list | last ",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1428,7 +1428,7 @@ fn alias_overlay_use_2() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam",
+         "spam b",
+-        "overlay list | get 1",
++        "overlay list | get 1.name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1447,7 +1447,7 @@ fn alias_overlay_use_3() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam b",
+         "b",
+-        "overlay list | get 1",
++        "overlay list | get 1.name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1465,7 +1465,7 @@ fn alias_overlay_new() {
+         "alias on = overlay new",
+         "on spam",
+         "on eggs",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+diff --git a/tests/repl/test_commandline.rs b/tests/repl/test_commandline.rs
+index 1b52797fc4a8733b34f6eec004ac0aee68c258fa..c40923cddb8b5692be55b3272c7e33214c31a790 100644
+--- a/tests/repl/test_commandline.rs
++++ b/tests/repl/test_commandline.rs
+@@ -140,3 +140,11 @@ fn commandline_test_cursor_end() -> TestResult {
+ fn commandline_test_cursor_type() -> TestResult {
+     run_test("commandline get-cursor | describe", "int")
+ }
++
++#[test]
++fn commandline_test_accepted_command() -> TestResult {
++    run_test(
++        "commandline edit --accept \"print accepted\"\n | commandline",
++        "print accepted",
++    )
++}
+diff --git a/tests/repl/test_engine.rs b/tests/repl/test_engine.rs
+index 22d81f08cb063503f745ffddd3ebecc66d74d8ed..d29325eb807a81f261cff4366e2f6d6a98144d54 100644
+--- a/tests/repl/test_engine.rs
++++ b/tests/repl/test_engine.rs
+@@ -1,4 +1,4 @@
+-use crate::repl::tests::{TestResult, fail_test, run_test};
++use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains};
+ use rstest::rstest;
+ 
+ #[test]
+@@ -87,7 +87,8 @@ fn in_used_in_range_to() -> TestResult {
+ 
+ #[test]
+ fn help_works_with_missing_requirements() -> TestResult {
+-    run_test(r#"each --help | lines | length"#, "72")
++    fail_test(r#"each"#, "missing_positional")?;
++    run_test_contains(r#"each --help"#, "Usage")
+ }
+ 
+ #[rstest]
+diff --git a/tests/repl/test_math.rs b/tests/repl/test_math.rs
+index 6bd7b2940382954cdebf4d32aef2819e5c6a6389..5dbc40abf6bb55bec4a86e06d38e1d23f5036375 100644
+--- a/tests/repl/test_math.rs
++++ b/tests/repl/test_math.rs
+@@ -117,7 +117,12 @@ fn bit_and_or() -> TestResult {
+ 
+ #[test]
+ fn pow() -> TestResult {
+-    run_test("3 ** 3", "27")
++    run_test("3 ** 3", "27").unwrap();
++    run_test("2 ** 1 ** 2", "2").unwrap();
++    run_test("2 ** 3 ** 2 ** 1 ** 5", "512").unwrap();
++    run_test("1.42 ** 2 ** 1.01 ** 9", "2.1135450418757156").unwrap();
++    run_test("2.571 ** 3.1 ** 2.18", "67804.81966071267").unwrap();
++    run_test("2.0 ** 3.0 ** 4.0", "2417851639229258349412352.0")
+ }
+ 
+ #[test]
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index 45b890653cba50ec336b439ff5f676475f2bbc11..10778d805324b56da90e023d94c5de3b9858dd6b 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -618,6 +618,11 @@ fn single_value_row_condition() -> TestResult {
+     )
+ }
+ 
++#[test]
++fn row_condition_non_boolean() -> TestResult {
++    fail_test(r#"[1 2 3] | where 1"#, "expected bool")
++}
++
+ #[test]
+ fn performance_nested_lists() -> TestResult {
+     // Parser used to be exponential on deeply nested lists
+@@ -1022,3 +1027,27 @@ fn not_panic_with_recursive_call() {
+     );
+     assert!(result.status.success());
+ }
++
++// https://github.com/nushell/nushell/issues/16040
++#[test]
++fn external_argument_with_subexpressions() -> TestResult {
++    run_test(r#"^echo foo( ('bar') | $in ++ 'baz' )"#, "foobarbaz")?;
++    run_test(r#"^echo foo( 'bar' )('baz')"#, "foobarbaz")?;
++    run_test(r#"^echo ")('foo')(""#, ")('foo')(")?;
++    fail_test(r#"^echo foo( 'bar'"#, "Unexpected end of code")
++}
++
++// https://github.com/nushell/nushell/issues/16332
++#[test]
++fn quote_escape_but_not_env_shorthand() -> TestResult {
++    run_test(r#""\"=foo""#, "\"=foo")
++}
++
++// https://github.com/nushell/nushell/issues/16586
++#[test]
++fn redefine_def_should_not_panic() -> TestResult {
++    fail_test(
++        r#"def def (=a|s)>"#,
++        "Missing required positional argument.",
++    )
++}
+diff --git a/tests/repl/test_ranges.rs b/tests/repl/test_ranges.rs
+index 92e03b1321260d428a8f1244d8cad33bdb80f9a3..a9691c7afe565b96b3d06fb3051df2fa08dbc5eb 100644
+--- a/tests/repl/test_ranges.rs
++++ b/tests/repl/test_ranges.rs
+@@ -1,4 +1,5 @@
+ use crate::repl::tests::{TestResult, fail_test, run_test};
++use rstest::rstest;
+ 
+ #[test]
+ fn int_in_inc_range() -> TestResult {
+@@ -47,7 +48,8 @@ fn zip_ranges() -> TestResult {
+ 
+ #[test]
+ fn int_in_stepped_range() -> TestResult {
+-    run_test(r#"7 in 1..3..15"#, "true")
++    run_test(r#"7 in 1..3..15"#, "true")?;
++    run_test(r#"7 in 1..3..=15"#, "true")
+ }
+ 
+ #[test]
+@@ -74,3 +76,14 @@ fn float_in_unbounded_stepped_range() -> TestResult {
+ fn float_not_in_unbounded_stepped_range() -> TestResult {
+     run_test(r#"2.1 in 1.2..3.."#, "false")
+ }
++
++#[rstest]
++#[case("1..=3..", "expected number")]
++#[case("..=3..=15", "expected number")]
++#[case("..=(..", "expected closing )")]
++#[case("..=()..", "expected at least one range bound")]
++#[case("..=..", "expected at least one range bound")]
++#[test]
++fn bad_range_syntax(#[case] input: &str, #[case] expect: &str) -> TestResult {
++    fail_test(&format!("def foo [r: range] {{}}; foo {input}"), expect)
++}
+diff --git a/tests/repl/test_spread.rs b/tests/repl/test_spread.rs
+index 091d885f303ee26262aafd0ded3c440e9825e7ea..d4d87d01774edaeccbaeae6d11b43f819b1a3aa9 100644
+--- a/tests/repl/test_spread.rs
++++ b/tests/repl/test_spread.rs
+@@ -200,3 +200,29 @@ fn respect_shape() -> TestResult {
+     run_test(r#"def "...$foo" [] {2}; do { ...$foo }"#, "2").unwrap();
+     run_test(r#"match "...$foo" { ...$foo => 5 }"#, "5")
+ }
++
++#[test]
++fn spread_null() -> TestResult {
++    // Spread in list
++    run_test(r#"[1, 2, ...(null)] | to nuon --raw"#, r#"[1,2]"#)?;
++
++    // Spread in record
++    run_test(r#"{a: 1, b: 2, ...(null)} | to nuon --raw"#, r#"{a:1,b:2}"#)?;
++
++    // Spread to built-in command's ...rest
++    run_test(r#"echo 1 2 ...(null) | to nuon --raw"#, r#"[1,2]"#)?;
++
++    // Spread to custom command's ...rest
++    run_test(
++        r#"
++            def foo [...rest] { $rest }
++            foo ...(null) 1 2 ...(null) 3 | to nuon --raw
++        "#,
++        r#"[1,2,3]"#,
++    )?;
++
++    // Spread to external command's arguments
++    assert_eq!(nu!(r#"nu --testbin cococo 1 ...(null) 2"#).out, "1 2");
++
++    Ok(())
++}
+diff --git a/tests/repl/test_table_operations.rs b/tests/repl/test_table_operations.rs
+index 737f07dc6d167e4c18f830ed1e451d30c7b9079c..65ccbd4db0e080da6719af160474f9ae44d9e922 100644
+--- a/tests/repl/test_table_operations.rs
++++ b/tests/repl/test_table_operations.rs
+@@ -305,9 +305,38 @@ fn nullify_holes() -> TestResult {
+ }
+ 
+ #[test]
+-fn get_insensitive() -> TestResult {
++fn get_with_insensitive_cellpath() -> TestResult {
+     run_test(
+         r#"[[name, age]; [a, 1] [b, 2]] | get NAmE! | select 0 | get 0"#,
+         "a",
+     )
+ }
++
++#[test]
++fn ignore_case_flag() -> TestResult {
++    run_test(
++        r#"
++            [
++                [Origin, Crate, Versions];
++                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
++            ]
++            | get --ignore-case crate.name.0
++        "#,
++        "nu-cli",
++    )?;
++    run_test(
++        r#"
++            [
++                [Origin, Crate, Versions];
++                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
++            ]
++            | select --ignore-case origin
++            | to nuon --raw
++        "#,
++        r#"[[origin];[World]]"#,
++    )?;
++    run_test(
++        r#"{A: {B: 3, C: 5}} | reject --ignore-case a.b | to nuon --raw"#,
++        "{A:{C:5}}",
++    )
++}
+diff --git a/tests/repl/test_type_check.rs b/tests/repl/test_type_check.rs
+index 2fbc5a78426cd6d5df704a999c995aa24afc709b..c39ae5653ca33deba69bd770cc53a3d8e2d820dc 100644
+--- a/tests/repl/test_type_check.rs
++++ b/tests/repl/test_type_check.rs
+@@ -1,4 +1,4 @@
+-use crate::repl::tests::{TestResult, fail_test, run_test};
++use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains};
+ use rstest::rstest;
+ 
+ #[test]
+@@ -178,3 +178,62 @@ fn in_oneof_block_expected_type(#[case] input: &str) -> TestResult {
+ fn in_oneof_block_expected_block() -> TestResult {
+     fail_test("match 1 { 0 => { try 3 } }", "expected block")
+ }
++
++#[test]
++fn pipeline_multiple_types() -> TestResult {
++    // https://github.com/nushell/nushell/issues/15485
++    run_test_contains("{year: 2019} | into datetime | date humanize", "years ago")
++}
++
++const MULTIPLE_TYPES_DEFS: &str = "
++def foo []: [int -> int, int -> string] {
++  if $in > 2 { 'hi' } else 4
++}
++def bar []: [int -> filesize, string -> string] {
++  if $in == 'hi' { 'meow' } else { into filesize }
++}
++";
++
++#[test]
++fn pipeline_multiple_types_custom() -> TestResult {
++    run_test(
++        &format!(
++            "{MULTIPLE_TYPES_DEFS}
++            5 | foo | str trim"
++        ),
++        "hi",
++    )
++}
++
++#[test]
++fn pipeline_multiple_types_propagate_string() -> TestResult {
++    run_test(
++        &format!(
++            "{MULTIPLE_TYPES_DEFS}
++            5 | foo | bar | str trim"
++        ),
++        "meow",
++    )
++}
++
++#[test]
++fn pipeline_multiple_types_propagate_int() -> TestResult {
++    run_test(
++        &format!(
++            "{MULTIPLE_TYPES_DEFS}
++            2 | foo | bar | format filesize B"
++        ),
++        "4 B",
++    )
++}
++
++#[test]
++fn pipeline_multiple_types_propagate_error() -> TestResult {
++    fail_test(
++        &format!(
++            "{MULTIPLE_TYPES_DEFS}
++            2 | foo | bar | values"
++        ),
++        "parser::input_type_mismatch",
++    )
++}
+diff --git a/tests/scope/mod.rs b/tests/scope/mod.rs
+index ffcaa80bd7b2c3e72fb80a233358f59a699c7978..83f9ee5b8230f391ae52c842d2b72470e68aa1a1 100644
+--- a/tests/scope/mod.rs
++++ b/tests/scope/mod.rs
+@@ -330,3 +330,19 @@ fn correct_scope_variables_fields() {
+     let actual = nu!(&inp.join("; "));
+     assert_eq!(actual.out, "false");
+ }
++
++#[test]
++fn example_results_have_valid_span() {
++    let inp = &[
++        "scope commands",
++        "| where name == 'do'",
++        "| first",
++        "| get examples",
++        "| where result == 177",
++        "| get 0.result",
++        "| metadata",
++        "| view span $in.span.start $in.span.end",
++    ];
++    let actual = nu!(&inp.join(" "));
++    assert_eq!(actual.out, "scope commands");
++}
+diff --git a/tests/shell/mod.rs b/tests/shell/mod.rs
+index 6f7d60aa587aed57f1ee7836a1f43e8dba87048e..c452e3d3a81360c383515cb6ccf95515908b7bd1 100644
+--- a/tests/shell/mod.rs
++++ b/tests/shell/mod.rs
+@@ -445,3 +445,20 @@ fn main_script_subcommand_help_uses_script_name2() {
+         assert!(!actual.err.contains("Usage: main foo"));
+     })
+ }
++
++#[test]
++fn script_file_not_found() {
++    let actual = nu!(r#"nu non-existent-script.nu foo bar"#);
++    assert!(
++        !actual.err.contains(".rs"),
++        "internal rust source was mentioned"
++    );
++    assert!(
++        actual.err.contains("non-existent-script.nu"),
++        "error did not include script name"
++    );
++    assert!(
++        actual.err.contains("commandline"),
++        "source file for the error was not commandline"
++    );
++}
+diff --git a/tests/shell/pipeline/commands/external.rs b/tests/shell/pipeline/commands/external.rs
+index 5b42798ba5e2d960c792de09613bb40eedc809ec..b6e13d71001a862809e28c05a3546efab272cb15 100644
+--- a/tests/shell/pipeline/commands/external.rs
++++ b/tests/shell/pipeline/commands/external.rs
+@@ -2,6 +2,7 @@ use nu_test_support::fs::Stub::{EmptyFile, FileWithContent};
+ use nu_test_support::nu;
+ use nu_test_support::playground::Playground;
+ use pretty_assertions::assert_eq;
++use rstest::rstest;
+ 
+ #[test]
+ fn shows_error_for_command_not_found() {
+@@ -729,3 +730,29 @@ fn sub_external_expression_with_and_op_should_raise_proper_error() {
+             .contains("The 'and' operator does not work on values of type 'string'")
+     )
+ }
++
++// FIXME: ignore these cases for now, the value inside a pipeline
++// makes all previous exit status untracked.
++// #[case("nu --testbin fail 10 | nu --testbin fail 20 | 10", 10)]
++// #[case("nu --testbin fail 20 | 10 | nu --testbin fail", 20)]
++// #[case("30 | nu --testbin fail | nu --testbin fail 30", 1)]
++// [ENV-PATCH] #[rstest]
++// [ENV-PATCH] #[case("nu --testbin fail | print aa", 1)]
++// [ENV-PATCH] #[case("nu --testbin nonu a | print bb", 0)]
++// [ENV-PATCH] #[case("nu --testbin fail 30 | nu --testbin nonu a | print aa", 30)]
++// [ENV-PATCH] #[case("print aa | print cc | nu --testbin fail 40", 40)]
++// [ENV-PATCH] #[case("nu --testbin fail 20 | print aa | nu --testbin fail", 1)]
++// [ENV-PATCH] #[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
++// [ENV-PATCH] fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
++// [ENV-PATCH]     let actual = nu!(
++// [ENV-PATCH]         experimental: vec!["pipefail".to_string()],
++// [ENV-PATCH]         inp
++// [ENV-PATCH]     );
++// [ENV-PATCH]     assert_eq!(
++// [ENV-PATCH]         actual
++// [ENV-PATCH]             .status
++// [ENV-PATCH]             .code()
++// [ENV-PATCH]             .expect("exit_status should not be none"),
++// [ENV-PATCH]         expect_code
++// [ENV-PATCH]     );
++// [ENV-PATCH] }

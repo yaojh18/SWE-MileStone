@@ -1,0 +1,2768 @@
+diff --git a/sklearn/compose/tests/test_column_transformer.py b/sklearn/compose/tests/test_column_transformer.py
+index db53beff73e88ea6f66403e8b160b98b16256142..704236def45b6362eac068412d155a00133fca92 100644
+--- a/sklearn/compose/tests/test_column_transformer.py
++++ b/sklearn/compose/tests/test_column_transformer.py
+@@ -2465,11 +2465,10 @@ def test_remainder_set_output():
+     assert isinstance(out, np.ndarray)
+ 
+ 
+-# TODO(1.6): replace the warning by a ValueError exception
+ def test_transform_pd_na():
+     """Check behavior when a tranformer's output contains pandas.NA
+ 
+-    It should emit a warning unless the output config is set to 'pandas'.
++    It should raise an error unless the output config is set to 'pandas'.
+     """
+     pd = pytest.importorskip("pandas")
+     if not hasattr(pd, "Float64Dtype"):
+@@ -2484,19 +2483,18 @@ def test_transform_pd_na():
+         warnings.simplefilter("error")
+         ct.fit_transform(df)
+     df = df.convert_dtypes()
++
+     # Error with extension dtype and pd.NA
+-    with pytest.warns(FutureWarning, match=r"set_output\(transform='pandas'\)"):
+-        ct.fit_transform(df)
+-    # No warning when output is set to pandas
+-    with warnings.catch_warnings():
+-        warnings.simplefilter("error")
+-        ct.set_output(transform="pandas")
++    with pytest.raises(ValueError, match=r"set_output\(transform='pandas'\)"):
+         ct.fit_transform(df)
++
++    # No error when output is set to pandas
++    ct.set_output(transform="pandas")
++    ct.fit_transform(df)
+     ct.set_output(transform="default")
+-    # No warning when there are no pd.NA
+-    with warnings.catch_warnings():
+-        warnings.simplefilter("error")
+-        ct.fit_transform(df.fillna(-1.0))
++
++    # No error when there are no pd.NA
++    ct.fit_transform(df.fillna(-1.0))
+ 
+ 
+ def test_dataframe_different_dataframe_libraries():
+diff --git a/sklearn/datasets/tests/test_samples_generator.py b/sklearn/datasets/tests/test_samples_generator.py
+index a2524fd7561fee83577e5591262bc4f6ebb5a170..f4bc6384f763f8de2de8e1a751534e0f699b652c 100644
+--- a/sklearn/datasets/tests/test_samples_generator.py
++++ b/sklearn/datasets/tests/test_samples_generator.py
+@@ -552,26 +552,6 @@ def test_make_sparse_spd_matrix(norm_diag, sparse_format, global_random_seed):
+         assert_array_almost_equal(Xarr.diagonal(), np.ones(n_dim))
+ 
+ 
+-# TODO(1.6): remove
+-def test_make_sparse_spd_matrix_deprecation_warning():
+-    """Check the message for future deprecation."""
+-    warn_msg = "dim was deprecated in version 1.4"
+-    with pytest.warns(FutureWarning, match=warn_msg):
+-        make_sparse_spd_matrix(
+-            dim=1,
+-        )
+-
+-    error_msg = "`dim` and `n_dim` cannot be both specified"
+-    with pytest.raises(ValueError, match=error_msg):
+-        make_sparse_spd_matrix(
+-            dim=1,
+-            n_dim=1,
+-        )
+-
+-    X = make_sparse_spd_matrix()
+-    assert X.shape[1] == 1
+-
+-
+ @pytest.mark.parametrize("hole", [False, True])
+ def test_make_swiss_roll(hole):
+     X, t = make_swiss_roll(n_samples=5, noise=0.0, random_state=0, hole=hole)
+diff --git a/sklearn/feature_selection/tests/test_rfe.py b/sklearn/feature_selection/tests/test_rfe.py
+index 98b55366c585338bcaf0c3c2c72644f3e7c9cd5e..ae11de2fadf59ae888e22338b8843fb238f99dc3 100644
+--- a/sklearn/feature_selection/tests/test_rfe.py
++++ b/sklearn/feature_selection/tests/test_rfe.py
+@@ -6,9 +6,10 @@ from operator import attrgetter
+ 
+ import numpy as np
+ import pytest
++from joblib import parallel_backend
+ from numpy.testing import assert_allclose, assert_array_almost_equal, assert_array_equal
+ 
+-from sklearn.base import BaseEstimator, ClassifierMixin
++from sklearn.base import BaseEstimator, ClassifierMixin, is_classifier
+ from sklearn.compose import TransformedTargetRegressor
+ from sklearn.cross_decomposition import CCA, PLSCanonical, PLSRegression
+ from sklearn.datasets import load_iris, make_classification, make_friedman1
+@@ -22,12 +23,11 @@ from sklearn.pipeline import make_pipeline
+ from sklearn.preprocessing import StandardScaler
+ from sklearn.svm import SVC, SVR, LinearSVR
+ from sklearn.utils import check_random_state
+-from sklearn.utils._tags import default_tags
+ from sklearn.utils._testing import ignore_warnings
+ from sklearn.utils.fixes import CSR_CONTAINERS
+ 
+ 
+-class MockClassifier(ClassifierMixin):
++class MockClassifier(ClassifierMixin, BaseEstimator):
+     """
+     Dummy classifier to test recursive feature elimination
+     """
+@@ -58,7 +58,7 @@ class MockClassifier(ClassifierMixin):
+         return self
+ 
+     def __sklearn_tags__(self):
+-        tags = default_tags(self)
++        tags = super().__sklearn_tags__()
+         tags.input_tags.allow_nan = True
+         return tags
+ 
+@@ -325,7 +325,7 @@ def test_rfecv_cv_results_size(global_random_seed):
+ 
+ def test_rfe_estimator_tags():
+     rfe = RFE(SVC(kernel="linear"))
+-    assert rfe._estimator_type == "classifier"
++    assert is_classifier(rfe)
+     # make sure that cross-validation is stratified
+     iris = load_iris()
+     score = cross_val_score(rfe, iris.data, iris.target)
+@@ -703,3 +703,21 @@ def test_rfe_with_sample_weight():
+     rfe_sw_2.fit(X, y, sample_weight=sample_weight_2)
+ 
+     assert not np.array_equal(rfe_sw_2.ranking_, rfe.ranking_)
++
++
++def test_rfe_with_joblib_threading_backend(global_random_seed):
++    X, y = make_classification(random_state=global_random_seed)
++
++    clf = LogisticRegression()
++    rfe = RFECV(
++        estimator=clf,
++        n_jobs=2,
++    )
++
++    rfe.fit(X, y)
++    ranking_ref = rfe.ranking_
++
++    with parallel_backend("threading"):
++        rfe.fit(X, y)
++
++    assert_array_equal(ranking_ref, rfe.ranking_)
+diff --git a/sklearn/frozen/tests/__init__.py b/sklearn/frozen/tests/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/sklearn/frozen/tests/test_frozen.py b/sklearn/frozen/tests/test_frozen.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b304d3ac0aa2c32d6b494351ef0c0d0209866b71
+--- /dev/null
++++ b/sklearn/frozen/tests/test_frozen.py
+@@ -0,0 +1,223 @@
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
++
++import re
++
++import numpy as np
++import pytest
++from numpy.testing import assert_array_equal
++
++from sklearn import config_context
++from sklearn.base import (
++    BaseEstimator,
++    clone,
++    is_classifier,
++    is_clusterer,
++    is_outlier_detector,
++    is_regressor,
++)
++from sklearn.cluster import KMeans
++from sklearn.compose import make_column_transformer
++from sklearn.datasets import make_classification, make_regression
++from sklearn.exceptions import NotFittedError, UnsetMetadataPassedError
++from sklearn.frozen import FrozenEstimator
++from sklearn.linear_model import LinearRegression, LogisticRegression
++from sklearn.neighbors import LocalOutlierFactor
++from sklearn.pipeline import make_pipeline
++from sklearn.preprocessing import RobustScaler, StandardScaler
++from sklearn.utils._testing import set_random_state
++from sklearn.utils.validation import check_is_fitted
++
++
++@pytest.fixture
++def regression_dataset():
++    return make_regression()
++
++
++@pytest.fixture
++def classification_dataset():
++    return make_classification()
++
++
++@pytest.mark.parametrize(
++    "estimator, dataset",
++    [
++        (LinearRegression(), "regression_dataset"),
++        (LogisticRegression(), "classification_dataset"),
++        (make_pipeline(StandardScaler(), LinearRegression()), "regression_dataset"),
++        (
++            make_pipeline(StandardScaler(), LogisticRegression()),
++            "classification_dataset",
++        ),
++        (StandardScaler(), "regression_dataset"),
++        (KMeans(), "regression_dataset"),
++        (LocalOutlierFactor(), "regression_dataset"),
++        (
++            make_column_transformer(
++                (StandardScaler(), [0]),
++                (RobustScaler(), [1]),
++            ),
++            "regression_dataset",
++        ),
++    ],
++)
++@pytest.mark.parametrize(
++    "method",
++    ["predict", "predict_proba", "predict_log_proba", "decision_function", "transform"],
++)
++def test_frozen_methods(estimator, dataset, request, method):
++    """Test that frozen.fit doesn't do anything, and that all other methods are
++    exposed by the frozen estimator and return the same values as the estimator.
++    """
++    X, y = request.getfixturevalue(dataset)
++    set_random_state(estimator)
++    estimator.fit(X, y)
++    frozen = FrozenEstimator(estimator)
++    # this should be no-op
++    frozen.fit([[1]], [1])
++
++    if hasattr(estimator, method):
++        assert_array_equal(getattr(estimator, method)(X), getattr(frozen, method)(X))
++
++    assert is_classifier(estimator) == is_classifier(frozen)
++    assert is_regressor(estimator) == is_regressor(frozen)
++    assert is_clusterer(estimator) == is_clusterer(frozen)
++    assert is_outlier_detector(estimator) == is_outlier_detector(frozen)
++
++
++@config_context(enable_metadata_routing=True)
++def test_frozen_metadata_routing(regression_dataset):
++    """Test that metadata routing works with frozen estimators."""
++
++    class ConsumesMetadata(BaseEstimator):
++        def __init__(self, on_fit=None, on_predict=None):
++            self.on_fit = on_fit
++            self.on_predict = on_predict
++
++        def fit(self, X, y, metadata=None):
++            if self.on_fit:
++                assert metadata is not None
++            self.fitted_ = True
++            return self
++
++        def predict(self, X, metadata=None):
++            if self.on_predict:
++                assert metadata is not None
++            return np.ones(len(X))
++
++    X, y = regression_dataset
++    pipeline = make_pipeline(
++        ConsumesMetadata(on_fit=True, on_predict=True)
++        .set_fit_request(metadata=True)
++        .set_predict_request(metadata=True)
++    )
++
++    pipeline.fit(X, y, metadata="test")
++    frozen = FrozenEstimator(pipeline)
++    pipeline.predict(X, metadata="test")
++    frozen.predict(X, metadata="test")
++
++    frozen["consumesmetadata"].set_predict_request(metadata=False)
++    with pytest.raises(
++        TypeError,
++        match=re.escape(
++            "Pipeline.predict got unexpected argument(s) {'metadata'}, which are not "
++            "routed to any object."
++        ),
++    ):
++        frozen.predict(X, metadata="test")
++
++    frozen["consumesmetadata"].set_predict_request(metadata=None)
++    with pytest.raises(UnsetMetadataPassedError):
++        frozen.predict(X, metadata="test")
++
++
++def test_composite_fit(classification_dataset):
++    """Test that calling fit_transform and fit_predict doesn't call fit."""
++
++    class Estimator(BaseEstimator):
++        def fit(self, X, y):
++            try:
++                self._fit_counter += 1
++            except AttributeError:
++                self._fit_counter = 1
++            return self
++
++        def fit_transform(self, X, y=None):
++            # only here to test that it doesn't get called
++            ...  # pragma: no cover
++
++        def fit_predict(self, X, y=None):
++            # only here to test that it doesn't get called
++            ...  # pragma: no cover
++
++    X, y = classification_dataset
++    est = Estimator().fit(X, y)
++    frozen = FrozenEstimator(est)
++
++    with pytest.raises(AttributeError):
++        frozen.fit_predict(X, y)
++    with pytest.raises(AttributeError):
++        frozen.fit_transform(X, y)
++
++    assert frozen._fit_counter == 1
++
++
++def test_clone_frozen(regression_dataset):
++    """Test that cloning a frozen estimator keeps the frozen state."""
++    X, y = regression_dataset
++    estimator = LinearRegression().fit(X, y)
++    frozen = FrozenEstimator(estimator)
++    cloned = clone(frozen)
++    assert cloned.estimator is estimator
++
++
++def test_check_is_fitted(regression_dataset):
++    """Test that check_is_fitted works on frozen estimators."""
++    X, y = regression_dataset
++
++    estimator = LinearRegression()
++    frozen = FrozenEstimator(estimator)
++    with pytest.raises(NotFittedError):
++        check_is_fitted(frozen)
++
++    estimator = LinearRegression().fit(X, y)
++    frozen = FrozenEstimator(estimator)
++    check_is_fitted(frozen)
++
++
++def test_frozen_tags():
++    """Test that frozen estimators have the same tags as the original estimator
++    except for the skip_test tag."""
++
++    class Estimator(BaseEstimator):
++        def __sklearn_tags__(self):
++            tags = super().__sklearn_tags__()
++            tags.input_tags.categorical = True
++            return tags
++
++    estimator = Estimator()
++    frozen = FrozenEstimator(estimator)
++    frozen_tags = frozen.__sklearn_tags__()
++    estimator_tags = estimator.__sklearn_tags__()
++
++    assert frozen_tags._skip_test is True
++    assert estimator_tags._skip_test is False
++
++    assert estimator_tags.input_tags.categorical is True
++    assert frozen_tags.input_tags.categorical is True
++
++
++def test_frozen_params():
++    """Test that FrozenEstimator only exposes the estimator parameter."""
++    est = LogisticRegression()
++    frozen = FrozenEstimator(est)
++
++    with pytest.raises(ValueError, match="You cannot set parameters of the inner"):
++        frozen.set_params(estimator__C=1)
++
++    assert frozen.get_params() == {"estimator": est}
++
++    other_est = LocalOutlierFactor()
++    frozen.set_params(estimator=other_est)
++    assert frozen.get_params() == {"estimator": other_est}
+diff --git a/sklearn/impute/tests/test_impute.py b/sklearn/impute/tests/test_impute.py
+index a7fe9e72551974664e1454d0d21a1d9ef13bed18..b92e8ecd8f01f462675cb3cb3a1b1d46ad22ac4b 100644
+--- a/sklearn/impute/tests/test_impute.py
++++ b/sklearn/impute/tests/test_impute.py
+@@ -410,18 +410,24 @@ def test_imputation_constant_error_invalid_type(X_data, missing_value):
+         imputer.fit_transform(X)
+ 
+ 
++# TODO (1.8): check that `keep_empty_features=False` drop the
++# empty features due to the behaviour change.
+ def test_imputation_constant_integer():
+     # Test imputation using the constant strategy on integers
+     X = np.array([[-1, 2, 3, -1], [4, -1, 5, -1], [6, 7, -1, -1], [8, 9, 0, -1]])
+ 
+     X_true = np.array([[0, 2, 3, 0], [4, 0, 5, 0], [6, 7, 0, 0], [8, 9, 0, 0]])
+ 
+-    imputer = SimpleImputer(missing_values=-1, strategy="constant", fill_value=0)
++    imputer = SimpleImputer(
++        missing_values=-1, strategy="constant", fill_value=0, keep_empty_features=True
++    )
+     X_trans = imputer.fit_transform(X)
+ 
+     assert_array_equal(X_trans, X_true)
+ 
+ 
++# TODO (1.8): check that `keep_empty_features=False` drop the
++# empty features due to the behaviour change.
+ @pytest.mark.parametrize("array_constructor", CSR_CONTAINERS + [np.asarray])
+ def test_imputation_constant_float(array_constructor):
+     # Test imputation using the constant strategy on floats
+@@ -442,12 +448,16 @@ def test_imputation_constant_float(array_constructor):
+ 
+     X_true = array_constructor(X_true)
+ 
+-    imputer = SimpleImputer(strategy="constant", fill_value=-1)
++    imputer = SimpleImputer(
++        strategy="constant", fill_value=-1, keep_empty_features=True
++    )
+     X_trans = imputer.fit_transform(X)
+ 
+     assert_allclose_dense_sparse(X_trans, X_true)
+ 
+ 
++# TODO (1.8): check that `keep_empty_features=False` drop the
++# empty features due to the behaviour change.
+ @pytest.mark.parametrize("marker", [None, np.nan, "NAN", "", 0])
+ def test_imputation_constant_object(marker):
+     # Test imputation using the constant strategy on objects
+@@ -472,13 +482,18 @@ def test_imputation_constant_object(marker):
+     )
+ 
+     imputer = SimpleImputer(
+-        missing_values=marker, strategy="constant", fill_value="missing"
++        missing_values=marker,
++        strategy="constant",
++        fill_value="missing",
++        keep_empty_features=True,
+     )
+     X_trans = imputer.fit_transform(X)
+ 
+     assert_array_equal(X_trans, X_true)
+ 
+ 
++# TODO (1.8): check that `keep_empty_features=False` drop the
++# empty features due to the behaviour change.
+ @pytest.mark.parametrize("dtype", [object, "category"])
+ def test_imputation_constant_pandas(dtype):
+     # Test imputation using the constant strategy on pandas df
+@@ -498,7 +513,7 @@ def test_imputation_constant_pandas(dtype):
+         dtype=object,
+     )
+ 
+-    imputer = SimpleImputer(strategy="constant")
++    imputer = SimpleImputer(strategy="constant", keep_empty_features=True)
+     X_trans = imputer.fit_transform(df)
+ 
+     assert_array_equal(X_trans, X_true)
+@@ -1013,6 +1028,7 @@ def test_iterative_imputer_min_max_array_like(min_value, max_value, correct_outp
+         (100, 0, "min_value >= max_value."),
+         (np.inf, -np.inf, "min_value >= max_value."),
+         ([-5, 5], [100, 200, 0], "_value' should be of shape"),
++        ([-5, 5, 5], [100, 200], "_value' should be of shape"),
+     ],
+ )
+ def test_iterative_imputer_catch_min_max_error(min_value, max_value, err_msg):
+@@ -1513,6 +1529,26 @@ def test_most_frequent(expected, array, dtype, extra_value, n_repeat):
+     )
+ 
+ 
++@pytest.mark.parametrize(
++    "initial_strategy", ["mean", "median", "most_frequent", "constant"]
++)
++def test_iterative_imputer_keep_empty_features(initial_strategy):
++    """Check the behaviour of the iterative imputer with different initial strategy
++    and keeping empty features (i.e. features containing only missing values).
++    """
++    X = np.array([[1, np.nan, 2], [3, np.nan, np.nan]])
++
++    imputer = IterativeImputer(
++        initial_strategy=initial_strategy, keep_empty_features=True
++    )
++    X_imputed = imputer.fit_transform(X)
++    assert_allclose(X_imputed[:, 1], 0)
++    X_imputed = imputer.transform(X)
++    assert_allclose(X_imputed[:, 1], 0)
++
++
++# TODO (1.8): check that `keep_empty_features=False` drop the
++# empty features due to the behaviour change.
+ def test_iterative_imputer_constant_fill_value():
+     """Check that we propagate properly the parameter `fill_value`."""
+     X = np.array([[-1, 2, 3, -1], [4, -1, 5, -1], [6, 7, -1, -1], [8, 9, 0, -1]])
+@@ -1523,11 +1559,67 @@ def test_iterative_imputer_constant_fill_value():
+         initial_strategy="constant",
+         fill_value=fill_value,
+         max_iter=0,
++        keep_empty_features=True,
+     )
+     imputer.fit_transform(X)
+     assert_array_equal(imputer.initial_imputer_.statistics_, fill_value)
+ 
+ 
++def test_iterative_imputer_min_max_value_remove_empty():
++    """Check that we properly apply the empty feature mask to `min_value` and
++    `max_value`.
++
++    Non-regression test for https://github.com/scikit-learn/scikit-learn/issues/29355
++    """
++    # Intentionally make column 2 as a missing column, then the bound of the imputed
++    # value of column 3 should be (4, 5)
++    X = np.array(
++        [
++            [1, 2, np.nan, np.nan],
++            [4, 5, np.nan, 6],
++            [7, 8, np.nan, np.nan],
++            [10, 11, np.nan, 12],
++        ]
++    )
++    min_value = [-np.inf, -np.inf, -np.inf, 4]
++    max_value = [np.inf, np.inf, np.inf, 5]
++
++    X_imputed = IterativeImputer(
++        min_value=min_value,
++        max_value=max_value,
++        keep_empty_features=False,
++    ).fit_transform(X)
++
++    X_without_missing_column = np.delete(X, 2, axis=1)
++    assert X_imputed.shape == X_without_missing_column.shape
++    assert np.min(X_imputed[np.isnan(X_without_missing_column)]) == pytest.approx(4)
++    assert np.max(X_imputed[np.isnan(X_without_missing_column)]) == pytest.approx(5)
++
++    # Intentionally make column 3 as a missing column, then the bound of the imputed
++    # value of column 2 should be (3.5, 6)
++    X = np.array(
++        [
++            [1, 2, np.nan, np.nan],
++            [4, 5, 6, np.nan],
++            [7, 8, np.nan, np.nan],
++            [10, 11, 12, np.nan],
++        ]
++    )
++    min_value = [-np.inf, -np.inf, 3.5, -np.inf]
++    max_value = [np.inf, np.inf, 6, np.inf]
++
++    X_imputed = IterativeImputer(
++        min_value=min_value,
++        max_value=max_value,
++        keep_empty_features=False,
++    ).fit_transform(X)
++
++    X_without_missing_column = X[:, :3]
++    assert X_imputed.shape == X_without_missing_column.shape
++    assert np.min(X_imputed[np.isnan(X_without_missing_column)]) == pytest.approx(3.5)
++    assert np.max(X_imputed[np.isnan(X_without_missing_column)]) == pytest.approx(6)
++
++
+ @pytest.mark.parametrize("keep_empty_features", [True, False])
+ def test_knn_imputer_keep_empty_features(keep_empty_features):
+     """Check the behaviour of `keep_empty_features` for `KNNImputer`."""
+@@ -1666,7 +1758,13 @@ def test_simple_imputer_constant_keep_empty_features(array_type, keep_empty_feat
+     )
+ 
+     for method in ["fit_transform", "transform"]:
+-        X_imputed = getattr(imputer, method)(X)
++        # TODO(1.8): Remove the condition and still call getattr(imputer, method)(X)
++        if method.startswith("fit") and not keep_empty_features:
++            warn_msg = '`strategy="constant"`, empty features are not dropped. '
++            with pytest.warns(FutureWarning, match=warn_msg):
++                X_imputed = getattr(imputer, method)(X)
++        else:
++            X_imputed = getattr(imputer, method)(X)
+         assert X_imputed.shape == X.shape
+         constant_feature = (
+             X_imputed[:, 0].toarray() if array_type == "sparse" else X_imputed[:, 0]
+diff --git a/sklearn/inspection/_plot/tests/test_boundary_decision_display.py b/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
+index b6767cbe72857376e5be82167710b2fa09e106c2..d0aabbbb15db936031a9627a8a1fb16f2f1fdcba 100644
+--- a/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
++++ b/sklearn/inspection/_plot/tests/test_boundary_decision_display.py
+@@ -334,7 +334,7 @@ def test_decision_boundary_display_regressor(pyplot, response_method, plot_metho
+ def test_error_bad_response(pyplot, response_method, msg):
+     """Check errors for bad response."""
+ 
+-    class MyClassifier(BaseEstimator, ClassifierMixin):
++    class MyClassifier(ClassifierMixin, BaseEstimator):
+         def fit(self, X, y):
+             self.fitted_ = True
+             self.classes_ = [0, 1]
+diff --git a/sklearn/linear_model/tests/test_common.py b/sklearn/linear_model/tests/test_common.py
+index 6aa7c737983ac24bb33a047b04f09afd345c4f04..2483a26644cbbe30388703efc4f687bb01ba5f62 100644
+--- a/sklearn/linear_model/tests/test_common.py
++++ b/sklearn/linear_model/tests/test_common.py
+@@ -6,16 +6,19 @@ import numpy as np
+ import pytest
+ 
+ from sklearn.base import is_classifier
+-from sklearn.datasets import make_low_rank_matrix
++from sklearn.datasets import make_classification, make_low_rank_matrix, make_regression
+ from sklearn.linear_model import (
+     ARDRegression,
+     BayesianRidge,
+     ElasticNet,
+     ElasticNetCV,
++    GammaRegressor,
++    HuberRegressor,
+     Lars,
+     LarsCV,
+     Lasso,
+     LassoCV,
++    LassoLars,
+     LassoLarsCV,
+     LassoLarsIC,
+     LinearRegression,
+@@ -27,12 +30,22 @@ from sklearn.linear_model import (
+     MultiTaskLassoCV,
+     OrthogonalMatchingPursuit,
+     OrthogonalMatchingPursuitCV,
++    PassiveAggressiveClassifier,
++    PassiveAggressiveRegressor,
++    Perceptron,
+     PoissonRegressor,
+     Ridge,
++    RidgeClassifier,
++    RidgeClassifierCV,
+     RidgeCV,
++    SGDClassifier,
+     SGDRegressor,
++    TheilSenRegressor,
+     TweedieRegressor,
+ )
++from sklearn.preprocessing import MinMaxScaler
++from sklearn.svm import LinearSVC, LinearSVR
++from sklearn.utils._testing import set_random_state
+ 
+ 
+ # Note: GammaRegressor() and TweedieRegressor(power != 1) have a non-canonical link.
+@@ -135,7 +148,6 @@ def test_balance_property(model, with_sample_weight, global_random_seed):
+         model.fit(X, y, sample_weight=sw)
+     else:
+         model.fit(X, y)
+-
+     # Assert balance property.
+     if is_classifier(model):
+         assert np.average(model.predict_proba(X)[:, 1], weights=sw) == pytest.approx(
+@@ -145,3 +157,78 @@ def test_balance_property(model, with_sample_weight, global_random_seed):
+         assert np.average(model.predict(X), weights=sw, axis=0) == pytest.approx(
+             np.average(y, weights=sw, axis=0), rel=rel
+         )
++
++
++@pytest.mark.filterwarnings("ignore:The default of 'normalize'")
++@pytest.mark.filterwarnings("ignore:lbfgs failed to converge")
++@pytest.mark.parametrize(
++    "Regressor",
++    [
++        ARDRegression,
++        BayesianRidge,
++        ElasticNet,
++        ElasticNetCV,
++        GammaRegressor,
++        HuberRegressor,
++        Lars,
++        LarsCV,
++        Lasso,
++        LassoCV,
++        LassoLars,
++        LassoLarsCV,
++        LassoLarsIC,
++        LinearSVR,
++        LinearRegression,
++        OrthogonalMatchingPursuit,
++        OrthogonalMatchingPursuitCV,
++        PassiveAggressiveRegressor,
++        PoissonRegressor,
++        Ridge,
++        RidgeCV,
++        SGDRegressor,
++        TheilSenRegressor,
++        TweedieRegressor,
++    ],
++)
++@pytest.mark.parametrize("ndim", [1, 2])
++def test_linear_model_regressor_coef_shape(Regressor, ndim):
++    """Check the consistency of linear models `coef` shape."""
++    if Regressor is LinearRegression:
++        pytest.xfail("LinearRegression does not follow `coef_` shape contract!")
++
++    X, y = make_regression(random_state=0, n_samples=200, n_features=20)
++    y = MinMaxScaler().fit_transform(y.reshape(-1, 1))[:, 0] + 1
++    y = y[:, np.newaxis] if ndim == 2 else y
++
++    regressor = Regressor()
++    set_random_state(regressor)
++    regressor.fit(X, y)
++    assert regressor.coef_.shape == (X.shape[1],)
++
++
++@pytest.mark.parametrize(
++    "Classifier",
++    [
++        LinearSVC,
++        LogisticRegression,
++        LogisticRegressionCV,
++        PassiveAggressiveClassifier,
++        Perceptron,
++        RidgeClassifier,
++        RidgeClassifierCV,
++        SGDClassifier,
++    ],
++)
++@pytest.mark.parametrize("n_classes", [2, 3])
++def test_linear_model_classifier_coef_shape(Classifier, n_classes):
++    if Classifier in (RidgeClassifier, RidgeClassifierCV):
++        pytest.xfail(f"{Classifier} does not follow `coef_` shape contract!")
++
++    X, y = make_classification(n_informative=10, n_classes=n_classes, random_state=0)
++    n_features = X.shape[1]
++
++    classifier = Classifier()
++    set_random_state(classifier)
++    classifier.fit(X, y)
++    expected_shape = (1, n_features) if n_classes == 2 else (n_classes, n_features)
++    assert classifier.coef_.shape == expected_shape
+diff --git a/sklearn/linear_model/tests/test_quantile.py b/sklearn/linear_model/tests/test_quantile.py
+index da96593de00f27909d3c34d099cc863eb60b37ae..1d166b14091ccc11e148184056a6d4a58a48a664 100644
+--- a/sklearn/linear_model/tests/test_quantile.py
++++ b/sklearn/linear_model/tests/test_quantile.py
+@@ -10,7 +10,7 @@ from sklearn.datasets import make_regression
+ from sklearn.exceptions import ConvergenceWarning
+ from sklearn.linear_model import HuberRegressor, QuantileRegressor
+ from sklearn.metrics import mean_pinball_loss
+-from sklearn.utils._testing import assert_allclose, skip_if_32bit
++from sklearn.utils._testing import assert_allclose
+ from sklearn.utils.fixes import (
+     COO_CONTAINERS,
+     CSC_CONTAINERS,
+@@ -233,26 +233,40 @@ def test_linprog_failure():
+         reg.fit(X, y)
+ 
+ 
+-@skip_if_32bit
+ @pytest.mark.parametrize(
+     "sparse_container", CSC_CONTAINERS + CSR_CONTAINERS + COO_CONTAINERS
+ )
+ @pytest.mark.parametrize("solver", ["highs", "highs-ds", "highs-ipm"])
+ @pytest.mark.parametrize("fit_intercept", [True, False])
+-def test_sparse_input(sparse_container, solver, fit_intercept):
++def test_sparse_input(sparse_container, solver, fit_intercept, global_random_seed):
+     """Test that sparse and dense X give same results."""
+-    X, y = make_regression(n_samples=100, n_features=20, random_state=1, noise=1.0)
++    n_informative = 10
++    quantile_level = 0.6
++    X, y = make_regression(
++        n_samples=300,
++        n_features=20,
++        n_informative=10,
++        random_state=global_random_seed,
++        noise=1.0,
++    )
+     X_sparse = sparse_container(X)
+-    alpha = 1e-4
+-    quant_dense = QuantileRegressor(alpha=alpha, fit_intercept=fit_intercept).fit(X, y)
++    alpha = 0.1
++    quant_dense = QuantileRegressor(
++        quantile=quantile_level, alpha=alpha, fit_intercept=fit_intercept
++    ).fit(X, y)
+     quant_sparse = QuantileRegressor(
+-        alpha=alpha, fit_intercept=fit_intercept, solver=solver
++        quantile=quantile_level, alpha=alpha, fit_intercept=fit_intercept, solver=solver
+     ).fit(X_sparse, y)
+     assert_allclose(quant_sparse.coef_, quant_dense.coef_, rtol=1e-2)
++    sparse_support = quant_sparse.coef_ != 0
++    dense_support = quant_dense.coef_ != 0
++    assert dense_support.sum() == pytest.approx(n_informative, abs=1)
++    assert sparse_support.sum() == pytest.approx(n_informative, abs=1)
+     if fit_intercept:
+         assert quant_sparse.intercept_ == approx(quant_dense.intercept_)
+         # check that we still predict fraction
+-        assert 0.45 <= np.mean(y < quant_sparse.predict(X_sparse)) <= 0.57
++        empirical_coverage = np.mean(y < quant_sparse.predict(X_sparse))
++        assert empirical_coverage == approx(quantile_level, abs=3e-2)
+ 
+ 
+ def test_error_interior_point_future(X_y_data, monkeypatch):
+diff --git a/sklearn/linear_model/tests/test_ridge.py b/sklearn/linear_model/tests/test_ridge.py
+index 32c7f7423e5548ad696f5428f1d1ab035c93d134..05cd49545d653a281e8400a3ce3600a3e34c711b 100644
+--- a/sklearn/linear_model/tests/test_ridge.py
++++ b/sklearn/linear_model/tests/test_ridge.py
+@@ -549,7 +549,7 @@ def test_ridge_shapes_type():
+     assert isinstance(ridge.intercept_, float)
+ 
+     ridge.fit(X, Y1)
+-    assert ridge.coef_.shape == (1, n_features)
++    assert ridge.coef_.shape == (n_features,)
+     assert ridge.intercept_.shape == (1,)
+     assert isinstance(ridge.coef_, np.ndarray)
+     assert isinstance(ridge.intercept_, np.ndarray)
+@@ -913,6 +913,8 @@ def test_ridge_gcv_sample_weights(
+     ridge_reg = Ridge(alpha=kfold.alpha_, fit_intercept=fit_intercept)
+     splits = cv.split(X_tiled, y_tiled, groups=indices)
+     predictions = cross_val_predict(ridge_reg, X_tiled, y_tiled, cv=splits)
++    if predictions.shape != y_tiled.shape:
++        predictions = predictions.reshape(y_tiled.shape)
+     kfold_errors = (y_tiled - predictions) ** 2
+     kfold_errors = [
+         np.sum(kfold_errors[indices == i], axis=0) for i in np.arange(X.shape[0])
+diff --git a/sklearn/linear_model/tests/test_sgd.py b/sklearn/linear_model/tests/test_sgd.py
+index 6f53d2826cc114a7de80c23fff20c82d25514810..c902de2d6648089e7655cd061308dfeec90bd8a2 100644
+--- a/sklearn/linear_model/tests/test_sgd.py
++++ b/sklearn/linear_model/tests/test_sgd.py
+@@ -20,6 +20,7 @@ from sklearn.model_selection import (
+ from sklearn.pipeline import make_pipeline
+ from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler, scale
+ from sklearn.svm import OneClassSVM
++from sklearn.utils import get_tags
+ from sklearn.utils._testing import (
+     assert_allclose,
+     assert_almost_equal,
+@@ -2170,3 +2171,12 @@ def test_passive_aggressive_deprecated_average(Estimator):
+     est = Estimator(average=0)
+     with pytest.warns(FutureWarning, match="average=0"):
+         est.fit(X, Y)
++
++
++def test_sgd_one_class_svm_estimator_type():
++    """Check that SGDOneClassSVM has the correct estimator type.
++
++    Non-regression test for if the mixin was not on the left.
++    """
++    sgd_ocsvm = SGDOneClassSVM()
++    assert get_tags(sgd_ocsvm).estimator_type == "outlier_detector"
+diff --git a/sklearn/metrics/_plot/tests/test_common_curve_display.py b/sklearn/metrics/_plot/tests/test_common_curve_display.py
+index 7fe0f0fc6fa7f52ef8afffb9d0cfc17135d515dc..0014a73055e411af5f3dfb0fe2ec5325bcf53516 100644
+--- a/sklearn/metrics/_plot/tests/test_common_curve_display.py
++++ b/sklearn/metrics/_plot/tests/test_common_curve_display.py
+@@ -1,7 +1,7 @@
+ import numpy as np
+ import pytest
+ 
+-from sklearn.base import ClassifierMixin, clone
++from sklearn.base import BaseEstimator, ClassifierMixin, clone
+ from sklearn.calibration import CalibrationDisplay
+ from sklearn.compose import make_column_transformer
+ from sklearn.datasets import load_iris
+@@ -121,7 +121,7 @@ def test_display_curve_error_no_response(
+     is not defined for the given trained classifier."""
+     X, y = data_binary
+ 
+-    class MyClassifier(ClassifierMixin):
++    class MyClassifier(ClassifierMixin, BaseEstimator):
+         def fit(self, X, y):
+             self.classes_ = [0, 1]
+             return self
+diff --git a/sklearn/metrics/_plot/tests/test_precision_recall_display.py b/sklearn/metrics/_plot/tests/test_precision_recall_display.py
+index 8fbdfd19295af2df8c949dc31b89d74f409a48a3..2ec34feb224daf7385ed7662f22764f872af96a5 100644
+--- a/sklearn/metrics/_plot/tests/test_precision_recall_display.py
++++ b/sklearn/metrics/_plot/tests/test_precision_recall_display.py
+@@ -353,3 +353,30 @@ def test_precision_recall_raise_no_prevalence(pyplot):
+ 
+     with pytest.raises(ValueError, match=msg):
+         display.plot(plot_chance_level=True)
++
++
++@pytest.mark.parametrize("despine", [True, False])
++@pytest.mark.parametrize("constructor_name", ["from_estimator", "from_predictions"])
++def test_plot_precision_recall_despine(pyplot, despine, constructor_name):
++    # Check that the despine keyword is working correctly
++    X, y = make_classification(n_classes=2, n_samples=50, random_state=0)
++
++    clf = LogisticRegression().fit(X, y)
++    clf.fit(X, y)
++
++    y_pred = clf.decision_function(X)
++
++    # safe guard for the binary if/else construction
++    assert constructor_name in ("from_estimator", "from_predictions")
++
++    if constructor_name == "from_estimator":
++        display = PrecisionRecallDisplay.from_estimator(clf, X, y, despine=despine)
++    else:
++        display = PrecisionRecallDisplay.from_predictions(y, y_pred, despine=despine)
++
++    for s in ["top", "right"]:
++        assert display.ax_.spines[s].get_visible() is not despine
++
++    if despine:
++        for s in ["bottom", "left"]:
++            assert display.ax_.spines[s].get_bounds() == (0, 1)
+diff --git a/sklearn/metrics/_plot/tests/test_roc_curve_display.py b/sklearn/metrics/_plot/tests/test_roc_curve_display.py
+index 4a2fc2e3cbfdd65a0ab57a8878af3b2fa8d16cad..8c8562e3833e48c5198a622d743edf146d549b08 100644
+--- a/sklearn/metrics/_plot/tests/test_roc_curve_display.py
++++ b/sklearn/metrics/_plot/tests/test_roc_curve_display.py
+@@ -334,3 +334,30 @@ def test_plot_roc_curve_pos_label(pyplot, response_method, constructor_name):
+ 
+     assert display.roc_auc == pytest.approx(roc_auc_limit)
+     assert trapezoid(display.tpr, display.fpr) == pytest.approx(roc_auc_limit)
++
++
++@pytest.mark.parametrize("despine", [True, False])
++@pytest.mark.parametrize("constructor_name", ["from_estimator", "from_predictions"])
++def test_plot_roc_curve_despine(pyplot, data_binary, despine, constructor_name):
++    # Check that the despine keyword is working correctly
++    X, y = data_binary
++
++    lr = LogisticRegression().fit(X, y)
++    lr.fit(X, y)
++
++    y_pred = lr.decision_function(X)
++
++    # safe guard for the binary if/else construction
++    assert constructor_name in ("from_estimator", "from_predictions")
++
++    if constructor_name == "from_estimator":
++        display = RocCurveDisplay.from_estimator(lr, X, y, despine=despine)
++    else:
++        display = RocCurveDisplay.from_predictions(y, y_pred, despine=despine)
++
++    for s in ["top", "right"]:
++        assert display.ax_.spines[s].get_visible() is not despine
++
++    if despine:
++        for s in ["bottom", "left"]:
++            assert display.ax_.spines[s].get_bounds() == (0, 1)
+diff --git a/sklearn/metrics/tests/test_classification.py b/sklearn/metrics/tests/test_classification.py
+index 06f9bf207ec2782d465ac7ddfc21fe9b0aebc353..d0e9f3d9a08b0f5339c0c9a4c7a73730958989e7 100644
+--- a/sklearn/metrics/tests/test_classification.py
++++ b/sklearn/metrics/tests/test_classification.py
+@@ -795,9 +795,22 @@ def test_cohen_kappa():
+     )
+ 
+ 
+-def test_matthews_corrcoef_nan():
+-    assert matthews_corrcoef([0], [1]) == 0.0
+-    assert matthews_corrcoef([0, 0], [0, 1]) == 0.0
++@pytest.mark.parametrize("zero_division", ["warn", 0, 1, np.nan])
++@pytest.mark.parametrize("y_true, y_pred", [([0], [1]), ([0, 0], [0, 1])])
++def test_matthews_corrcoef_zero_division(zero_division, y_true, y_pred):
++    """Check the behaviour of `zero_division` in `matthews_corrcoef`."""
++    expected_result = 0.0 if zero_division == "warn" else zero_division
++
++    if zero_division == "warn":
++        with pytest.warns(UndefinedMetricWarning):
++            result = matthews_corrcoef(y_true, y_pred, zero_division=zero_division)
++    else:
++        result = matthews_corrcoef(y_true, y_pred, zero_division=zero_division)
++
++    if np.isnan(expected_result):
++        assert np.isnan(result)
++    else:
++        assert result == expected_result
+ 
+ 
+ @pytest.mark.parametrize("zero_division", [0, 1, np.nan])
+@@ -924,15 +937,19 @@ def test_matthews_corrcoef():
+ 
+     # For the zero vector case, the corrcoef cannot be calculated and should
+     # output 0
+-    assert_almost_equal(matthews_corrcoef([0, 0, 0, 0], [0, 0, 0, 0]), 0.0)
++    assert_almost_equal(
++        matthews_corrcoef([0, 0, 0, 0], [0, 0, 0, 0], zero_division=0), 0.0
++    )
+ 
+     # And also for any other vector with 0 variance
+-    assert_almost_equal(matthews_corrcoef(y_true, ["a"] * len(y_true)), 0.0)
++    assert_almost_equal(
++        matthews_corrcoef(y_true, ["a"] * len(y_true), zero_division=0), 0.0
++    )
+ 
+     # These two vectors have 0 correlation and hence mcc should be 0
+     y_1 = [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1]
+     y_2 = [1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1]
+-    assert_almost_equal(matthews_corrcoef(y_1, y_2), 0.0)
++    assert_almost_equal(matthews_corrcoef(y_1, y_2, zero_division=0), 0.0)
+ 
+     # Check that sample weight is able to selectively exclude
+     mask = [1] * 10 + [0] * 10
+@@ -965,17 +982,17 @@ def test_matthews_corrcoef_multiclass():
+     # Zero variance will result in an mcc of zero
+     y_true = [0, 1, 2]
+     y_pred = [3, 3, 3]
+-    assert_almost_equal(matthews_corrcoef(y_true, y_pred), 0.0)
++    assert_almost_equal(matthews_corrcoef(y_true, y_pred, zero_division=0), 0.0)
+ 
+     # Also for ground truth with zero variance
+     y_true = [3, 3, 3]
+     y_pred = [0, 1, 2]
+-    assert_almost_equal(matthews_corrcoef(y_true, y_pred), 0.0)
++    assert_almost_equal(matthews_corrcoef(y_true, y_pred, zero_division=0), 0.0)
+ 
+     # These two vectors have 0 correlation and hence mcc should be 0
+     y_1 = [0, 1, 2, 0, 1, 2, 0, 1, 2]
+     y_2 = [1, 1, 1, 2, 2, 2, 0, 0, 0]
+-    assert_almost_equal(matthews_corrcoef(y_1, y_2), 0.0)
++    assert_almost_equal(matthews_corrcoef(y_1, y_2, zero_division=0), 0.0)
+ 
+     # We can test that binary assumptions hold using the multiclass computation
+     # by masking the weight of samples not in the first two classes
+@@ -994,7 +1011,10 @@ def test_matthews_corrcoef_multiclass():
+     y_pred = [0, 0, 1, 2]
+     sample_weight = [1, 1, 0, 0]
+     assert_almost_equal(
+-        matthews_corrcoef(y_true, y_pred, sample_weight=sample_weight), 0.0
++        matthews_corrcoef(
++            y_true, y_pred, sample_weight=sample_weight, zero_division=0.0
++        ),
++        0.0,
+     )
+ 
+ 
+diff --git a/sklearn/metrics/tests/test_common.py b/sklearn/metrics/tests/test_common.py
+index f70f0bfa50137b3eba1190b279bf7d044645777c..e6abc8c433013f2c6bfd945d4c209c526ef689f9 100644
+--- a/sklearn/metrics/tests/test_common.py
++++ b/sklearn/metrics/tests/test_common.py
+@@ -1,3 +1,4 @@
++import math
+ from functools import partial
+ from inspect import signature
+ from itertools import chain, permutations, product
+@@ -843,9 +844,9 @@ def test_format_invariance_with_1d_vectors(name):
+         ):
+             if "roc_auc" in name:
+                 # for consistency between the `roc_cuve` and `roc_auc_score`
+-                # 0.0 is returned and an `UndefinedMetricWarning` is raised
++                # np.nan is returned and an `UndefinedMetricWarning` is raised
+                 with pytest.warns(UndefinedMetricWarning):
+-                    assert metric(y1_row, y2_row) == pytest.approx(0.0)
++                    assert math.isnan(metric(y1_row, y2_row))
+             else:
+                 with pytest.raises(ValueError):
+                     metric(y1_row, y2_row)
+diff --git a/sklearn/metrics/tests/test_pairwise.py b/sklearn/metrics/tests/test_pairwise.py
+index f93dbcd6d8288739e6fa1365839e34945dc6838c..96f9ec256e8004e1c93e7ab232b3a52aea304c89 100644
+--- a/sklearn/metrics/tests/test_pairwise.py
++++ b/sklearn/metrics/tests/test_pairwise.py
+@@ -1582,6 +1582,33 @@ def test_numeric_pairwise_distances_datatypes(metric, global_dtype, y_is_x):
+     assert_allclose(dist, expected_dist)
+ 
+ 
++@pytest.mark.parametrize(
++    "pairwise_distances_func",
++    [pairwise_distances, pairwise_distances_argmin, pairwise_distances_argmin_min],
++)
++def test_nan_euclidean_support(pairwise_distances_func):
++    """Check that `nan_euclidean` is lenient with `nan` values."""
++
++    X = [[0, 1], [1, np.nan], [2, 3], [3, 5]]
++    output = pairwise_distances_func(X, X, metric="nan_euclidean")
++
++    assert not np.isnan(output).any()
++
++
++def test_nan_euclidean_constant_input_argmin():
++    """Check that the behavior of constant input is the same in the case of
++    full of nan vector and full of zero vector.
++    """
++
++    X_nan = [[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan]]
++    argmin_nan = pairwise_distances_argmin(X_nan, X_nan, metric="nan_euclidean")
++
++    X_const = [[0, 0], [0, 0], [0, 0]]
++    argmin_const = pairwise_distances_argmin(X_const, X_const, metric="nan_euclidean")
++
++    assert_allclose(argmin_nan, argmin_const)
++
++
+ @pytest.mark.parametrize(
+     "X,Y,expected_distance",
+     [
+diff --git a/sklearn/metrics/tests/test_ranking.py b/sklearn/metrics/tests/test_ranking.py
+index 7e7d78452252420d4e82c5e6ba289220dafa3e05..c92fee002595fa8a51add54c1dfb6886acf8c63d 100644
+--- a/sklearn/metrics/tests/test_ranking.py
++++ b/sklearn/metrics/tests/test_ranking.py
+@@ -1,3 +1,4 @@
++import math
+ import re
+ 
+ import numpy as np
+@@ -370,7 +371,8 @@ def test_roc_curve_toydata():
+         "ROC AUC score is not defined in that case."
+     )
+     with pytest.warns(UndefinedMetricWarning, match=expected_message):
+-        roc_auc_score(y_true, y_score)
++        auc = roc_auc_score(y_true, y_score)
++    assert math.isnan(auc)
+ 
+     # case with no negative samples
+     y_true = [1, 1]
+@@ -388,7 +390,8 @@ def test_roc_curve_toydata():
+         "ROC AUC score is not defined in that case."
+     )
+     with pytest.warns(UndefinedMetricWarning, match=expected_message):
+-        roc_auc_score(y_true, y_score)
++        auc = roc_auc_score(y_true, y_score)
++    assert math.isnan(auc)
+ 
+     # Multi-label classification task
+     y_true = np.array([[0, 1], [0, 1]])
+diff --git a/sklearn/metrics/tests/test_score_objects.py b/sklearn/metrics/tests/test_score_objects.py
+index 58d6561d566db48a0122fd8e5e00c899e35e8723..66bf521e43ec5ceb43bf3f6f4da41b2f3c5e6c21 100644
+--- a/sklearn/metrics/tests/test_score_objects.py
++++ b/sklearn/metrics/tests/test_score_objects.py
+@@ -3,7 +3,6 @@ import pickle
+ import warnings
+ from copy import deepcopy
+ from functools import partial
+-from unittest.mock import Mock
+ 
+ import joblib
+ import numpy as np
+@@ -11,7 +10,7 @@ import pytest
+ from numpy.testing import assert_allclose
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator
++from sklearn.base import BaseEstimator, ClassifierMixin
+ from sklearn.cluster import KMeans
+ from sklearn.datasets import (
+     load_diabetes,
+@@ -185,7 +184,7 @@ class EstimatorWithFit(BaseEstimator):
+         return self
+ 
+ 
+-class EstimatorWithFitAndScore:
++class EstimatorWithFitAndScore(BaseEstimator):
+     """Dummy estimator to test scoring validators"""
+ 
+     def fit(self, X, y):
+@@ -195,7 +194,7 @@ class EstimatorWithFitAndScore:
+         return 1.0
+ 
+ 
+-class EstimatorWithFitAndPredict:
++class EstimatorWithFitAndPredict(BaseEstimator):
+     """Dummy estimator to test scoring validators"""
+ 
+     def fit(self, X, y):
+@@ -748,37 +747,41 @@ def test_multimetric_scorer_calls_method_once(
+     expected_decision_func_count,
+ ):
+     X, y = np.array([[1], [1], [0], [0], [0]]), np.array([0, 1, 1, 1, 0])
+-
+-    mock_est = Mock()
+-    mock_est._estimator_type = "classifier"
+-    fit_func = Mock(return_value=mock_est, name="fit")
+-    fit_func.__name__ = "fit"
+-    predict_func = Mock(return_value=y, name="predict")
+-    predict_func.__name__ = "predict"
+-
+     pos_proba = np.random.rand(X.shape[0])
+     proba = np.c_[1 - pos_proba, pos_proba]
+-    predict_proba_func = Mock(return_value=proba, name="predict_proba")
+-    predict_proba_func.__name__ = "predict_proba"
+-    decision_function_func = Mock(return_value=pos_proba, name="decision_function")
+-    decision_function_func.__name__ = "decision_function"
+-
+-    mock_est.fit = fit_func
+-    mock_est.predict = predict_func
+-    mock_est.predict_proba = predict_proba_func
+-    mock_est.decision_function = decision_function_func
+-    # add the classes that would be found during fit
+-    mock_est.classes_ = np.array([0, 1])
+ 
++    class MyClassifier(ClassifierMixin, BaseEstimator):
++        def __init__(self):
++            self._expected_predict_count = 0
++            self._expected_predict_proba_count = 0
++            self._expected_decision_function_count = 0
++
++        def fit(self, X, y):
++            self.classes_ = np.unique(y)
++            return self
++
++        def predict(self, X):
++            self._expected_predict_count += 1
++            return y
++
++        def predict_proba(self, X):
++            self._expected_predict_proba_count += 1
++            return proba
++
++        def decision_function(self, X):
++            self._expected_decision_function_count += 1
++            return pos_proba
++
++    mock_est = MyClassifier().fit(X, y)
+     scorer_dict = _check_multimetric_scoring(LogisticRegression(), scorers)
+     multi_scorer = _MultimetricScorer(scorers=scorer_dict)
+     results = multi_scorer(mock_est, X, y)
+ 
+     assert set(scorers) == set(results)  # compare dict keys
+ 
+-    assert predict_func.call_count == expected_predict_count
+-    assert predict_proba_func.call_count == expected_predict_proba_count
+-    assert decision_function_func.call_count == expected_decision_func_count
++    assert mock_est._expected_predict_count == expected_predict_count
++    assert mock_est._expected_predict_proba_count == expected_predict_proba_count
++    assert mock_est._expected_decision_function_count == expected_decision_func_count
+ 
+ 
+ @pytest.mark.parametrize(
+diff --git a/sklearn/model_selection/tests/test_classification_threshold.py b/sklearn/model_selection/tests/test_classification_threshold.py
+index 12d2f20e26c4c0cb30087fd846c2da106c2f4f3c..1ba4dcea369748622d366df0477e3b7911873593 100644
+--- a/sklearn/model_selection/tests/test_classification_threshold.py
++++ b/sklearn/model_selection/tests/test_classification_threshold.py
+@@ -2,7 +2,7 @@ import numpy as np
+ import pytest
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator, ClassifierMixin, clone
++from sklearn.base import clone
+ from sklearn.datasets import (
+     load_breast_cancer,
+     load_iris,
+@@ -593,41 +593,26 @@ def test_fixed_threshold_classifier_metadata_routing():
+     assert_allclose(classifier_default_threshold.estimator_.coef_, classifier.coef_)
+ 
+ 
+-class ClassifierLoggingFit(ClassifierMixin, BaseEstimator):
+-    """Classifier that logs the number of `fit` calls."""
+-
+-    def __init__(self, fit_calls=0):
+-        self.fit_calls = fit_calls
+-
+-    def fit(self, X, y, **fit_params):
+-        self.fit_calls += 1
+-        self.is_fitted_ = True
+-        return self
+-
+-    def predict_proba(self, X):
+-        return np.ones((X.shape[0], 2), np.float64)  # pragma: nocover
+-
+-
+-def test_fixed_threshold_classifier_prefit():
+-    """Check the behaviour of the `FixedThresholdClassifier` with the `prefit`
+-    parameter."""
++@pytest.mark.parametrize(
++    "method", ["predict_proba", "decision_function", "predict", "predict_log_proba"]
++)
++def test_fixed_threshold_classifier_fitted_estimator(method):
++    """Check that if the underlying estimator is already fitted, no fit is required."""
+     X, y = make_classification(random_state=0)
++    classifier = LogisticRegression().fit(X, y)
++    fixed_threshold_classifier = FixedThresholdClassifier(estimator=classifier)
++    # This should not raise an error
++    getattr(fixed_threshold_classifier, method)(X)
+ 
+-    estimator = ClassifierLoggingFit()
+-    model = FixedThresholdClassifier(estimator=estimator, prefit=True)
+-    with pytest.raises(NotFittedError):
+-        model.fit(X, y)
+ 
+-    # check that we don't clone the classifier when `prefit=True`.
+-    estimator.fit(X, y)
+-    model.fit(X, y)
+-    assert estimator.fit_calls == 1
+-    assert model.estimator_ is estimator
++def test_fixed_threshold_classifier_classes_():
++    """Check that the classes_ attribute is properly set."""
++    X, y = make_classification(random_state=0)
++    with pytest.raises(
++        AttributeError, match="The underlying estimator is not fitted yet."
++    ):
++        FixedThresholdClassifier(estimator=LogisticRegression()).classes_
+ 
+-    # check that we clone the classifier when `prefit=False`.
+-    estimator = ClassifierLoggingFit()
+-    model = FixedThresholdClassifier(estimator=estimator, prefit=False)
+-    model.fit(X, y)
+-    assert estimator.fit_calls == 0
+-    assert model.estimator_.fit_calls == 1
+-    assert model.estimator_ is not estimator
++    classifier = LogisticRegression().fit(X, y)
++    fixed_threshold_classifier = FixedThresholdClassifier(estimator=classifier)
++    assert_array_equal(fixed_threshold_classifier.classes_, classifier.classes_)
+diff --git a/sklearn/model_selection/tests/test_search.py b/sklearn/model_selection/tests/test_search.py
+index c0442906d99de264a1502dd0f1e9e329ddae1c19..5313e5d28a1a7c6e1123cb2819a1fe808a181a57 100644
+--- a/sklearn/model_selection/tests/test_search.py
++++ b/sklearn/model_selection/tests/test_search.py
+@@ -100,7 +100,7 @@ from sklearn.utils.validation import _num_samples
+ 
+ # Neither of the following two estimators inherit from BaseEstimator,
+ # to test hyperparameter search on user-defined classifiers.
+-class MockClassifier:
++class MockClassifier(ClassifierMixin, BaseEstimator):
+     """Dummy classifier to test the parameter search algorithms"""
+ 
+     def __init__(self, foo_param=0):
+@@ -213,7 +213,7 @@ def test_parameter_grid():
+ def test_grid_search():
+     # Test that the best estimator contains the right value for foo_param
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
+     # make sure it selects the smallest parameter in case of ties
+     old_stdout = sys.stdout
+     sys.stdout = StringIO()
+@@ -383,11 +383,11 @@ def test_classes__property():
+ def test_trivial_cv_results_attr():
+     # Test search over a "grid" with only one point.
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1]}, cv=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1]}, cv=2)
+     grid_search.fit(X, y)
+     assert hasattr(grid_search, "cv_results_")
+ 
+-    random_search = RandomizedSearchCV(clf, {"foo_param": [0]}, n_iter=1, cv=3)
++    random_search = RandomizedSearchCV(clf, {"foo_param": [0]}, n_iter=1, cv=2)
+     random_search.fit(X, y)
+     assert hasattr(grid_search, "cv_results_")
+ 
+@@ -396,7 +396,7 @@ def test_no_refit():
+     # Test that GSCV can be used for model selection alone without refitting
+     clf = MockClassifier()
+     for scoring in [None, ["accuracy", "precision"]]:
+-        grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=False, cv=3)
++        grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=False, cv=2)
+         grid_search.fit(X, y)
+         assert (
+             not hasattr(grid_search, "best_estimator_")
+@@ -463,7 +463,7 @@ def test_grid_search_when_param_grid_includes_range():
+     # Test that the best estimator contains the right value for foo_param
+     clf = MockClassifier()
+     grid_search = None
+-    grid_search = GridSearchCV(clf, {"foo_param": range(1, 4)}, cv=3)
++    grid_search = GridSearchCV(clf, {"foo_param": range(1, 4)}, cv=2)
+     grid_search.fit(X, y)
+     assert grid_search.best_estimator_.foo_param == 2
+ 
+@@ -1496,13 +1496,13 @@ def test_grid_search_correct_score_results():
+ def test_pickle():
+     # Test that a fit search can be pickled
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=True, cv=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, refit=True, cv=2)
+     grid_search.fit(X, y)
+     grid_search_pickled = pickle.loads(pickle.dumps(grid_search))
+     assert_array_almost_equal(grid_search.predict(X), grid_search_pickled.predict(X))
+ 
+     random_search = RandomizedSearchCV(
+-        clf, {"foo_param": [1, 2, 3]}, refit=True, n_iter=3, cv=3
++        clf, {"foo_param": [1, 2, 3]}, refit=True, n_iter=3, cv=2
+     )
+     random_search.fit(X, y)
+     random_search_pickled = pickle.loads(pickle.dumps(random_search))
+@@ -1901,7 +1901,7 @@ def test_grid_search_cv_splits_consistency():
+ 
+ def test_transform_inverse_transform_round_trip():
+     clf = MockClassifier()
+-    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
++    grid_search = GridSearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
+ 
+     grid_search.fit(X, y)
+     X_round_trip = grid_search.inverse_transform(grid_search.transform(X))
+@@ -2571,7 +2571,7 @@ def test_search_html_repr():
+ @pytest.mark.parametrize("SearchCV", [GridSearchCV, RandomizedSearchCV])
+ def test_inverse_transform_Xt_deprecation(SearchCV):
+     clf = MockClassifier()
+-    search = SearchCV(clf, {"foo_param": [1, 2, 3]}, cv=3, verbose=3)
++    search = SearchCV(clf, {"foo_param": [1, 2, 3]}, cv=2, verbose=3)
+ 
+     X2 = search.fit(X, y).transform(X)
+ 
+diff --git a/sklearn/model_selection/tests/test_split.py b/sklearn/model_selection/tests/test_split.py
+index 79f195263be9344803142154e45588ddc0aa6db2..f26c9bd2b34ff29d1489bd3c8cc2de8d7bc17a46 100644
+--- a/sklearn/model_selection/tests/test_split.py
++++ b/sklearn/model_selection/tests/test_split.py
+@@ -594,6 +594,30 @@ def test_shuffle_stratifiedkfold():
+     assert test_set1 != test_set2
+ 
+ 
++def test_shuffle_groupkfold():
++    # Check that shuffling is happening when requested, and for proper
++    # sample coverage
++    X = np.ones(40)
++    y = [0] * 20 + [1] * 20
++    groups = np.arange(40) // 3
++    gkf0 = GroupKFold(4, shuffle=True, random_state=0)
++    gkf1 = GroupKFold(4, shuffle=True, random_state=1)
++
++    # Check that the groups are shuffled differently
++    test_groups0 = [
++        set(groups[test_idx]) for _, test_idx in gkf0.split(X, None, groups)
++    ]
++    test_groups1 = [
++        set(groups[test_idx]) for _, test_idx in gkf1.split(X, None, groups)
++    ]
++    for g0, g1 in zip(test_groups0, test_groups1):
++        assert g0 != g1, "Test groups should differ with different random states"
++
++    # Check coverage and splits
++    check_cv_coverage(gkf0, X, y, groups, expected_n_splits=4)
++    check_cv_coverage(gkf1, X, y, groups, expected_n_splits=4)
++
++
+ def test_kfold_can_detect_dependent_samples_on_digits():  # see #2372
+     # The digits samples are dependent: they are apparently grouped by authors
+     # although we don't have any information on the groups segment locations
+@@ -1601,8 +1625,9 @@ def test_cv_iterable_wrapper():
+ 
+ 
+ @pytest.mark.parametrize("kfold", [GroupKFold, StratifiedGroupKFold])
+-def test_group_kfold(kfold):
+-    rng = np.random.RandomState(0)
++@pytest.mark.parametrize("shuffle", [True, False])
++def test_group_kfold(kfold, shuffle, global_random_seed):
++    rng = np.random.RandomState(global_random_seed)
+ 
+     # Parameters of the test
+     n_groups = 15
+@@ -1620,7 +1645,8 @@ def test_group_kfold(kfold):
+     len(np.unique(groups))
+     # Get the test fold indices from the test set indices of each fold
+     folds = np.zeros(n_samples)
+-    lkf = kfold(n_splits=n_splits)
++    random_state = None if not shuffle else global_random_seed
++    lkf = kfold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+     for i, (_, test) in enumerate(lkf.split(X, y, groups)):
+         folds[test] = i
+ 
+@@ -1697,8 +1723,9 @@ def test_group_kfold(kfold):
+ 
+     # Check that folds have approximately the same size
+     assert len(folds) == len(groups)
+-    for i in np.unique(folds):
+-        assert tolerance >= abs(sum(folds == i) - ideal_n_groups_per_fold)
++    if not shuffle:
++        for i in np.unique(folds):
++            assert tolerance >= abs(sum(folds == i) - ideal_n_groups_per_fold)
+ 
+     # Check that each group appears only in 1 fold
+     with warnings.catch_warnings():
+@@ -1712,8 +1739,10 @@ def test_group_kfold(kfold):
+         assert len(np.intersect1d(groups[train], groups[test])) == 0
+ 
+     # groups can also be a list
++    # use a new instance for reproducibility when shuffle=True
++    lkf_copy = kfold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+     cv_iter = list(lkf.split(X, y, groups.tolist()))
+-    for (train1, test1), (train2, test2) in zip(lkf.split(X, y, groups), cv_iter):
++    for (train1, test1), (train2, test2) in zip(lkf_copy.split(X, y, groups), cv_iter):
+         assert_array_equal(train1, train2)
+         assert_array_equal(test1, test2)
+ 
+@@ -1975,7 +2004,9 @@ def test_leave_p_out_empty_trainset():
+         next(cv.split(X, y))
+ 
+ 
+-@pytest.mark.parametrize("Klass", (KFold, StratifiedKFold, StratifiedGroupKFold))
++@pytest.mark.parametrize(
++    "Klass", (KFold, StratifiedKFold, StratifiedGroupKFold, GroupKFold)
++)
+ def test_random_state_shuffle_false(Klass):
+     # passing a non-default random_state when shuffle=False makes no sense
+     with pytest.raises(ValueError, match="has no effect since shuffle is False"):
+@@ -1997,6 +2028,7 @@ def test_random_state_shuffle_false(Klass):
+         (GroupShuffleSplit(random_state=123), True),
+         (StratifiedShuffleSplit(random_state=123), True),
+         (GroupKFold(), True),
++        (GroupKFold(shuffle=True, random_state=123), True),
+         (TimeSeriesSplit(), True),
+         (LeaveOneOut(), True),
+         (LeaveOneGroupOut(), True),
+diff --git a/sklearn/model_selection/tests/test_validation.py b/sklearn/model_selection/tests/test_validation.py
+index 81f716ed88516176377c5a4a6204e4d5bb4581a1..2d579772b1fbeb08b9a00bdc694e403490d2eb53 100644
+--- a/sklearn/model_selection/tests/test_validation.py
++++ b/sklearn/model_selection/tests/test_validation.py
+@@ -14,7 +14,7 @@ import pytest
+ from scipy.sparse import issparse
+ 
+ from sklearn import config_context
+-from sklearn.base import BaseEstimator, clone
++from sklearn.base import BaseEstimator, ClassifierMixin, clone
+ from sklearn.cluster import KMeans
+ from sklearn.datasets import (
+     load_diabetes,
+@@ -186,7 +186,7 @@ class MockEstimatorWithSingleFitCallAllowed(MockEstimatorWithParameter):
+         raise NotImplementedError
+ 
+ 
+-class MockClassifier:
++class MockClassifier(ClassifierMixin, BaseEstimator):
+     """Dummy classifier to test the cross-validation"""
+ 
+     def __init__(self, a=0, allow_nd=False):
+@@ -254,7 +254,7 @@ class MockClassifier:
+                 P.shape[0],
+                 P.shape[1],
+             )
+-        self.fitted_ = True
++        self.classes_ = np.unique(y)
+         return self
+ 
+     def predict(self, T):
+@@ -274,11 +274,11 @@ class MockClassifier:
+ 
+ # XXX: use 2D array, since 1D X is being detected as a single sample in
+ # check_consistent_length
+-X = np.ones((10, 2))
+-y = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
++X = np.ones((15, 2))
++y = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 6])
+ # The number of samples per class needs to be > n_splits,
+ # for StratifiedKFold(n_splits=3)
+-y2 = np.array([1, 1, 1, 2, 2, 2, 3, 3, 3, 3])
++y2 = np.array([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3])
+ P = np.eye(5)
+ 
+ 
+@@ -694,7 +694,7 @@ def test_cross_val_score_fit_params(coo_container):
+     n_classes = len(np.unique(y))
+ 
+     W_sparse = coo_container(
+-        (np.array([1]), (np.array([1]), np.array([0]))), shape=(10, 1)
++        (np.array([1]), (np.array([1]), np.array([0]))), shape=(15, 1)
+     )
+     P_sparse = coo_container(np.eye(5))
+ 
+@@ -720,7 +720,7 @@ def test_cross_val_score_fit_params(coo_container):
+         "dummy_obj": DUMMY_OBJ,
+         "callback": assert_fit_params,
+     }
+-    cross_val_score(clf, X, y, params=fit_params)
++    cross_val_score(clf, X, y2, params=fit_params)
+ 
+ 
+ def test_cross_val_score_score_func():
+diff --git a/sklearn/neighbors/tests/test_nearest_centroid.py b/sklearn/neighbors/tests/test_nearest_centroid.py
+index 5ce792ac29d56364e902d3b66ae8942375242f6c..1aa9274cd28a89be3744f56b6c3f31b80c2252ed 100644
+--- a/sklearn/neighbors/tests/test_nearest_centroid.py
++++ b/sklearn/neighbors/tests/test_nearest_centroid.py
+@@ -4,10 +4,14 @@ Testing for the nearest centroid module.
+ 
+ import numpy as np
+ import pytest
+-from numpy.testing import assert_array_equal
+ 
+ from sklearn import datasets
+ from sklearn.neighbors import NearestCentroid
++from sklearn.utils._testing import (
++    assert_allclose,
++    assert_array_almost_equal,
++    assert_array_equal,
++)
+ from sklearn.utils.fixes import CSR_CONTAINERS
+ 
+ # toy sample
+@@ -15,6 +19,11 @@ X = [[-2, -1], [-1, -1], [-1, -2], [1, 1], [1, 2], [2, 1]]
+ y = [-1, -1, -1, 1, 1, 1]
+ T = [[-1, -1], [2, 2], [3, 2]]
+ true_result = [-1, 1, 1]
++true_result_prior1 = [-1, 1, 1]
++
++true_discriminant_scores = [-32, 64, 80]
++true_proba = [[1, 1.26642e-14], [1.60381e-28, 1], [1.80485e-35, 1]]
++
+ 
+ # also load the iris dataset
+ # and randomly permute it
+@@ -31,9 +40,30 @@ def test_classification_toy(csr_container):
+     X_csr = csr_container(X)
+     T_csr = csr_container(T)
+ 
++    # Check classification on a toy dataset, including sparse versions.
+     clf = NearestCentroid()
+     clf.fit(X, y)
+     assert_array_equal(clf.predict(T), true_result)
++    assert_array_almost_equal(clf.decision_function(T), true_discriminant_scores)
++    assert_array_almost_equal(clf.predict_proba(T), true_proba)
++
++    # Test uniform priors
++    clf = NearestCentroid(priors="uniform")
++    clf.fit(X, y)
++    assert_array_equal(clf.predict(T), true_result)
++    assert_array_almost_equal(clf.decision_function(T), true_discriminant_scores)
++    assert_array_almost_equal(clf.predict_proba(T), true_proba)
++
++    clf = NearestCentroid(priors="empirical")
++    clf.fit(X, y)
++    assert_array_equal(clf.predict(T), true_result)
++    assert_array_almost_equal(clf.decision_function(T), true_discriminant_scores)
++    assert_array_almost_equal(clf.predict_proba(T), true_proba)
++
++    # Test custom priors
++    clf = NearestCentroid(priors=[0.25, 0.75])
++    clf.fit(X, y)
++    assert_array_equal(clf.predict(T), true_result_prior1)
+ 
+     # Same test, but with a sparse matrix to fit and test.
+     clf = NearestCentroid()
+@@ -159,3 +189,49 @@ def test_features_zero_var():
+     clf = NearestCentroid(shrink_threshold=0.1)
+     with pytest.raises(ValueError):
+         clf.fit(X, y)
++
++
++def test_negative_priors_error():
++    """Check that we raise an error when the user-defined priors are negative."""
++    clf = NearestCentroid(priors=[-2, 4])
++    with pytest.raises(ValueError, match="priors must be non-negative"):
++        clf.fit(X, y)
++
++
++def test_warn_non_normalized_priors():
++    """Check that we raise a warning and normalize the user-defined priors when they
++    don't sum to 1.
++    """
++    priors = [2, 4]
++    clf = NearestCentroid(priors=priors)
++    with pytest.warns(
++        UserWarning,
++        match="The priors do not sum to 1. Normalizing such that it sums to one.",
++    ):
++        clf.fit(X, y)
++
++    assert_allclose(clf.class_prior_, np.asarray(priors) / np.asarray(priors).sum())
++
++
++@pytest.mark.parametrize(
++    "response_method", ["decision_function", "predict_proba", "predict_log_proba"]
++)
++def test_method_not_available_with_manhattan(response_method):
++    """Check that we raise an AttributeError with Manhattan metric when trying
++    to call a non-thresholded response method.
++    """
++    clf = NearestCentroid(metric="manhattan").fit(X, y)
++    with pytest.raises(AttributeError):
++        getattr(clf, response_method)(T)
++
++
++@pytest.mark.parametrize("array_constructor", [np.array] + CSR_CONTAINERS)
++def test_error_zero_variances(array_constructor):
++    """Check that we raise an error when the variance for all features is zero."""
++    X = np.ones((len(y), 2))
++    X[:, 1] *= 2
++    X = array_constructor(X)
++
++    clf = NearestCentroid()
++    with pytest.raises(ValueError, match="All features have zero variance"):
++        clf.fit(X, y)
+diff --git a/sklearn/neighbors/tests/test_neighbors.py b/sklearn/neighbors/tests/test_neighbors.py
+index 9622e85c397184c07d5d10d47e0dc01a15f4b909..c9fb85fec990829483b2c9a2549197a8079cd1bd 100644
+--- a/sklearn/neighbors/tests/test_neighbors.py
++++ b/sklearn/neighbors/tests/test_neighbors.py
+@@ -2337,6 +2337,38 @@ def test_regressor_predict_on_arraylikes():
+     assert_allclose(est.predict([[0, 2.5]]), [6])
+ 
+ 
++@pytest.mark.parametrize(
++    "Estimator, params",
++    [
++        (neighbors.KNeighborsClassifier, {"n_neighbors": 2}),
++        (neighbors.KNeighborsRegressor, {"n_neighbors": 2}),
++        (neighbors.RadiusNeighborsRegressor, {}),
++        (neighbors.RadiusNeighborsClassifier, {}),
++        (neighbors.KNeighborsTransformer, {"n_neighbors": 2}),
++        (neighbors.RadiusNeighborsTransformer, {"radius": 1.5}),
++        (neighbors.LocalOutlierFactor, {"n_neighbors": 1}),
++    ],
++)
++def test_nan_euclidean_support(Estimator, params):
++    """Check that the different neighbor estimators are lenient towards `nan`
++    values if using `metric="nan_euclidean"`.
++    """
++
++    X = [[0, 1], [1, np.nan], [2, 3], [3, 5]]
++    y = [0, 0, 1, 1]
++
++    params.update({"metric": "nan_euclidean"})
++    estimator = Estimator().set_params(**params).fit(X, y)
++
++    for response_method in ("kneighbors", "predict", "transform", "fit_predict"):
++        if hasattr(estimator, response_method):
++            output = getattr(estimator, response_method)(X)
++            if hasattr(output, "toarray"):
++                assert not np.isnan(output.data).any()
++            else:
++                assert not np.isnan(output).any()
++
++
+ def test_predict_dataframe():
+     """Check that KNN predict works with dataframes
+ 
+diff --git a/sklearn/neural_network/tests/test_mlp.py b/sklearn/neural_network/tests/test_mlp.py
+index edba508204b22ae1101a43f21a4e0ed72f5ead75..969b452d687fde3aa7f04c704a1523c727e79499 100644
+--- a/sklearn/neural_network/tests/test_mlp.py
++++ b/sklearn/neural_network/tests/test_mlp.py
+@@ -203,7 +203,9 @@ def test_gradient():
+                 max_iter=1,
+                 random_state=1,
+             )
+-            mlp.fit(X, y)
++            with warnings.catch_warnings():
++                warnings.simplefilter("ignore", ConvergenceWarning)
++                mlp.fit(X, y)
+ 
+             theta = np.hstack([l.ravel() for l in mlp.coefs_ + mlp.intercepts_])
+ 
+@@ -276,7 +278,8 @@ def test_lbfgs_regression(X, y):
+         mlp = MLPRegressor(
+             solver="lbfgs",
+             hidden_layer_sizes=50,
+-            max_iter=150,
++            max_iter=200,
++            tol=1e-3,
+             shuffle=True,
+             random_state=1,
+             activation=activation,
+@@ -397,9 +400,9 @@ def test_multilabel_classification():
+ 
+ def test_multioutput_regression():
+     # Test that multi-output regression works as expected
+-    X, y = make_regression(n_samples=200, n_targets=5)
++    X, y = make_regression(n_samples=200, n_targets=5, random_state=11)
+     mlp = MLPRegressor(
+-        solver="lbfgs", hidden_layer_sizes=50, max_iter=200, random_state=1
++        solver="lbfgs", hidden_layer_sizes=50, max_iter=200, tol=1e-2, random_state=1
+     )
+     mlp.fit(X, y)
+     assert mlp.score(X, y) > 0.9
+@@ -468,8 +471,8 @@ def test_partial_fit_regression():
+             batch_size=X.shape[0],
+             momentum=momentum,
+         )
+-        with warnings.catch_warnings(record=True):
+-            # catch convergence warning
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore", ConvergenceWarning)
+             mlp.fit(X, y)
+         pred1 = mlp.predict(X)
+         mlp = MLPRegressor(
+@@ -517,7 +520,10 @@ def test_nonfinite_params():
+         " values and need to be preprocessed."
+     )
+     with pytest.raises(ValueError, match=msg):
+-        clf.fit(X, y)
++        with warnings.catch_warnings():
++            # RuntimeWarning: overflow encountered in square
++            warnings.simplefilter("ignore")
++            clf.fit(X, y)
+ 
+ 
+ def test_predict_proba_binary():
+@@ -608,8 +614,10 @@ def test_shuffle():
+             random_state=0,
+             shuffle=shuffle,
+         )
+-        mlp1.fit(X, y)
+-        mlp2.fit(X, y)
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore", ConvergenceWarning)
++            mlp1.fit(X, y)
++            mlp2.fit(X, y)
+ 
+         assert np.array_equal(mlp1.coefs_[0], mlp2.coefs_[0])
+ 
+@@ -620,8 +628,10 @@ def test_shuffle():
+     mlp2 = MLPRegressor(
+         hidden_layer_sizes=1, max_iter=1, batch_size=1, random_state=0, shuffle=False
+     )
+-    mlp1.fit(X, y)
+-    mlp2.fit(X, y)
++    with warnings.catch_warnings():
++        warnings.simplefilter("ignore", ConvergenceWarning)
++        mlp1.fit(X, y)
++        mlp2.fit(X, y)
+ 
+     assert not np.array_equal(mlp1.coefs_[0], mlp2.coefs_[0])
+ 
+@@ -720,14 +730,20 @@ def test_warm_start():
+     y_5classes = np.array([0] * 30 + [1] * 30 + [2] * 30 + [3] * 30 + [4] * 30)
+ 
+     # No error raised
+-    clf = MLPClassifier(hidden_layer_sizes=2, solver="lbfgs", warm_start=True).fit(X, y)
++    clf = MLPClassifier(
++        hidden_layer_sizes=2, solver="lbfgs", warm_start=True, random_state=42, tol=1e-2
++    ).fit(X, y)
+     clf.fit(X, y)
+     clf.fit(X, y_3classes)
+ 
+     for y_i in (y_2classes, y_3classes_alt, y_4classes, y_5classes):
+-        clf = MLPClassifier(hidden_layer_sizes=2, solver="lbfgs", warm_start=True).fit(
+-            X, y
+-        )
++        clf = MLPClassifier(
++            hidden_layer_sizes=2,
++            solver="lbfgs",
++            warm_start=True,
++            random_state=42,
++            tol=1e-2,
++        ).fit(X, y)
+         message = (
+             "warm_start can only be used where `y` has the same "
+             "classes as in the previous call to fit."
+@@ -748,10 +764,12 @@ def test_warm_start_full_iteration(MLPEstimator):
+     clf = MLPEstimator(
+         hidden_layer_sizes=2, solver="sgd", warm_start=True, max_iter=max_iter
+     )
+-    clf.fit(X, y)
+-    assert max_iter == clf.n_iter_
+-    clf.fit(X, y)
+-    assert max_iter == clf.n_iter_
++    with warnings.catch_warnings():
++        warnings.simplefilter("ignore", ConvergenceWarning)
++        clf.fit(X, y)
++        assert max_iter == clf.n_iter_
++        clf.fit(X, y)
++        assert max_iter == clf.n_iter_
+ 
+ 
+ def test_n_iter_no_change():
+@@ -815,14 +833,14 @@ def test_early_stopping_stratified():
+ def test_mlp_classifier_dtypes_casting():
+     # Compare predictions for different dtypes
+     mlp_64 = MLPClassifier(
+-        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50
++        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=100, tol=1e-1
+     )
+     mlp_64.fit(X_digits[:300], y_digits[:300])
+     pred_64 = mlp_64.predict(X_digits[300:])
+     proba_64 = mlp_64.predict_proba(X_digits[300:])
+ 
+     mlp_32 = MLPClassifier(
+-        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50
++        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=100, tol=1e-1
+     )
+     mlp_32.fit(X_digits[:300].astype(np.float32), y_digits[:300])
+     pred_32 = mlp_32.predict(X_digits[300:].astype(np.float32))
+@@ -834,18 +852,18 @@ def test_mlp_classifier_dtypes_casting():
+ 
+ def test_mlp_regressor_dtypes_casting():
+     mlp_64 = MLPRegressor(
+-        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50
++        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=150, tol=1e-3
+     )
+     mlp_64.fit(X_digits[:300], y_digits[:300])
+     pred_64 = mlp_64.predict(X_digits[300:])
+ 
+     mlp_32 = MLPRegressor(
+-        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50
++        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=150, tol=1e-3
+     )
+     mlp_32.fit(X_digits[:300].astype(np.float32), y_digits[:300])
+     pred_32 = mlp_32.predict(X_digits[300:].astype(np.float32))
+ 
+-    assert_allclose(pred_64, pred_32, rtol=1e-04)
++    assert_allclose(pred_64, pred_32, rtol=5e-04)
+ 
+ 
+ @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@@ -854,7 +872,9 @@ def test_mlp_param_dtypes(dtype, Estimator):
+     # Checks if input dtype is used for network parameters
+     # and predictions
+     X, y = X_digits.astype(dtype), y_digits
+-    mlp = Estimator(alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50)
++    mlp = Estimator(
++        alpha=1e-5, hidden_layer_sizes=(5, 3), random_state=1, max_iter=50, tol=1e-1
++    )
+     mlp.fit(X[:300], y[:300])
+     pred = mlp.predict(X[300:])
+ 
+@@ -920,10 +940,12 @@ def test_mlp_warm_start_with_early_stopping(MLPEstimator):
+     mlp = MLPEstimator(
+         max_iter=10, random_state=0, warm_start=True, early_stopping=True
+     )
+-    mlp.fit(X_iris, y_iris)
+-    n_validation_scores = len(mlp.validation_scores_)
+-    mlp.set_params(max_iter=20)
+-    mlp.fit(X_iris, y_iris)
++    with warnings.catch_warnings():
++        warnings.simplefilter("ignore", ConvergenceWarning)
++        mlp.fit(X_iris, y_iris)
++        n_validation_scores = len(mlp.validation_scores_)
++        mlp.set_params(max_iter=20)
++        mlp.fit(X_iris, y_iris)
+     assert len(mlp.validation_scores_) > n_validation_scores
+ 
+ 
+@@ -987,7 +1009,12 @@ def test_mlp_diverging_loss():
+         random_state=0,
+     )
+ 
+-    mlp.fit(X_iris, y_iris)
++    with warnings.catch_warnings():
++        # RuntimeWarning: overflow encountered in matmul
++        # ConvergenceWarning: Stochastic Optimizer: Maximum iteration
++        warnings.simplefilter("ignore", RuntimeWarning)
++        warnings.simplefilter("ignore", ConvergenceWarning)
++        mlp.fit(X_iris, y_iris)
+ 
+     # In python, float("nan") != float("nan")
+     assert str(mlp.validation_scores_[-1]) == str(np.nan)
+diff --git a/sklearn/tests/test_base.py b/sklearn/tests/test_base.py
+index e23c347708b1f86fbd7582105a1127dc0bb7ede1..b65baa78802bc4ec81e7194f42fddec282eeafd5 100644
+--- a/sklearn/tests/test_base.py
++++ b/sklearn/tests/test_base.py
+@@ -19,10 +19,12 @@ from sklearn.base import (
+     clone,
+     is_classifier,
+     is_clusterer,
++    is_outlier_detector,
+     is_regressor,
+ )
+ from sklearn.cluster import KMeans
+ from sklearn.decomposition import PCA
++from sklearn.ensemble import IsolationForest
+ from sklearn.exceptions import InconsistentVersionWarning
+ from sklearn.model_selection import GridSearchCV
+ from sklearn.pipeline import Pipeline
+@@ -266,6 +268,21 @@ def test_get_params():
+         test.set_params(a__a=2)
+ 
+ 
++# TODO(1.8): Remove this test when the deprecation is removed
++def test_is_estimator_type_class():
++    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
++        assert is_classifier(SVC)
++
++    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
++        assert is_regressor(SVR)
++
++    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
++        assert is_clusterer(KMeans)
++
++    with pytest.warns(FutureWarning, match="passing a class to.*is deprecated"):
++        assert is_outlier_detector(IsolationForest)
++
++
+ @pytest.mark.parametrize(
+     "estimator, expected_result",
+     [
+diff --git a/sklearn/tests/test_calibration.py b/sklearn/tests/test_calibration.py
+index 0f23bb74631264ccf7055e8f73ff19d39224f188..6e5900e4fa4a66c3febe945ece31cf35d6fdd861 100644
+--- a/sklearn/tests/test_calibration.py
++++ b/sklearn/tests/test_calibration.py
+@@ -5,7 +5,7 @@ import numpy as np
+ import pytest
+ from numpy.testing import assert_allclose
+ 
+-from sklearn.base import BaseEstimator, clone
++from sklearn.base import BaseEstimator, ClassifierMixin, clone
+ from sklearn.calibration import (
+     CalibratedClassifierCV,
+     CalibrationDisplay,
+@@ -22,6 +22,7 @@ from sklearn.ensemble import (
+ )
+ from sklearn.exceptions import NotFittedError
+ from sklearn.feature_extraction import DictVectorizer
++from sklearn.frozen import FrozenEstimator
+ from sklearn.impute import SimpleImputer
+ from sklearn.isotonic import IsotonicRegression
+ from sklearn.linear_model import LogisticRegression, SGDClassifier
+@@ -45,6 +46,7 @@ from sklearn.utils._testing import (
+     assert_almost_equal,
+     assert_array_almost_equal,
+     assert_array_equal,
++    ignore_warnings,
+ )
+ from sklearn.utils.extmath import softmax
+ from sklearn.utils.fixes import CSR_CONTAINERS
+@@ -299,9 +301,11 @@ def test_calibration_zero_probability():
+     assert_allclose(probas, 1.0 / clf.n_classes_)
+ 
+ 
++@ignore_warnings(category=FutureWarning)
+ @pytest.mark.parametrize("csr_container", CSR_CONTAINERS)
+ def test_calibration_prefit(csr_container):
+     """Test calibration for prefitted classifiers"""
++    # TODO(1.8): Remove cv="prefit" options here and the @ignore_warnings of the test
+     n_samples = 50
+     X, y = make_classification(n_samples=3 * n_samples, n_features=6, random_state=42)
+     sample_weight = np.random.RandomState(seed=42).uniform(size=y.size)
+@@ -333,17 +337,25 @@ def test_calibration_prefit(csr_container):
+         (csr_container(X_calib), csr_container(X_test)),
+     ]:
+         for method in ["isotonic", "sigmoid"]:
+-            cal_clf = CalibratedClassifierCV(clf, method=method, cv="prefit")
++            cal_clf_prefit = CalibratedClassifierCV(clf, method=method, cv="prefit")
++            cal_clf_frozen = CalibratedClassifierCV(FrozenEstimator(clf), method=method)
+ 
+             for sw in [sw_calib, None]:
+-                cal_clf.fit(this_X_calib, y_calib, sample_weight=sw)
+-                y_prob = cal_clf.predict_proba(this_X_test)
+-                y_pred = cal_clf.predict(this_X_test)
+-                prob_pos_cal_clf = y_prob[:, 1]
+-                assert_array_equal(y_pred, np.array([0, 1])[np.argmax(y_prob, axis=1)])
+-
++                cal_clf_prefit.fit(this_X_calib, y_calib, sample_weight=sw)
++                cal_clf_frozen.fit(this_X_calib, y_calib, sample_weight=sw)
++
++                y_prob_prefit = cal_clf_prefit.predict_proba(this_X_test)
++                y_prob_frozen = cal_clf_frozen.predict_proba(this_X_test)
++                y_pred_prefit = cal_clf_prefit.predict(this_X_test)
++                y_pred_frozen = cal_clf_frozen.predict(this_X_test)
++                prob_pos_cal_clf_prefit = y_prob_prefit[:, 1]
++                prob_pos_cal_clf_frozen = y_prob_frozen[:, 1]
++                assert_array_equal(y_pred_prefit, y_pred_frozen)
++                assert_array_equal(
++                    y_pred_prefit, np.array([0, 1])[np.argmax(y_prob_prefit, axis=1)]
++                )
+                 assert brier_score_loss(y_test, prob_pos_clf) > brier_score_loss(
+-                    y_test, prob_pos_cal_clf
++                    y_test, prob_pos_cal_clf_frozen
+                 )
+ 
+ 
+@@ -491,11 +503,9 @@ def test_calibration_accepts_ndarray(X):
+     """Test that calibration accepts n-dimensional arrays as input"""
+     y = [1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0]
+ 
+-    class MockTensorClassifier(BaseEstimator):
++    class MockTensorClassifier(ClassifierMixin, BaseEstimator):
+         """A toy estimator that accepts tensor inputs"""
+ 
+-        _estimator_type = "classifier"
+-
+         def fit(self, X, y):
+             self.classes_ = np.unique(y)
+             return self
+@@ -515,8 +525,10 @@ def dict_data():
+         {"state": "NY", "age": "adult"},
+         {"state": "TX", "age": "adult"},
+         {"state": "VT", "age": "child"},
++        {"state": "CT", "age": "adult"},
++        {"state": "BR", "age": "child"},
+     ]
+-    text_labels = [1, 0, 1]
++    text_labels = [1, 0, 1, 1, 0]
+     return dict_data, text_labels
+ 
+ 
+@@ -540,7 +552,7 @@ def test_calibration_dict_pipeline(dict_data, dict_data_pipeline):
+     """
+     X, y = dict_data
+     clf = dict_data_pipeline
+-    calib_clf = CalibratedClassifierCV(clf, cv="prefit")
++    calib_clf = CalibratedClassifierCV(FrozenEstimator(clf), cv=2)
+     calib_clf.fit(X, y)
+     # Check attributes are obtained from fitted estimator
+     assert_array_equal(calib_clf.classes_, clf.classes_)
+@@ -584,7 +596,7 @@ def test_calibration_inconsistent_prefit_n_features_in():
+     # is consistent with training set
+     X, y = make_classification(n_samples=10, n_features=5, n_classes=2, random_state=7)
+     clf = LinearSVC(C=1).fit(X, y)
+-    calib_clf = CalibratedClassifierCV(clf, cv="prefit")
++    calib_clf = CalibratedClassifierCV(FrozenEstimator(clf))
+ 
+     msg = "X has 3 features, but LinearSVC is expecting 5 features as input."
+     with pytest.raises(ValueError, match=msg):
+@@ -602,7 +614,7 @@ def test_calibration_votingclassifier():
+     )
+     vote.fit(X, y)
+ 
+-    calib_clf = CalibratedClassifierCV(estimator=vote, cv="prefit")
++    calib_clf = CalibratedClassifierCV(estimator=FrozenEstimator(vote))
+     # smoke test: should not raise an error
+     calib_clf.fit(X, y)
+ 
+diff --git a/sklearn/tests/test_common.py b/sklearn/tests/test_common.py
+index a985f6a02289a2f044763c1ff67fad6093b5bf47..455234adfad5bc22e49be8ea6d94a1cfaa320a07 100644
+--- a/sklearn/tests/test_common.py
++++ b/sklearn/tests/test_common.py
+@@ -35,7 +35,14 @@ from sklearn.preprocessing import (
+     StandardScaler,
+ )
+ from sklearn.utils import all_estimators
+-from sklearn.utils._tags import get_tags
++from sklearn.utils._tags import (
++    ClassifierTags,
++    InputTags,
++    RegressorTags,
++    TargetTags,
++    TransformerTags,
++    get_tags,
++)
+ from sklearn.utils._test_common.instance_generator import (
+     _get_check_estimator_ids,
+     _tested_estimators,
+@@ -217,29 +224,49 @@ def test_class_support_removed():
+ )
+ def test_valid_tag_types(estimator):
+     """Check that estimator tags are valid."""
+-    from dataclasses import fields
+-
+-    from ..utils._tags import default_tags
+-
+-    def check_field_types(tags, defaults):
+-        if tags is None:
+-            return
+-        tags_fields = fields(tags)
+-        for field in tags_fields:
+-            correct_tags = type(getattr(defaults, field.name))
+-            if field.name == "_xfail_checks":
+-                # _xfail_checks can be a dictionary
+-                correct_tags = (correct_tags, dict)
+-            assert isinstance(getattr(tags, field.name), correct_tags)
+-
+     tags = get_tags(estimator)
+-    defaults = default_tags(estimator)
+-    check_field_types(tags, defaults)
+-    check_field_types(tags.input_tags, defaults.input_tags)
+-    check_field_types(tags.target_tags, defaults.target_tags)
+-    check_field_types(tags.classifier_tags, defaults.classifier_tags)
+-    check_field_types(tags.regressor_tags, defaults.regressor_tags)
+-    check_field_types(tags.transformer_tags, defaults.transformer_tags)
++    assert isinstance(tags.estimator_type, (str, type(None)))
++    assert isinstance(tags.target_tags, TargetTags)
++    assert isinstance(tags.classifier_tags, (ClassifierTags, type(None)))
++    assert isinstance(tags.regressor_tags, (RegressorTags, type(None)))
++    assert isinstance(tags.transformer_tags, (TransformerTags, type(None)))
++    assert isinstance(tags.input_tags, InputTags)
++    assert isinstance(tags.array_api_support, bool)
++    assert isinstance(tags.no_validation, bool)
++    assert isinstance(tags.non_deterministic, bool)
++    assert isinstance(tags.requires_fit, bool)
++    assert isinstance(tags._skip_test, bool)
++    assert isinstance(tags._xfail_checks, dict)
++
++    assert isinstance(tags.target_tags.required, bool)
++    assert isinstance(tags.target_tags.one_d_labels, bool)
++    assert isinstance(tags.target_tags.two_d_labels, bool)
++    assert isinstance(tags.target_tags.positive_only, bool)
++    assert isinstance(tags.target_tags.multi_output, bool)
++    assert isinstance(tags.target_tags.single_output, bool)
++
++    assert isinstance(tags.input_tags.pairwise, bool)
++    assert isinstance(tags.input_tags.allow_nan, bool)
++    assert isinstance(tags.input_tags.sparse, bool)
++    assert isinstance(tags.input_tags.categorical, bool)
++    assert isinstance(tags.input_tags.string, bool)
++    assert isinstance(tags.input_tags.dict, bool)
++    assert isinstance(tags.input_tags.one_d_array, bool)
++    assert isinstance(tags.input_tags.two_d_array, bool)
++    assert isinstance(tags.input_tags.three_d_array, bool)
++    assert isinstance(tags.input_tags.positive_only, bool)
++
++    if tags.classifier_tags is not None:
++        assert isinstance(tags.classifier_tags.poor_score, bool)
++        assert isinstance(tags.classifier_tags.multi_class, bool)
++        assert isinstance(tags.classifier_tags.multi_label, bool)
++
++    if tags.regressor_tags is not None:
++        assert isinstance(tags.regressor_tags.poor_score, bool)
++        assert isinstance(tags.regressor_tags.multi_label, bool)
++
++    if tags.transformer_tags is not None:
++        assert isinstance(tags.transformer_tags.preserves_dtype, list)
+ 
+ 
+ def _estimators_that_predict_in_fit():
+diff --git a/sklearn/tests/test_docstring_parameters.py b/sklearn/tests/test_docstring_parameters.py
+index 6d44a3546f1ea7b222f4541ac08291f331450f72..f3a6ba999f7f6a1fe46ca85648ae686fb87c8e38 100644
+--- a/sklearn/tests/test_docstring_parameters.py
++++ b/sklearn/tests/test_docstring_parameters.py
+@@ -177,9 +177,6 @@ def _construct_sparse_coder(Estimator):
+ 
+ 
+ @pytest.mark.filterwarnings("ignore::sklearn.exceptions.ConvergenceWarning")
+-# TODO(1.6): remove "@pytest.mark.filterwarnings" as SAMME.R will be removed
+-# and substituted with the SAMME algorithm as a default
+-@pytest.mark.filterwarnings("ignore:The SAMME.R algorithm")
+ @pytest.mark.parametrize("name, Estimator", all_estimators())
+ def test_fit_docstring_attributes(name, Estimator):
+     pytest.importorskip("numpydoc")
+@@ -203,6 +200,9 @@ def test_fit_docstring_attributes(name, Estimator):
+         est = _construct_compose_pipeline_instance(Estimator)
+     elif Estimator.__name__ == "SparseCoder":
+         est = _construct_sparse_coder(Estimator)
++    elif Estimator.__name__ == "FrozenEstimator":
++        X, y = make_classification(n_samples=20, n_features=5, random_state=0)
++        est = Estimator(LogisticRegression().fit(X, y))
+     else:
+         # TODO(devtools): use _tested_estimators instead of all_estimators in the
+         # decorator
+@@ -225,10 +225,6 @@ def test_fit_docstring_attributes(name, Estimator):
+         # default raises an error, perplexity must be less than n_samples
+         est.set_params(perplexity=2)
+ 
+-    # TODO(1.6): remove (avoid FutureWarning)
+-    if Estimator.__name__ in ("NMF", "MiniBatchNMF"):
+-        est.set_params(n_components="auto")
+-
+     # Low max iter to speed up tests: we are only interested in checking the existence
+     # of fitted attributes. This should be invariant to whether it has converged or not.
+     if "max_iter" in est.get_params():
+diff --git a/sklearn/tests/test_metaestimators.py b/sklearn/tests/test_metaestimators.py
+index 9c12afd60c2068534d5cf88fdbd4fc515eee5f76..214fc75a683642a33c81320e709c94fbd7a78bd1 100644
+--- a/sklearn/tests/test_metaestimators.py
++++ b/sklearn/tests/test_metaestimators.py
+@@ -1,6 +1,7 @@
+ """Common tests for metaestimators"""
+ 
+ import functools
++from contextlib import suppress
+ from inspect import signature
+ 
+ import numpy as np
+@@ -18,7 +19,8 @@ from sklearn.pipeline import Pipeline, make_pipeline
+ from sklearn.preprocessing import MaxAbsScaler, StandardScaler
+ from sklearn.semi_supervised import SelfTrainingClassifier
+ from sklearn.utils import all_estimators
+-from sklearn.utils._testing import set_random_state
++from sklearn.utils._test_common.instance_generator import _construct_instances
++from sklearn.utils._testing import SkipTest, set_random_state
+ from sklearn.utils.estimator_checks import (
+     _enforce_estimator_tags_X,
+     _enforce_estimator_tags_y,
+@@ -197,61 +199,80 @@ def test_metaestimator_delegation():
+             )
+ 
+ 
++def _get_instance_with_pipeline(meta_estimator, init_params):
++    """Given a single meta-estimator instance, generate an instance with a pipeline"""
++    if {"estimator", "base_estimator", "regressor"} & init_params:
++        if is_regressor(meta_estimator):
++            estimator = make_pipeline(TfidfVectorizer(), Ridge())
++            param_grid = {"ridge__alpha": [0.1, 1.0]}
++        else:
++            estimator = make_pipeline(TfidfVectorizer(), LogisticRegression())
++            param_grid = {"logisticregression__C": [0.1, 1.0]}
++
++        if init_params.intersection(
++            {"param_grid", "param_distributions"}
++        ):  # SearchCV estimators
++            extra_params = {"n_iter": 2} if "n_iter" in init_params else {}
++            return type(meta_estimator)(estimator, param_grid, **extra_params)
++        else:
++            return type(meta_estimator)(estimator)
++
++    if "transformer_list" in init_params:
++        # FeatureUnion
++        transformer_list = [
++            ("trans1", make_pipeline(TfidfVectorizer(), MaxAbsScaler())),
++            (
++                "trans2",
++                make_pipeline(TfidfVectorizer(), StandardScaler(with_mean=False)),
++            ),
++        ]
++        return type(meta_estimator)(transformer_list)
++
++    if "estimators" in init_params:
++        # stacking, voting
++        if is_regressor(meta_estimator):
++            estimator = [
++                ("est1", make_pipeline(TfidfVectorizer(), Ridge(alpha=0.1))),
++                ("est2", make_pipeline(TfidfVectorizer(), Ridge(alpha=1))),
++            ]
++        else:
++            estimator = [
++                (
++                    "est1",
++                    make_pipeline(TfidfVectorizer(), LogisticRegression(C=0.1)),
++                ),
++                ("est2", make_pipeline(TfidfVectorizer(), LogisticRegression(C=1))),
++            ]
++        return type(meta_estimator)(estimator)
++
++
+ def _generate_meta_estimator_instances_with_pipeline():
+     """Generate instances of meta-estimators fed with a pipeline
+ 
+     Are considered meta-estimators all estimators accepting one of "estimator",
+     "base_estimator" or "estimators".
+     """
++    print("estimators: ", len(all_estimators()))
+     for _, Estimator in sorted(all_estimators()):
+         sig = set(signature(Estimator).parameters)
+ 
+-        if "estimator" in sig or "base_estimator" in sig or "regressor" in sig:
+-            if is_regressor(Estimator):
+-                estimator = make_pipeline(TfidfVectorizer(), Ridge())
+-                param_grid = {"ridge__alpha": [0.1, 1.0]}
+-            else:
+-                estimator = make_pipeline(TfidfVectorizer(), LogisticRegression())
+-                param_grid = {"logisticregression__C": [0.1, 1.0]}
+-
+-            if "param_grid" in sig or "param_distributions" in sig:
+-                # SearchCV estimators
+-                extra_params = {"n_iter": 2} if "n_iter" in sig else {}
+-                yield Estimator(estimator, param_grid, **extra_params)
+-            else:
+-                yield Estimator(estimator)
+-
+-        elif "transformer_list" in sig:
+-            # FeatureUnion
+-            transformer_list = [
+-                ("trans1", make_pipeline(TfidfVectorizer(), MaxAbsScaler())),
+-                (
+-                    "trans2",
+-                    make_pipeline(TfidfVectorizer(), StandardScaler(with_mean=False)),
+-                ),
+-            ]
+-            yield Estimator(transformer_list)
+-
+-        elif "estimators" in sig:
+-            # stacking, voting
+-            if is_regressor(Estimator):
+-                estimator = [
+-                    ("est1", make_pipeline(TfidfVectorizer(), Ridge(alpha=0.1))),
+-                    ("est2", make_pipeline(TfidfVectorizer(), Ridge(alpha=1))),
+-                ]
+-            else:
+-                estimator = [
+-                    (
+-                        "est1",
+-                        make_pipeline(TfidfVectorizer(), LogisticRegression(C=0.1)),
+-                    ),
+-                    ("est2", make_pipeline(TfidfVectorizer(), LogisticRegression(C=1))),
+-                ]
+-            yield Estimator(estimator)
+-
+-        else:
++        print("\n", Estimator.__name__, sig)
++        if not sig.intersection(
++            {
++                "estimator",
++                "base_estimator",
++                "regressor",
++                "transformer_list",
++                "estimators",
++            }
++        ):
+             continue
+ 
++        with suppress(SkipTest):
++            for meta_estimator in _construct_instances(Estimator):
++                print(meta_estimator)
++                yield _get_instance_with_pipeline(meta_estimator, sig)
++
+ 
+ # TODO: remove data validation for the following estimators
+ # They should be able to work on any data and delegate data validation to
+@@ -262,6 +283,7 @@ DATA_VALIDATION_META_ESTIMATORS_TO_IGNORE = [
+     "BaggingClassifier",
+     "BaggingRegressor",
+     "ClassifierChain",  # data validation is necessary
++    "FrozenEstimator",  # this estimator cannot be tested like others.
+     "IterativeImputer",
+     "OneVsOneClassifier",  # input validation can't be avoided
+     "RANSACRegressor",
+diff --git a/sklearn/tests/test_metaestimators_metadata_routing.py b/sklearn/tests/test_metaestimators_metadata_routing.py
+index 7117c27e32e428bd7e945feebd98c3380b60d753..b733f4d119f5edfc42677dd0714edea2190c0890 100644
+--- a/sklearn/tests/test_metaestimators_metadata_routing.py
++++ b/sklearn/tests/test_metaestimators_metadata_routing.py
+@@ -5,7 +5,7 @@ import numpy as np
+ import pytest
+ 
+ from sklearn import config_context
+-from sklearn.base import is_classifier
++from sklearn.base import BaseEstimator, is_classifier
+ from sklearn.calibration import CalibratedClassifierCV
+ from sklearn.compose import TransformedTargetRegressor
+ from sklearn.covariance import GraphicalLassoCV
+@@ -551,13 +551,13 @@ def get_init_args(metaestimator_info, sub_estimator_consumes):
+     )
+ 
+ 
+-def set_requests(estimator, *, method_mapping, methods, metadata_name, value=True):
++def set_requests(obj, *, method_mapping, methods, metadata_name, value=True):
+     """Call `set_{method}_request` on a list of methods from the sub-estimator.
+ 
+     Parameters
+     ----------
+-    estimator : BaseEstimator
+-        The estimator for which `set_{method}_request` methods are called.
++    obj : BaseEstimator
++        The object for which `set_{method}_request` methods are called.
+ 
+     method_mapping : dict
+         The method mapping in the form of `{caller: [callee, ...]}`.
+@@ -577,9 +577,13 @@ def set_requests(estimator, *, method_mapping, methods, metadata_name, value=Tru
+     """
+     for caller in methods:
+         for callee in method_mapping.get(caller, [caller]):
+-            set_request_for_method = getattr(estimator, f"set_{callee}_request")
++            set_request_for_method = getattr(obj, f"set_{callee}_request")
+             set_request_for_method(**{metadata_name: value})
+-            if is_classifier(estimator) and callee == "partial_fit":
++            if (
++                isinstance(obj, BaseEstimator)
++                and is_classifier(obj)
++                and callee == "partial_fit"
++            ):
+                 set_request_for_method(classes=True)
+ 
+ 
+diff --git a/sklearn/tests/test_pipeline.py b/sklearn/tests/test_pipeline.py
+index 1a876e050f4f4cec656cbb3e38b0bce6f1605120..d425c00f114a2b07a3aecf3065032955e4134bb4 100644
+--- a/sklearn/tests/test_pipeline.py
++++ b/sklearn/tests/test_pipeline.py
+@@ -71,7 +71,7 @@ JUNK_FOOD_DOCS = (
+ )
+ 
+ 
+-class NoFit:
++class NoFit(BaseEstimator):
+     """Small class to test parameter dispatching."""
+ 
+     def __init__(self, a=None, b=None):
+@@ -80,7 +80,7 @@ class NoFit:
+ 
+ 
+ class NoTrans(NoFit):
+-    def fit(self, X, y):
++    def fit(self, X, y=None):
+         return self
+ 
+     def get_params(self, deep=False):
+@@ -91,7 +91,7 @@ class NoTrans(NoFit):
+         return self
+ 
+ 
+-class NoInvTransf(NoTrans):
++class NoInvTransf(TransformerMixin, NoTrans):
+     def transform(self, X):
+         return X
+ 
+@@ -105,19 +105,19 @@ class Transf(NoInvTransf):
+ 
+ 
+ class TransfFitParams(Transf):
+-    def fit(self, X, y, **fit_params):
++    def fit(self, X, y=None, **fit_params):
+         self.fit_params = fit_params
+         return self
+ 
+ 
+-class Mult(BaseEstimator):
++class Mult(TransformerMixin, BaseEstimator):
+     def __init__(self, mult=1):
+         self.mult = mult
+ 
+     def __sklearn_is_fitted__(self):
+         return True
+ 
+-    def fit(self, X, y):
++    def fit(self, X, y=None):
+         return self
+ 
+     def transform(self, X):
+diff --git a/sklearn/tree/tests/test_export.py b/sklearn/tree/tests/test_export.py
+index cd4a106ee76068669cf4187db252626ac4e66bb3..d05e657072b170901d880b74757d1483b38049f1 100644
+--- a/sklearn/tree/tests/test_export.py
++++ b/sklearn/tree/tests/test_export.py
+@@ -52,6 +52,90 @@ def test_graphviz_toy():
+         'headlabel="False"] ;\n'
+         "}"
+     )
++    assert contents1 == contents2
++
++    # Test with feature_names
++    contents1 = export_graphviz(
++        clf, feature_names=["feature0", "feature1"], out_file=None
++    )
++    contents2 = (
++        "digraph Tree {\n"
++        'node [shape=box, fontname="helvetica"] ;\n'
++        'edge [fontname="helvetica"] ;\n'
++        '0 [label="feature0 <= 0.0\\ngini = 0.5\\nsamples = 6\\n'
++        'value = [3, 3]"] ;\n'
++        '1 [label="gini = 0.0\\nsamples = 3\\nvalue = [3, 0]"] ;\n'
++        "0 -> 1 [labeldistance=2.5, labelangle=45, "
++        'headlabel="True"] ;\n'
++        '2 [label="gini = 0.0\\nsamples = 3\\nvalue = [0, 3]"] ;\n'
++        "0 -> 2 [labeldistance=2.5, labelangle=-45, "
++        'headlabel="False"] ;\n'
++        "}"
++    )
++
++    assert contents1 == contents2
++
++    # Test with feature_names (escaped)
++    contents1 = export_graphviz(
++        clf, feature_names=['feature"0"', 'feature"1"'], out_file=None
++    )
++    contents2 = (
++        "digraph Tree {\n"
++        'node [shape=box, fontname="helvetica"] ;\n'
++        'edge [fontname="helvetica"] ;\n'
++        '0 [label="feature\\"0\\" <= 0.0\\n'
++        "gini = 0.5\\nsamples = 6\\n"
++        'value = [3, 3]"] ;\n'
++        '1 [label="gini = 0.0\\nsamples = 3\\nvalue = [3, 0]"] ;\n'
++        "0 -> 1 [labeldistance=2.5, labelangle=45, "
++        'headlabel="True"] ;\n'
++        '2 [label="gini = 0.0\\nsamples = 3\\nvalue = [0, 3]"] ;\n'
++        "0 -> 2 [labeldistance=2.5, labelangle=-45, "
++        'headlabel="False"] ;\n'
++        "}"
++    )
++
++    assert contents1 == contents2
++
++    # Test with class_names
++    contents1 = export_graphviz(clf, class_names=["yes", "no"], out_file=None)
++    contents2 = (
++        "digraph Tree {\n"
++        'node [shape=box, fontname="helvetica"] ;\n'
++        'edge [fontname="helvetica"] ;\n'
++        '0 [label="x[0] <= 0.0\\ngini = 0.5\\nsamples = 6\\n'
++        'value = [3, 3]\\nclass = yes"] ;\n'
++        '1 [label="gini = 0.0\\nsamples = 3\\nvalue = [3, 0]\\n'
++        'class = yes"] ;\n'
++        "0 -> 1 [labeldistance=2.5, labelangle=45, "
++        'headlabel="True"] ;\n'
++        '2 [label="gini = 0.0\\nsamples = 3\\nvalue = [0, 3]\\n'
++        'class = no"] ;\n'
++        "0 -> 2 [labeldistance=2.5, labelangle=-45, "
++        'headlabel="False"] ;\n'
++        "}"
++    )
++
++    assert contents1 == contents2
++
++    # Test with class_names (escaped)
++    contents1 = export_graphviz(clf, class_names=['"yes"', '"no"'], out_file=None)
++    contents2 = (
++        "digraph Tree {\n"
++        'node [shape=box, fontname="helvetica"] ;\n'
++        'edge [fontname="helvetica"] ;\n'
++        '0 [label="x[0] <= 0.0\\ngini = 0.5\\nsamples = 6\\n'
++        'value = [3, 3]\\nclass = \\"yes\\""] ;\n'
++        '1 [label="gini = 0.0\\nsamples = 3\\nvalue = [3, 0]\\n'
++        'class = \\"yes\\""] ;\n'
++        "0 -> 1 [labeldistance=2.5, labelangle=45, "
++        'headlabel="True"] ;\n'
++        '2 [label="gini = 0.0\\nsamples = 3\\nvalue = [0, 3]\\n'
++        'class = \\"no\\""] ;\n'
++        "0 -> 2 [labeldistance=2.5, labelangle=-45, "
++        'headlabel="False"] ;\n'
++        "}"
++    )
+ 
+     assert contents1 == contents2
+ 
+diff --git a/sklearn/utils/tests/test_estimator_checks.py b/sklearn/utils/tests/test_estimator_checks.py
+index 29611a853938f8456aca8407a57c491be7eb66c2..846ee75a9bbd42c58104136f6179acb691de59dc 100644
+--- a/sklearn/utils/tests/test_estimator_checks.py
++++ b/sklearn/utils/tests/test_estimator_checks.py
+@@ -13,7 +13,7 @@ import numpy as np
+ import scipy.sparse as sp
+ 
+ from sklearn import config_context, get_config
+-from sklearn.base import BaseEstimator, ClassifierMixin, OutlierMixin
++from sklearn.base import BaseEstimator, ClassifierMixin, OutlierMixin, TransformerMixin
+ from sklearn.cluster import MiniBatchKMeans
+ from sklearn.datasets import (
+     load_iris,
+@@ -33,7 +33,6 @@ from sklearn.preprocessing import StandardScaler
+ from sklearn.svm import SVC, NuSVC
+ from sklearn.utils import _array_api, all_estimators, deprecated
+ from sklearn.utils._param_validation import Interval, StrOptions
+-from sklearn.utils._tags import default_tags
+ from sklearn.utils._testing import (
+     MinimalClassifier,
+     MinimalRegressor,
+@@ -422,7 +421,7 @@ class LargeSparseNotSupportedClassifier(BaseEstimator):
+         return self
+ 
+ 
+-class SparseTransformer(BaseEstimator):
++class SparseTransformer(TransformerMixin, BaseEstimator):
+     def __init__(self, sparse_container=None):
+         self.sparse_container = sparse_container
+ 
+@@ -1276,18 +1275,18 @@ def test_check_requires_y_none():
+ def test_non_deterministic_estimator_skip_tests():
+     # check estimators with non_deterministic tag set to True
+     # will skip certain tests, refer to issue #22313 for details
+-    for est in [MinimalTransformer, MinimalRegressor, MinimalClassifier]:
+-        all_tests = list(_yield_all_checks(est(), legacy=True))
++    for Estimator in [MinimalTransformer, MinimalRegressor, MinimalClassifier]:
++        all_tests = list(_yield_all_checks(Estimator(), legacy=True))
+         assert check_methods_sample_order_invariance in all_tests
+         assert check_methods_subset_invariance in all_tests
+ 
+-        class Estimator(est):
++        class MyEstimator(Estimator):
+             def __sklearn_tags__(self):
+-                tags = default_tags(self)
++                tags = super().__sklearn_tags__()
+                 tags.non_deterministic = True
+                 return tags
+ 
+-        all_tests = list(_yield_all_checks(Estimator(), legacy=True))
++        all_tests = list(_yield_all_checks(MyEstimator(), legacy=True))
+         assert check_methods_sample_order_invariance not in all_tests
+         assert check_methods_subset_invariance not in all_tests
+ 
+diff --git a/sklearn/utils/tests/test_plotting.py b/sklearn/utils/tests/test_plotting.py
+index 40678a8db4074e7c752111aeecaeb5467c100f8c..1f0c675577bcaf821ac80aafa7101ab8c9aa9e50 100644
+--- a/sklearn/utils/tests/test_plotting.py
++++ b/sklearn/utils/tests/test_plotting.py
+@@ -2,6 +2,7 @@ import numpy as np
+ import pytest
+ 
+ from sklearn.utils._plotting import (
++    _despine,
+     _interval_max_min_ratio,
+     _validate_score_name,
+     _validate_style_kwargs,
+@@ -128,3 +129,12 @@ def test_validate_style_kwargs_error(default_kwargs, user_kwargs):
+     """Check that `validate_style_kwargs` raises TypeError"""
+     with pytest.raises(TypeError):
+         _validate_style_kwargs(default_kwargs, user_kwargs)
++
++
++def test_despine(pyplot):
++    ax = pyplot.gca()
++    _despine(ax)
++    assert ax.spines["top"].get_visible() is False
++    assert ax.spines["right"].get_visible() is False
++    assert ax.spines["bottom"].get_bounds() == (0, 1)
++    assert ax.spines["left"].get_bounds() == (0, 1)
+diff --git a/sklearn/utils/tests/test_tags.py b/sklearn/utils/tests/test_tags.py
+index a6dab5078e5ac8ae68bc7ddfc8f0a538ae2c14e9..5768a0d2b6b27b059967f97cb9235c519675fd45 100644
+--- a/sklearn/utils/tests/test_tags.py
++++ b/sklearn/utils/tests/test_tags.py
+@@ -1,6 +1,10 @@
+ import pytest
+ 
+-from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
++from sklearn.base import (
++    BaseEstimator,
++    RegressorMixin,
++    TransformerMixin,
++)
+ from sklearn.utils._tags import get_tags
+ 
+ 
+@@ -13,13 +17,22 @@ class ClassifierEstimator:
+     _estimator_type = "classifier"
+ 
+ 
++class EmptyTransformer(TransformerMixin, BaseEstimator):
++    pass
++
++
++class EmptyRegressor(RegressorMixin, BaseEstimator):
++    pass
++
++
++@pytest.mark.filterwarnings("ignore:.*no __sklearn_tags__ attribute.*:FutureWarning")
+ @pytest.mark.parametrize(
+     "estimator, value",
+     [
+         [NoTagsEstimator(), False],
+         [ClassifierEstimator(), True],
+-        [TransformerMixin(), False],
+-        [RegressorMixin(), True],
++        [EmptyTransformer(), False],
++        [EmptyRegressor(), True],
+         [BaseEstimator(), False],
+     ],
+ )
+diff --git a/sklearn/utils/tests/test_validation.py b/sklearn/utils/tests/test_validation.py
+index 62627ecb1bae8449a9c215febbf5303a35b6e928..5ae5a003d0d0a2fe3c716f4d43c4c62b7c9afe6d 100644
+--- a/sklearn/utils/tests/test_validation.py
++++ b/sklearn/utils/tests/test_validation.py
+@@ -67,6 +67,7 @@ from sklearn.utils.validation import (
+     _check_sample_weight,
+     _check_y,
+     _deprecate_positional_args,
++    _estimator_has,
+     _get_feature_names,
+     _is_fitted,
+     _is_pandas_df,
+@@ -946,7 +947,7 @@ def test_check_is_fitted():
+ 
+ 
+ def test_check_is_fitted_attributes():
+-    class MyEstimator:
++    class MyEstimator(BaseEstimator):
+         def fit(self, X, y):
+             return self
+ 
+@@ -1163,6 +1164,93 @@ def test_check_array_memmap(copy):
+         assert X_checked.flags["WRITEABLE"] == copy
+ 
+ 
++@pytest.mark.parametrize(
++    "estimator_name, estimator_value, delegates, expected_result, expected_exception",
++    [
++        (
++            "estimator_",
++            type("SubEstimator", (), {"attribute_present": True}),
++            None,  # default delegates - ["estimator_", "estimator"]
++            True,  # expected_result is True b/c delegate and attribute are present
++            None,  # expected_exception not relevant for this case
++        ),
++        (
++            "estimator",
++            type("SubEstimator", (), {"attribute_present": True}),
++            None,  # default delegates - ["estimator_", "estimator"]
++            True,  # expected_result is True b/c delegate and attribute are present
++            None,  # expected_exception not relevant for this case
++        ),
++        (
++            "estimators_",
++            [
++                type("SubEstimator", (), {"attribute_present": True})
++            ],  # list of sub-estimators
++            ["estimators_"],
++            True,  # expected_result is True b/c delegate and attribute are present
++            None,  # expected_exception not relevant for this case
++        ),
++        (
++            "custom_estimator",  # custom estimator attribute name
++            type("SubEstimator", (), {"attribute_present": True}),
++            ["custom_estimator"],  # custom delegates
++            True,  # expected_result is True b/c delegate and attribute are present
++            None,  # expected_exception not relevant for this case
++        ),
++        (
++            "no_estimator",  # no estimator attribute name
++            type("SubEstimator", (), {"attribute_present": True}),
++            None,  # default delegates - ["estimator_", "estimator"]
++            None,  # expected_result is not relevant for this case
++            ValueError,  # should raise ValueError b/c no estimator found from delegates
++        ),
++        (
++            "estimator",
++            type("SubEstimator", (), {"attribute_absent": True}),  # attribute_absent
++            None,  # default delegates - ["estimator_", "estimator"]
++            None,  # expected_result is not relevant for this case
++            AttributeError,  # should raise AttributeError b/c attribute is absent
++        ),
++    ],
++    ids=[
++        "fitted_estimator_with_default_delegates",
++        "estimator_with_default_delegates",
++        "list_of_estimators_with_estimators_",
++        "custom_estimator_with_custom_delegates",
++        "no_estimator_with_default_delegates",
++        "estimator_with_default_delegates_but_absent_attribute",
++    ],
++)
++def test_estimator_has(
++    estimator_name, estimator_value, delegates, expected_result, expected_exception
++):
++    """
++    Tests the _estimator_has function by verifying:
++    - Functionality with default and custom delegates.
++    - Raises ValueError if delegates are missing.
++    - Raises AttributeError if the specified attribute is missing.
++    """
++
++    # always checks for attribute - "attribute_present"
++    # ["estimator_", "estimator"] is default value for delegates
++    if delegates is None:
++        check = _estimator_has("attribute_present")
++    else:
++        check = _estimator_has("attribute_present", delegates=delegates)
++
++    class MockEstimator:
++        pass
++
++    a = MockEstimator()
++    setattr(a, estimator_name, estimator_value)
++
++    if expected_exception:
++        with pytest.raises(expected_exception):
++            check(a)
++    else:
++        assert check(a) == expected_result
++
++
+ @pytest.mark.parametrize(
+     "retype",
+     [

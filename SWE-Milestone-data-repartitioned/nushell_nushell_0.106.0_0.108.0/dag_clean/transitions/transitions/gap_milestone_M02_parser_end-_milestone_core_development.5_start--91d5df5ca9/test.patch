@@ -1,0 +1,861 @@
+diff --git a/benches/benchmarks.rs b/benches/benchmarks.rs
+index 6d7e9092734c395e9638bdb69536f7c5e180ef2f..6a2522135587b4112a0dd5fc66c31f6402c68ec4 100644
+--- a/benches/benchmarks.rs
++++ b/benches/benchmarks.rs
+@@ -6,7 +6,7 @@ use nu_protocol::{
+     engine::{EngineState, Stack},
+ };
+ use nu_std::load_standard_library;
+-use nu_utils::ConfigFileKind;
++use nu_utils::{get_default_config, get_default_env};
+ use std::{
+     fmt::Write,
+     hint::black_box,
+@@ -350,9 +350,8 @@ fn bench_eval_par_each(n: usize) -> impl IntoBenchmarks {
+ }
+ 
+ fn bench_eval_default_config() -> impl IntoBenchmarks {
+-    let kind = ConfigFileKind::Config;
+-    let default_env = kind.default().as_bytes().to_vec();
+-    let fname = kind.default_path().to_string();
++    let default_env = get_default_config().as_bytes().to_vec();
++    let fname = "default_config.nu".to_string();
+     bench_eval_source(
+         "eval_default_config",
+         fname,
+@@ -363,9 +362,8 @@ fn bench_eval_default_config() -> impl IntoBenchmarks {
+ }
+ 
+ fn bench_eval_default_env() -> impl IntoBenchmarks {
+-    let kind = ConfigFileKind::Env;
+-    let default_env = kind.default().as_bytes().to_vec();
+-    let fname = kind.default_path().to_string();
++    let default_env = get_default_env().as_bytes().to_vec();
++    let fname = "default_env.nu".to_string();
+     bench_eval_source(
+         "eval_default_env",
+         fname,
+diff --git a/crates/nu-cli/tests/commands/mod.rs b/crates/nu-cli/tests/commands/mod.rs
+index cba2a2c0754ddcd839fee3a1d6d77ce8f383911e..9eb18e328016e5fdab1f981c1bf0cbe94fefab49 100644
+--- a/crates/nu-cli/tests/commands/mod.rs
++++ b/crates/nu-cli/tests/commands/mod.rs
+@@ -1,5 +1,3 @@
++mod history_import;
+ mod keybindings_list;
+ mod nu_highlight;
+-
+-#[cfg(feature = "sqlite")]
+-mod history_import;
+diff --git a/crates/nu-cli/tests/completions/mod.rs b/crates/nu-cli/tests/completions/mod.rs
+index 6999609ed4d181f677e1bdb46e39939b8512c89f..938a81083c369fccea50d242af18f20c8ecdb016 100644
+--- a/crates/nu-cli/tests/completions/mod.rs
++++ b/crates/nu-cli/tests/completions/mod.rs
+@@ -50,10 +50,12 @@ pub fn match_dir_content_for_dotnu(dir: ReadDir, suggestions: &[Suggestion]) {
+             // we clean them to compare more exactly with read_dir result.
+             s.value
+                 .as_str()
+-                .trim_matches('`')
+-                .trim_start_matches("~")
+-                .trim_matches('/')
+-                .trim_matches('\\')
++                .trim_end_matches('`')
++                .trim_end_matches('/')
++                .trim_end_matches('\\')
++                .trim_start_matches('`')
++                .trim_start_matches("~/")
++                .trim_start_matches("~\\")
+         })
+         .collect();
+     pure_suggestions.sort();
+@@ -497,14 +499,11 @@ fn dotnu_completions() {
+ 
+     match_suggestions(
+         &vec![
++            "mod.nu",
+             #[cfg(windows)]
+-            ".\\dir_module\\mod.nu",
+-            #[cfg(windows)]
+-            "`.\\dir_module\\sub module\\`",
+-            #[cfg(not(windows))]
+-            "./dir_module/mod.nu",
++            "sub module\\`",
+             #[cfg(not(windows))]
+-            "`./dir_module/sub module/`",
++            "sub module/`",
+         ],
+         &suggestions,
+     );
+@@ -516,28 +515,18 @@ fn dotnu_completions() {
+     let completion_str = "use `./dir_module/sub module/`";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+ 
+-    match_suggestions(
+-        &vec![
+-            #[cfg(windows)]
+-            "`.\\dir_module\\sub module\\sub.nu`",
+-            #[cfg(not(windows))]
+-            "`./dir_module/sub module/sub.nu`",
+-        ],
+-        &suggestions,
+-    );
++    match_suggestions(&vec!["sub.nu`"], &suggestions);
+ 
+     let mut expected = vec![
+         "asdf.nu",
+         "bar.nu",
+         "bat.nu",
+         "baz.nu",
+-        "foo.nu",
+-        "spam.nu",
+-        "xyzzy.nu",
+         #[cfg(windows)]
+         "dir_module\\",
+         #[cfg(not(windows))]
+         "dir_module/",
++        "foo.nu",
+         #[cfg(windows)]
+         "lib-dir1\\",
+         #[cfg(not(windows))]
+@@ -550,6 +539,8 @@ fn dotnu_completions() {
+         "lib-dir3\\",
+         #[cfg(not(windows))]
+         "lib-dir3/",
++        "spam.nu",
++        "xyzzy.nu",
+     ];
+ 
+     // Test source completion
+@@ -559,8 +550,8 @@ fn dotnu_completions() {
+     match_suggestions(&expected, &suggestions);
+ 
+     // Test use completion
+-    expected.insert(7, "std-rfc");
+-    expected.insert(7, "std");
++    expected.push("std");
++    expected.push("std-rfc");
+     let completion_str = "use ";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+ 
+@@ -601,19 +592,19 @@ fn dotnu_stdlib_completions() {
+     // `export  use` should be recognized as command `export use`
+     let completion_str = "export  use std/ass";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+-    match_suggestions(&vec!["std/assert"], &suggestions);
++    match_suggestions(&vec!["assert"], &suggestions);
+ 
+     let completion_str = "use `std-rfc/cli";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+-    match_suggestions(&vec!["`std-rfc/clip"], &suggestions);
++    match_suggestions(&vec!["clip"], &suggestions);
+ 
+     let completion_str = "use \"std";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+     match_suggestions(&vec!["\"std", "\"std-rfc"], &suggestions);
+ 
+-    let completion_str = "overlay use 'std-rfc/cli";
++    let completion_str = "overlay use \'std-rfc/cli";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+-    match_suggestions(&vec!["'std-rfc/clip"], &suggestions);
++    match_suggestions(&vec!["clip"], &suggestions);
+ }
+ 
+ #[test]
+@@ -677,11 +668,11 @@ fn dotnu_completions_const_nu_lib_dirs() {
+     {
+         let completion_str = "use .\\asdf";
+         let suggestions = completer.complete(completion_str, completion_str.len());
+-        match_suggestions(&vec![".\\asdf.nu"], &suggestions);
++        assert!(suggestions.is_empty());
+     }
+     let completion_str = "use ./asdf";
+     let suggestions = completer.complete(completion_str, completion_str.len());
+-    match_suggestions(&vec!["./asdf.nu"], &suggestions);
++    assert!(suggestions.is_empty());
+ }
+ 
+ #[test]
+@@ -740,16 +731,6 @@ fn external_completer_fallback() {
+         fs::fixtures().join("external_completions"),
+     );
+     match_suggestions(&expected, &suggestions);
+-
+-    // issue #16712
+-    let input = "`dir with space/`";
+-    let expected = vec!["`dir with space/bar baz`", "`dir with space/foo`"];
+-    let suggestions = run_external_completion_within_pwd(
+-        block,
+-        input,
+-        fs::fixtures().join("external_completions"),
+-    );
+-    match_suggestions(&expected, &suggestions);
+ }
+ 
+ /// Fallback to external completions for flags of `sudo`
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index 2d5334a0b00328cfa9397e59b6dd6ad91f747076..45a76aa852cdcb62cb0d1485a0ac77efdc367314 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -199,7 +199,7 @@ pub fn merge_input(
+             engine_state,
+             stack,
+             &block,
+-            PipelineData::Value(Value::nothing(Span::unknown()), None),
++            PipelineData::value(Value::nothing(Span::unknown()), None),
+         )
+         .is_ok()
+     );
+diff --git a/crates/nu-command/tests/commands/date/format.rs b/crates/nu-command/tests/commands/date/format.rs
+index fe454e782c2fca15fb6e385ce4ee08d8599b910b..cd49ea78ac212bc3c0ba98cfb9e449a20d2c0040 100644
+--- a/crates/nu-command/tests/commands/date/format.rs
++++ b/crates/nu-command/tests/commands/date/format.rs
+@@ -9,43 +9,6 @@ fn formatter_not_valid() {
+     assert!(actual.err.contains("invalid format"));
+ }
+ 
+-#[test]
+-fn test_j_q_format_specifiers() {
+-    let actual = nu!(r#"
+-        "2021-10-22 20:00:12 +01:00" | format date '%J_%Q'
+-        "#);
+-
+-    assert_eq!(actual.out, "20211022_200012");
+-}
+-
+-#[test]
+-fn test_j_q_format_specifiers_current_time() {
+-    let actual = nu!(r#"
+-        date now | format date '%J_%Q' | str length
+-        "#);
+-
+-    // Should be exactly 15 characters: YYYYMMDD_HHMMSS
+-    assert_eq!(actual.out, "15");
+-}
+-
+-#[test]
+-fn test_j_format_specifier_date_only() {
+-    let actual = nu!(r#"
+-        "2021-10-22 20:00:12 +01:00" | format date '%J'
+-        "#);
+-
+-    assert_eq!(actual.out, "20211022");
+-}
+-
+-#[test]
+-fn test_q_format_specifier_time_only() {
+-    let actual = nu!(r#"
+-        "2021-10-22 20:00:12 +01:00" | format date '%Q'
+-        "#);
+-
+-    assert_eq!(actual.out, "200012");
+-}
+-
+ #[test]
+ fn fails_without_input() {
+     let actual = nu!(r#"
+diff --git a/crates/nu-command/tests/commands/into_datetime.rs b/crates/nu-command/tests/commands/into_datetime.rs
+index c5c7fabcf819b8b7ab9e430370e4c2948a5d8eb7..152ede853493c80f1dfd6dc906d33334003f2596 100644
+--- a/crates/nu-command/tests/commands/into_datetime.rs
++++ b/crates/nu-command/tests/commands/into_datetime.rs
+@@ -119,44 +119,3 @@ fn into_datetime_from_record_incompatible_with_offset_flag() {
+ 
+     assert!(actual.err.contains("nu::shell::incompatible_parameters"));
+ }
+-
+-#[test]
+-fn test_j_q_format_specifiers_into_datetime() {
+-    let actual = nu!(r#"
+-        "20211022_200012" | into datetime --format '%J_%Q'
+-        "#);
+-
+-    // Check for the date components - the exact output format may vary
+-    assert!(actual.out.contains("22 Oct 2021") || actual.out.contains("2021-10-22"));
+-    assert!(actual.out.contains("20:00:12"));
+-}
+-
+-#[test]
+-fn test_j_q_format_specifiers_round_trip() {
+-    let actual = nu!(r#"
+-        "2021-10-22 20:00:12 +01:00" | format date '%J_%Q' | into datetime --format '%J_%Q' | format date '%J_%Q'
+-        "#);
+-
+-    assert_eq!(actual.out, "20211022_200012");
+-}
+-
+-#[test]
+-fn test_j_format_specifier_date_only() {
+-    let actual = nu!(r#"
+-        "20211022" | into datetime --format '%J'
+-        "#);
+-
+-    // Check for the date components - time should default to midnight
+-    assert!(actual.out.contains("22 Oct 2021") || actual.out.contains("2021-10-22"));
+-    assert!(actual.out.contains("00:00:00"));
+-}
+-
+-#[test]
+-fn test_q_format_specifier_time_only() {
+-    let actual = nu!(r#"
+-        "200012" | into datetime --format '%Q'
+-        "#);
+-
+-    // Check for the time components - should parse as time with default date
+-    assert!(actual.out.contains("20:00:12"));
+-}
+diff --git a/crates/nu-command/tests/commands/redirection.rs b/crates/nu-command/tests/commands/redirection.rs
+index b822ace4b769cbe1fa5846064e0d14beeaa9c786..adbc052c0a8da052f48bea67825c8e6e5ca11be0 100644
+--- a/crates/nu-command/tests/commands/redirection.rs
++++ b/crates/nu-command/tests/commands/redirection.rs
+@@ -476,7 +476,7 @@ fn pipe_redirection_in_let_and_mut(
+ 
+ #[rstest::rstest]
+ #[case("o>", "bar")]
+-#[case("e>", "baz")]
++#[case("e>", "")]
+ #[case("o+e>", "bar\nbaz")] // in subexpression, the stderr is go to the terminal
+ fn subexpression_redirection(#[case] redir: &str, #[case] stdout_file_body: &str) {
+     Playground::setup("file redirection with subexpression", |dirs, _| {
+@@ -485,153 +485,6 @@ fn subexpression_redirection(#[case] redir: &str, #[case] stdout_file_body: &str
+             format!("$env.BAR = 'bar'; $env.BAZ = 'baz'; (nu --testbin echo_env_mixed out-err BAR BAZ) {redir} result.txt")
+         );
+         assert!(actual.status.success());
+-        assert_eq!(
+-            file_contents(dirs.test().join("result.txt")).trim(),
+-            stdout_file_body
+-        );
+-    })
+-}
+-
+-#[rstest::rstest]
+-#[case("o>", "bar")]
+-#[case("e>", "baz")]
+-#[case("o+e>", "bar\nbaz")]
+-fn file_redirection_in_if_true(#[case] redir: &str, #[case] stdout_file_body: &str) {
+-    Playground::setup("file redirection if true block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-          format!("$env.BAR = 'bar'; $env.BAZ = 'baz'; if true {{ nu --testbin echo_env_mixed out-err BAR BAZ }} {redir} result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(
+-            file_contents(dirs.test().join("result.txt")).trim(),
+-            stdout_file_body
+-        );
+-    })
+-}
+-
+-#[rstest::rstest]
+-#[case(true, "hey")]
+-#[case(false, "ho")]
+-fn file_redirection_in_if_else(#[case] cond: bool, #[case] stdout_file_body: &str) {
+-    Playground::setup("file redirection if-else block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("if {cond} {{ echo 'hey' }} else {{ echo 'ho' }} out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(
+-            file_contents(dirs.test().join("result.txt")).trim(),
+-            stdout_file_body
+-        );
+-    })
+-}
+-
+-#[rstest::rstest]
+-#[case("o>", "bar")]
+-#[case("e>", "baz")]
+-#[case("o+e>", "bar\nbaz")]
+-fn file_redirection_in_try_catch(#[case] redir: &str, #[case] stdout_file_body: &str) {
+-    Playground::setup("file redirection try-catch block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("$env.BAR = 'bar'; $env.BAZ = 'baz'; try {{ 1/0 }} catch {{ nu --testbin echo_env_mixed out-err BAR BAZ }} {redir} result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(
+-            file_contents(dirs.test().join("result.txt")).trim(),
+-            stdout_file_body
+-        );
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_where_closure() {
+-    Playground::setup("file redirection where closure", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("echo foo bar | where {{|x| $x | str contains 'f'}} out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(file_contents(dirs.test().join("result.txt")).trim(), "foo");
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_match_block() {
+-    Playground::setup("file redirection match block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("match 3 {{ 1 => 'foo', 3 => 'bar' }} out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(file_contents(dirs.test().join("result.txt")).trim(), "bar");
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_pattern_match_block() {
+-    Playground::setup("file redirection pattern match block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("let foo = {{ name: 'bar' }}; match $foo {{ {{ name: 'bar' }} => 'baz' }} out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(file_contents(dirs.test().join("result.txt")).trim(), "baz");
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_each_block() {
+-    Playground::setup("file redirection each block", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("[1 2 3] | each {{ $in + 1 }} out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(
+-            file_contents(dirs.test().join("result.txt")).trim(),
+-            "2\n3\n4"
+-        );
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_do_block_with_return() {
+-    Playground::setup("file redirection do block with return", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("do {{|x| return ($x + 1); return $x}} 4 out> result.txt")
+-        );
+-        assert!(actual.status.success());
+-        assert_eq!(file_contents(dirs.test().join("result.txt")).trim(), "5");
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_while_block() {
+-    Playground::setup("file redirection on while", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("mut x = 0; while $x < 3 {{ $x = $x + 1; echo $x }} o> result.txt")
+-        );
+-        // Why the discrepancy to `for` behaviour?
+-        assert!(actual.status.success());
+-        assert_eq!(file_contents(dirs.test().join("result.txt")), "");
+-    })
+-}
+-
+-#[rstest::rstest]
+-fn file_redirection_not_allowed_on_for() {
+-    Playground::setup("file redirection disallowed on for", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            format!("for $it in [1 2 3] {{ echo $in + 1 }} out> result.txt")
+-        );
+-        assert!(!actual.status.success());
+-        assert!(
+-            actual.err.contains("Redirection can not be used with for"),
+-            "Should fail"
+-        );
++        assert!(file_contents(dirs.test().join("result.txt")).contains(stdout_file_body));
+     })
+ }
+diff --git a/crates/nu-parser/tests/test_parser.rs b/crates/nu-parser/tests/test_parser.rs
+index b0f3e856f269c08c3e7bbb3ac763e3ff8dcf4e48..55d872e04eed8c993d276feff48c83d9c598fe8c 100644
+--- a/crates/nu-parser/tests/test_parser.rs
++++ b/crates/nu-parser/tests/test_parser.rs
+@@ -494,47 +494,39 @@ pub fn parse_binary_with_incomplete_octal_format() {
+     assert_eq!(element.expr.expr, Expr::Binary(vec![0o2]));
+ }
+ 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_invalid_octal_format() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, b"0o[90]", true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)));
+-// [ENV-PATCH] }
+-// [ENV-PATCH] 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_multi_byte_char() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     // found using fuzzing, Rust can panic if you slice into this string
+-// [ENV-PATCH]     let contents = b"0x[\xEF\xBF\xBD]";
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, contents, true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)))
+-// [ENV-PATCH] }
++#[test]
++pub fn parse_binary_with_invalid_octal_format() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    let block = parse(&mut working_set, None, b"0b[90]", true);
++
++    assert!(working_set.parse_errors.is_empty());
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)));
++}
++
++#[test]
++pub fn parse_binary_with_multi_byte_char() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    // found using fuzzing, Rust can panic if you slice into this string
++    let contents = b"0x[\xEF\xBF\xBD]";
++    let block = parse(&mut working_set, None, contents, true);
++
++    assert!(working_set.parse_errors.is_empty());
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)))
++}
+ 
+ #[test]
+ pub fn parse_call() {
+@@ -3146,25 +3138,4 @@ mod record {
+             Some("Invalid characters after closing delimiter".to_string())
+         );
+     }
+-
+-    /// https://github.com/nushell/nushell/issues/16713
+-    #[test]
+-    fn garbage_span_of_incomplete_math_op() {
+-        let engine_state = EngineState::new();
+-        let mut working_set = StateWorkingSet::new(&engine_state);
+-        let block = parse(&mut working_set, None, b"$ a", false);
+-        let pipeline_el_expr = &block
+-            .pipelines
+-            .first()
+-            .unwrap()
+-            .elements
+-            .first()
+-            .unwrap()
+-            .expr
+-            .expr;
+-        let Expr::BinaryOp(_, op, rhs) = pipeline_el_expr else {
+-            panic!("Expected Expr::BinaryOp, but found {pipeline_el_expr:?}");
+-        };
+-        assert_ne!(op.span, rhs.span)
+-    }
+ }
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index b398b39290f0c605c8dcf119e3309e5e29e1f8ce..34c3a722dd09707b9cfad6c05adbee342e882f99 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::ListStream(
++    let pipe = PipelineData::list_stream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::ByteStream(
++    let data = PipelineData::byte_stream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index 26f755eed081713220acf609db23a15b4df0d24f..7497063e046f85262dafd1f000233403c8edf8b3 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -145,7 +145,7 @@ fn test_into_int_from_u32() -> Result<(), ShellError> {
+     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+         .eval_with(
+             "into int from u32",
+-            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
++            PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
+         )?
+         .into_value(Span::test_data())?;
+     assert_eq!(Value::test_int(42), result);
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 011607959a8fb30bdd3a378a9f079b8c4b7dde88..e2d0d3b9c074faf86e8351bcec0f471d170d16e3 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,6 +45,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -55,6 +56,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -65,6 +67,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ 
+@@ -78,6 +81,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ 
+@@ -91,6 +95,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ }
+diff --git a/tests/fixtures/lsp/completion/var.nu b/tests/fixtures/lsp/completion/var.nu
+index 7b05c20241024d7833ce8fb8ad1e8bb25ac2fd3d..de8f657235a78a49b0ff9ccd861a0727fc481439 100644
+--- a/tests/fixtures/lsp/completion/var.nu
++++ b/tests/fixtures/lsp/completion/var.nu
+@@ -1,7 +1,3 @@
+ let greeting = "Hello"
+ 
+ echo $gre
+-
+-def foo [bar: int] {
+-  echo $bar
+-}
+diff --git a/tests/fixtures/lsp/goto/use_module.nu b/tests/fixtures/lsp/goto/use_module.nu
+index 7f33a4fac4ddcb371a4664bf4643db1a75b27fc0..058e631fd73e55e4e283ad02860771cf2d4c62d1 100644
+--- a/tests/fixtures/lsp/goto/use_module.nu
++++ b/tests/fixtures/lsp/goto/use_module.nu
+@@ -2,7 +2,3 @@ use module.nu "module name"
+ overlay use module.nu as new_name
+ overlay hide --keep-env [PWD] new_name
+ hide "module name"
+-
+-# stdlib files are loaded virtually
+-# goto_def on them should just fail without panic
+-use std/log log-level
+diff --git a/tests/repl/test_custom_commands.rs b/tests/repl/test_custom_commands.rs
+index e176863e91e8576ef99094eb6ae7597d3fbc539f..d6cd718cf1dd52a7fda4d4c6f45663f57a81aa17 100644
+--- a/tests/repl/test_custom_commands.rs
++++ b/tests/repl/test_custom_commands.rs
+@@ -50,7 +50,7 @@ fn def_twice_should_fail() -> TestResult {
+ 
+ #[test]
+ fn missing_parameters() -> TestResult {
+-    fail_test(r#"def foo {}"#, "expected [ or (")
++    fail_test(r#"def foo {}"#, "Missing required positional")
+ }
+ 
+ #[test]
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index d6a97434837c6af4e22a81ae47b5092bc87a5632..5ace9267b418dce1778bc480988cf3071b2ddd06 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -728,45 +728,40 @@ fn unbalanced_parens2() -> TestResult {
+     fail_test(r#"("("))"#, "unbalanced ( and )")
+ }
+ 
+-#[cfg(feature = "plugin")]
+-mod plugin_tests {
+-    use super::*;
+-
+-    #[test]
+-    fn plugin_use_with_string_literal() -> TestResult {
+-        fail_test(
+-            r#"plugin use 'nu-plugin-math'"#,
+-            "Plugin registry file not set",
+-        )
+-    }
++#[test]
++fn plugin_use_with_string_literal() -> TestResult {
++    fail_test(
++        r#"plugin use 'nu-plugin-math'"#,
++        "Plugin registry file not set",
++    )
++}
+ 
+-    #[test]
+-    fn plugin_use_with_string_constant() -> TestResult {
+-        let input = "\
+-            const file = 'nu-plugin-math'
+-            plugin use $file
+-            ";
+-        // should not fail with `not a constant`
+-        fail_test(input, "Plugin registry file not set")
+-    }
++#[test]
++fn plugin_use_with_string_constant() -> TestResult {
++    let input = "\
++const file = 'nu-plugin-math'
++plugin use $file
++";
++    // should not fail with `not a constant`
++    fail_test(input, "Plugin registry file not set")
++}
+ 
+-    #[test]
+-    fn plugin_use_with_string_variable() -> TestResult {
+-        let input = "\
+-            let file = 'nu-plugin-math'
+-            plugin use $file
+-            ";
+-        fail_test(input, "Value is not a parse-time constant")
+-    }
++#[test]
++fn plugin_use_with_string_variable() -> TestResult {
++    let input = "\
++let file = 'nu-plugin-math'
++plugin use $file
++";
++    fail_test(input, "Value is not a parse-time constant")
++}
+ 
+-    #[test]
+-    fn plugin_use_with_non_string_constant() -> TestResult {
+-        let input = "\
+-            const file = 6
+-            plugin use $file
+-            ";
+-        fail_test(input, "expected string, found int")
+-    }
++#[test]
++fn plugin_use_with_non_string_constant() -> TestResult {
++    let input = "\
++const file = 6
++plugin use $file
++";
++    fail_test(input, "expected string, found int")
+ }
+ 
+ #[test]
+@@ -1051,7 +1046,10 @@ fn quote_escape_but_not_env_shorthand() -> TestResult {
+ // https://github.com/nushell/nushell/issues/16586
+ #[test]
+ fn redefine_def_should_not_panic() -> TestResult {
+-    fail_test(r#"def def (=a|s)>"#, "Unclosed delimiter")
++    fail_test(
++        r#"def def (=a|s)>"#,
++        "Missing required positional argument.",
++    )
+ }
+ 
+ #[test]
+diff --git a/tests/shell/pipeline/commands/external.rs b/tests/shell/pipeline/commands/external.rs
+index aaa1cb02a68064e39a5c9fa5eedd31a6366c6e6e..f7585fb2d2fa27eb740186c9ced2b37f7915dab0 100644
+--- a/tests/shell/pipeline/commands/external.rs
++++ b/tests/shell/pipeline/commands/external.rs
+@@ -734,25 +734,25 @@ fn sub_external_expression_with_and_op_should_raise_proper_error() {
+ // FIXME: ignore these cases for now, the value inside a pipeline
+ // makes all previous exit status untracked.
+ // #[case("nu --testbin fail 10 | nu --testbin fail 20 | 10", 10)]
+-// [ENV-PATCH] // #[case("nu --testbin fail 20 | 10 | nu --testbin fail", 20)]
+-// [ENV-PATCH] // #[case("30 | nu --testbin fail | nu --testbin fail 30", 1)]
+-// [ENV-PATCH] #[rstest]
+-// [ENV-PATCH] #[case("nu --testbin fail | print aa", 1)]
+-// [ENV-PATCH] #[case("nu --testbin nonu a | print bb", 0)]
+-// [ENV-PATCH] #[case("nu --testbin fail 30 | nu --testbin nonu a | print aa", 30)]
+-// [ENV-PATCH] #[case("print aa | print cc | nu --testbin fail 40", 40)]
+-// [ENV-PATCH] #[case("nu --testbin fail 20 | print aa | nu --testbin fail", 1)]
+-// [ENV-PATCH] #[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
+-// [ENV-PATCH] fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
+-// [ENV-PATCH]     let actual = nu!(
+-// [ENV-PATCH]         experimental: vec!["pipefail".to_string()],
+-// [ENV-PATCH]         inp
+-// [ENV-PATCH]     );
+-// [ENV-PATCH]     assert_eq!(
+-// [ENV-PATCH]         actual
+-// [ENV-PATCH]             .status
+-// [ENV-PATCH]             .code()
+-// [ENV-PATCH]             .expect("exit_status should not be none"),
+-// [ENV-PATCH]         expect_code
+-// [ENV-PATCH]     );
+-// [ENV-PATCH] }
++// #[case("nu --testbin fail 20 | 10 | nu --testbin fail", 20)]
++// #[case("30 | nu --testbin fail | nu --testbin fail 30", 1)]
++#[rstest]
++#[case("nu --testbin fail | print aa", 1)]
++#[case("nu --testbin nonu a | print bb", 0)]
++#[case("nu --testbin fail 30 | nu --testbin nonu a | print aa", 30)]
++#[case("print aa | print cc | nu --testbin fail 40", 40)]
++#[case("nu --testbin fail 20 | print aa | nu --testbin fail", 1)]
++#[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
++fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
++    let actual = nu!(
++        experimental: vec!["pipefail".to_string()],
++        inp
++    );
++    assert_eq!(
++        actual
++            .status
++            .code()
++            .expect("exit_status should not be none"),
++        expect_code
++    );
++}

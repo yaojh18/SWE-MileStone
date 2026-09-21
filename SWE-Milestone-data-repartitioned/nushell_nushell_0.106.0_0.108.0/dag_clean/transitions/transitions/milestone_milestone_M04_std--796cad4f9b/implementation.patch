@@ -1,0 +1,525 @@
+diff --git a/crates/nu-command/src/random/dice.rs b/crates/nu-command/src/random/dice.rs
+index 6e6ff4296cde20950f364c96f5d87f03702f5149..9a2e3a21775b3a13ef6d03026feccdb8d4beb1ac 100644
+--- a/crates/nu-command/src/random/dice.rs
++++ b/crates/nu-command/src/random/dice.rs
+@@ -1,5 +1,5 @@
+ use nu_engine::command_prelude::*;
+-use nu_protocol::ListStream;
++use nu_protocol::{DeprecationEntry, DeprecationType, ListStream, ReportMode};
+ use rand::random_range;
+ use std::num::NonZeroUsize;
+ 
+@@ -38,6 +38,16 @@ impl Command for RandomDice {
+         vec!["generate", "die", "1-6"]
+     }
+ 
++    fn deprecation_info(&self) -> Vec<DeprecationEntry> {
++        vec![DeprecationEntry {
++            ty: DeprecationType::Command,
++            report_mode: ReportMode::FirstUse,
++            since: Some("0.107.0".to_owned()),
++            expected_removal: Some("0.108.0".to_owned()),
++            help: Some("Use `random dice` from std/random instead.".to_owned()),
++        }]
++    }
++
+     fn run(
+         &self,
+         engine_state: &EngineState,
+diff --git a/crates/nu-std/src/lib.rs b/crates/nu-std/src/lib.rs
+index f60f8648a5ee378e4480c9ea17958e61ee12beca..24ff5a774dbb3e0c0d3b3da1f04a06f947190d27 100644
+--- a/crates/nu-std/src/lib.rs
++++ b/crates/nu-std/src/lib.rs
+@@ -65,6 +65,7 @@ pub fn load_standard_library(
+             include_str!("../std/testing/mod.nu"),
+         ),
+         ("mod.nu", "std/clip", include_str!("../std/clip/mod.nu")),
++        ("mod.nu", "std/random", include_str!("../std/random/mod.nu")),
+     ];
+ 
+     for (filename, std_subdir_name, content) in std_submodules.drain(..) {
+@@ -132,6 +133,11 @@ pub fn load_standard_library(
+             "std-rfc/iter",
+             include_str!("../std-rfc/iter/mod.nu"),
+         ),
++        (
++            "mod.nu",
++            "std-rfc/random",
++            include_str!("../std-rfc/random/mod.nu"),
++        ),
+     ];
+ 
+     for (filename, std_rfc_subdir_name, content) in std_rfc_submodules.drain(..) {
+diff --git a/crates/nu-std/std-rfc/mod.nu b/crates/nu-std/std-rfc/mod.nu
+index efb375378b7c332d941fcb8a4a77bfadb0744890..3454e9941e43dcea0952f5ff22f9898fcd62656b 100644
+--- a/crates/nu-std/std-rfc/mod.nu
++++ b/crates/nu-std/std-rfc/mod.nu
+@@ -4,6 +4,7 @@ export use path *
+ export module clip
+ export module str
+ export module iter
++export module random
+ 
+ # kv module depends on sqlite feature, which may not be available in some builds
+ const kv_module = if ("sqlite" in (version).features) { "std-rfc/kv" } else { null }
+diff --git a/crates/nu-std/std-rfc/random/mod.nu b/crates/nu-std/std-rfc/random/mod.nu
+new file mode 100644
+index 0000000000000000000000000000000000000000..088eaccdddaa61376bb1dd400ec5c047c55aaed8
+--- /dev/null
++++ b/crates/nu-std/std-rfc/random/mod.nu
+@@ -0,0 +1,72 @@
++# for examples
++alias "random choice" = choice
++
++# Sample `k` elements from a list
++#
++# This function will pick a simple random sample from input without replacement
++# (each element from the input can only be picked once).
++#
++# The sample is treated as a set.  This means that the combined probability of
++# `[1 2 3 4] | random choice 2` returning `[3, 4]` or `[4, 3]` equals that of
++# `[1, 2]`.  To ensure that all permutations are equally probable, use
++# `shuffle` or `sort`.
++#
++# The current implementation collects the input stream.  This might change in
++# the future.
++@example "Pick 2 random items" {
++	[1 2 3 4 5] | random choice 2
++}
++@example "Verify that the elements are picked uniformly" {
++	0..100_000
++	| each {
++		[1 2 3 4 5] | random choice 2 | sort | to nuon
++	}
++	| histogram
++}
++export def choice [
++	n: int = 1  # number of items to sample
++]: list -> list {
++	# XXX: this collects the stream
++	let input = $in
++
++	let len = $input | length
++	if $n > ($input | length) {
++		error make {
++			msg: "Can't sample more elements than there are in input"
++			label: {
++				text: $"Tried to sample ($n) out of ($len)"
++				span: (metadata $n).span
++			}
++		}
++	}
++
++	# always return a list, even though `first 1` returns standalone T
++	mut output = $input | if $n == 1 {
++		first | [$in]
++	} else {
++		first $n
++	}
++
++	# reservoir sampling, algorithm L
++	# https://doi.org/10.1145/198429.198435
++
++	mut w = (random float) ** (1 / $n)
++	mut i = $n - 1
++
++	loop {
++		$i += (random float | math ln) / (1.0 - $w | math ln)
++			| math floor
++			| $in + 1
++
++		if $i < $len {
++			let el = $input | get $i
++			$output = $output | update (random int 0..<$n) $el
++
++			$w *= (random float) ** (1 / $n)
++		} else {
++			break
++		}
++	}
++
++	$output
++}
+diff --git a/crates/nu-std/std-rfc/str/mod.nu b/crates/nu-std/std-rfc/str/mod.nu
+index 4c9995594f810472d0bb08c1ace12546882094bd..b8b477504ceff689faace6bdd88d5afaf2c1633f 100644
+--- a/crates/nu-std/std-rfc/str/mod.nu
++++ b/crates/nu-std/std-rfc/str/mod.nu
+@@ -129,3 +129,54 @@ export def unindent [
+     $text
+     | str replace -r --all $"\(?m\)^($indent_chars)" ''
+ }
++
++alias "str align" = align
++
++# Aligns each line in the input string to have the target in the same column through padding
++@example "Align variable assignments" { [ "one = 1", "two = 2", "three = 3", "four = 4", "five = 5" ] | str align '=' } --result r#'one   = 1
++two   = 2
++three = 3
++four  = 4
++five  = 5'#
++@example "Align variable assignments to the center" { [ "one = 1", "two = 2", "three = 3", "four = 4", "five = 5" ] | str align '=' --center } --result r#'  one = 1
++  two = 2
++three = 3
++ four = 4
++ five = 5'#
++export def align [
++    target:string       # Substring to align
++    --char (-c) = " "   # Character to use for padding
++    --center (-C)       # Add padding at the beginning of the line instead of before the target
++    --range (-r): range # The range of lines to align
++]: [string -> string, list<string> -> string] {
++    # noop on empty string
++    if ($in | is-empty) { return "" }
++    let $input = $in | to text | lines
++
++    let $indexes = (
++        $input
++        | enumerate
++        | each {|x|
++            if $x.index in ($range | default 0..) {
++                $x.item | str index-of $target
++            } else {
++                -1
++            }
++        }
++    )
++    let $max = $indexes | math max
++
++    $input
++    | zip $indexes
++    | each {|x|
++        # Fold adding a `$char` at the index until they are in the same column
++        # If the substring is not in the line, the index is -1 and it is left as it is
++        seq 1 (if $x.1 == -1 { 0 } else { $max - $x.1 })
++        | reduce -f ($x.0 | split chars) {|_, acc|
++            let $idx = if $center { 0 } else { $x.1 }
++            $acc | insert $idx $char
++        }
++        | str join
++    }
++    | str join (char nl)
++}
+diff --git a/crates/nu-std/std/bench/mod.nu b/crates/nu-std/std/bench/mod.nu
+index 311c3a4364993ea3d143b594ee5dab13cae7d77c..7feba83d9ec152f5c5902fea6cb4d614c2ca7849 100644
+--- a/crates/nu-std/std/bench/mod.nu
++++ b/crates/nu-std/std/bench/mod.nu
+@@ -84,6 +84,8 @@ export def main [
+     nothing -> table<code: string, mean: duration, std: duration, ratio: float>
+     nothing -> string
+ ] {
++    let $num_commands = ($commands | length)
++    let $total_rounds = $rounds * $num_commands
+     if $setup != null { do $setup | ignore }
+ 
+     let results = (
+@@ -91,7 +93,7 @@ export def main [
+             let code = $x.item
+             let idx = $x.index
+ 
+-            let bench_num = if ($commands | length) > 1 { $" ($idx + 1)"}
++            let bench_num = if $num_commands > 1 { $" ($idx + 1)"}
+ 
+             seq 1 $warmup | each {|i|
+                 if $progress { print -n $"Warmup($bench_num): ($i) / ($warmup)\r" }
+@@ -104,6 +106,7 @@ export def main [
+ 
+             let times: list<duration> = (
+                 seq 1 $rounds | each {|i|
++                    if $i mod 10 == 0 { print -n $'(ansi osc)9;4;1;(($idx * $rounds + $i) / $total_rounds * 100 | into int)(ansi st)' }
+                     if $progress { print -n $"Benchmark($bench_num): ($i) / ($rounds)\r" }
+ 
+                     if $prepare != null { $idx | do $prepare $idx | ignore }
+@@ -127,9 +130,10 @@ export def main [
+     )
+ 
+     if $cleanup != null { do $cleanup | ignore }
++    print -n $'(ansi osc)9;4;0(ansi st)'
+ 
+     # One benchmark
+-    if ($results | length) == 1 {
++    if $num_commands == 1 {
+         let report = $results | first
+         if $pretty {
+             return $"($report.mean) +/- ($report.std)"
+diff --git a/crates/nu-std/std/help/mod.nu b/crates/nu-std/std/help/mod.nu
+index 0be2bafbf18e625471d2f54eae9f08359eefe338..86deb7b76e41cae1aad4d24d4b83e22084aac8e9 100644
+--- a/crates/nu-std/std/help/mod.nu
++++ b/crates/nu-std/std/help/mod.nu
+@@ -111,7 +111,7 @@ def "nu-complete main-help" [] {
+ }
+ 
+ def "nu-complete list-externs" [] {
+-    scope commands | where is_extern == true | select name description | rename value description
++    scope commands | where type == "external" | select name description | rename value description
+ }
+ 
+ def build-help-header [
+@@ -128,7 +128,7 @@ def build-help-header [
+ }
+ 
+ def build-module-page [module: record] {
+-    let description = (if not ($module.description? | is-empty) {[
++    let description = (if ($module.description? | is-not-empty) {[
+         $module.description
+         ""
+     ]} else { [] })
+@@ -138,7 +138,7 @@ def build-module-page [module: record] {
+         ""
+     ]
+ 
+-    let commands = (if not ($module.commands? | is-empty) {[
++    let commands = (if ($module.commands? | is-not-empty) {[
+         (build-help-header -n "Exported commands")
+         $"    (
+             $module.commands | each {|command|
+@@ -149,7 +149,7 @@ def build-module-page [module: record] {
+         ""
+     ]} else { [] })
+ 
+-    let aliases = (if not ($module.aliases? | is-empty) {[
++    let aliases = (if ($module.aliases? | is-not-empty) {[
+         (build-help-header -n "Exported aliases")
+         $"    ($module.aliases | str join ', ')"
+         ""
+@@ -257,9 +257,9 @@ export def modules [
+ ] {
+     let modules = (scope modules)
+ 
+-    if not ($find | is-empty) {
++    if ($find | is-not-empty) {
+         $modules | find $find --columns [name description]
+-    } else if not ($module | is-empty) {
++    } else if ($module | is-not-empty) {
+         let found_module = ($modules | where name == ($module | str join " "))
+ 
+         if ($found_module | is-empty) {
+@@ -273,7 +273,7 @@ export def modules [
+ }
+ 
+ def build-alias-page [alias: record] {
+-    let description = (if not ($alias.description? | is-empty) {[
++    let description = (if ($alias.description? | is-not-empty) {[
+         $alias.description
+         ""
+     ]} else { [] })
+@@ -363,9 +363,9 @@ export def aliases [
+ ] {
+     let aliases = (scope aliases | sort-by name)
+ 
+-    if not ($find | is-empty) {
++    if ($find | is-not-empty) {
+         $aliases | find $find --columns [name description]
+-    } else if not ($alias | is-empty) {
++    } else if ($alias | is-not-empty) {
+         let found_alias = ($aliases | where name == ($alias | str join " "))
+ 
+         if ($found_alias | is-empty) {
+@@ -379,7 +379,7 @@ export def aliases [
+ }
+ 
+ def build-extern-page [extern: record] {
+-    let description = (if not ($extern.description? | is-empty) {[
++    let description = (if ($extern.description? | is-not-empty) {[
+         $extern.description
+         ""
+     ]} else { [] })
+@@ -399,15 +399,15 @@ export def externs [
+ ] {
+     let externs = (
+         scope commands
+-        | where is_extern == true
+-        | select name module_name description
++        | where type == "external"
++        | select name description
+         | sort-by name
+         | str trim
+     )
+ 
+-    if not ($find | is-empty) {
++    if ($find | is-not-empty) {
+         $externs | find $find --columns [name description]
+-    } else if not ($extern | is-empty) {
++    } else if ($extern | is-not-empty) {
+         let found_extern = ($externs | where name == ($extern | str join " "))
+ 
+         if ($found_extern | is-empty) {
+@@ -471,9 +471,9 @@ export def operators [
+ ] {
+     let operators = (get-all-operators)
+ 
+-    if not ($find | is-empty) {
++    if ($find | is-not-empty) {
+         $operators | find $find --columns [type name]
+-    } else if not ($operator | is-empty) {
++    } else if ($operator | is-not-empty) {
+         let found_operator = ($operators | where name == ($operator | str join " "))
+ 
+         if ($found_operator | is-empty) {
+@@ -543,25 +543,20 @@ def get-command-extensions [command: string] {
+ }
+ 
+ def build-command-page [command: record] {
+-    let description = (if not ($command.description? | is-empty) {[
++    let description = (if ($command.description? | is-not-empty) {[
+         $command.description
+     ]} else { [] })
+-    let extra_description = (if not ($command.extra_description? | is-empty) {[
++    let extra_description = (if ($command.extra_description? | is-not-empty) {[
+         ""
+         $command.extra_description
+     ]} else { [] })
+ 
+-    let search_terms = (if not ($command.search_terms? | is-empty) {[
++    let search_terms = (if ($command.search_terms? | is-not-empty) {[
+         ""
+         $"(build-help-header -n 'Search terms') ($command.search_terms)"
+     ]} else { [] })
+ 
+-    let module = (if not ($command.module_name? | is-empty) {[
+-        ""
+-        $"(build-help-header -n 'Module') ($command.module_name)"
+-    ]} else { [] })
+-
+-    let category = (if not ($command.category? | is-empty) {[
++    let category = (if ($command.category? | is-not-empty) {[
+         ""
+         $"(build-help-header -n 'Category') ($command.category)"
+     ]} else { [] })
+@@ -587,7 +582,7 @@ def build-command-page [command: record] {
+ 
+     let signatures = ($command.signatures | transpose | get column1)
+ 
+-    let cli_usage = (if not ($signatures | is-empty) {
++    let cli_usage = (if ($signatures | is-not-empty) {
+         let parameters = ($signatures | get 0 | where parameter_type != input and parameter_type != output)
+ 
+         let positionals = ($parameters | where parameter_type == positional and parameter_type != rest)
+@@ -598,7 +593,7 @@ def build-command-page [command: record] {
+             (build-help-header -n "Usage")
+             ([
+                 $"  > ($command.name) "
+-                (if not ($flags | is-empty) { "{flags} " } else "")
++                (if ($flags | is-not-empty) { "{flags} " } else "")
+                 ($positionals | each {|param|
+                     $"<($param.parameter_name)> "
+                 })
+@@ -608,14 +603,14 @@ def build-command-page [command: record] {
+     } else { [] })
+ 
+     let subcommands = (scope commands | where name =~ $"^($command.name) " | select name description)
+-    let subcommands = (if not ($subcommands | is-empty) {[
++    let subcommands = (if ($subcommands | is-not-empty) {[
+         (build-help-header "Subcommands")
+         ($subcommands | each {|subcommand |
+             $"  (ansi teal)($subcommand.name)(ansi reset) - ($subcommand.description)"
+         } | str join "\n")
+     ]} else { [] })
+ 
+-    let rest = (if not ($signatures | is-empty) {
++    let rest = (if ($signatures | is-not-empty) {
+         let parameters = ($signatures | get 0 | where parameter_type != input and parameter_type != output)
+ 
+         let positionals = ($parameters | where parameter_type == positional and parameter_type != rest)
+@@ -701,17 +696,19 @@ def build-command-page [command: record] {
+       } else {}
+     )
+ 
+-    let examples = (if not ($command.examples | is-empty) {[
++    let examples = (if ($command.examples | is-not-empty) {[
+         ""
+         (build-help-header -n "Examples")
+         ($command.examples | each {|example| [
+             $"  ($example.description)"
+             $"  > ($example.example | nu-highlight)"
+-            (if not ($example.result | is-empty) {
++            (if ($example.result | is-not-empty) {
+                 $example.result
+                 | table -e
+                 | to text
+-                | if ($example.result | describe) == "binary" { str join } else { lines }
++                | str trim --right
++                | lines
++                | skip until { is-not-empty }
+                 | each {|line|
+                     $"  ($line)"
+                 }
+@@ -725,7 +722,6 @@ def build-command-page [command: record] {
+         $description
+         $extra_description
+         $search_terms
+-        $module
+         $category
+         $this
+         $cli_usage
+@@ -742,10 +738,10 @@ def scope-commands [
+ ] {
+     let commands = (scope commands | sort-by name)
+ 
+-    if not ($find | is-empty) {
++    if ($find | is-not-empty) {
+         # TODO: impl find for external commands
+         $commands | find $find --columns [name description search_terms] | select name category description signatures search_terms
+-    } else if not ($command | is-empty) {
++    } else if ($command | is-not-empty) {
+         let target_command = ($command | str join " ")
+         let found_command = ($commands | where name == $target_command)
+ 
+@@ -839,13 +835,13 @@ You can also learn more at (ansi default_italic)(ansi light_cyan_underline)https
+     let target_item = ($item | str join " ")
+ 
+     let commands = (try { scope-commands $target_item --find $find })
+-    if not ($commands | is-empty) { return $commands }
++    if ($commands | is-not-empty) { return $commands }
+ 
+     let aliases = (try { aliases $target_item --find $find })
+-    if not ($aliases | is-empty) { return $aliases }
++    if ($aliases | is-not-empty) { return $aliases }
+ 
+     let modules = (try { modules $target_item --find $find })
+-    if not ($modules | is-empty) { return $modules }
++    if ($modules | is-not-empty) { return $modules }
+ 
+     if ($find | is-not-empty) {
+         print -e $"No help results found mentioning: ($find)"
+diff --git a/crates/nu-std/std/mod.nu b/crates/nu-std/std/mod.nu
+index 9c45021f1cd8b06e24fec09d2e117c272990a8e0..51b55e95d74f5afb8f5e18dd8322c594302952aa 100644
+--- a/crates/nu-std/std/mod.nu
++++ b/crates/nu-std/std/mod.nu
+@@ -16,6 +16,7 @@ export module std/math
+ export module std/xml
+ export module std/config
+ export module std/testing
++export module std/random
+ 
+ # Load main dirs command and all subcommands
+ export use std/dirs main
+diff --git a/crates/nu-std/std/random/mod.nu b/crates/nu-std/std/random/mod.nu
+new file mode 100644
+index 0000000000000000000000000000000000000000..409081c08db90ea7b81fcc78beb5bbb77240f6a8
+--- /dev/null
++++ b/crates/nu-std/std/random/mod.nu
+@@ -0,0 +1,24 @@
++use std/assert greater
++
++# for examples
++alias "random dice" = dice
++
++# Generate a random dice roll
++@search-terms "generate" "die" "1-6"
++@example "Roll 1 dice with 6 sides each" { random dice }
++@example "Roll 10 dice with 12 sides each" {
++    random dice --dice 10 --sides 12
++}
++export def dice [
++    --dice = 1  # The amount of dice being rolled
++    --sides = 6  # The amount of sides a die has
++]: nothing -> list<int> {
++    greater $dice 0 "The amount of dice must be greater than 0"
++    greater $sides 1 "The amount of sides must be greater than 1"
++
++    mut out = []
++    for _ in 1..$dice {
++    	$out ++= [(random int 1..$sides)]
++    }
++    $out
++}

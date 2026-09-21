@@ -1,0 +1,316 @@
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index c25e3f22227d855bc839523c471b30444c6d65f9..5f521120b7b17e03e93b381915299578d8e06c02 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -208,0 +209,5 @@ struct GlobOptions {
++    /// Whether or not an unclosed character class is allowed. When an unclosed
++    /// character class is found, the opening `[` is treated as a literal `[`.
++    /// When this isn't enabled, an opening `[` without a corresponding `]` is
++    /// treated as an error.
++    allow_unclosed_class: bool,
+@@ -217,0 +223 @@ impl GlobOptions {
++            allow_unclosed_class: false,
+@@ -567 +573,2 @@ impl<'a> GlobBuilder<'a> {
+-            stack: vec![Tokens::default()],
++            alternates_stack: Vec::new(),
++            branches: vec![Tokens::default()],
+@@ -570,0 +578 @@ impl<'a> GlobBuilder<'a> {
++            found_unclosed_class: false,
+@@ -574,6 +582,6 @@ impl<'a> GlobBuilder<'a> {
+-        if p.stack.is_empty() {
+-            Err(Error {
+-                glob: Some(self.glob.to_string()),
+-                kind: ErrorKind::UnopenedAlternates,
+-            })
+-        } else if p.stack.len() > 1 {
++        if p.branches.is_empty() {
++            // OK because of how the the branches/alternate_stack are managed.
++            // If we end up here, then there *must* be a bug in the parser
++            // somewhere.
++            unreachable!()
++        } else if p.branches.len() > 1 {
+@@ -585 +593 @@ impl<'a> GlobBuilder<'a> {
+-            let tokens = p.stack.pop().unwrap();
++            let tokens = p.branches.pop().unwrap();
+@@ -633,0 +642,16 @@ impl<'a> GlobBuilder<'a> {
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is false. Generally speaking, enabling this leads to
++    /// worse failure modes since the glob parser becomes more permissive. You
++    /// might want to enable this when compatibility (e.g., with POSIX glob
++    /// implementations) is more important than good error messages.
++    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut GlobBuilder<'a> {
++        self.opts.allow_unclosed_class = yes;
++        self
++    }
+@@ -758,0 +783 @@ struct Parser<'a> {
++    /// The glob to parse.
+@@ -760 +785,6 @@ struct Parser<'a> {
+-    stack: Vec<Tokens>,
++    /// Marks the index in `stack` where the alternation started.
++    alternates_stack: Vec<usize>,
++    /// The set of active alternation branches being parsed.
++    /// Tokens are added to the end of the last one.
++    branches: Vec<Tokens>,
++    /// A character iterator over the glob pattern to parse.
+@@ -761,0 +792 @@ struct Parser<'a> {
++    /// The previous character seen.
+@@ -762,0 +794 @@ struct Parser<'a> {
++    /// The current character.
+@@ -763,0 +796,10 @@ struct Parser<'a> {
++    /// Whether we failed to find a closing `]` for a character
++    /// class. This can only be true when `GlobOptions::allow_unclosed_class`
++    /// is enabled. When enabled, it is impossible to ever parse another
++    /// character class with this glob. That's because classes cannot be
++    /// nested *and* the only way this happens is when there is never a `]`.
++    ///
++    /// We track this state so that we don't end up spending quadratic time
++    /// trying to parse something like `[[[[[[[[[[[[[[[[[[[[[[[...`.
++    found_unclosed_class: bool,
++    /// Glob options, which may influence parsing.
+@@ -777 +819 @@ impl<'a> Parser<'a> {
+-                '[' => self.parse_class()?,
++                '[' if !self.found_unclosed_class => self.parse_class()?,
+@@ -789,4 +831,3 @@ impl<'a> Parser<'a> {
+-        if self.stack.len() > 1 {
+-            return Err(self.error(ErrorKind::NestedAlternates));
+-        }
+-        Ok(self.stack.push(Tokens::default()))
++        self.alternates_stack.push(self.branches.len());
++        self.branches.push(Tokens::default());
++        Ok(())
+@@ -796,5 +837,7 @@ impl<'a> Parser<'a> {
+-        let mut alts = vec![];
+-        while self.stack.len() >= 2 {
+-            alts.push(self.stack.pop().unwrap());
+-        }
+-        self.push_token(Token::Alternates(alts))
++        let Some(start) = self.alternates_stack.pop() else {
++            return Err(self.error(ErrorKind::UnopenedAlternates));
++        };
++        assert!(start <= self.branches.len());
++        let alts = Token::Alternates(self.branches.drain(start..).collect());
++        self.push_token(alts)?;
++        Ok(())
+@@ -804 +847 @@ impl<'a> Parser<'a> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+@@ -811 +854 @@ impl<'a> Parser<'a> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+@@ -818 +861 @@ impl<'a> Parser<'a> {
+-        match self.stack.last() {
++        match self.branches.last() {
+@@ -827,2 +870,2 @@ impl<'a> Parser<'a> {
+-        // a new alternate.
+-        if self.stack.len() <= 1 {
++        // a new alternate branch.
++        if self.alternates_stack.is_empty() {
+@@ -831 +874 @@ impl<'a> Parser<'a> {
+-            Ok(self.stack.push(Tokens::default()))
++            Ok(self.branches.push(Tokens::default()))
+@@ -868 +911 @@ impl<'a> Parser<'a> {
+-            if self.stack.len() <= 1
++            if self.branches.len() <= 1
+@@ -881 +924 @@ impl<'a> Parser<'a> {
+-            Some(',') | Some('}') if self.stack.len() >= 2 => true,
++            Some(',') | Some('}') if self.branches.len() >= 2 => true,
+@@ -910,0 +954,5 @@ impl<'a> Parser<'a> {
++        // Save parser state for potential rollback to literal '[' parsing.
++        let saved_chars = self.chars.clone();
++        let saved_prev = self.prev;
++        let saved_cur = self.cur;
++
+@@ -938,5 +986,11 @@ impl<'a> Parser<'a> {
+-            let c = match self.bump() {
+-                Some(c) => c,
+-                // The only way to successfully break this loop is to observe
+-                // a ']'.
+-                None => return Err(self.error(ErrorKind::UnclosedClass)),
++            let Some(c) = self.bump() else {
++                return if self.opts.allow_unclosed_class == true {
++                    self.chars = saved_chars;
++                    self.cur = saved_cur;
++                    self.prev = saved_prev;
++                    self.found_unclosed_class = true;
++
++                    self.push_token(Token::Literal('['))
++                } else {
++                    Err(self.error(ErrorKind::UnclosedClass))
++                };
+@@ -1026,0 +1081 @@ mod tests {
++        unccls: Option<bool>,
+@@ -1068,0 +1124,4 @@ mod tests {
++                if let Some(unccls) = $options.unccls {
++                    builder.allow_unclosed_class(unccls);
++                }
++
+@@ -1208,0 +1268,4 @@ mod tests {
++    syntaxerr!(err_alt1, "{a,b", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt2, "{a,{b,c}", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt3, "a,b}", ErrorKind::UnopenedAlternates);
++    syntaxerr!(err_alt4, "{a,b}}", ErrorKind::UnopenedAlternates);
+@@ -1210,4 +1273,14 @@ mod tests {
+-    const CASEI: Options =
+-        Options { casei: Some(true), litsep: None, bsesc: None, ealtre: None };
+-    const SLASHLIT: Options =
+-        Options { casei: None, litsep: Some(true), bsesc: None, ealtre: None };
++    const CASEI: Options = Options {
++        casei: Some(true),
++        litsep: None,
++        bsesc: None,
++        ealtre: None,
++        unccls: None,
++    };
++    const SLASHLIT: Options = Options {
++        casei: None,
++        litsep: Some(true),
++        bsesc: None,
++        ealtre: None,
++        unccls: None,
++    };
+@@ -1218,0 +1292,8 @@ mod tests {
++        unccls: None,
++    };
++    const BSESC: Options = Options {
++        casei: None,
++        litsep: None,
++        bsesc: Some(true),
++        ealtre: None,
++        unccls: None,
+@@ -1220,2 +1300,0 @@ mod tests {
+-    const BSESC: Options =
+-        Options { casei: None, litsep: None, bsesc: Some(true), ealtre: None };
+@@ -1226,0 +1306 @@ mod tests {
++        unccls: None,
+@@ -1227,0 +1308,34 @@ mod tests {
++    const UNCCLS: Options = Options {
++        casei: None,
++        litsep: None,
++        bsesc: None,
++        ealtre: None,
++        unccls: Some(true),
++    };
++
++    toregex!(allow_unclosed_class_single, r"[", r"^\[$", &UNCCLS);
++    toregex!(allow_unclosed_class_many, r"[abc", r"^\[abc$", &UNCCLS);
++    toregex!(allow_unclosed_class_empty1, r"[]", r"^\[\]$", &UNCCLS);
++    toregex!(allow_unclosed_class_empty2, r"[][", r"^\[\]\[$", &UNCCLS);
++    toregex!(allow_unclosed_class_negated_unclosed, r"[!", r"^\[!$", &UNCCLS);
++    toregex!(allow_unclosed_class_negated_empty, r"[!]", r"^\[!\]$", &UNCCLS);
++    toregex!(
++        allow_unclosed_class_brace1,
++        r"{[abc,xyz}",
++        r"^(?:\[abc|xyz)$",
++        &UNCCLS
++    );
++    toregex!(
++        allow_unclosed_class_brace2,
++        r"{[abc,[xyz}",
++        r"^(?:\[abc|\[xyz)$",
++        &UNCCLS
++    );
++    toregex!(
++        allow_unclosed_class_brace3,
++        r"{[abc],[xyz}",
++        r"^(?:[abc]|\[xyz)$",
++        &UNCCLS
++    );
++
++    toregex!(re_empty, "", "^$");
+@@ -1268 +1382,3 @@ mod tests {
+-    toregex!(re35, "{a,b}", r"^(?:b|a)$");
++    toregex!(re35, "{a,b}", r"^(?:a|b)$");
++    toregex!(re36, "{a,{b,c}}", r"^(?:a|(?:b|c))$");
++    toregex!(re37, "{{a,b},{c,d}}", r"^(?:(?:a|b)|(?:c|d))$");
+@@ -1355,0 +1472,3 @@ mod tests {
++    matches!(matchalt17, "{a,b{c,d}}", "bc");
++    matches!(matchalt18, "{a,b{c,d}}", "bd");
++    matches!(matchalt19, "{a,b{c,d}}", "a");
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index b1fc696af2c634ce983254d81eb7712cf06e6db3..c07076d45167870486fbd7807913a1d95e55189b 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -172,2 +172,5 @@ pub enum ErrorKind {
+-    /// Occurs when an alternating group is nested inside another alternating
+-    /// group, e.g., `{{a,b},{c,d}}`.
++    /// **DEPRECATED**.
++    ///
++    /// This error used to occur when an alternating group was nested inside
++    /// another alternating group, e.g., `{{a,b},{c,d}}`. However, this is now
++    /// supported and as such this error cannot occur.
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index 19a347cdbe2b0680b9e0320631d5ac824f148100..716739bdc0a00afa608e00a37b3804f8b87910e1 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -310,0 +311 @@ pub struct GitignoreBuilder {
++    allow_unclosed_class: bool,
+@@ -326,0 +328 @@ impl GitignoreBuilder {
++            allow_unclosed_class: true,
+@@ -507,0 +510 @@ impl GitignoreBuilder {
++            .allow_unclosed_class(self.allow_unclosed_class)
+@@ -532,0 +536,20 @@ impl GitignoreBuilder {
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is true in order to match established `gitignore`
++    /// semantics. Generally speaking, enabling this leads to worse failure
++    /// modes since the glob parser becomes more permissive. You might want to
++    /// enable this when compatibility (e.g., with POSIX glob implementations)
++    /// is more important than good error messages.
++    pub fn allow_unclosed_class(
++        &mut self,
++        yes: bool,
++    ) -> &mut GitignoreBuilder {
++        self.allow_unclosed_class = yes;
++        self
++    }
+diff --git a/crates/ignore/src/overrides.rs b/crates/ignore/src/overrides.rs
+index 1b02b4d4ee9a1ca3592a517d3d741fdf611292b0..079b02c4132ee63f1b1b3277c51b8ceb0fcae822 100644
+--- a/crates/ignore/src/overrides.rs
++++ b/crates/ignore/src/overrides.rs
+@@ -2,0 +3 @@ The overrides module provides a way to specify a set of override globs.
++
+@@ -123 +124,3 @@ impl OverrideBuilder {
+-        OverrideBuilder { builder: GitignoreBuilder::new(path) }
++        let mut builder = GitignoreBuilder::new(path);
++        builder.allow_unclosed_class(false);
++        OverrideBuilder { builder }
+@@ -146 +149,2 @@ impl OverrideBuilder {
+-    /// When this option is changed, only globs added after the change will be affected.
++    /// When this option is changed, only globs added after the change will be
++    /// affected.
+@@ -157,0 +162,22 @@ impl OverrideBuilder {
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is false. Generally speaking, enabling this leads to
++    /// worse failure modes since the glob parser becomes more permissive. You
++    /// might want to enable this when compatibility (e.g., with POSIX glob
++    /// implementations) is more important than good error messages.
++    ///
++    /// This default is different from the default for [`Gitignore`]. Namely,
++    /// [`Gitignore`] is intended to match git's behavior as-is. But this
++    /// abstraction for "override" globs does not necessarily conform to any
++    /// other known specification and instead prioritizes better error
++    /// messages.
++    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut OverrideBuilder {
++        self.builder.allow_unclosed_class(yes);
++        self
++    }

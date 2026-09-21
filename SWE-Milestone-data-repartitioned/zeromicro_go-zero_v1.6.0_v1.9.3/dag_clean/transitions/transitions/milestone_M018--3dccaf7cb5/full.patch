@@ -1,0 +1,1035 @@
+diff --git a/core/logc/logs.go b/core/logc/logs.go
+index b8343fa26ce8887d34e2c5dcb5ab6e668ffa6fb8..f690960e86808faa279bfc98547c2ce746c0cc92 100644
+--- a/core/logc/logs.go
++++ b/core/logc/logs.go
+@@ -37,6 +37,13 @@ func Debugf(ctx context.Context, format string, v ...interface{}) {
+ 	getLogger(ctx).Debugf(format, v...)
+ }
+ 
++// Debugfn writes fn result into access log.
++// This is useful when the function is expensive to compute,
++// and we want to log it only when necessary.
++func Debugfn(ctx context.Context, fn func() any) {
++	getLogger(ctx).Debugfn(fn)
++}
++
+ // Debugv writes v into access log with json content.
+ func Debugv(ctx context.Context, v interface{}) {
+ 	getLogger(ctx).Debugv(v)
+@@ -57,6 +64,13 @@ func Errorf(ctx context.Context, format string, v ...any) {
+ 	getLogger(ctx).Errorf(fmt.Errorf(format, v...).Error())
+ }
+ 
++// Errorfn writes fn result into error log.
++// This is useful when the function is expensive to compute,
++// and we want to log it only when necessary.
++func Errorfn(ctx context.Context, fn func() any) {
++	getLogger(ctx).Errorfn(fn)
++}
++
+ // Errorv writes v into error log with json content.
+ // No call stack attached, because not elegant to pack the messages.
+ func Errorv(ctx context.Context, v any) {
+@@ -83,6 +97,13 @@ func Infof(ctx context.Context, format string, v ...any) {
+ 	getLogger(ctx).Infof(format, v...)
+ }
+ 
++// Infofn writes fn result into access log.
++// This is useful when the function is expensive to compute,
++// and we want to log it only when necessary.
++func Infofn(ctx context.Context, fn func() any) {
++	getLogger(ctx).Infofn(fn)
++}
++
+ // Infov writes v into access log with json content.
+ func Infov(ctx context.Context, v any) {
+ 	getLogger(ctx).Infov(v)
+@@ -127,6 +148,13 @@ func Slowf(ctx context.Context, format string, v ...any) {
+ 	getLogger(ctx).Slowf(format, v...)
+ }
+ 
++// Slowfn writes fn result into slow log.
++// This is useful when the function is expensive to compute,
++// and we want to log it only when necessary.
++func Slowfn(ctx context.Context, fn func() any) {
++	getLogger(ctx).Slowfn(fn)
++}
++
+ // Slowv writes v into slow log with json content.
+ func Slowv(ctx context.Context, v any) {
+ 	getLogger(ctx).Slowv(v)
+diff --git a/core/logx/config.go b/core/logx/config.go
+index a86e4d740b6bf06765cf5227f078bcb979bbb201..8834648b0b316f8703f94af7d1c7d1842fac5ef1 100644
+--- a/core/logx/config.go
++++ b/core/logx/config.go
+@@ -1,45 +1,70 @@
+ package logx
+ 
+-// A LogConf is a logging config.
+-type LogConf struct {
+-	// ServiceName represents the service name.
+-	ServiceName string `json:",optional"`
+-	// Mode represents the logging mode, default is `console`.
+-	// console: log to console.
+-	// file: log to file.
+-	// volume: used in k8s, prepend the hostname to the log file name.
+-	Mode string `json:",default=console,options=[console,file,volume]"`
+-	// Encoding represents the encoding type, default is `json`.
+-	// json: json encoding.
+-	// plain: plain text encoding, typically used in development.
+-	Encoding string `json:",default=json,options=[json,plain]"`
+-	// TimeFormat represents the time format, default is `2006-01-02T15:04:05.000Z07:00`.
+-	TimeFormat string `json:",optional"`
+-	// Path represents the log file path, default is `logs`.
+-	Path string `json:",default=logs"`
+-	// Level represents the log level, default is `info`.
+-	Level string `json:",default=info,options=[debug,info,error,severe]"`
+-	// MaxContentLength represents the max content bytes, default is no limit.
+-	MaxContentLength uint32 `json:",optional"`
+-	// Compress represents whether to compress the log file, default is `false`.
+-	Compress bool `json:",optional"`
+-	// Stat represents whether to log statistics, default is `true`.
+-	Stat bool `json:",default=true"`
+-	// KeepDays represents how many days the log files will be kept. Default to keep all files.
+-	// Only take effect when Mode is `file` or `volume`, both work when Rotation is `daily` or `size`.
+-	KeepDays int `json:",optional"`
+-	// StackCooldownMillis represents the cooldown time for stack logging, default is 100ms.
+-	StackCooldownMillis int `json:",default=100"`
+-	// MaxBackups represents how many backup log files will be kept. 0 means all files will be kept forever.
+-	// Only take effect when RotationRuleType is `size`.
+-	// Even though `MaxBackups` sets 0, log files will still be removed
+-	// if the `KeepDays` limitation is reached.
+-	MaxBackups int `json:",default=0"`
+-	// MaxSize represents how much space the writing log file takes up. 0 means no limit. The unit is `MB`.
+-	// Only take effect when RotationRuleType is `size`
+-	MaxSize int `json:",default=0"`
+-	// Rotation represents the type of log rotation rule. Default is `daily`.
+-	// daily: daily rotation.
+-	// size: size limited rotation.
+-	Rotation string `json:",default=daily,options=[daily,size]"`
+-}
++type (
++	// A LogConf is a logging config.
++	LogConf struct {
++		// ServiceName represents the service name.
++		ServiceName string `json:",optional"`
++		// Mode represents the logging mode, default is `console`.
++		// console: log to console.
++		// file: log to file.
++		// volume: used in k8s, prepend the hostname to the log file name.
++		Mode string `json:",default=console,options=[console,file,volume]"`
++		// Encoding represents the encoding type, default is `json`.
++		// json: json encoding.
++		// plain: plain text encoding, typically used in development.
++		Encoding string `json:",default=json,options=[json,plain]"`
++		// TimeFormat represents the time format, default is `2006-01-02T15:04:05.000Z07:00`.
++		TimeFormat string `json:",optional"`
++		// Path represents the log file path, default is `logs`.
++		Path string `json:",default=logs"`
++		// Level represents the log level, default is `info`.
++		Level string `json:",default=info,options=[debug,info,error,severe]"`
++		// MaxContentLength represents the max content bytes, default is no limit.
++		MaxContentLength uint32 `json:",optional"`
++		// Compress represents whether to compress the log file, default is `false`.
++		Compress bool `json:",optional"`
++		// Stat represents whether to log statistics, default is `true`.
++		Stat bool `json:",default=true"`
++		// KeepDays represents how many days the log files will be kept. Default to keep all files.
++		// Only take effect when Mode is `file` or `volume`, both work when Rotation is `daily` or `size`.
++		KeepDays int `json:",optional"`
++		// StackCooldownMillis represents the cooldown time for stack logging, default is 100ms.
++		StackCooldownMillis int `json:",default=100"`
++		// MaxBackups represents how many backup log files will be kept. 0 means all files will be kept forever.
++		// Only take effect when RotationRuleType is `size`.
++		// Even though `MaxBackups` sets 0, log files will still be removed
++		// if the `KeepDays` limitation is reached.
++		MaxBackups int `json:",default=0"`
++		// MaxSize represents how much space the writing log file takes up. 0 means no limit. The unit is `MB`.
++		// Only take effect when RotationRuleType is `size`
++		MaxSize int `json:",default=0"`
++		// Rotation represents the type of log rotation rule. Default is `daily`.
++		// daily: daily rotation.
++		// size: size limited rotation.
++		Rotation string `json:",default=daily,options=[daily,size]"`
++		// FileTimeFormat represents the time format for file name, default is `2006-01-02T15:04:05.000Z07:00`.
++		FileTimeFormat string `json:",optional"`
++		// FieldKeys represents the field keys.
++		FieldKeys fieldKeyConf `json:",optional"`
++	}
++
++	fieldKeyConf struct {
++		// CallerKey represents the caller key.
++		CallerKey string `json:",default=caller"`
++		// ContentKey represents the content key.
++		ContentKey string `json:",default=content"`
++		// DurationKey represents the duration key.
++		DurationKey string `json:",default=duration"`
++		// LevelKey represents the level key.
++		LevelKey string `json:",default=level"`
++		// SpanKey represents the span key.
++		SpanKey string `json:",default=span"`
++		// TimestampKey represents the timestamp key.
++		TimestampKey string `json:",default=@timestamp"`
++		// TraceKey represents the trace key.
++		TraceKey string `json:",default=trace"`
++		// TruncatedKey represents the truncated key.
++		TruncatedKey string `json:",default=truncated"`
++	}
++)
+diff --git a/core/logx/logger.go b/core/logx/logger.go
+index f9dd4a3c2e556a0ab2bfc004b280749e9584c426..8f8c1ec28c9394dd46dc934f7ccd6379240629df 100644
+--- a/core/logx/logger.go
++++ b/core/logx/logger.go
+@@ -7,18 +7,22 @@ import (
+ 
+ // A Logger represents a logger.
+ type Logger interface {
+-	// Debug logs a message at info level.
++	// Debug logs a message at debug level.
+ 	Debug(...any)
+-	// Debugf logs a message at info level.
++	// Debugf logs a message at debug level.
+ 	Debugf(string, ...any)
+-	// Debugv logs a message at info level.
++	// Debugfn logs a message at debug level.
++	Debugfn(func() any)
++	// Debugv logs a message at debug level.
+ 	Debugv(any)
+-	// Debugw logs a message at info level.
++	// Debugw logs a message at debug level.
+ 	Debugw(string, ...LogField)
+ 	// Error logs a message at error level.
+ 	Error(...any)
+ 	// Errorf logs a message at error level.
+ 	Errorf(string, ...any)
++	// Errorfn logs a message at error level.
++	Errorfn(func() any)
+ 	// Errorv logs a message at error level.
+ 	Errorv(any)
+ 	// Errorw logs a message at error level.
+@@ -27,6 +31,8 @@ type Logger interface {
+ 	Info(...any)
+ 	// Infof logs a message at info level.
+ 	Infof(string, ...any)
++	// Infofn logs a message at info level.
++	Infofn(func() any)
+ 	// Infov logs a message at info level.
+ 	Infov(any)
+ 	// Infow logs a message at info level.
+@@ -35,6 +41,8 @@ type Logger interface {
+ 	Slow(...any)
+ 	// Slowf logs a message at slow level.
+ 	Slowf(string, ...any)
++	// Slowfn logs a message at slow level.
++	Slowfn(func() any)
+ 	// Slowv logs a message at slow level.
+ 	Slowv(any)
+ 	// Sloww logs a message at slow level.
+diff --git a/core/logx/logs.go b/core/logx/logs.go
+index bc5e356e4213e53020bdd3008cabe877f37d652e..843e363e59a453941a43b64e8263faf582e8722b 100644
+--- a/core/logx/logs.go
++++ b/core/logx/logs.go
+@@ -6,10 +6,10 @@ import (
+ 	"log"
+ 	"os"
+ 	"path"
++	"reflect"
+ 	"runtime/debug"
+ 	"sync"
+ 	"sync/atomic"
+-	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/sysx"
+ )
+@@ -17,14 +17,13 @@ import (
+ const callerDepth = 4
+ 
+ var (
+-	timeFormat = "2006-01-02T15:04:05.000Z07:00"
+-	logLevel   uint32
++	timeFormat        = "2006-01-02T15:04:05.000Z07:00"
+ 	encoding   uint32 = jsonEncodingType
+ 	// maxContentLength is used to truncate the log content, 0 for not truncating.
+ 	maxContentLength uint32
+ 	// use uint32 for atomic operations
+-	disableLog  uint32
+ 	disableStat uint32
++	logLevel    uint32
+ 	options     logOptions
+ 	writer      = new(atomicWriter)
+ 	setupOnce   sync.Once
+@@ -52,6 +51,26 @@ type (
+ 	}
+ )
+ 
++// AddWriter adds a new writer.
++// If there is already a writer, the new writer will be added to the writer chain.
++// For example, to write logs to both file and console, if there is already a file writer,
++// ```go
++// logx.AddWriter(logx.NewWriter(os.Stdout))
++// ```
++func AddWriter(w Writer) {
++	ow := Reset()
++	if ow == nil {
++		SetWriter(w)
++	} else {
++		// no need to check if the existing writer is a comboWriter,
++		// because it is not common to add more than one writer.
++		// even more than one writer, the behavior is the same.
++		SetWriter(comboWriter{
++			writers: []Writer{ow, w},
++		})
++	}
++}
++
+ // Alert alerts v in alert level, and the message is written to error log.
+ func Alert(v string) {
+ 	getWriter().Alert(v)
+@@ -80,6 +99,14 @@ func Debugf(format string, v ...any) {
+ 	}
+ }
+ 
++// Debugfn writes function result into access log if debug level enabled.
++// This is useful when the function is expensive to call and debug level disabled.
++func Debugfn(fn func() any) {
++	if shallLog(DebugLevel) {
++		writeDebug(fn())
++	}
++}
++
+ // Debugv writes v into access log with json content.
+ func Debugv(v any) {
+ 	if shallLog(DebugLevel) {
+@@ -96,7 +123,7 @@ func Debugw(msg string, fields ...LogField) {
+ 
+ // Disable disables the logging.
+ func Disable() {
+-	atomic.StoreUint32(&disableLog, 1)
++	atomic.StoreUint32(&logLevel, disableLevel)
+ 	writer.Store(nopWriter{})
+ }
+ 
+@@ -119,6 +146,13 @@ func Errorf(format string, v ...any) {
+ 	}
+ }
+ 
++// Errorfn writes function result into error log.
++func Errorfn(fn func() any) {
++	if shallLog(ErrorLevel) {
++		writeError(fn())
++	}
++}
++
+ // ErrorStack writes v along with call stack into error log.
+ func ErrorStack(v ...any) {
+ 	if shallLog(ErrorLevel) {
+@@ -152,39 +186,9 @@ func Errorw(msg string, fields ...LogField) {
+ 
+ // Field returns a LogField for the given key and value.
+ func Field(key string, value any) LogField {
+-	switch val := value.(type) {
+-	case error:
+-		return LogField{Key: key, Value: val.Error()}
+-	case []error:
+-		var errs []string
+-		for _, err := range val {
+-			errs = append(errs, err.Error())
+-		}
+-		return LogField{Key: key, Value: errs}
+-	case time.Duration:
+-		return LogField{Key: key, Value: fmt.Sprint(val)}
+-	case []time.Duration:
+-		var durs []string
+-		for _, dur := range val {
+-			durs = append(durs, fmt.Sprint(dur))
+-		}
+-		return LogField{Key: key, Value: durs}
+-	case []time.Time:
+-		var times []string
+-		for _, t := range val {
+-			times = append(times, fmt.Sprint(t))
+-		}
+-		return LogField{Key: key, Value: times}
+-	case fmt.Stringer:
+-		return LogField{Key: key, Value: val.String()}
+-	case []fmt.Stringer:
+-		var strs []string
+-		for _, str := range val {
+-			strs = append(strs, str.String())
+-		}
+-		return LogField{Key: key, Value: strs}
+-	default:
+-		return LogField{Key: key, Value: val}
++	return LogField{
++		Key:   key,
++		Value: value,
+ 	}
+ }
+ 
+@@ -202,6 +206,14 @@ func Infof(format string, v ...any) {
+ 	}
+ }
+ 
++// Infofn writes function result into access log.
++// This is useful when the function is expensive to call and info level disabled.
++func Infofn(fn func() any) {
++	if shallLog(InfoLevel) {
++		writeInfo(fn())
++	}
++}
++
+ // Infov writes v into access log with json content.
+ func Infov(v any) {
+ 	if shallLog(InfoLevel) {
+@@ -250,7 +262,7 @@ func SetLevel(level uint32) {
+ 
+ // SetWriter sets the logging writer. It can be used to customize the logging.
+ func SetWriter(w Writer) {
+-	if atomic.LoadUint32(&disableLog) == 0 {
++	if atomic.LoadUint32(&logLevel) != disableLevel {
+ 		writer.Store(w)
+ 	}
+ }
+@@ -264,7 +276,8 @@ func SetUp(c LogConf) (err error) {
+ 	// Because multiple services in one process might call SetUp respectively.
+ 	// Need to wait for the first caller to complete the execution.
+ 	setupOnce.Do(func() {
+-		setupLogLevel(c)
++		setupLogLevel(c.Level)
++		setupFieldKeys(c.FieldKeys)
+ 
+ 		if !c.Stat {
+ 			DisableStat()
+@@ -274,6 +287,10 @@ func SetUp(c LogConf) (err error) {
+ 			timeFormat = c.TimeFormat
+ 		}
+ 
++		if len(c.FileTimeFormat) > 0 {
++			fileTimeFormat = c.FileTimeFormat
++		}
++
+ 		atomic.StoreUint32(&maxContentLength, c.MaxContentLength)
+ 
+ 		switch c.Encoding {
+@@ -324,6 +341,14 @@ func Slowf(format string, v ...any) {
+ 	}
+ }
+ 
++// Slowfn writes function result into slow log.
++// This is useful when the function is expensive to call and slow level disabled.
++func Slowfn(fn func() any) {
++	if shallLog(ErrorLevel) {
++		writeSlow(fn())
++	}
++}
++
+ // Slowv writes v into slow log with json content.
+ func Slowv(v any) {
+ 	if shallLog(ErrorLevel) {
+@@ -415,6 +440,32 @@ func createOutput(path string) (io.WriteCloser, error) {
+ 	return NewLogger(path, rule, options.gzipEnabled)
+ }
+ 
++func encodeError(err error) (ret string) {
++	return encodeWithRecover(err, func() string {
++		return err.Error()
++	})
++}
++
++func encodeStringer(v fmt.Stringer) (ret string) {
++	return encodeWithRecover(v, func() string {
++		return v.String()
++	})
++}
++
++func encodeWithRecover(arg any, fn func() string) (ret string) {
++	defer func() {
++		if err := recover(); err != nil {
++			if v := reflect.ValueOf(arg); v.Kind() == reflect.Ptr && v.IsNil() {
++				ret = nilAngleString
++			} else {
++				ret = fmt.Sprintf("panic: %v", err)
++			}
++		}
++	}()
++
++	return fn()
++}
++
+ func getWriter() Writer {
+ 	w := writer.Load()
+ 	if w == nil {
+@@ -430,8 +481,35 @@ func handleOptions(opts []LogOption) {
+ 	}
+ }
+ 
+-func setupLogLevel(c LogConf) {
+-	switch c.Level {
++func setupFieldKeys(c fieldKeyConf) {
++	if len(c.CallerKey) > 0 {
++		callerKey = c.CallerKey
++	}
++	if len(c.ContentKey) > 0 {
++		contentKey = c.ContentKey
++	}
++	if len(c.DurationKey) > 0 {
++		durationKey = c.DurationKey
++	}
++	if len(c.LevelKey) > 0 {
++		levelKey = c.LevelKey
++	}
++	if len(c.SpanKey) > 0 {
++		spanKey = c.SpanKey
++	}
++	if len(c.TimestampKey) > 0 {
++		timestampKey = c.TimestampKey
++	}
++	if len(c.TraceKey) > 0 {
++		traceKey = c.TraceKey
++	}
++	if len(c.TruncatedKey) > 0 {
++		truncatedKey = c.TruncatedKey
++	}
++}
++
++func setupLogLevel(level string) {
++	switch level {
+ 	case levelDebug:
+ 		SetLevel(DebugLevel)
+ 	case levelInfo:
+@@ -479,7 +557,7 @@ func shallLogStat() bool {
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+ func writeDebug(val any, fields ...LogField) {
+-	getWriter().Debug(val, addCaller(fields...)...)
++	getWriter().Debug(val, mergeGlobalFields(addCaller(fields...))...)
+ }
+ 
+ // writeError writes v into the error log.
+@@ -487,7 +565,7 @@ func writeDebug(val any, fields ...LogField) {
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+ func writeError(val any, fields ...LogField) {
+-	getWriter().Error(val, addCaller(fields...)...)
++	getWriter().Error(val, mergeGlobalFields(addCaller(fields...))...)
+ }
+ 
+ // writeInfo writes v into info log.
+@@ -495,7 +573,7 @@ func writeError(val any, fields ...LogField) {
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+ func writeInfo(val any, fields ...LogField) {
+-	getWriter().Info(val, addCaller(fields...)...)
++	getWriter().Info(val, mergeGlobalFields(addCaller(fields...))...)
+ }
+ 
+ // writeSevere writes v into severe log.
+@@ -511,7 +589,7 @@ func writeSevere(msg string) {
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+ func writeSlow(val any, fields ...LogField) {
+-	getWriter().Slow(val, addCaller(fields...)...)
++	getWriter().Slow(val, mergeGlobalFields(addCaller(fields...))...)
+ }
+ 
+ // writeStack writes v into stack log.
+@@ -527,5 +605,5 @@ func writeStack(msg string) {
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+ func writeStat(msg string) {
+-	getWriter().Stat(msg, addCaller()...)
++	getWriter().Stat(msg, mergeGlobalFields(addCaller())...)
+ }
+diff --git a/core/logx/richlogger.go b/core/logx/richlogger.go
+index 185a96990ecc929ab7f2cdbb9295fea0be1654c9..dc80ead228596df057eca05f5bbae6cec69599e9 100644
+--- a/core/logx/richlogger.go
++++ b/core/logx/richlogger.go
+@@ -52,6 +52,12 @@ func (l *richLogger) Debugf(format string, v ...any) {
+ 	}
+ }
+ 
++func (l *richLogger) Debugfn(fn func() any) {
++	if shallLog(DebugLevel) {
++		l.debug(fn())
++	}
++}
++
+ func (l *richLogger) Debugv(v any) {
+ 	if shallLog(DebugLevel) {
+ 		l.debug(v)
+@@ -76,6 +82,12 @@ func (l *richLogger) Errorf(format string, v ...any) {
+ 	}
+ }
+ 
++func (l *richLogger) Errorfn(fn func() any) {
++	if shallLog(ErrorLevel) {
++		l.err(fn())
++	}
++}
++
+ func (l *richLogger) Errorv(v any) {
+ 	if shallLog(ErrorLevel) {
+ 		l.err(v)
+@@ -100,6 +112,12 @@ func (l *richLogger) Infof(format string, v ...any) {
+ 	}
+ }
+ 
++func (l *richLogger) Infofn(fn func() any) {
++	if shallLog(InfoLevel) {
++		l.info(fn())
++	}
++}
++
+ func (l *richLogger) Infov(v any) {
+ 	if shallLog(InfoLevel) {
+ 		l.info(v)
+@@ -124,6 +142,12 @@ func (l *richLogger) Slowf(format string, v ...any) {
+ 	}
+ }
+ 
++func (l *richLogger) Slowfn(fn func() any) {
++	if shallLog(ErrorLevel) {
++		l.slow(fn())
++	}
++}
++
+ func (l *richLogger) Slowv(v any) {
+ 	if shallLog(ErrorLevel) {
+ 		l.slow(v)
+@@ -141,28 +165,50 @@ func (l *richLogger) WithCallerSkip(skip int) Logger {
+ 		return l
+ 	}
+ 
+-	l.callerSkip = skip
+-	return l
++	return &richLogger{
++		ctx:        l.ctx,
++		callerSkip: skip,
++		fields:     l.fields,
++	}
+ }
+ 
+ func (l *richLogger) WithContext(ctx context.Context) Logger {
+-	l.ctx = ctx
+-	return l
++	return &richLogger{
++		ctx:        ctx,
++		callerSkip: l.callerSkip,
++		fields:     l.fields,
++	}
+ }
+ 
+ func (l *richLogger) WithDuration(duration time.Duration) Logger {
+-	l.fields = append(l.fields, Field(durationKey, timex.ReprOfDuration(duration)))
+-	return l
++	fields := append(l.fields, Field(durationKey, timex.ReprOfDuration(duration)))
++
++	return &richLogger{
++		ctx:        l.ctx,
++		callerSkip: l.callerSkip,
++		fields:     fields,
++	}
+ }
+ 
+ func (l *richLogger) WithFields(fields ...LogField) Logger {
+-	l.fields = append(l.fields, fields...)
+-	return l
++	if len(fields) == 0 {
++		return l
++	}
++
++	f := append(l.fields, fields...)
++
++	return &richLogger{
++		ctx:        l.ctx,
++		callerSkip: l.callerSkip,
++		fields:     f,
++	}
+ }
+ 
+ func (l *richLogger) buildFields(fields ...LogField) []LogField {
+ 	fields = append(l.fields, fields...)
++	// caller field should always appear together with global fields
+ 	fields = append(fields, Field(callerKey, getCaller(callerDepth+l.callerSkip)))
++	fields = mergeGlobalFields(fields)
+ 
+ 	if l.ctx == nil {
+ 		return fields
+diff --git a/core/logx/rotatelogger.go b/core/logx/rotatelogger.go
+index 61f9a9d03f795cf6005108cae5eb3ca1c8d1cf1c..fc9c4fc25be29406f247ee31bb50eb0d1d6aeeb7 100644
+--- a/core/logx/rotatelogger.go
++++ b/core/logx/rotatelogger.go
+@@ -19,7 +19,6 @@ import (
+ 
+ const (
+ 	dateFormat      = "2006-01-02"
+-	fileTimeFormat  = time.RFC3339
+ 	hoursPerDay     = 24
+ 	bufferSize      = 100
+ 	defaultDirMode  = 0o755
+@@ -28,8 +27,12 @@ const (
+ 	megaBytes       = 1 << 20
+ )
+ 
+-// ErrLogFileClosed is an error that indicates the log file is already closed.
+-var ErrLogFileClosed = errors.New("error: log file closed")
++var (
++	// ErrLogFileClosed is an error that indicates the log file is already closed.
++	ErrLogFileClosed = errors.New("error: log file closed")
++
++	fileTimeFormat = time.RFC3339
++)
+ 
+ type (
+ 	// A RotateRule interface is used to define the log rotating rules.
+diff --git a/core/logx/sensitive.go b/core/logx/sensitive.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0b2dac0c3e16b939745086431eae40fe4bec2ad
+--- /dev/null
++++ b/core/logx/sensitive.go
+@@ -0,0 +1,21 @@
++package logx
++
++// Sensitive is an interface that defines a method for masking sensitive information in logs.
++// It is typically implemented by types that contain sensitive data,
++// such as passwords or personal information.
++// Infov, Errorv, Debugv, and Slowv methods will call this method to mask sensitive data.
++// The values in LogField will also be masked if they implement the Sensitive interface.
++type Sensitive interface {
++	// MaskSensitive masks sensitive information in the log.
++	MaskSensitive() any
++}
++
++// maskSensitive returns the value returned by MaskSensitive method,
++// if the value implements Sensitive interface.
++func maskSensitive(v any) any {
++	if s, ok := v.(Sensitive); ok {
++		return s.MaskSensitive()
++	}
++
++	return v
++}
+diff --git a/core/logx/vars.go b/core/logx/vars.go
+index 59688e875d4e7144bbbe04495497ac969c94739b..9079120a7a7a19031e0622e42c3f7712a9288483 100644
+--- a/core/logx/vars.go
++++ b/core/logx/vars.go
+@@ -15,6 +15,8 @@ const (
+ 	ErrorLevel
+ 	// SevereLevel only log severe messages
+ 	SevereLevel
++	// disableLevel doesn't log any messages
++	disableLevel = 0xff
+ )
+ 
+ const (
+@@ -46,18 +48,19 @@ const (
+ 	levelDebug  = "debug"
+ 
+ 	backupFileDelimiter = "-"
++	nilAngleString      = "<nil>"
+ 	flags               = 0x0
+ )
+ 
+ const (
+-	callerKey    = "caller"
+-	contentKey   = "content"
+-	durationKey  = "duration"
+-	levelKey     = "level"
+-	spanKey      = "span"
+-	timestampKey = "@timestamp"
+-	traceKey     = "trace"
+-	truncatedKey = "truncated"
++	defaultCallerKey    = "caller"
++	defaultContentKey   = "content"
++	defaultDurationKey  = "duration"
++	defaultLevelKey     = "level"
++	defaultSpanKey      = "span"
++	defaultTimestampKey = "@timestamp"
++	defaultTraceKey     = "trace"
++	defaultTruncatedKey = "truncated"
+ )
+ 
+ var (
+@@ -70,3 +73,14 @@ var (
+ 
+ 	truncatedField = Field(truncatedKey, true)
+ )
++
++var (
++	callerKey    = defaultCallerKey
++	contentKey   = defaultContentKey
++	durationKey  = defaultDurationKey
++	levelKey     = defaultLevelKey
++	spanKey      = defaultSpanKey
++	timestampKey = defaultTimestampKey
++	traceKey     = defaultTraceKey
++	truncatedKey = defaultTruncatedKey
++)
+diff --git a/core/logx/writer.go b/core/logx/writer.go
+index ac19aa245e37d62a546b833af07572c205d02cc6..016c63ed686fcf231dea452565acdbded46674f9 100644
+--- a/core/logx/writer.go
++++ b/core/logx/writer.go
+@@ -10,21 +10,35 @@ import (
+ 	"runtime/debug"
+ 	"sync"
+ 	"sync/atomic"
++	"time"
+ 
+ 	fatihcolor "github.com/fatih/color"
+ 	"github.com/zeromicro/go-zero/core/color"
++	"github.com/zeromicro/go-zero/core/errorx"
+ )
+ 
+ type (
++	// Writer is the interface for writing logs.
++	// It's designed to let users customize their own log writer,
++	// such as writing logs to a kafka, a database, or using third-party loggers.
+ 	Writer interface {
++		// Alert sends an alert message, if your writer implemented alerting functionality.
+ 		Alert(v any)
++		// Close closes the writer.
+ 		Close() error
++		// Debug logs a message at debug level.
+ 		Debug(v any, fields ...LogField)
++		// Error logs a message at error level.
+ 		Error(v any, fields ...LogField)
++		// Info logs a message at info level.
+ 		Info(v any, fields ...LogField)
++		// Severe logs a message at severe level.
+ 		Severe(v any)
++		// Slow logs a message at slow level.
+ 		Slow(v any, fields ...LogField)
++		// Stack logs a message at error level.
+ 		Stack(v any)
++		// Stat logs a message at stat level.
+ 		Stat(v any, fields ...LogField)
+ 	}
+ 
+@@ -33,6 +47,10 @@ type (
+ 		lock   sync.RWMutex
+ 	}
+ 
++	comboWriter struct {
++		writers []Writer
++	}
++
+ 	concreteWriter struct {
+ 		infoLog   io.WriteCloser
+ 		errorLog  io.WriteCloser
+@@ -88,6 +106,62 @@ func (w *atomicWriter) Swap(v Writer) Writer {
+ 	return old
+ }
+ 
++func (c comboWriter) Alert(v any) {
++	for _, w := range c.writers {
++		w.Alert(v)
++	}
++}
++
++func (c comboWriter) Close() error {
++	var be errorx.BatchError
++	for _, w := range c.writers {
++		be.Add(w.Close())
++	}
++	return be.Err()
++}
++
++func (c comboWriter) Debug(v any, fields ...LogField) {
++	for _, w := range c.writers {
++		w.Debug(v, fields...)
++	}
++}
++
++func (c comboWriter) Error(v any, fields ...LogField) {
++	for _, w := range c.writers {
++		w.Error(v, fields...)
++	}
++}
++
++func (c comboWriter) Info(v any, fields ...LogField) {
++	for _, w := range c.writers {
++		w.Info(v, fields...)
++	}
++}
++
++func (c comboWriter) Severe(v any) {
++	for _, w := range c.writers {
++		w.Severe(v)
++	}
++}
++
++func (c comboWriter) Slow(v any, fields ...LogField) {
++	for _, w := range c.writers {
++		w.Slow(v, fields...)
++	}
++}
++
++func (c comboWriter) Stack(v any) {
++	for _, w := range c.writers {
++		w.Stack(v)
++	}
++}
++
++func (c comboWriter) Stat(v any, fields ...LogField) {
++	for _, w := range c.writers {
++		w.Stat(v, fields...)
++	}
++}
++
+ func newConsoleWriter() Writer {
+ 	outLog := newLogWriter(log.New(fatihcolor.Output, "", flags))
+ 	errLog := newLogWriter(log.New(fatihcolor.Error, "", flags))
+@@ -138,7 +212,6 @@ func newFileWriter(c LogConf) (Writer, error) {
+ 	statFile := path.Join(c.Path, statFilename)
+ 
+ 	handleOptions(opts)
+-	setupLogLevel(c)
+ 
+ 	if infoLog, err = createOutput(accessFile); err != nil {
+ 		return nil, err
+@@ -254,17 +327,30 @@ func (n nopWriter) Stack(_ any) {
+ func (n nopWriter) Stat(_ any, _ ...LogField) {
+ }
+ 
+-func buildPlainFields(fields ...LogField) []string {
+-	var items []string
+-
+-	for _, field := range fields {
+-		items = append(items, fmt.Sprintf("%s=%+v", field.Key, field.Value))
++func buildPlainFields(fields logEntry) []string {
++	items := make([]string, 0, len(fields))
++	for k, v := range fields {
++		items = append(items, fmt.Sprintf("%s=%+v", k, v))
+ 	}
+ 
+ 	return items
+ }
+ 
+-func combineGlobalFields(fields []LogField) []LogField {
++func marshalJson(t interface{}) ([]byte, error) {
++	var buf bytes.Buffer
++	encoder := json.NewEncoder(&buf)
++	encoder.SetEscapeHTML(false)
++	err := encoder.Encode(t)
++	// go 1.5+ will append a newline to the end of the json string
++	// https://github.com/golang/go/issues/13520
++	if l := buf.Len(); l > 0 && buf.Bytes()[l-1] == '\n' {
++		buf.Truncate(l - 1)
++	}
++
++	return buf.Bytes(), err
++}
++
++func mergeGlobalFields(fields []LogField) []LogField {
+ 	globals := globalFields.Load()
+ 	if globals == nil {
+ 		return fields
+@@ -279,25 +365,32 @@ func combineGlobalFields(fields []LogField) []LogField {
+ }
+ 
+ func output(writer io.Writer, level string, val any, fields ...LogField) {
+-	// only truncate string content, don't know how to truncate the values of other types.
+-	if v, ok := val.(string); ok {
++	switch v := val.(type) {
++	case string:
++		// only truncate string content, don't know how to truncate the values of other types.
+ 		maxLen := atomic.LoadUint32(&maxContentLength)
+ 		if maxLen > 0 && len(v) > int(maxLen) {
+ 			val = v[:maxLen]
+ 			fields = append(fields, truncatedField)
+ 		}
++	case Sensitive:
++		val = v.MaskSensitive()
+ 	}
+ 
+-	fields = combineGlobalFields(fields)
++	// +3 for timestamp, level and content
++	entry := make(logEntry, len(fields)+3)
++	for _, field := range fields {
++		// mask sensitive data before processing types,
++		// in case field.Value is a sensitive type and also implemented fmt.Stringer.
++		mval := maskSensitive(field.Value)
++		entry[field.Key] = processFieldValue(mval)
++	}
+ 
+ 	switch atomic.LoadUint32(&encoding) {
+ 	case plainEncodingType:
+-		writePlainAny(writer, level, val, buildPlainFields(fields...)...)
++		plainFields := buildPlainFields(entry)
++		writePlainAny(writer, level, val, plainFields...)
+ 	default:
+-		entry := make(logEntry)
+-		for _, field := range fields {
+-			entry[field.Key] = field.Value
+-		}
+ 		entry[timestampKey] = getTimestamp()
+ 		entry[levelKey] = level
+ 		entry[contentKey] = val
+@@ -305,6 +398,45 @@ func output(writer io.Writer, level string, val any, fields ...LogField) {
+ 	}
+ }
+ 
++func processFieldValue(value any) any {
++	switch val := value.(type) {
++	case error:
++		return encodeError(val)
++	case []error:
++		var errs []string
++		for _, err := range val {
++			errs = append(errs, encodeError(err))
++		}
++		return errs
++	case time.Duration:
++		return fmt.Sprint(val)
++	case []time.Duration:
++		var durs []string
++		for _, dur := range val {
++			durs = append(durs, fmt.Sprint(dur))
++		}
++		return durs
++	case []time.Time:
++		var times []string
++		for _, t := range val {
++			times = append(times, fmt.Sprint(t))
++		}
++		return times
++	case json.Marshaler:
++		return val
++	case fmt.Stringer:
++		return encodeStringer(val)
++	case []fmt.Stringer:
++		var strs []string
++		for _, str := range val {
++			strs = append(strs, encodeStringer(str))
++		}
++		return strs
++	default:
++		return val
++	}
++}
++
+ func wrapLevelWithColor(level string) string {
+ 	var colour color.Color
+ 	switch level {
+@@ -332,7 +464,7 @@ func wrapLevelWithColor(level string) string {
+ }
+ 
+ func writeJson(writer io.Writer, info any) {
+-	if content, err := json.Marshal(info); err != nil {
++	if content, err := marshalJson(info); err != nil {
+ 		log.Printf("err: %s\n\n%s", err.Error(), debug.Stack())
+ 	} else if writer == nil {
+ 		log.Println(string(content))
+diff --git a/rest/handler/loghandler.go b/rest/handler/loghandler.go
+index eaf59a16b8264f983cabb1d41a669de124602bd4..30348e3b113deca06f63459bd2e159942493100e 100644
+--- a/rest/handler/loghandler.go
++++ b/rest/handler/loghandler.go
+@@ -158,7 +158,7 @@ func logDetails(r *http.Request, response *detailLoggedResponseWriter, timer *ut
+ 	logger := logx.WithContext(r.Context())
+ 	buf.WriteString(fmt.Sprintf("[HTTP] %s - %d - %s - %s\n=> %s\n",
+ 		r.Method, code, r.RemoteAddr, timex.ReprOfDuration(duration), dumpRequest(r)))
+-	if duration > defaultSlowThreshold {
++	if duration > slowThreshold.Load() {
+ 		logger.Slowf("[HTTP] %s - %d - %s - slowcall(%s)\n=> %s\n", r.Method, code, r.RemoteAddr,
+ 			fmt.Sprintf("slowcall(%s)", timex.ReprOfDuration(duration)), dumpRequest(r))
+ 	}

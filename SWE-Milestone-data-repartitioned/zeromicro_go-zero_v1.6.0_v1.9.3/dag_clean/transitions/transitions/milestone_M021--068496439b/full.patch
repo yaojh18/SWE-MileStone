@@ -1,0 +1,307 @@
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 135d17238206ecb449f165484fb4b89675a44f1e..0a5c37203d61d707daa5f889cfaffb55909e5212 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -62,7 +62,11 @@ func Load(file string, v any, opts ...Option) error {
+ 		return loader([]byte(os.ExpandEnv(string(content))), v)
+ 	}
+ 
+-	return loader(content, v)
++	if err = loader(content, v); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfig loads config into v from file, .json, .yaml and .yml are acceptable.
+@@ -85,7 +89,12 @@ func LoadFromJsonBytes(content []byte, v any) error {
+ 
+ 	lowerCaseKeyMap := toLowerCaseKeyMap(m, info)
+ 
+-	return mapping.UnmarshalJsonMap(lowerCaseKeyMap, v, mapping.WithCanonicalKeyFunc(toLowerCase))
++	if err = mapping.UnmarshalJsonMap(lowerCaseKeyMap, v,
++		mapping.WithCanonicalKeyFunc(toLowerCase)); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfigFromJsonBytes loads config into v from content json bytes.
+diff --git a/core/conf/validate.go b/core/conf/validate.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2724aa6a2bd907650ad599d582a57f06702c61c8
+--- /dev/null
++++ b/core/conf/validate.go
+@@ -0,0 +1,12 @@
++package conf
++
++import "github.com/zeromicro/go-zero/core/validation"
++
++// validate validates the value if it implements the Validator interface.
++func validate(v any) error {
++	if val, ok := v.(validation.Validator); ok {
++		return val.Validate()
++	}
++
++	return nil
++}
+diff --git a/core/prof/runtime.go b/core/prof/runtime.go
+index af41d0517f683b5b905236cc31a9a2c90cbced39..10554e56d41c6599947c032a389d53c21d8b4c56 100644
+--- a/core/prof/runtime.go
++++ b/core/prof/runtime.go
+@@ -5,6 +5,8 @@ import (
+ 	"io"
+ 	"os"
+ 	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"time"
+ )
+ 
+@@ -28,10 +30,29 @@ func displayStatsWithWriter(writer io.Writer, interval ...time.Duration) {
+ 		ticker := time.NewTicker(duration)
+ 		defer ticker.Stop()
+ 		for range ticker.C {
+-			var m runtime.MemStats
+-			runtime.ReadMemStats(&m)
++			var (
++				alloc, totalAlloc, sys uint64
++				samples                = []metrics.Sample{
++					{Name: "/memory/classes/heap/objects:bytes"},
++					{Name: "/gc/heap/allocs:bytes"},
++					{Name: "/memory/classes/total:bytes"},
++				}
++			)
++			metrics.Read(samples)
++
++			if samples[0].Value.Kind() == metrics.KindUint64 {
++				alloc = samples[0].Value.Uint64()
++			}
++			if samples[1].Value.Kind() == metrics.KindUint64 {
++				totalAlloc = samples[1].Value.Uint64()
++			}
++			if samples[2].Value.Kind() == metrics.KindUint64 {
++				sys = samples[2].Value.Uint64()
++			}
++			var stats debug.GCStats
++			debug.ReadGCStats(&stats)
+ 			fmt.Fprintf(writer, "Goroutines: %d, Alloc: %vm, TotalAlloc: %vm, Sys: %vm, NumGC: %v\n",
+-				runtime.NumGoroutine(), m.Alloc/mega, m.TotalAlloc/mega, m.Sys/mega, m.NumGC)
++				runtime.NumGoroutine(), alloc/mega, totalAlloc/mega, sys/mega, stats.NumGC)
+ 		}
+ 	}()
+ }
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 27ec45ad0fa29cbd3edf1d7b01674f0ca7094564..c8b0715aa054a2aeaefef52985472fa546412eb6 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -1,8 +1,7 @@
+ package service
+ 
+ import (
+-	"log"
+-
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+@@ -51,7 +50,7 @@ func (sg *ServiceGroup) Add(service Service) {
+ // Also, quitting this method will close the logx output.
+ func (sg *ServiceGroup) Start() {
+ 	proc.AddShutdownListener(func() {
+-		log.Println("Shutting down...")
++		logx.Info("Shutting down service in group")
+ 		sg.stopOnce()
+ 	})
+ 
+diff --git a/core/stat/usage.go b/core/stat/usage.go
+index 40936604841f4b8447cb2dfcba4857bd2bb25a43..9bdecab76a35b63d430d48e2c4e42d98679b5f95 100644
+--- a/core/stat/usage.go
++++ b/core/stat/usage.go
+@@ -1,7 +1,8 @@
+ package stat
+ 
+ import (
+-	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -56,8 +57,28 @@ func bToMb(b uint64) float32 {
+ }
+ 
+ func printUsage() {
+-	var m runtime.MemStats
+-	runtime.ReadMemStats(&m)
++	var (
++		alloc, totalAlloc, sys uint64
++		samples                = []metrics.Sample{
++			{Name: "/memory/classes/heap/objects:bytes"},
++			{Name: "/gc/heap/allocs:bytes"},
++			{Name: "/memory/classes/total:bytes"},
++		}
++		stats debug.GCStats
++	)
++	metrics.Read(samples)
++
++	if samples[0].Value.Kind() == metrics.KindUint64 {
++		alloc = samples[0].Value.Uint64()
++	}
++	if samples[1].Value.Kind() == metrics.KindUint64 {
++		totalAlloc = samples[1].Value.Uint64()
++	}
++	if samples[2].Value.Kind() == metrics.KindUint64 {
++		sys = samples[2].Value.Uint64()
++	}
++	debug.ReadGCStats(&stats)
++
+ 	logx.Statf("CPU: %dm, MEMORY: Alloc=%.1fMi, TotalAlloc=%.1fMi, Sys=%.1fMi, NumGC=%d",
+-		CpuUsage(), bToMb(m.Alloc), bToMb(m.TotalAlloc), bToMb(m.Sys), m.NumGC)
++		CpuUsage(), bToMb(alloc), bToMb(totalAlloc), bToMb(sys), stats.NumGC)
+ }
+diff --git a/core/syncx/immutableresource.go b/core/syncx/immutableresource.go
+index dd9e4733aa00e5c662236b2eb0fc4d7ce1a72bd8..8b79a6ce5cbc96bfb499e72cdf5c1309c0f68609 100644
+--- a/core/syncx/immutableresource.go
++++ b/core/syncx/immutableresource.go
+@@ -47,30 +47,32 @@ func (ir *ImmutableResource) Get() (any, error) {
+ 		return resource, nil
+ 	}
+ 
+-	ir.maybeRefresh(func() {
+-		res, err := ir.fetch()
+-		ir.lock.Lock()
+-		if err != nil {
+-			ir.err = err
+-		} else {
+-			ir.resource, ir.err = res, nil
+-		}
+-		ir.lock.Unlock()
+-	})
++	ir.lock.Lock()
++	defer ir.lock.Unlock()
+ 
+-	ir.lock.RLock()
+-	resource, err := ir.resource, ir.err
+-	ir.lock.RUnlock()
+-	return resource, err
++	// double check
++	if ir.resource != nil {
++		return ir.resource, nil
++	}
++	if ir.err != nil && !ir.shouldRefresh() {
++		return ir.resource, ir.err
++	}
++
++	res, err := ir.fetch()
++	ir.lastTime.Set(timex.Now())
++	if err != nil {
++		ir.err = err
++		return nil, err
++	}
++
++	ir.resource, ir.err = res, nil
++	return res, nil
+ }
+ 
+-func (ir *ImmutableResource) maybeRefresh(execute func()) {
++func (ir *ImmutableResource) shouldRefresh() bool {
+ 	now := timex.Now()
+ 	lastTime := ir.lastTime.Load()
+-	if lastTime == 0 || lastTime+ir.refreshInterval < now {
+-		ir.lastTime.Set(now)
+-		execute()
+-	}
++	return lastTime == 0 || lastTime+ir.refreshInterval < now
+ }
+ 
+ // WithRefreshIntervalOnFailure sets refresh interval on failure.
+diff --git a/internal/devserver/config.go b/internal/devserver/config.go
+index aa11b2fd6d0258a8e6be143d3e5ff585349e0e9a..1f94e4755691d1c7c0f391969928561e5c694b3f 100644
+--- a/internal/devserver/config.go
++++ b/internal/devserver/config.go
+@@ -9,5 +9,5 @@ type Config struct {
+ 	HealthPath     string `json:",default=/healthz"`
+ 	EnableMetrics  bool   `json:",default=true"`
+ 	EnablePprof    bool   `json:",default=true"`
+-	HealthRespInfo string `json:",default=OK"`
++	HealthResponse string `json:",default=OK"`
+ }
+diff --git a/internal/devserver/server.go b/internal/devserver/server.go
+index 57293adc88e9a59aa2dbb55720bee41682168419..069612b1f358c0ad28894d8ca4401f5897323b4d 100644
+--- a/internal/devserver/server.go
++++ b/internal/devserver/server.go
+@@ -16,8 +16,8 @@ import (
+ 
+ var once sync.Once
+ 
+-// Server is inner http server, expose some useful observability information of app.
+-// For example health check, metrics and pprof.
++// Server is an inner http server, expose some useful observability information of app.
++// For example, health check, metrics and pprof.
+ type Server struct {
+ 	config Config
+ 	server *http.ServeMux
+@@ -37,8 +37,9 @@ func (s *Server) addRoutes(c Config) {
+ 	s.handleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+ 		_ = json.NewEncoder(w).Encode(s.routes)
+ 	})
++
+ 	// health
+-	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthRespInfo))
++	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthResponse))
+ 
+ 	// metrics
+ 	if s.config.EnableMetrics {
+@@ -46,6 +47,7 @@ func (s *Server) addRoutes(c Config) {
+ 		prometheus.Enable()
+ 		s.handleFunc(s.config.MetricsPath, promhttp.Handler().ServeHTTP)
+ 	}
++
+ 	// pprof
+ 	if s.config.EnablePprof {
+ 		s.handleFunc("/debug/pprof/", pprof.Index)
+@@ -75,10 +77,11 @@ func (s *Server) StartAsync(c Config) {
+ 
+ // StartAgent start inner http server by config.
+ func StartAgent(c Config) {
++	if !c.Enabled {
++		return
++	}
+ 	once.Do(func() {
+-		if c.Enabled {
+-			s := NewServer(c)
+-			s.StartAsync(c)
+-		}
++		s := NewServer(c)
++		s.StartAsync(c)
+ 	})
+ }
+diff --git a/internal/health/health.go b/internal/health/health.go
+index 4711ee5067d6812b970d38e4deafb010346b52e6..afa299d6358486b44992fbcc8ff90c631b49c04a 100644
+--- a/internal/health/health.go
++++ b/internal/health/health.go
+@@ -13,7 +13,7 @@ import (
+ var defaultHealthManager = newComboHealthManager()
+ 
+ type (
+-	// Probe represents readiness status of given component.
++	// Probe represents readiness status of a given component.
+ 	Probe interface {
+ 		// MarkReady sets a ready state for the endpoint handlers.
+ 		MarkReady()
+@@ -44,10 +44,10 @@ func AddProbe(probe Probe) {
+ }
+ 
+ // CreateHttpHandler create health http handler base on given probe.
+-func CreateHttpHandler(healthRespInfo string) http.HandlerFunc {
++func CreateHttpHandler(healthResponse string) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, _ *http.Request) {
+ 		if defaultHealthManager.IsReady() {
+-			_, _ = w.Write([]byte(healthRespInfo))
++			_, _ = w.Write([]byte(healthResponse))
+ 		} else {
+ 			http.Error(w, "Service Unavailable\n"+defaultHealthManager.verboseInfo(),
+ 				http.StatusServiceUnavailable)

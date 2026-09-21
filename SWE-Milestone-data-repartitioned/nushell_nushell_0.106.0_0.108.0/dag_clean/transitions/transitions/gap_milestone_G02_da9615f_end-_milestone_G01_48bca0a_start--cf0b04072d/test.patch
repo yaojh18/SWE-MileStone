@@ -1,0 +1,335 @@
+diff --git a/crates/nu-cli/tests/completions/mod.rs b/crates/nu-cli/tests/completions/mod.rs
+index 9090e055371ba0b518cbdddcc539ff5fab523d02..9f1c8bf75d6268bcdca01dfab73a4092dc69440f 100644
+--- a/crates/nu-cli/tests/completions/mod.rs
++++ b/crates/nu-cli/tests/completions/mod.rs
+@@ -2140,8 +2140,7 @@ fn run_external_completion_within_pwd(
+     assert!(engine_state.merge_delta(delta).is_ok());
+ 
+     assert!(
+-        eval_block::<WithoutDebug>(&engine_state, &mut stack, &block, PipelineData::empty())
+-            .is_ok()
++        eval_block::<WithoutDebug>(&engine_state, &mut stack, &block, PipelineData::Empty).is_ok()
+     );
+ 
+     // Merge environment into the permanent state
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index 2d5334a0b00328cfa9397e59b6dd6ad91f747076..a6e429eb5d2842dc935de0505cbc1afdca6e6c61 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -79,13 +79,7 @@ pub fn new_external_engine() -> EngineState {
+     let internal_span = nu_protocol::Span::new(0, dir_str.len());
+     engine.add_env_var(
+         "PATH".to_string(),
+-        Value::List {
+-            vals: vec![Value::String {
+-                val: dir_str,
+-                internal_span,
+-            }],
+-            internal_span,
+-        },
++        Value::list(vec![Value::string(dir_str, internal_span)], internal_span),
+     );
+     engine
+ }
+diff --git a/crates/nu-command/tests/commands/start.rs b/crates/nu-command/tests/commands/start.rs
+index 01115ec3c189821d101a2b9e6ac5ebc6af4fc2f9..55507be5d65f87d70ec292d0bd37a236068d433b 100644
+--- a/crates/nu-command/tests/commands/start.rs
++++ b/crates/nu-command/tests/commands/start.rs
+@@ -2,9 +2,9 @@ use super::*;
+ use nu_engine::test_help::{convert_single_value_to_cmd_args, eval_block_with_input};
+ use nu_engine::{current_dir, eval_expression};
+ use nu_protocol::{
+-    PipelineData, Span, Spanned, Type, Value,
+     ast::Call,
+     engine::{EngineState, Stack, StateWorkingSet},
++    PipelineData, Span, Spanned, Type, Value,
+ };
+ use std::path::PathBuf;
+ 
+@@ -33,14 +33,19 @@ fn test_start_valid_url() {
+ 
+     // Create call for: `start https://www.example.com`
+     let path = "https://www.example.com".to_string();
+-    let span = Span::test_data();
++    let span = Span::test_data(); 
+     let call = Call::test(
+         "start",
+         // The arguments for `start` are just the path in this case
+         vec![Value::string(path, span)],
+     );
+ 
+-    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
++    let result = Start.run(
++        &engine_state,
++        &mut stack,
++        &call,
++        PipelineData::Empty,
++    );
+ 
+     assert!(
+         result.is_ok(),
+@@ -56,9 +61,17 @@ fn test_start_valid_local_path() {
+     // Here we'll simulate opening the current directory (`.`).
+     let path = ".".to_string();
+     let span = Span::test_data();
+-    let call = Call::test("start", vec![Value::string(path, span)]);
++    let call = Call::test(
++        "start",
++        vec![Value::string(path, span)],
++    );
+ 
+-    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
++    let result = Start.run(
++        &engine_state,
++        &mut stack,
++        &call,
++        PipelineData::Empty,
++    );
+ 
+     // If the environment is correctly set, it should succeed.
+     // If you're running in a CI environment or restricted environment
+@@ -77,9 +90,17 @@ fn test_start_nonexistent_local_path() {
+     // Create an obviously invalid path
+     let path = "this_file_does_not_exist_hopefully.txt".to_string();
+     let span = Span::test_data();
+-    let call = Call::test("start", vec![Value::string(path, span)]);
++    let call = Call::test(
++        "start",
++        vec![Value::string(path, span)],
++    );
+ 
+-    let result = Start.run(&engine_state, &mut stack, &call, PipelineData::empty);
++    let result = Start.run(
++        &engine_state,
++        &mut stack,
++        &call,
++        PipelineData::Empty,
++    );
+ 
+     // We expect an error since the file does not exist
+     assert!(
+@@ -96,5 +117,4 @@ fn test_start_nonexistent_local_path() {
+     } else {
+         panic!("Unexpected error type, expected ShellError::GenericError");
+     }
+-}
+-
++}
+\ No newline at end of file
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index 34c3a722dd09707b9cfad6c05adbee342e882f99..392d50ec5d78f5468175d0181384ee65b0676d53 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -302,7 +302,7 @@ fn write_pipeline_data_empty() -> Result<(), ShellError> {
+     let manager = TestInterfaceManager::new(&test);
+     let interface = manager.get_interface();
+ 
+-    let (header, writer) = interface.init_write_pipeline_data(PipelineData::empty(), &())?;
++    let (header, writer) = interface.init_write_pipeline_data(PipelineData::Empty, &())?;
+ 
+     assert!(matches!(header, PipelineDataHeader::Empty));
+ 
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::list_stream(
++    let pipe = PipelineData::ListStream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::byte_stream(
++    let data = PipelineData::ByteStream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 704c885347a54edacde0a1023ac10b116a5ee99d..011607959a8fb30bdd3a378a9f079b8c4b7dde88 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,7 +45,6 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -56,7 +55,6 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -67,7 +65,6 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
+         })
+     );
+ 
+@@ -81,7 +78,6 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
+         })
+     );
+ 
+@@ -95,7 +91,6 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
+         })
+     );
+ }
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index 0cc4bc4cfea9fcf8a1606294a6fbd861b14975cd..45b890653cba50ec336b439ff5f676475f2bbc11 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -618,11 +618,6 @@ fn single_value_row_condition() -> TestResult {
+     )
+ }
+ 
+-#[test]
+-fn row_condition_non_boolean() -> TestResult {
+-    fail_test(r#"[1 2 3] | where 1"#, "expected bool")
+-}
+-
+ #[test]
+ fn performance_nested_lists() -> TestResult {
+     // Parser used to be exponential on deeply nested lists
+diff --git a/tests/repl/test_ranges.rs b/tests/repl/test_ranges.rs
+index a9691c7afe565b96b3d06fb3051df2fa08dbc5eb..92e03b1321260d428a8f1244d8cad33bdb80f9a3 100644
+--- a/tests/repl/test_ranges.rs
++++ b/tests/repl/test_ranges.rs
+@@ -1,5 +1,4 @@
+ use crate::repl::tests::{TestResult, fail_test, run_test};
+-use rstest::rstest;
+ 
+ #[test]
+ fn int_in_inc_range() -> TestResult {
+@@ -48,8 +47,7 @@ fn zip_ranges() -> TestResult {
+ 
+ #[test]
+ fn int_in_stepped_range() -> TestResult {
+-    run_test(r#"7 in 1..3..15"#, "true")?;
+-    run_test(r#"7 in 1..3..=15"#, "true")
++    run_test(r#"7 in 1..3..15"#, "true")
+ }
+ 
+ #[test]
+@@ -76,14 +74,3 @@ fn float_in_unbounded_stepped_range() -> TestResult {
+ fn float_not_in_unbounded_stepped_range() -> TestResult {
+     run_test(r#"2.1 in 1.2..3.."#, "false")
+ }
+-
+-#[rstest]
+-#[case("1..=3..", "expected number")]
+-#[case("..=3..=15", "expected number")]
+-#[case("..=(..", "expected closing )")]
+-#[case("..=()..", "expected at least one range bound")]
+-#[case("..=..", "expected at least one range bound")]
+-#[test]
+-fn bad_range_syntax(#[case] input: &str, #[case] expect: &str) -> TestResult {
+-    fail_test(&format!("def foo [r: range] {{}}; foo {input}"), expect)
+-}
+diff --git a/tests/repl/test_type_check.rs b/tests/repl/test_type_check.rs
+index c39ae5653ca33deba69bd770cc53a3d8e2d820dc..2fbc5a78426cd6d5df704a999c995aa24afc709b 100644
+--- a/tests/repl/test_type_check.rs
++++ b/tests/repl/test_type_check.rs
+@@ -1,4 +1,4 @@
+-use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains};
++use crate::repl::tests::{TestResult, fail_test, run_test};
+ use rstest::rstest;
+ 
+ #[test]
+@@ -178,62 +178,3 @@ fn in_oneof_block_expected_type(#[case] input: &str) -> TestResult {
+ fn in_oneof_block_expected_block() -> TestResult {
+     fail_test("match 1 { 0 => { try 3 } }", "expected block")
+ }
+-
+-#[test]
+-fn pipeline_multiple_types() -> TestResult {
+-    // https://github.com/nushell/nushell/issues/15485
+-    run_test_contains("{year: 2019} | into datetime | date humanize", "years ago")
+-}
+-
+-const MULTIPLE_TYPES_DEFS: &str = "
+-def foo []: [int -> int, int -> string] {
+-  if $in > 2 { 'hi' } else 4
+-}
+-def bar []: [int -> filesize, string -> string] {
+-  if $in == 'hi' { 'meow' } else { into filesize }
+-}
+-";
+-
+-#[test]
+-fn pipeline_multiple_types_custom() -> TestResult {
+-    run_test(
+-        &format!(
+-            "{MULTIPLE_TYPES_DEFS}
+-            5 | foo | str trim"
+-        ),
+-        "hi",
+-    )
+-}
+-
+-#[test]
+-fn pipeline_multiple_types_propagate_string() -> TestResult {
+-    run_test(
+-        &format!(
+-            "{MULTIPLE_TYPES_DEFS}
+-            5 | foo | bar | str trim"
+-        ),
+-        "meow",
+-    )
+-}
+-
+-#[test]
+-fn pipeline_multiple_types_propagate_int() -> TestResult {
+-    run_test(
+-        &format!(
+-            "{MULTIPLE_TYPES_DEFS}
+-            2 | foo | bar | format filesize B"
+-        ),
+-        "4 B",
+-    )
+-}
+-
+-#[test]
+-fn pipeline_multiple_types_propagate_error() -> TestResult {
+-    fail_test(
+-        &format!(
+-            "{MULTIPLE_TYPES_DEFS}
+-            2 | foo | bar | values"
+-        ),
+-        "parser::input_type_mismatch",
+-    )
+-}

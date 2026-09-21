@@ -1,0 +1,1281 @@
+diff --git a/src/MatrixClientPeg.ts b/src/MatrixClientPeg.ts
+index 9682b418008e03d6c6f3ce4ebbe61301373b9c26..288878cddc555a09b585db3f0cac3ac1a286dc76 100644
+--- a/src/MatrixClientPeg.ts
++++ b/src/MatrixClientPeg.ts
+@@ -299,6 +299,12 @@ class MatrixClientPegClass implements IMatrixClientPeg {
+         opts.threadSupport = true;
+ 
+         if (SettingsStore.getValue("feature_sliding_sync")) {
++            throw new UserFriendlyError("sliding_sync_legacy_no_longer_supported");
++        }
++
++        // If the user has enabled the labs feature for sliding sync, set it up
++        // otherwise check if the feature is supported
++        if (SettingsStore.getValue("feature_simplified_sliding_sync")) {
+             opts.slidingSync = await SlidingSyncManager.instance.setup(this.matrixClient);
+         } else {
+             SlidingSyncManager.instance.checkSupport(this.matrixClient);
+diff --git a/src/SlidingSyncManager.ts b/src/SlidingSyncManager.ts
+index adfca7c3c3669b149eb6b1acb77599c8cc5e5b95..88b839312d1e9d45693da41d8222b727bb47f39a 100644
+--- a/src/SlidingSyncManager.ts
++++ b/src/SlidingSyncManager.ts
+@@ -36,45 +36,51 @@ Please see LICENSE files in the repository root for full details.
+  *                      list ops)
+  */
+ 
+-import { type MatrixClient, EventType, AutoDiscovery, Method, timeoutSignal } from "matrix-js-sdk/src/matrix";
++import { type MatrixClient, ClientEvent, EventType, type Room } from "matrix-js-sdk/src/matrix";
+ import {
+     type MSC3575Filter,
+     type MSC3575List,
++    type MSC3575SlidingSyncResponse,
+     MSC3575_STATE_KEY_LAZY,
+     MSC3575_STATE_KEY_ME,
+     MSC3575_WILDCARD,
+     SlidingSync,
++    SlidingSyncEvent,
++    SlidingSyncState,
+ } from "matrix-js-sdk/src/sliding-sync";
+ import { logger } from "matrix-js-sdk/src/logger";
+ import { defer, sleep } from "matrix-js-sdk/src/utils";
+ 
+-import SettingsStore from "./settings/SettingsStore";
+-import SlidingSyncController from "./settings/controllers/SlidingSyncController";
+-
+ // how long to long poll for
+ const SLIDING_SYNC_TIMEOUT_MS = 20 * 1000;
+ 
++// The state events we will get for every single room/space/old room/etc
++// This list is only augmented when a direct room subscription is made. (e.g you view a room)
++const REQUIRED_STATE_LIST = [
++    [EventType.RoomJoinRules, ""], // the public icon on the room list
++    [EventType.RoomAvatar, ""], // any room avatar
++    [EventType.RoomCanonicalAlias, ""], // for room name calculations
++    [EventType.RoomTombstone, ""], // lets JS SDK hide rooms which are dead
++    [EventType.RoomEncryption, ""], // lets rooms be configured for E2EE correctly
++    [EventType.RoomCreate, ""], // for isSpaceRoom checks
++    [EventType.SpaceChild, MSC3575_WILDCARD], // all space children
++    [EventType.SpaceParent, MSC3575_WILDCARD], // all space parents
++    [EventType.RoomMember, MSC3575_STATE_KEY_ME], // lets the client calculate that we are in fact in the room
++];
++
+ // the things to fetch when a user clicks on a room
+ const DEFAULT_ROOM_SUBSCRIPTION_INFO = {
+     timeline_limit: 50,
+     // missing required_state which will change depending on the kind of room
+     include_old_rooms: {
+         timeline_limit: 0,
+-        required_state: [
+-            // state needed to handle space navigation and tombstone chains
+-            [EventType.RoomCreate, ""],
+-            [EventType.RoomTombstone, ""],
+-            [EventType.SpaceChild, MSC3575_WILDCARD],
+-            [EventType.SpaceParent, MSC3575_WILDCARD],
+-            [EventType.RoomMember, MSC3575_STATE_KEY_ME],
+-        ],
++        required_state: REQUIRED_STATE_LIST,
+     },
+ };
+ // lazy load room members so rooms like Matrix HQ don't take forever to load
+ const UNENCRYPTED_SUBSCRIPTION_NAME = "unencrypted";
+ const UNENCRYPTED_SUBSCRIPTION = {
+     required_state: [
+-        [MSC3575_WILDCARD, MSC3575_WILDCARD], // all events
+         [EventType.RoomMember, MSC3575_STATE_KEY_ME], // except for m.room.members, get our own membership
+         [EventType.RoomMember, MSC3575_STATE_KEY_LAZY], // ...and lazy load the rest.
+     ],
+@@ -90,6 +96,72 @@ const ENCRYPTED_SUBSCRIPTION = {
+     ...DEFAULT_ROOM_SUBSCRIPTION_INFO,
+ };
+ 
++// the complete set of lists made in SSS. The manager will spider all of these lists depending
++// on the count for each one.
++const sssLists: Record<string, MSC3575List> = {
++    spaces: {
++        ranges: [[0, 10]],
++        timeline_limit: 0, // we don't care about the most recent message for spaces
++        required_state: REQUIRED_STATE_LIST,
++        include_old_rooms: {
++            timeline_limit: 0,
++            required_state: REQUIRED_STATE_LIST,
++        },
++        filters: {
++            room_types: ["m.space"],
++        },
++    },
++    invites: {
++        ranges: [[0, 10]],
++        timeline_limit: 1, // most recent message display
++        required_state: REQUIRED_STATE_LIST,
++        include_old_rooms: {
++            timeline_limit: 0,
++            required_state: REQUIRED_STATE_LIST,
++        },
++        filters: {
++            is_invite: true,
++        },
++    },
++    favourites: {
++        ranges: [[0, 10]],
++        timeline_limit: 1, // most recent message display
++        required_state: REQUIRED_STATE_LIST,
++        include_old_rooms: {
++            timeline_limit: 0,
++            required_state: REQUIRED_STATE_LIST,
++        },
++        filters: {
++            tags: ["m.favourite"],
++        },
++    },
++    dms: {
++        ranges: [[0, 10]],
++        timeline_limit: 1, // most recent message display
++        required_state: REQUIRED_STATE_LIST,
++        include_old_rooms: {
++            timeline_limit: 0,
++            required_state: REQUIRED_STATE_LIST,
++        },
++        filters: {
++            is_dm: true,
++            is_invite: false,
++            // If a DM has a Favourite & Low Prio tag then it'll be shown in those lists instead
++            not_tags: ["m.favourite", "m.lowpriority"],
++        },
++    },
++    untagged: {
++        // SSS will dupe suppress invites/dms from here, so we don't need "not dms, not invites"
++        ranges: [[0, 10]],
++        timeline_limit: 1, // most recent message display
++        required_state: REQUIRED_STATE_LIST,
++        include_old_rooms: {
++            timeline_limit: 0,
++            required_state: REQUIRED_STATE_LIST,
++        },
++    },
++};
++
+ export type PartialSlidingSyncRequest = {
+     filters?: MSC3575Filter;
+     sort?: string[];
+@@ -103,6 +175,8 @@ export type PartialSlidingSyncRequest = {
+  * sync options and code.
+  */
+ export class SlidingSyncManager {
++    public static serverSupportsSlidingSync: boolean;
++
+     public static readonly ListSpaces = "space_list";
+     public static readonly ListSearch = "search_list";
+     private static readonly internalInstance = new SlidingSyncManager();
+@@ -116,48 +190,17 @@ export class SlidingSyncManager {
+         return SlidingSyncManager.internalInstance;
+     }
+ 
+-    public configure(client: MatrixClient, proxyUrl: string): SlidingSync {
++    private configure(client: MatrixClient, proxyUrl: string): SlidingSync {
+         this.client = client;
++        // create the set of lists we will use.
++        const lists = new Map();
++        for (const listName in sssLists) {
++            lists.set(listName, sssLists[listName]);
++        }
+         // by default use the encrypted subscription as that gets everything, which is a safer
+         // default than potentially missing member events.
+-        this.slidingSync = new SlidingSync(
+-            proxyUrl,
+-            new Map(),
+-            ENCRYPTED_SUBSCRIPTION,
+-            client,
+-            SLIDING_SYNC_TIMEOUT_MS,
+-        );
++        this.slidingSync = new SlidingSync(proxyUrl, lists, ENCRYPTED_SUBSCRIPTION, client, SLIDING_SYNC_TIMEOUT_MS);
+         this.slidingSync.addCustomSubscription(UNENCRYPTED_SUBSCRIPTION_NAME, UNENCRYPTED_SUBSCRIPTION);
+-        // set the space list
+-        this.slidingSync.setList(SlidingSyncManager.ListSpaces, {
+-            ranges: [[0, 20]],
+-            sort: ["by_name"],
+-            slow_get_all_rooms: true,
+-            timeline_limit: 0,
+-            required_state: [
+-                [EventType.RoomJoinRules, ""], // the public icon on the room list
+-                [EventType.RoomAvatar, ""], // any room avatar
+-                [EventType.RoomTombstone, ""], // lets JS SDK hide rooms which are dead
+-                [EventType.RoomEncryption, ""], // lets rooms be configured for E2EE correctly
+-                [EventType.RoomCreate, ""], // for isSpaceRoom checks
+-                [EventType.SpaceChild, MSC3575_WILDCARD], // all space children
+-                [EventType.SpaceParent, MSC3575_WILDCARD], // all space parents
+-                [EventType.RoomMember, MSC3575_STATE_KEY_ME], // lets the client calculate that we are in fact in the room
+-            ],
+-            include_old_rooms: {
+-                timeline_limit: 0,
+-                required_state: [
+-                    [EventType.RoomCreate, ""],
+-                    [EventType.RoomTombstone, ""], // lets JS SDK hide rooms which are dead
+-                    [EventType.SpaceChild, MSC3575_WILDCARD], // all space children
+-                    [EventType.SpaceParent, MSC3575_WILDCARD], // all space parents
+-                    [EventType.RoomMember, MSC3575_STATE_KEY_ME], // lets the client calculate that we are in fact in the room
+-                ],
+-            },
+-            filters: {
+-                room_types: ["m.space"],
+-            },
+-        });
+         this.configureDefer.resolve();
+         return this.slidingSync;
+     }
+@@ -220,99 +263,113 @@ export class SlidingSyncManager {
+         return this.slidingSync!.getListParams(listKey)!;
+     }
+ 
+-    public async setRoomVisible(roomId: string, visible: boolean): Promise<string> {
++    /**
++     * Announces that the user has chosen to view the given room and that room will now
++     * be displayed, so it should have more state loaded.
++     * @param roomId The room to set visible
++     */
++    public async setRoomVisible(roomId: string): Promise<void> {
+         await this.configureDefer.promise;
+         const subscriptions = this.slidingSync!.getRoomSubscriptions();
+-        if (visible) {
+-            subscriptions.add(roomId);
+-        } else {
+-            subscriptions.delete(roomId);
+-        }
++        if (subscriptions.has(roomId)) return;
++
++        subscriptions.add(roomId);
++
+         const room = this.client?.getRoom(roomId);
+-        let shouldLazyLoad = !(await this.client?.getCrypto()?.isEncryptionEnabledInRoom(roomId));
+-        if (!room) {
+-            // default to safety: request all state if we can't work it out. This can happen if you
+-            // refresh the app whilst viewing a room: we call setRoomVisible before we know anything
+-            // about the room.
+-            shouldLazyLoad = false;
++        // default to safety: request all state if we can't work it out. This can happen if you
++        // refresh the app whilst viewing a room: we call setRoomVisible before we know anything
++        // about the room.
++        let shouldLazyLoad = false;
++        if (room) {
++            // do not lazy load encrypted rooms as we need the entire member list.
++            shouldLazyLoad = !(await this.client?.getCrypto()?.isEncryptionEnabledInRoom(roomId));
+         }
+-        logger.log("SlidingSync setRoomVisible:", roomId, visible, "shouldLazyLoad:", shouldLazyLoad);
++        logger.log("SlidingSync setRoomVisible:", roomId, "shouldLazyLoad:", shouldLazyLoad);
+         if (shouldLazyLoad) {
+             // lazy load this room
+             this.slidingSync!.useCustomSubscription(roomId, UNENCRYPTED_SUBSCRIPTION_NAME);
+         }
+-        const p = this.slidingSync!.modifyRoomSubscriptions(subscriptions);
++        this.slidingSync!.modifyRoomSubscriptions(subscriptions);
+         if (room) {
+-            return roomId; // we have data already for this room, show immediately e.g it's in a list
++            return; // we have data already for this room, show immediately e.g it's in a list
+         }
+-        try {
+-            // wait until the next sync before returning as RoomView may need to know the current state
+-            await p;
+-        } catch {
+-            logger.warn("SlidingSync setRoomVisible:", roomId, visible, "failed to confirm transaction");
+-        }
+-        return roomId;
++        // wait until we know about this room. This may take a little while.
++        return new Promise((resolve) => {
++            logger.log(`SlidingSync setRoomVisible room ${roomId} not found, waiting for ClientEvent.Room`);
++            const waitForRoom = (r: Room): void => {
++                if (r.roomId === roomId) {
++                    this.client?.off(ClientEvent.Room, waitForRoom);
++                    logger.log(`SlidingSync room ${roomId} found, resolving setRoomVisible`);
++                    resolve();
++                }
++            };
++            this.client?.on(ClientEvent.Room, waitForRoom);
++        });
+     }
+ 
+     /**
+-     * Retrieve all rooms on the user's account. Used for pre-populating the local search cache.
+-     * Retrieval is gradual over time.
++     * Retrieve all rooms on the user's account. Retrieval is gradual over time.
++     * This function MUST be called BEFORE the first sync request goes out.
+      * @param batchSize The number of rooms to return in each request.
+      * @param gapBetweenRequestsMs The number of milliseconds to wait between requests.
+      */
+-    public async startSpidering(batchSize: number, gapBetweenRequestsMs: number): Promise<void> {
+-        await sleep(gapBetweenRequestsMs); // wait a bit as this is called on first render so let's let things load
+-        let startIndex = batchSize;
+-        let hasMore = true;
+-        let firstTime = true;
+-        while (hasMore) {
+-            const endIndex = startIndex + batchSize - 1;
+-            try {
+-                const ranges = [
+-                    [0, batchSize - 1],
+-                    [startIndex, endIndex],
+-                ];
+-                if (firstTime) {
+-                    await this.slidingSync!.setList(SlidingSyncManager.ListSearch, {
+-                        // e.g [0,19] [20,39] then [0,19] [40,59]. We keep [0,20] constantly to ensure
+-                        // any changes to the list whilst spidering are caught.
+-                        ranges: ranges,
+-                        sort: [
+-                            "by_recency", // this list isn't shown on the UI so just sorting by timestamp is enough
+-                        ],
+-                        timeline_limit: 0, // we only care about the room details, not messages in the room
+-                        required_state: [
+-                            [EventType.RoomJoinRules, ""], // the public icon on the room list
+-                            [EventType.RoomAvatar, ""], // any room avatar
+-                            [EventType.RoomTombstone, ""], // lets JS SDK hide rooms which are dead
+-                            [EventType.RoomEncryption, ""], // lets rooms be configured for E2EE correctly
+-                            [EventType.RoomCreate, ""], // for isSpaceRoom checks
+-                            [EventType.RoomMember, MSC3575_STATE_KEY_ME], // lets the client calculate that we are in fact in the room
+-                        ],
+-                        // we don't include_old_rooms here in an effort to reduce the impact of spidering all rooms
+-                        // on the user's account. This means some data in the search dialog results may be inaccurate
+-                        // e.g membership of space, but this will be corrected when the user clicks on the room
+-                        // as the direct room subscription does include old room iterations.
+-                        filters: {
+-                            // we get spaces via a different list, so filter them out
+-                            not_room_types: ["m.space"],
+-                        },
+-                    });
+-                } else {
+-                    await this.slidingSync!.setListRanges(SlidingSyncManager.ListSearch, ranges);
++    private async startSpidering(
++        slidingSync: SlidingSync,
++        batchSize: number,
++        gapBetweenRequestsMs: number,
++    ): Promise<void> {
++        // The manager has created several lists (see `sssLists` in this file), all of which will be spidered simultaneously.
++        // There are multiple lists to ensure that we can populate invites/favourites/DMs sections immediately, rather than
++        // potentially waiting minutes if they are all very old rooms (and hence are returned last by the server). In this
++        // way, the lists are effectively priority requests. We don't actually care which room goes into which list at this
++        // point, as the RoomListStore will calculate this based on the returned data.
++
++        // copy the initial set of list names and ranges, we'll keep this map updated.
++        const listToUpperBound = new Map(
++            Object.keys(sssLists).map((listName) => {
++                return [listName, sssLists[listName].ranges[0][1]];
++            }),
++        );
++        console.log("startSpidering:", listToUpperBound);
++
++        // listen for a response from the server. ANY 200 OK will do here, as we assume that it is ACKing
++        // the request change we have sent out. TODO: this may not be true if you concurrently subscribe to a room :/
++        // but in that case, for spidering at least, it isn't the end of the world as request N+1 includes all indexes
++        // from request N.
++        const lifecycle = async (
++            state: SlidingSyncState,
++            _: MSC3575SlidingSyncResponse | null,
++            err?: Error,
++        ): Promise<void> => {
++            if (state !== SlidingSyncState.Complete) {
++                return;
++            }
++            await sleep(gapBetweenRequestsMs); // don't tightloop; even on errors
++            if (err) {
++                return;
++            }
++
++            // for all lists with total counts > range => increase the range
++            let hasSetRanges = false;
++            listToUpperBound.forEach((currentUpperBound, listName) => {
++                const totalCount = slidingSync.getListData(listName)?.joinedCount || 0;
++                if (currentUpperBound < totalCount) {
++                    // increment the upper bound
++                    const newUpperBound = currentUpperBound + batchSize;
++                    console.log(`startSpidering: ${listName} ${currentUpperBound} => ${newUpperBound}`);
++                    listToUpperBound.set(listName, newUpperBound);
++                    // make the next request. This will only send the request when this callback has finished, so if
++                    // we set all the list ranges at once we will only send 1 new request.
++                    slidingSync.setListRanges(listName, [[0, newUpperBound]]);
++                    hasSetRanges = true;
+                 }
+-            } catch {
+-                // do nothing, as we reject only when we get interrupted but that's fine as the next
+-                // request will include our data
+-            } finally {
+-                // gradually request more over time, even on errors.
+-                await sleep(gapBetweenRequestsMs);
++            });
++            if (!hasSetRanges) {
++                // finish spidering
++                slidingSync.off(SlidingSyncEvent.Lifecycle, lifecycle);
+             }
+-            const listData = this.slidingSync!.getListData(SlidingSyncManager.ListSearch)!;
+-            hasMore = endIndex + 1 < listData.joinedCount;
+-            startIndex += batchSize;
+-            firstTime = false;
+-        }
++        };
++        slidingSync.on(SlidingSyncEvent.Lifecycle, lifecycle);
+     }
+ 
+     /**
+@@ -325,42 +382,10 @@ export class SlidingSyncManager {
+      * @returns A working Sliding Sync or undefined
+      */
+     public async setup(client: MatrixClient): Promise<SlidingSync | undefined> {
+-        const baseUrl = client.baseUrl;
+-        const proxyUrl = SettingsStore.getValue("feature_sliding_sync_proxy_url");
+-        const wellKnownProxyUrl = await this.getProxyFromWellKnown(client);
+-
+-        const slidingSyncEndpoint = proxyUrl || wellKnownProxyUrl || baseUrl;
+-
+-        this.configure(client, slidingSyncEndpoint);
+-        logger.info("Sliding sync activated at", slidingSyncEndpoint);
+-        this.startSpidering(100, 50); // 100 rooms at a time, 50ms apart
+-
+-        return this.slidingSync;
+-    }
+-
+-    /**
+-     * Get the sliding sync proxy URL from the client well known
+-     * @param client The MatrixClient to use
+-     * @return The proxy url
+-     */
+-    public async getProxyFromWellKnown(client: MatrixClient): Promise<string | undefined> {
+-        let proxyUrl: string | undefined;
+-
+-        try {
+-            const clientDomain = await client.getDomain();
+-            if (clientDomain === null) {
+-                throw new RangeError("Homeserver domain is null");
+-            }
+-            const clientWellKnown = await AutoDiscovery.findClientConfig(clientDomain);
+-            proxyUrl = clientWellKnown?.["org.matrix.msc3575.proxy"]?.url;
+-        } catch {
+-            // Either client.getDomain() is null so we've shorted out, or is invalid so `AutoDiscovery.findClientConfig` has thrown
+-        }
+-
+-        if (proxyUrl != undefined) {
+-            logger.log("getProxyFromWellKnown: client well-known declares sliding sync proxy at", proxyUrl);
+-        }
+-        return proxyUrl;
++        const slidingSync = this.configure(client, client.baseUrl);
++        logger.info("Simplified Sliding Sync activated at", client.baseUrl);
++        this.startSpidering(slidingSync, 50, 50); // 50 rooms at a time, 50ms apart
++        return slidingSync;
+     }
+ 
+     /**
+@@ -371,9 +396,9 @@ export class SlidingSyncManager {
+     public async nativeSlidingSyncSupport(client: MatrixClient): Promise<boolean> {
+         // Per https://github.com/matrix-org/matrix-spec-proposals/pull/3575/files#r1589542561
+         // `client` can be undefined/null in tests for some reason.
+-        const support = await client?.doesServerSupportUnstableFeature("org.matrix.msc3575");
++        const support = await client?.doesServerSupportUnstableFeature("org.matrix.simplified_msc3575");
+         if (support) {
+-            logger.log("nativeSlidingSyncSupport: sliding sync advertised as unstable");
++            logger.log("nativeSlidingSyncSupport: org.matrix.simplified_msc3575 sliding sync advertised as unstable");
+         }
+         return support;
+     }
+@@ -387,20 +412,9 @@ export class SlidingSyncManager {
+      */
+     public async checkSupport(client: MatrixClient): Promise<void> {
+         if (await this.nativeSlidingSyncSupport(client)) {
+-            SlidingSyncController.serverSupportsSlidingSync = true;
++            SlidingSyncManager.serverSupportsSlidingSync = true;
+             return;
+         }
+-
+-        const proxyUrl = await this.getProxyFromWellKnown(client);
+-        if (proxyUrl != undefined) {
+-            const response = await fetch(new URL("/client/server.json", proxyUrl), {
+-                method: Method.Get,
+-                signal: timeoutSignal(10 * 1000), // 10s
+-            });
+-            if (response.status === 200) {
+-                logger.log("checkSupport: well-known sliding sync proxy is up at", proxyUrl);
+-                SlidingSyncController.serverSupportsSlidingSync = true;
+-            }
+-        }
++        SlidingSyncManager.serverSupportsSlidingSync = false;
+     }
+ }
+diff --git a/src/Unread.ts b/src/Unread.ts
+index 2c8fa0cff3925084f99e8d7a9ee61bce4946c997..e8f4769e25f329de38a92849f542aef3c8ba6ec3 100644
+--- a/src/Unread.ts
++++ b/src/Unread.ts
+@@ -11,7 +11,6 @@ import { logger } from "matrix-js-sdk/src/logger";
+ 
+ import shouldHideEvent from "./shouldHideEvent";
+ import { haveRendererForEvent } from "./events/EventTileFactory";
+-import SettingsStore from "./settings/SettingsStore";
+ import { RoomNotifState, getRoomNotifsState } from "./RoomNotifs";
+ 
+ /**
+@@ -44,12 +43,6 @@ export function eventTriggersUnreadCount(client: MatrixClient, ev: MatrixEvent):
+ }
+ 
+ export function doesRoomHaveUnreadMessages(room: Room, includeThreads: boolean): boolean {
+-    if (SettingsStore.getValue("feature_sliding_sync")) {
+-        // TODO: https://github.com/vector-im/element-web/issues/23207
+-        // Sliding Sync doesn't support unread indicator dots (yet...)
+-        return false;
+-    }
+-
+     const toCheck: Array<Room | Thread> = [room];
+     if (includeThreads) {
+         toCheck.push(...room.getThreads());
+diff --git a/src/components/views/rooms/RoomSublist.tsx b/src/components/views/rooms/RoomSublist.tsx
+index de313246b1fb1ddf1820d67b49de893e95a5ba3c..3c54b98b0eab63c705cd69bdb16ee073d69e1513 100644
+--- a/src/components/views/rooms/RoomSublist.tsx
++++ b/src/components/views/rooms/RoomSublist.tsx
+@@ -42,8 +42,6 @@ import ContextMenu, {
+ } from "../../structures/ContextMenu";
+ import AccessibleButton, { type ButtonEvent } from "../../views/elements/AccessibleButton";
+ import type ExtraTile from "./ExtraTile";
+-import SettingsStore from "../../../settings/SettingsStore";
+-import { SlidingSyncManager } from "../../../SlidingSyncManager";
+ import NotificationBadge from "./NotificationBadge";
+ import RoomTile from "./RoomTile";
+ 
+@@ -106,12 +104,8 @@ export default class RoomSublist extends React.Component<IProps, IState> {
+     private heightAtStart: number;
+     private notificationState: ListNotificationState;
+ 
+-    private slidingSyncMode: boolean;
+-
+     public constructor(props: IProps) {
+         super(props);
+-        // when this setting is toggled it restarts the app so it's safe to not watch this.
+-        this.slidingSyncMode = SettingsStore.getValue("feature_sliding_sync");
+ 
+         this.layout = RoomListLayoutStore.instance.getLayoutFor(this.props.tagId);
+         this.heightAtStart = 0;
+@@ -165,9 +159,6 @@ export default class RoomSublist extends React.Component<IProps, IState> {
+     }
+ 
+     private get numVisibleTiles(): number {
+-        if (this.slidingSyncMode) {
+-            return this.state.rooms.length;
+-        }
+         const nVisible = Math.ceil(this.layout.visibleTiles);
+         return Math.min(nVisible, this.numTiles);
+     }
+@@ -329,12 +320,6 @@ export default class RoomSublist extends React.Component<IProps, IState> {
+     };
+ 
+     private onShowAllClick = async (): Promise<void> => {
+-        if (this.slidingSyncMode) {
+-            const count = RoomListStore.instance.getCount(this.props.tagId);
+-            await SlidingSyncManager.instance.ensureListRegistered(this.props.tagId, {
+-                ranges: [[0, count]],
+-            });
+-        }
+         // read number of visible tiles before we mutate it
+         const numVisibleTiles = this.numVisibleTiles;
+         const newHeight = this.layout.tilesToPixelsWithPadding(this.numTiles, this.padding);
+@@ -554,13 +539,8 @@ export default class RoomSublist extends React.Component<IProps, IState> {
+ 
+         let contextMenu: JSX.Element | undefined;
+         if (this.state.contextMenuPosition) {
+-            let isAlphabetical = RoomListStore.instance.getTagSorting(this.props.tagId) === SortAlgorithm.Alphabetic;
+-            let isUnreadFirst = RoomListStore.instance.getListOrder(this.props.tagId) === ListAlgorithm.Importance;
+-            if (this.slidingSyncMode) {
+-                const slidingList = SlidingSyncManager.instance.slidingSync?.getListParams(this.props.tagId);
+-                isAlphabetical = (slidingList?.sort || [])[0] === "by_name";
+-                isUnreadFirst = (slidingList?.sort || [])[0] === "by_notification_level";
+-            }
++            const isAlphabetical = RoomListStore.instance.getTagSorting(this.props.tagId) === SortAlgorithm.Alphabetic;
++            const isUnreadFirst = RoomListStore.instance.getListOrder(this.props.tagId) === ListAlgorithm.Importance;
+ 
+             // Invites don't get some nonsense options, so only add them if we have to.
+             let otherSections: JSX.Element | undefined;
+@@ -763,17 +743,12 @@ export default class RoomSublist extends React.Component<IProps, IState> {
+             // floats above the resize handle, if we have one present. If the user has all
+             // tiles visible, it becomes 'show less'.
+             let showNButton: JSX.Element | undefined;
+-            const hasMoreSlidingSync =
+-                this.slidingSyncMode && RoomListStore.instance.getCount(this.props.tagId) > this.state.rooms.length;
+ 
+-            if (maxTilesPx > this.state.height || hasMoreSlidingSync) {
++            if (maxTilesPx > this.state.height) {
+                 // the height of all the tiles is greater than the section height: we need a 'show more' button
+                 const nonPaddedHeight = this.state.height - RESIZE_HANDLE_HEIGHT - SHOW_N_BUTTON_HEIGHT;
+                 const amountFullyShown = Math.floor(nonPaddedHeight / this.layout.tileHeight);
+-                let numMissing = this.numTiles - amountFullyShown;
+-                if (this.slidingSyncMode) {
+-                    numMissing = RoomListStore.instance.getCount(this.props.tagId) - amountFullyShown;
+-                }
++                const numMissing = this.numTiles - amountFullyShown;
+                 const label = _t("room_list|show_n_more", { count: numMissing });
+                 let showMoreText: ReactNode = <span className="mx_RoomSublist_showNButtonText">{label}</span>;
+                 if (this.props.isMinimized) showMoreText = null;
+diff --git a/src/hooks/useSlidingSyncRoomSearch.ts b/src/hooks/useSlidingSyncRoomSearch.ts
+deleted file mode 100644
+index 17eca74474aa7c0c6afc8e5a23b562e794055867..0000000000000000000000000000000000000000
+--- a/src/hooks/useSlidingSyncRoomSearch.ts
++++ /dev/null
+@@ -1,82 +0,0 @@
+-/*
+-Copyright 2024 New Vector Ltd.
+-Copyright 2022 The Matrix.org Foundation C.I.C.
+-
+-SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+-Please see LICENSE files in the repository root for full details.
+-*/
+-
+-import { useCallback, useState } from "react";
+-import { type Room } from "matrix-js-sdk/src/matrix";
+-
+-import { MatrixClientPeg } from "../MatrixClientPeg";
+-import { useLatestResult } from "./useLatestResult";
+-import { SlidingSyncManager } from "../SlidingSyncManager";
+-
+-export interface SlidingSyncRoomSearchOpts {
+-    limit: number;
+-    query: string;
+-}
+-
+-export const useSlidingSyncRoomSearch = (): {
+-    loading: boolean;
+-    rooms: Room[];
+-    search(opts: SlidingSyncRoomSearchOpts): Promise<boolean>;
+-} => {
+-    const [rooms, setRooms] = useState<Room[]>([]);
+-
+-    const [loading, setLoading] = useState(false);
+-
+-    const [updateQuery, updateResult] = useLatestResult<{ term: string; limit?: number }, Room[]>(setRooms);
+-
+-    const search = useCallback(
+-        async ({ limit = 100, query: term }: SlidingSyncRoomSearchOpts): Promise<boolean> => {
+-            const opts = { limit, term };
+-            updateQuery(opts);
+-
+-            if (!term?.length) {
+-                setRooms([]);
+-                return true;
+-            }
+-
+-            try {
+-                setLoading(true);
+-                await SlidingSyncManager.instance.ensureListRegistered(SlidingSyncManager.ListSearch, {
+-                    ranges: [[0, limit]],
+-                    filters: {
+-                        room_name_like: term,
+-                    },
+-                });
+-                const rooms: Room[] = [];
+-                const { roomIndexToRoomId } = SlidingSyncManager.instance.slidingSync!.getListData(
+-                    SlidingSyncManager.ListSearch,
+-                )!;
+-                let i = 0;
+-                while (roomIndexToRoomId[i]) {
+-                    const roomId = roomIndexToRoomId[i];
+-                    const room = MatrixClientPeg.safeGet().getRoom(roomId);
+-                    if (room) {
+-                        rooms.push(room);
+-                    }
+-                    i++;
+-                }
+-                updateResult(opts, rooms);
+-                return true;
+-            } catch (e) {
+-                console.error("Could not fetch sliding sync rooms for params", { limit, term }, e);
+-                updateResult(opts, []);
+-                return false;
+-            } finally {
+-                setLoading(false);
+-                // TODO: delete the list?
+-            }
+-        },
+-        [updateQuery, updateResult],
+-    );
+-
+-    return {
+-        loading,
+-        rooms,
+-        search,
+-    } as const;
+-};
+diff --git a/src/settings/Settings.tsx b/src/settings/Settings.tsx
+index 439b0c112f5ed5d3a0e9d4982b2f5c15b42cac2f..aed1606ddfdb24ef85878ff1b946fdad61fdece4 100644
+--- a/src/settings/Settings.tsx
++++ b/src/settings/Settings.tsx
+@@ -197,7 +197,8 @@ export interface Settings {
+     "feature_html_topic": IFeature;
+     "feature_bridge_state": IFeature;
+     "feature_jump_to_date": IFeature;
+-    "feature_sliding_sync": IFeature;
++    "feature_sliding_sync": IBaseSetting<boolean>;
++    "feature_simplified_sliding_sync": IFeature;
+     "feature_element_call_video_rooms": IFeature;
+     "feature_group_calls": IFeature;
+     "feature_disable_call_per_sender_encryption": IFeature;
+@@ -209,7 +210,6 @@ export interface Settings {
+     "feature_ask_to_join": IFeature;
+     "feature_notifications": IFeature;
+     // These are in the feature namespace but aren't actually features
+-    "feature_sliding_sync_proxy_url": IBaseSetting<string>;
+     "feature_hidebold": IBaseSetting<boolean>;
+ 
+     "useOnlyCurrentProfiles": IBaseSetting<boolean>;
+@@ -534,7 +534,14 @@ export const SETTINGS: Settings = {
+             true,
+         ),
+     },
++    // legacy sliding sync flag: no longer works, will error for anyone who's still using it
+     "feature_sliding_sync": {
++        supportedLevels: LEVELS_DEVICE_ONLY_SETTINGS_WITH_CONFIG_PRIORITISED,
++        supportedLevelsAreOrdered: true,
++        shouldWarn: true,
++        default: false,
++    },
++    "feature_simplified_sliding_sync": {
+         isFeature: true,
+         labsGroup: LabGroup.Developer,
+         supportedLevels: LEVELS_DEVICE_ONLY_SETTINGS_WITH_CONFIG_PRIORITISED,
+@@ -545,11 +552,6 @@ export const SETTINGS: Settings = {
+         default: false,
+         controller: new SlidingSyncController(),
+     },
+-    "feature_sliding_sync_proxy_url": {
+-        // This is not a distinct feature, it is a legacy setting for feature_sliding_sync above
+-        supportedLevels: LEVELS_DEVICE_ONLY_SETTINGS_WITH_CONFIG,
+-        default: "",
+-    },
+     "feature_element_call_video_rooms": {
+         isFeature: true,
+         labsGroup: LabGroup.VoiceAndVideo,
+diff --git a/src/settings/controllers/SlidingSyncController.ts b/src/settings/controllers/SlidingSyncController.ts
+index 11ae1a2ba02c35538a1dc80bd6d62aff4bb53a6b..44de3ba8eee89ef397ea9bda9a77975e9a773c00 100644
+--- a/src/settings/controllers/SlidingSyncController.ts
++++ b/src/settings/controllers/SlidingSyncController.ts
+@@ -11,20 +11,19 @@ import SettingController from "./SettingController";
+ import PlatformPeg from "../../PlatformPeg";
+ import SettingsStore from "../SettingsStore";
+ import { _t } from "../../languageHandler";
++import { SlidingSyncManager } from "../../SlidingSyncManager";
+ 
+ export default class SlidingSyncController extends SettingController {
+-    public static serverSupportsSlidingSync: boolean;
+-
+     public async onChange(): Promise<void> {
+         PlatformPeg.get()?.reload();
+     }
+ 
+     public get settingDisabled(): boolean | string {
+         // Cannot be disabled once enabled, user has been warned and must log out and back in.
+-        if (SettingsStore.getValue("feature_sliding_sync")) {
++        if (SettingsStore.getValue("feature_simplified_sliding_sync")) {
+             return _t("labs|sliding_sync_disabled_notice");
+         }
+-        if (!SlidingSyncController.serverSupportsSlidingSync) {
++        if (!SlidingSyncManager.serverSupportsSlidingSync) {
+             return _t("labs|sliding_sync_server_no_support");
+         }
+ 
+diff --git a/src/stores/MemberListStore.ts b/src/stores/MemberListStore.ts
+index 04c5824d998a6cfc21d33be7899407bf19df5cc7..29269bac9437a516aadb8c4eb3b94858ea23be4f 100644
+--- a/src/stores/MemberListStore.ts
++++ b/src/stores/MemberListStore.ts
+@@ -122,7 +122,7 @@ export class MemberListStore {
+      * @returns True if enabled
+      */
+     private async isLazyLoadingEnabled(roomId: string): Promise<boolean> {
+-        if (SettingsStore.getValue("feature_sliding_sync")) {
++        if (SettingsStore.getValue("feature_simplified_sliding_sync")) {
+             // only unencrypted rooms use lazy loading
+             return !(await this.stores.client?.getCrypto()?.isEncryptionEnabledInRoom(roomId));
+         }
+@@ -134,7 +134,7 @@ export class MemberListStore {
+      * @returns True if there is storage for lazy loading members
+      */
+     private isLazyMemberStorageEnabled(): boolean {
+-        if (SettingsStore.getValue("feature_sliding_sync")) {
++        if (SettingsStore.getValue("feature_simplified_sliding_sync")) {
+             return false;
+         }
+         return this.stores.client!.hasLazyLoadMembersEnabled();
+diff --git a/src/stores/RoomViewStore.tsx b/src/stores/RoomViewStore.tsx
+index 91edcbb41223ae7963a919072a932e966ff1ddf6..633d55f3f63bc59cbf36c375565d551949e4dcb1 100644
+--- a/src/stores/RoomViewStore.tsx
++++ b/src/stores/RoomViewStore.tsx
+@@ -372,11 +372,7 @@ export class RoomViewStore extends EventEmitter {
+             if (prevRoomCall !== null && (!payload.view_call || payload.room_id !== this.state.roomId))
+                 prevRoomCall.presented = false;
+ 
+-            if (SettingsStore.getValue("feature_sliding_sync") && this.state.roomId !== payload.room_id) {
+-                if (this.state.subscribingRoomId && this.state.subscribingRoomId !== payload.room_id) {
+-                    // unsubscribe from this room, but don't await it as we don't care when this gets done.
+-                    this.stores.slidingSyncManager.setRoomVisible(this.state.subscribingRoomId, false);
+-                }
++            if (SettingsStore.getValue("feature_simplified_sliding_sync") && this.state.roomId !== payload.room_id) {
+                 this.setState({
+                     subscribingRoomId: payload.room_id,
+                     roomId: payload.room_id,
+@@ -392,13 +388,8 @@ export class RoomViewStore extends EventEmitter {
+                 });
+                 // set this room as the room subscription. We need to await for it as this will fetch
+                 // all room state for this room, which is required before we get the state below.
+-                await this.stores.slidingSyncManager.setRoomVisible(payload.room_id, true);
+-                // Whilst we were subscribing another room was viewed, so stop what we're doing and
+-                // unsubscribe
+-                if (this.state.subscribingRoomId !== payload.room_id) {
+-                    this.stores.slidingSyncManager.setRoomVisible(payload.room_id, false);
+-                    return;
+-                }
++                await this.stores.slidingSyncManager.setRoomVisible(payload.room_id);
++
+                 // Re-fire the payload: we won't re-process it because the prev room ID == payload room ID now
+                 this.dis?.dispatch({
+                     ...payload,
+diff --git a/src/stores/room-list/RoomListStore.ts b/src/stores/room-list/RoomListStore.ts
+index e1d2f7b7e8d21b0dc4b1cc2ac263f738166cb479..6985e007bd818d18a7dba4f73babd2d52c934ea7 100644
+--- a/src/stores/room-list/RoomListStore.ts
++++ b/src/stores/room-list/RoomListStore.ts
+@@ -33,7 +33,6 @@ import { VisibilityProvider } from "./filters/VisibilityProvider";
+ import { SpaceWatcher } from "./SpaceWatcher";
+ import { type IRoomTimelineActionPayload } from "../../actions/MatrixActionCreators";
+ import { type RoomListStore as Interface, RoomListStoreEvent } from "./Interface";
+-import { SlidingRoomListStoreClass } from "./SlidingRoomListStore";
+ import { UPDATE_EVENT } from "../AsyncStore";
+ import { SdkContextClass } from "../../contexts/SDKContext";
+ import { getChangedOverrideRoomMutePushRules } from "./utils/roomMute";
+@@ -406,6 +405,9 @@ export class RoomListStoreClass extends AsyncStoreWithClient<EmptyObject> implem
+ 
+     public setTagSorting(tagId: TagID, sort: SortAlgorithm): void {
+         this.setAndPersistTagSorting(tagId, sort);
++        // We'll always need an update after changing the sort order, so mark for update and trigger
++        // immediately.
++        this.updateFn.mark();
+         this.updateFn.trigger();
+     }
+ 
+@@ -642,16 +644,9 @@ export default class RoomListStore {
+ 
+     public static get instance(): Interface {
+         if (!RoomListStore.internalInstance) {
+-            if (SettingsStore.getValue("feature_sliding_sync")) {
+-                logger.info("using SlidingRoomListStoreClass");
+-                const instance = new SlidingRoomListStoreClass(defaultDispatcher, SdkContextClass.instance);
+-                instance.start();
+-                RoomListStore.internalInstance = instance;
+-            } else {
+-                const instance = new RoomListStoreClass(defaultDispatcher);
+-                instance.start();
+-                RoomListStore.internalInstance = instance;
+-            }
++            const instance = new RoomListStoreClass(defaultDispatcher);
++            instance.start();
++            RoomListStore.internalInstance = instance;
+         }
+ 
+         return this.internalInstance;
+diff --git a/src/stores/room-list/SlidingRoomListStore.ts b/src/stores/room-list/SlidingRoomListStore.ts
+deleted file mode 100644
+index b7ff70c67165d65645507e3d79997e405b4a61a7..0000000000000000000000000000000000000000
+--- a/src/stores/room-list/SlidingRoomListStore.ts
++++ /dev/null
+@@ -1,391 +0,0 @@
+-/*
+-Copyright 2024 New Vector Ltd.
+-Copyright 2022 The Matrix.org Foundation C.I.C.
+-
+-SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+-Please see LICENSE files in the repository root for full details.
+-*/
+-
+-import { type EmptyObject, type Room } from "matrix-js-sdk/src/matrix";
+-import { logger } from "matrix-js-sdk/src/logger";
+-import { type MSC3575Filter, SlidingSyncEvent } from "matrix-js-sdk/src/sliding-sync";
+-import { type Optional } from "matrix-events-sdk";
+-
+-import { type RoomUpdateCause, type TagID, OrderedDefaultTagIDs, DefaultTagID } from "./models";
+-import { type ITagMap, ListAlgorithm, SortAlgorithm } from "./algorithms/models";
+-import { type ActionPayload } from "../../dispatcher/payloads";
+-import { type MatrixDispatcher } from "../../dispatcher/dispatcher";
+-import { type IFilterCondition } from "./filters/IFilterCondition";
+-import { AsyncStoreWithClient } from "../AsyncStoreWithClient";
+-import { type RoomListStore as Interface, RoomListStoreEvent } from "./Interface";
+-import { MetaSpace, type SpaceKey, UPDATE_SELECTED_SPACE } from "../spaces";
+-import { LISTS_LOADING_EVENT } from "./RoomListStore";
+-import { UPDATE_EVENT } from "../AsyncStore";
+-import { type SdkContextClass } from "../../contexts/SDKContext";
+-
+-export const SlidingSyncSortToFilter: Record<SortAlgorithm, string[]> = {
+-    [SortAlgorithm.Alphabetic]: ["by_name", "by_recency"],
+-    [SortAlgorithm.Recent]: ["by_notification_level", "by_recency"],
+-    [SortAlgorithm.Manual]: ["by_recency"],
+-};
+-
+-const filterConditions: Record<TagID, MSC3575Filter> = {
+-    [DefaultTagID.Invite]: {
+-        is_invite: true,
+-    },
+-    [DefaultTagID.Favourite]: {
+-        tags: ["m.favourite"],
+-    },
+-    [DefaultTagID.DM]: {
+-        is_dm: true,
+-        is_invite: false,
+-        // If a DM has a Favourite & Low Prio tag then it'll be shown in those lists instead
+-        not_tags: ["m.favourite", "m.lowpriority"],
+-    },
+-    [DefaultTagID.Untagged]: {
+-        is_dm: false,
+-        is_invite: false,
+-        not_room_types: ["m.space"],
+-        not_tags: ["m.favourite", "m.lowpriority"],
+-        // spaces filter added dynamically
+-    },
+-    [DefaultTagID.LowPriority]: {
+-        tags: ["m.lowpriority"],
+-        // If a room has both Favourite & Low Prio tags then it'll be shown under Favourites
+-        not_tags: ["m.favourite"],
+-    },
+-    // TODO https://github.com/vector-im/element-web/issues/23207
+-    // DefaultTagID.ServerNotice,
+-    // DefaultTagID.Suggested,
+-    // DefaultTagID.Archived,
+-};
+-
+-export const LISTS_UPDATE_EVENT = RoomListStoreEvent.ListsUpdate;
+-
+-export class SlidingRoomListStoreClass extends AsyncStoreWithClient<EmptyObject> implements Interface {
+-    private tagIdToSortAlgo: Record<TagID, SortAlgorithm> = {};
+-    private tagMap: ITagMap = {};
+-    private counts: Record<TagID, number> = {};
+-    private stickyRoomId: Optional<string>;
+-
+-    public constructor(
+-        dis: MatrixDispatcher,
+-        private readonly context: SdkContextClass,
+-    ) {
+-        super(dis);
+-        this.setMaxListeners(20); // RoomList + LeftPanel + 8xRoomSubList + spares
+-    }
+-
+-    public async setTagSorting(tagId: TagID, sort: SortAlgorithm): Promise<void> {
+-        logger.info("SlidingRoomListStore.setTagSorting ", tagId, sort);
+-        this.tagIdToSortAlgo[tagId] = sort;
+-        switch (sort) {
+-            case SortAlgorithm.Alphabetic:
+-                await this.context.slidingSyncManager.ensureListRegistered(tagId, {
+-                    sort: SlidingSyncSortToFilter[SortAlgorithm.Alphabetic],
+-                });
+-                break;
+-            case SortAlgorithm.Recent:
+-                await this.context.slidingSyncManager.ensureListRegistered(tagId, {
+-                    sort: SlidingSyncSortToFilter[SortAlgorithm.Recent],
+-                });
+-                break;
+-            case SortAlgorithm.Manual:
+-                logger.error("cannot enable manual sort in sliding sync mode");
+-                break;
+-            default:
+-                logger.error("unknown sort mode: ", sort);
+-        }
+-    }
+-
+-    public getTagSorting(tagId: TagID): SortAlgorithm {
+-        let algo = this.tagIdToSortAlgo[tagId];
+-        if (!algo) {
+-            logger.warn("SlidingRoomListStore.getTagSorting: no sort algorithm for tag ", tagId);
+-            algo = SortAlgorithm.Recent; // why not, we have to do something..
+-        }
+-        return algo;
+-    }
+-
+-    public getCount(tagId: TagID): number {
+-        return this.counts[tagId] || 0;
+-    }
+-
+-    public setListOrder(tagId: TagID, order: ListAlgorithm): void {
+-        // TODO: https://github.com/vector-im/element-web/issues/23207
+-    }
+-
+-    public getListOrder(tagId: TagID): ListAlgorithm {
+-        // TODO: handle unread msgs first? https://github.com/vector-im/element-web/issues/23207
+-        return ListAlgorithm.Natural;
+-    }
+-
+-    /**
+-     * Adds a filter condition to the room list store. Filters may be applied async,
+-     * and thus might not cause an update to the store immediately.
+-     * @param {IFilterCondition} filter The filter condition to add.
+-     */
+-    public async addFilter(filter: IFilterCondition): Promise<void> {
+-        // Do nothing, the filters are only used by SpaceWatcher to see if a room should appear
+-        // in the room list. We do not support arbitrary code for filters in sliding sync.
+-    }
+-
+-    /**
+-     * Removes a filter condition from the room list store. If the filter was
+-     * not previously added to the room list store, this will no-op. The effects
+-     * of removing a filter may be applied async and therefore might not cause
+-     * an update right away.
+-     * @param {IFilterCondition} filter The filter condition to remove.
+-     */
+-    public removeFilter(filter: IFilterCondition): void {
+-        // Do nothing, the filters are only used by SpaceWatcher to see if a room should appear
+-        // in the room list. We do not support arbitrary code for filters in sliding sync.
+-    }
+-
+-    /**
+-     * Gets the tags for a room identified by the store. The returned set
+-     * should never be empty, and will contain DefaultTagID.Untagged if
+-     * the store is not aware of any tags.
+-     * @param room The room to get the tags for.
+-     * @returns The tags for the room.
+-     */
+-    public getTagsForRoom(room: Room): TagID[] {
+-        // check all lists for each tag we know about and see if the room is there
+-        const tags: TagID[] = [];
+-        for (const tagId in this.tagIdToSortAlgo) {
+-            const listData = this.context.slidingSyncManager.slidingSync?.getListData(tagId);
+-            if (!listData) {
+-                continue;
+-            }
+-            for (const roomIndex in listData.roomIndexToRoomId) {
+-                const roomId = listData.roomIndexToRoomId[roomIndex];
+-                if (roomId === room.roomId) {
+-                    tags.push(tagId);
+-                    break;
+-                }
+-            }
+-        }
+-        return tags;
+-    }
+-
+-    /**
+-     * Manually update a room with a given cause. This should only be used if the
+-     * room list store would otherwise be incapable of doing the update itself. Note
+-     * that this may race with the room list's regular operation.
+-     * @param {Room} room The room to update.
+-     * @param {RoomUpdateCause} cause The cause to update for.
+-     */
+-    public async manualRoomUpdate(room: Room, cause: RoomUpdateCause): Promise<void> {
+-        // TODO: this is only used when you forget a room, not that important for now.
+-    }
+-
+-    public get orderedLists(): ITagMap {
+-        return this.tagMap;
+-    }
+-
+-    private refreshOrderedLists(tagId: string, roomIndexToRoomId: Record<number, string>): void {
+-        const tagMap = this.tagMap;
+-
+-        // this room will not move due to it being viewed: it is sticky. This can be null to indicate
+-        // no sticky room if you aren't viewing a room.
+-        this.stickyRoomId = this.context.roomViewStore.getRoomId();
+-        let stickyRoomNewIndex = -1;
+-        const stickyRoomOldIndex = (tagMap[tagId] || []).findIndex((room): boolean => {
+-            return room.roomId === this.stickyRoomId;
+-        });
+-
+-        // order from low to high
+-        const orderedRoomIndexes = Object.keys(roomIndexToRoomId)
+-            .map((numStr) => {
+-                return Number(numStr);
+-            })
+-            .sort((a, b) => {
+-                return a - b;
+-            });
+-        const seenRoomIds = new Set<string>();
+-        const orderedRoomIds = orderedRoomIndexes.map((i) => {
+-            const rid = roomIndexToRoomId[i];
+-            if (seenRoomIds.has(rid)) {
+-                logger.error("room " + rid + " already has an index position: duplicate room!");
+-            }
+-            seenRoomIds.add(rid);
+-            if (!rid) {
+-                throw new Error("index " + i + " has no room ID: Map => " + JSON.stringify(roomIndexToRoomId));
+-            }
+-            if (rid === this.stickyRoomId) {
+-                stickyRoomNewIndex = i;
+-            }
+-            return rid;
+-        });
+-        logger.debug(
+-            `SlidingRoomListStore.refreshOrderedLists ${tagId} sticky: ${this.stickyRoomId}`,
+-            `${stickyRoomOldIndex} -> ${stickyRoomNewIndex}`,
+-            "rooms:",
+-            orderedRoomIds.length < 30 ? orderedRoomIds : orderedRoomIds.length,
+-        );
+-
+-        if (this.stickyRoomId && stickyRoomOldIndex >= 0 && stickyRoomNewIndex >= 0) {
+-            // this update will move this sticky room from old to new, which we do not want.
+-            // Instead, keep the sticky room ID index position as it is, swap it with
+-            // whatever was in its place.
+-            // Some scenarios with sticky room S and bump room B (other letters unimportant):
+-            // A, S, C, B                                  S, A, B
+-            // B, A, S, C  <---- without sticky rooms ---> B, S, A
+-            // B, S, A, C  <- with sticky rooms applied -> S, B, A
+-            // In other words, we need to swap positions to keep it locked in place.
+-            const inWayRoomId = orderedRoomIds[stickyRoomOldIndex];
+-            orderedRoomIds[stickyRoomOldIndex] = this.stickyRoomId;
+-            orderedRoomIds[stickyRoomNewIndex] = inWayRoomId;
+-        }
+-
+-        // now set the rooms
+-        const rooms: Room[] = [];
+-        orderedRoomIds.forEach((roomId) => {
+-            const room = this.matrixClient?.getRoom(roomId);
+-            if (!room) {
+-                return;
+-            }
+-            rooms.push(room);
+-        });
+-        tagMap[tagId] = rooms;
+-        this.tagMap = tagMap;
+-    }
+-
+-    private onSlidingSyncListUpdate(tagId: string, joinCount: number, roomIndexToRoomId: Record<number, string>): void {
+-        this.counts[tagId] = joinCount;
+-        this.refreshOrderedLists(tagId, roomIndexToRoomId);
+-        // let the UI update
+-        this.emit(LISTS_UPDATE_EVENT);
+-    }
+-
+-    private onRoomViewStoreUpdated(): void {
+-        // we only care about this to know when the user has clicked on a room to set the stickiness value
+-        if (this.context.roomViewStore.getRoomId() === this.stickyRoomId) {
+-            return;
+-        }
+-
+-        let hasUpdatedAnyList = false;
+-
+-        // every list with the OLD sticky room ID needs to be resorted because it now needs to take
+-        // its proper place as it is no longer sticky. The newly sticky room can remain the same though,
+-        // as we only actually care about its sticky status when we get list updates.
+-        const oldStickyRoom = this.stickyRoomId;
+-        // it's not safe to check the data in slidingSync as it is tracking the server's view of the
+-        // room list. There's an edge case whereby the sticky room has gone outside the window and so
+-        // would not be present in the roomIndexToRoomId map anymore, and hence clicking away from it
+-        // will make it disappear eventually. We need to check orderedLists as that is the actual
+-        // sorted renderable list of rooms which sticky rooms apply to.
+-        for (const tagId in this.orderedLists) {
+-            const list = this.orderedLists[tagId];
+-            const room = list.find((room) => {
+-                return room.roomId === oldStickyRoom;
+-            });
+-            if (room) {
+-                // resort it based on the slidingSync view of the list. This may cause this old sticky
+-                // room to cease to exist.
+-                const listData = this.context.slidingSyncManager.slidingSync?.getListData(tagId);
+-                if (!listData) {
+-                    continue;
+-                }
+-                this.refreshOrderedLists(tagId, listData.roomIndexToRoomId);
+-                hasUpdatedAnyList = true;
+-            }
+-        }
+-        // in the event we didn't call refreshOrderedLists, it helps to still remember the sticky room ID.
+-        this.stickyRoomId = this.context.roomViewStore.getRoomId();
+-
+-        if (hasUpdatedAnyList) {
+-            this.emit(LISTS_UPDATE_EVENT);
+-        }
+-    }
+-
+-    protected async onReady(): Promise<any> {
+-        logger.info("SlidingRoomListStore.onReady");
+-        // permanent listeners: never get destroyed. Could be an issue if we want to test this in isolation.
+-        this.context.slidingSyncManager.slidingSync!.on(SlidingSyncEvent.List, this.onSlidingSyncListUpdate.bind(this));
+-        this.context.roomViewStore.addListener(UPDATE_EVENT, this.onRoomViewStoreUpdated.bind(this));
+-        this.context.spaceStore.on(UPDATE_SELECTED_SPACE, this.onSelectedSpaceUpdated.bind(this));
+-        if (this.context.spaceStore.activeSpace) {
+-            this.onSelectedSpaceUpdated(this.context.spaceStore.activeSpace, false);
+-        }
+-
+-        // sliding sync has an initial response for spaces. Now request all the lists.
+-        // We do the spaces list _first_ to avoid potential flickering on DefaultTagID.Untagged list
+-        // which would be caused by initially having no `spaces` filter set, and then suddenly setting one.
+-        OrderedDefaultTagIDs.forEach((tagId) => {
+-            const filter = filterConditions[tagId];
+-            if (!filter) {
+-                logger.info("SlidingRoomListStore.onReady unsupported list ", tagId);
+-                return; // we do not support this list yet.
+-            }
+-            const sort = SortAlgorithm.Recent; // default to recency sort, TODO: read from config
+-            this.tagIdToSortAlgo[tagId] = sort;
+-            this.emit(LISTS_LOADING_EVENT, tagId, true);
+-            this.context.slidingSyncManager
+-                .ensureListRegistered(tagId, {
+-                    filters: filter,
+-                    sort: SlidingSyncSortToFilter[sort],
+-                })
+-                .then(() => {
+-                    this.emit(LISTS_LOADING_EVENT, tagId, false);
+-                });
+-        });
+-    }
+-
+-    private onSelectedSpaceUpdated = (activeSpace: SpaceKey, allRoomsInHome: boolean): void => {
+-        logger.info("SlidingRoomListStore.onSelectedSpaceUpdated", activeSpace);
+-        // update the untagged filter
+-        const tagId = DefaultTagID.Untagged;
+-        const filters = filterConditions[tagId];
+-        const oldSpace = filters.spaces?.[0];
+-        filters.spaces = activeSpace && activeSpace != MetaSpace.Home ? [activeSpace] : undefined;
+-        if (oldSpace !== activeSpace) {
+-            // include subspaces in this list
+-            this.context.spaceStore.traverseSpace(
+-                activeSpace,
+-                (roomId: string) => {
+-                    if (roomId === activeSpace) {
+-                        return;
+-                    }
+-                    if (!filters.spaces) {
+-                        filters.spaces = [];
+-                    }
+-                    filters.spaces.push(roomId); // add subspace
+-                },
+-                false,
+-            );
+-
+-            this.emit(LISTS_LOADING_EVENT, tagId, true);
+-            this.context.slidingSyncManager
+-                .ensureListRegistered(tagId, {
+-                    filters: filters,
+-                })
+-                .then(() => {
+-                    this.emit(LISTS_LOADING_EVENT, tagId, false);
+-                });
+-        }
+-    };
+-
+-    // Intended for test usage
+-    public async resetStore(): Promise<void> {
+-        // Test function
+-    }
+-
+-    /**
+-     * Regenerates the room whole room list, discarding any previous results.
+-     *
+-     * Note: This is only exposed externally for the tests. Do not call this from within
+-     * the app.
+-     * @param trigger Set to false to prevent a list update from being sent. Should only
+-     * be used if the calling code will manually trigger the update.
+-     */
+-    public regenerateAllLists({ trigger = true }): void {
+-        // Test function
+-    }
+-
+-    protected async onNotReady(): Promise<any> {
+-        await this.resetStore();
+-    }
+-
+-    protected async onAction(payload: ActionPayload): Promise<void> {}
+-}
+diff --git a/src/stores/room-list/algorithms/tag-sorting/RecentAlgorithm.ts b/src/stores/room-list/algorithms/tag-sorting/RecentAlgorithm.ts
+index e84f538993d727508bbaeece782e462b7e0b4c7b..e41eeee8160f44297a5138be122eb5a4d9db35c1 100644
+--- a/src/stores/room-list/algorithms/tag-sorting/RecentAlgorithm.ts
++++ b/src/stores/room-list/algorithms/tag-sorting/RecentAlgorithm.ts
+@@ -69,6 +69,12 @@ export const getLastTs = (r: Room, userId: string): number => {
+         if (!r?.timeline) {
+             return Number.MAX_SAFE_INTEGER;
+         }
++        // MSC4186: Simplified Sliding Sync sets this.
++        // If it's present, sort by it.
++        const bumpStamp = r.getBumpStamp();
++        if (bumpStamp) {
++            return bumpStamp;
++        }
+ 
+         // If the room hasn't been joined yet, it probably won't have a timeline to
+         // parse. We'll still fall back to the timeline if this fails, but chances

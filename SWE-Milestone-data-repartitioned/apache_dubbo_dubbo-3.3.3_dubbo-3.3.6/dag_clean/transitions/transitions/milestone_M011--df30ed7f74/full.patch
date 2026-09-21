@@ -1,0 +1,751 @@
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/FluentLoggerImpl.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/FluentLoggerImpl.java
+index 3184493b8b2331573292d071cbe0d1bb04d79b18..f7e85cf998979204bf0bb9111a1674dd727b80f2 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/FluentLoggerImpl.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/FluentLoggerImpl.java
+@@ -36,12 +36,12 @@ final class FluentLoggerImpl implements FluentLogger {
+     private Object[] args;
+ 
+     FluentLoggerImpl(Class<?> key) {
+-        delegate = LoggerFactory.getErrorTypeAwareLogger(key);
++        delegate = LoggerFactory.getErrorTypeAwareLogger(FluentLoggerImpl.class.getName(), key);
+         root = this;
+     }
+ 
+     FluentLoggerImpl(String key) {
+-        delegate = LoggerFactory.getErrorTypeAwareLogger(key);
++        delegate = LoggerFactory.getErrorTypeAwareLogger(FluentLoggerImpl.class.getName(), key);
+         root = this;
+     }
+ 
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerAdapter.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerAdapter.java
+index 6c668592d39e8a72bfec5cc73fe97adae7a139b3..7a5a2f87052d6307c11b75ab3f12a3ee8a552c9f 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerAdapter.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerAdapter.java
+@@ -43,6 +43,28 @@ public interface LoggerAdapter {
+      */
+     Logger getLogger(String key);
+ 
++    /**
++     * Get a logger
++     *
++     * @param fqcn the full qualified class name of caller
++     * @param key the returned logger will be named after clazz
++     * @return logger
++     */
++    default Logger getLogger(String fqcn, Class<?> key) {
++        return getLogger(key);
++    }
++
++    /**
++     * Get a logger
++     *
++     * @param fqcn the full qualified class name of caller
++     * @param key the returned logger will be named after key
++     * @return logger
++     */
++    default Logger getLogger(String fqcn, String key) {
++        return getLogger(key);
++    }
++
+     /**
+      * Get the current logging level
+      *
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerFactory.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerFactory.java
+index 00eaebe64ccff450c63aec95037001ae9620a7f3..6930b7172bca6cb88335a3b00e509d3c42160ab1 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerFactory.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/LoggerFactory.java
+@@ -25,6 +25,7 @@ import org.apache.dubbo.common.logger.slf4j.Slf4jLoggerAdapter;
+ import org.apache.dubbo.common.logger.support.FailsafeErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.support.FailsafeLogger;
+ import org.apache.dubbo.common.utils.ConcurrentHashMapUtils;
++import org.apache.dubbo.common.utils.Pair;
+ import org.apache.dubbo.common.utils.SystemPropertyConfigUtils;
+ import org.apache.dubbo.rpc.model.FrameworkModel;
+ 
+@@ -43,7 +44,7 @@ import java.util.concurrent.ConcurrentMap;
+ public class LoggerFactory {
+ 
+     private static final ConcurrentMap<String, FailsafeLogger> LOGGERS = new ConcurrentHashMap<>();
+-    private static final ConcurrentMap<String, FailsafeErrorTypeAwareLogger> ERROR_TYPE_AWARE_LOGGERS =
++    private static final ConcurrentMap<Object, FailsafeErrorTypeAwareLogger> ERROR_TYPE_AWARE_LOGGERS =
+             new ConcurrentHashMap<>();
+     private static volatile LoggerAdapter loggerAdapter;
+ 
+@@ -176,10 +177,9 @@ public class LoggerFactory {
+      * @return error type aware logger
+      */
+     public static ErrorTypeAwareLogger getErrorTypeAwareLogger(Class<?> key) {
++        final String name = key.getName();
+         return ConcurrentHashMapUtils.computeIfAbsent(
+-                ERROR_TYPE_AWARE_LOGGERS,
+-                key.getName(),
+-                name -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(name)));
++                ERROR_TYPE_AWARE_LOGGERS, name, k -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(name)));
+     }
+ 
+     /**
+@@ -190,7 +190,36 @@ public class LoggerFactory {
+      */
+     public static ErrorTypeAwareLogger getErrorTypeAwareLogger(String key) {
+         return ConcurrentHashMapUtils.computeIfAbsent(
+-                ERROR_TYPE_AWARE_LOGGERS, key, k -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(k)));
++                ERROR_TYPE_AWARE_LOGGERS, key, k -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(key)));
++    }
++
++    /**
++     * Get error type aware logger by FQCN and Class object.
++     *
++     * @param fqcn the full qualified class name of caller
++     * @param key the returned logger will be named after clazz
++     * @return error type aware logger
++     */
++    public static ErrorTypeAwareLogger getErrorTypeAwareLogger(String fqcn, Class<?> key) {
++        final String name = key.getName();
++        return ConcurrentHashMapUtils.computeIfAbsent(
++                ERROR_TYPE_AWARE_LOGGERS,
++                Pair.of(name, fqcn),
++                p -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(fqcn, name)));
++    }
++
++    /**
++     * Get error type aware logger by FQCN and a String key.
++     *
++     * @param fqcn the full qualified class name of caller
++     * @param key the returned logger will be named after key
++     * @return error type aware logger
++     */
++    public static ErrorTypeAwareLogger getErrorTypeAwareLogger(String fqcn, String key) {
++        return ConcurrentHashMapUtils.computeIfAbsent(
++                ERROR_TYPE_AWARE_LOGGERS,
++                Pair.of(key, fqcn),
++                p -> new FailsafeErrorTypeAwareLogger(loggerAdapter.getLogger(fqcn, key)));
+     }
+ 
+     /**
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLogger.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLogger.java
+index 9c1073aa9c231e03c37f712469e05efda235579a..b262f966d061860c13a98a761e2a8dcad7b15dab 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLogger.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLogger.java
+@@ -25,117 +25,123 @@ import org.slf4j.helpers.MessageFormatter;
+ 
+ public class Log4jLogger implements Logger {
+ 
+-    private static final String FQCN = FailsafeLogger.class.getName();
++    private final String fqcn;
+ 
+     private final org.apache.log4j.Logger logger;
+ 
+     public Log4jLogger(org.apache.log4j.Logger logger) {
++        this.fqcn = FailsafeLogger.class.getName();
++        this.logger = logger;
++    }
++
++    public Log4jLogger(String fqcn, org.apache.log4j.Logger logger) {
++        this.fqcn = fqcn;
+         this.logger = logger;
+     }
+ 
+     @Override
+     public void trace(String msg) {
+-        logger.log(FQCN, Level.TRACE, msg, null);
++        logger.log(fqcn, Level.TRACE, msg, null);
+     }
+ 
+     @Override
+     public void trace(String msg, Object... arguments) {
+         FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-        logger.log(FQCN, Level.TRACE, ft.getMessage(), ft.getThrowable());
++        logger.log(fqcn, Level.TRACE, ft.getMessage(), ft.getThrowable());
+     }
+ 
+     @Override
+     public void trace(Throwable e) {
+-        logger.log(FQCN, Level.TRACE, e == null ? null : e.getMessage(), e);
++        logger.log(fqcn, Level.TRACE, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void trace(String msg, Throwable e) {
+-        logger.log(FQCN, Level.TRACE, msg, e);
++        logger.log(fqcn, Level.TRACE, msg, e);
+     }
+ 
+     @Override
+     public void debug(String msg) {
+-        logger.log(FQCN, Level.DEBUG, msg, null);
++        logger.log(fqcn, Level.DEBUG, msg, null);
+     }
+ 
+     @Override
+     public void debug(String msg, Object... arguments) {
+         FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-        logger.log(FQCN, Level.DEBUG, ft.getMessage(), ft.getThrowable());
++        logger.log(fqcn, Level.DEBUG, ft.getMessage(), ft.getThrowable());
+     }
+ 
+     @Override
+     public void debug(Throwable e) {
+-        logger.log(FQCN, Level.DEBUG, e == null ? null : e.getMessage(), e);
++        logger.log(fqcn, Level.DEBUG, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void debug(String msg, Throwable e) {
+-        logger.log(FQCN, Level.DEBUG, msg, e);
++        logger.log(fqcn, Level.DEBUG, msg, e);
+     }
+ 
+     @Override
+     public void info(String msg) {
+-        logger.log(FQCN, Level.INFO, msg, null);
++        logger.log(fqcn, Level.INFO, msg, null);
+     }
+ 
+     @Override
+     public void info(String msg, Object... arguments) {
+         FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-        logger.log(FQCN, Level.INFO, ft.getMessage(), ft.getThrowable());
++        logger.log(fqcn, Level.INFO, ft.getMessage(), ft.getThrowable());
+     }
+ 
+     @Override
+     public void info(Throwable e) {
+-        logger.log(FQCN, Level.INFO, e == null ? null : e.getMessage(), e);
++        logger.log(fqcn, Level.INFO, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void info(String msg, Throwable e) {
+-        logger.log(FQCN, Level.INFO, msg, e);
++        logger.log(fqcn, Level.INFO, msg, e);
+     }
+ 
+     @Override
+     public void warn(String msg) {
+-        logger.log(FQCN, Level.WARN, msg, null);
++        logger.log(fqcn, Level.WARN, msg, null);
+     }
+ 
+     @Override
+     public void warn(String msg, Object... arguments) {
+         FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-        logger.log(FQCN, Level.WARN, ft.getMessage(), ft.getThrowable());
++        logger.log(fqcn, Level.WARN, ft.getMessage(), ft.getThrowable());
+     }
+ 
+     @Override
+     public void warn(Throwable e) {
+-        logger.log(FQCN, Level.WARN, e == null ? null : e.getMessage(), e);
++        logger.log(fqcn, Level.WARN, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void warn(String msg, Throwable e) {
+-        logger.log(FQCN, Level.WARN, msg, e);
++        logger.log(fqcn, Level.WARN, msg, e);
+     }
+ 
+     @Override
+     public void error(String msg) {
+-        logger.log(FQCN, Level.ERROR, msg, null);
++        logger.log(fqcn, Level.ERROR, msg, null);
+     }
+ 
+     @Override
+     public void error(String msg, Object... arguments) {
+         FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-        logger.log(FQCN, Level.ERROR, ft.getMessage(), ft.getThrowable());
++        logger.log(fqcn, Level.ERROR, ft.getMessage(), ft.getThrowable());
+     }
+ 
+     @Override
+     public void error(Throwable e) {
+-        logger.log(FQCN, Level.ERROR, e == null ? null : e.getMessage(), e);
++        logger.log(fqcn, Level.ERROR, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void error(String msg, Throwable e) {
+-        logger.log(FQCN, Level.ERROR, msg, e);
++        logger.log(fqcn, Level.ERROR, msg, e);
+     }
+ 
+     @Override
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLoggerAdapter.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLoggerAdapter.java
+index 1fdc8ac1bc519c51191de6ab723e3f4823ced370..10b603259b2e6a4683e70bd0739b05b4c81caa31 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLoggerAdapter.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j/Log4jLoggerAdapter.java
+@@ -111,6 +111,16 @@ public class Log4jLoggerAdapter implements LoggerAdapter {
+         return new Log4jLogger(LogManager.getLogger(key));
+     }
+ 
++    @Override
++    public Logger getLogger(String fqcn, Class<?> key) {
++        return new Log4jLogger(fqcn, LogManager.getLogger(key));
++    }
++
++    @Override
++    public Logger getLogger(String fqcn, String key) {
++        return new Log4jLogger(fqcn, LogManager.getLogger(key));
++    }
++
+     @Override
+     public Level getLevel() {
+         return fromLog4jLevel(LogManager.getRootLogger().getLevel());
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2Logger.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2Logger.java
+index 8701b181fed562708a135c9e2ba409dcd0481d6b..a7c9d6ca3996fb1a7f3284f2e323d93da3f3d888 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2Logger.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2Logger.java
+@@ -17,113 +17,124 @@
+ package org.apache.dubbo.common.logger.log4j2;
+ 
+ import org.apache.dubbo.common.logger.Logger;
++import org.apache.dubbo.common.logger.support.FailsafeLogger;
++
++import org.apache.logging.log4j.Level;
+ 
+ public class Log4j2Logger implements Logger {
+ 
+-    private final org.apache.logging.log4j.Logger logger;
++    private final String fqcn;
++
++    private final org.apache.logging.log4j.spi.ExtendedLogger logger;
++
++    public Log4j2Logger(org.apache.logging.log4j.spi.ExtendedLogger logger) {
++        this.fqcn = FailsafeLogger.class.getName();
++        this.logger = logger;
++    }
+ 
+-    public Log4j2Logger(org.apache.logging.log4j.Logger logger) {
++    public Log4j2Logger(String fqcn, org.apache.logging.log4j.spi.ExtendedLogger logger) {
++        this.fqcn = fqcn;
+         this.logger = logger;
+     }
+ 
+     @Override
+     public void trace(String msg) {
+-        logger.trace(msg);
++        logger.logIfEnabled(fqcn, Level.TRACE, null, msg);
+     }
+ 
+     @Override
+     public void trace(String msg, Object... arguments) {
+-        logger.trace(msg, arguments);
++        logger.logIfEnabled(fqcn, Level.TRACE, null, msg, arguments);
+     }
+ 
+     @Override
+     public void trace(Throwable e) {
+-        logger.trace(e == null ? null : e.getMessage(), e);
++        logger.logIfEnabled(fqcn, Level.TRACE, null, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void trace(String msg, Throwable e) {
+-        logger.trace(msg, e);
++        logger.logIfEnabled(fqcn, Level.TRACE, null, msg, e);
+     }
+ 
+     @Override
+     public void debug(String msg) {
+-        logger.debug(msg);
++        logger.logIfEnabled(fqcn, Level.DEBUG, null, msg);
+     }
+ 
+     @Override
+     public void debug(String msg, Object... arguments) {
+-        logger.debug(msg, arguments);
++        logger.logIfEnabled(fqcn, Level.DEBUG, null, msg, arguments);
+     }
+ 
+     @Override
+     public void debug(Throwable e) {
+-        logger.debug(e == null ? null : e.getMessage(), e);
++        logger.logIfEnabled(fqcn, Level.DEBUG, null, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void debug(String msg, Throwable e) {
+-        logger.debug(msg, e);
++        logger.logIfEnabled(fqcn, Level.DEBUG, null, msg, e);
+     }
+ 
+     @Override
+     public void info(String msg) {
+-        logger.info(msg);
++        logger.logIfEnabled(fqcn, Level.INFO, null, msg);
+     }
+ 
+     @Override
+     public void info(String msg, Object... arguments) {
+-        logger.info(msg, arguments);
++        logger.logIfEnabled(fqcn, Level.INFO, null, msg, arguments);
+     }
+ 
+     @Override
+     public void info(Throwable e) {
+-        logger.info(e == null ? null : e.getMessage(), e);
++        logger.logIfEnabled(fqcn, Level.INFO, null, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void info(String msg, Throwable e) {
+-        logger.info(msg, e);
++        logger.logIfEnabled(fqcn, Level.INFO, null, msg, e);
+     }
+ 
+     @Override
+     public void warn(String msg) {
+-        logger.warn(msg);
++        logger.logIfEnabled(fqcn, Level.WARN, null, msg);
+     }
+ 
+     @Override
+     public void warn(String msg, Object... arguments) {
+-        logger.warn(msg, arguments);
++        logger.logIfEnabled(fqcn, Level.WARN, null, msg, arguments);
+     }
+ 
+     @Override
+     public void warn(Throwable e) {
+-        logger.warn(e == null ? null : e.getMessage(), e);
++        logger.logIfEnabled(fqcn, Level.WARN, null, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void warn(String msg, Throwable e) {
+-        logger.warn(msg, e);
++        logger.logIfEnabled(fqcn, Level.WARN, null, msg, e);
+     }
+ 
+     @Override
+     public void error(String msg) {
+-        logger.error(msg);
++        logger.logIfEnabled(fqcn, Level.ERROR, null, msg);
+     }
+ 
+     @Override
+     public void error(String msg, Object... arguments) {
+-        logger.error(msg, arguments);
++        logger.logIfEnabled(fqcn, Level.ERROR, null, msg, arguments);
+     }
+ 
+     @Override
+     public void error(Throwable e) {
+-        logger.error(e == null ? null : e.getMessage(), e);
++        logger.logIfEnabled(fqcn, Level.ERROR, null, e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void error(String msg, Throwable e) {
+-        logger.error(msg, e);
++        logger.logIfEnabled(fqcn, Level.ERROR, null, msg, e);
+     }
+ 
+     @Override
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2LoggerAdapter.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2LoggerAdapter.java
+index f30bbcb9fe581156d7bcf5ad5da830f22a3f7c05..724ae35b37f04cf91387c7c7d990a50b43f5bea8 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2LoggerAdapter.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/log4j2/Log4j2LoggerAdapter.java
+@@ -24,6 +24,7 @@ import java.io.File;
+ 
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.core.config.Configurator;
++import org.apache.logging.log4j.spi.ExtendedLogger;
+ 
+ public class Log4j2LoggerAdapter implements LoggerAdapter {
+     public static final String NAME = "log4j2";
+@@ -85,12 +86,22 @@ public class Log4j2LoggerAdapter implements LoggerAdapter {
+ 
+     @Override
+     public Logger getLogger(Class<?> key) {
+-        return new Log4j2Logger(LogManager.getLogger(key));
++        return new Log4j2Logger((ExtendedLogger) LogManager.getLogger(key));
+     }
+ 
+     @Override
+     public Logger getLogger(String key) {
+-        return new Log4j2Logger(LogManager.getLogger(key));
++        return new Log4j2Logger((ExtendedLogger) LogManager.getLogger(key));
++    }
++
++    @Override
++    public Logger getLogger(String fqcn, Class<?> key) {
++        return new Log4j2Logger(fqcn, (ExtendedLogger) LogManager.getLogger(key));
++    }
++
++    @Override
++    public Logger getLogger(String fqcn, String key) {
++        return new Log4j2Logger(fqcn, (ExtendedLogger) LogManager.getLogger(key));
+     }
+ 
+     @Override
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLogger.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLogger.java
+index 333fc645aad7c309fd5874fd57c73e5b63bbe0c7..8bb7ff3b7bc1806ffea1bde82333b50fbd313a34 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLogger.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLogger.java
+@@ -26,7 +26,7 @@ import org.slf4j.spi.LocationAwareLogger;
+ 
+ public class Slf4jLogger implements Logger {
+ 
+-    private static final String FQCN = FailsafeLogger.class.getName();
++    private final String fqcn;
+ 
+     private final org.slf4j.Logger logger;
+ 
+@@ -38,13 +38,24 @@ public class Slf4jLogger implements Logger {
+         } else {
+             locationAwareLogger = null;
+         }
++        this.fqcn = FailsafeLogger.class.getName();
++        this.logger = logger;
++    }
++
++    public Slf4jLogger(String fqcn, org.slf4j.Logger logger) {
++        if (logger instanceof LocationAwareLogger) {
++            locationAwareLogger = (LocationAwareLogger) logger;
++        } else {
++            locationAwareLogger = null;
++        }
++        this.fqcn = fqcn;
+         this.logger = logger;
+     }
+ 
+     @Override
+     public void trace(String msg) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.TRACE_INT, msg, null, null);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.TRACE_INT, msg, null, null);
+             return;
+         }
+         logger.trace(msg);
+@@ -55,7 +66,7 @@ public class Slf4jLogger implements Logger {
+         if (locationAwareLogger != null && locationAwareLogger.isTraceEnabled()) {
+             FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+             locationAwareLogger.log(
+-                    null, FQCN, LocationAwareLogger.TRACE_INT, msg, ft.getArgArray(), ft.getThrowable());
++                    null, fqcn, LocationAwareLogger.TRACE_INT, msg, ft.getArgArray(), ft.getThrowable());
+             return;
+         }
+         logger.trace(msg, arguments);
+@@ -64,16 +75,17 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void trace(Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.TRACE_INT, e.getMessage(), null, e);
++            locationAwareLogger.log(
++                    null, fqcn, LocationAwareLogger.TRACE_INT, e == null ? null : e.getMessage(), null, e);
+             return;
+         }
+-        logger.trace(e.getMessage(), e);
++        logger.trace(e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void trace(String msg, Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.TRACE_INT, msg, null, e);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.TRACE_INT, msg, null, e);
+             return;
+         }
+         logger.trace(msg, e);
+@@ -82,7 +94,7 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void debug(String msg) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.DEBUG_INT, msg, null, null);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.DEBUG_INT, msg, null, null);
+             return;
+         }
+         logger.debug(msg);
+@@ -93,7 +105,7 @@ public class Slf4jLogger implements Logger {
+         if (locationAwareLogger != null && locationAwareLogger.isDebugEnabled()) {
+             FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+             locationAwareLogger.log(
+-                    null, FQCN, LocationAwareLogger.DEBUG_INT, msg, ft.getArgArray(), ft.getThrowable());
++                    null, fqcn, LocationAwareLogger.DEBUG_INT, msg, ft.getArgArray(), ft.getThrowable());
+             return;
+         }
+         logger.debug(msg, arguments);
+@@ -102,16 +114,17 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void debug(Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.DEBUG_INT, e.getMessage(), null, e);
++            locationAwareLogger.log(
++                    null, fqcn, LocationAwareLogger.DEBUG_INT, e == null ? null : e.getMessage(), null, e);
+             return;
+         }
+-        logger.debug(e.getMessage(), e);
++        logger.debug(e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void debug(String msg, Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.DEBUG_INT, msg, null, e);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.DEBUG_INT, msg, null, e);
+             return;
+         }
+         logger.debug(msg, e);
+@@ -120,7 +133,7 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void info(String msg) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.INFO_INT, msg, null, null);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.INFO_INT, msg, null, null);
+             return;
+         }
+         logger.info(msg);
+@@ -130,7 +143,7 @@ public class Slf4jLogger implements Logger {
+     public void info(String msg, Object... arguments) {
+         if (locationAwareLogger != null && locationAwareLogger.isInfoEnabled()) {
+             FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.INFO_INT, msg, ft.getArgArray(), ft.getThrowable());
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.INFO_INT, msg, ft.getArgArray(), ft.getThrowable());
+             return;
+         }
+         logger.info(msg, arguments);
+@@ -139,16 +152,17 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void info(Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.INFO_INT, e.getMessage(), null, e);
++            locationAwareLogger.log(
++                    null, fqcn, LocationAwareLogger.INFO_INT, e == null ? null : e.getMessage(), null, e);
+             return;
+         }
+-        logger.info(e.getMessage(), e);
++        logger.info(e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void info(String msg, Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.INFO_INT, msg, null, e);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.INFO_INT, msg, null, e);
+             return;
+         }
+         logger.info(msg, e);
+@@ -157,7 +171,7 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void warn(String msg) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.WARN_INT, msg, null, null);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.WARN_INT, msg, null, null);
+             return;
+         }
+         logger.warn(msg);
+@@ -167,7 +181,7 @@ public class Slf4jLogger implements Logger {
+     public void warn(String msg, Object... arguments) {
+         if (locationAwareLogger != null && locationAwareLogger.isWarnEnabled()) {
+             FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.WARN_INT, msg, ft.getArgArray(), ft.getThrowable());
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.WARN_INT, msg, ft.getArgArray(), ft.getThrowable());
+             return;
+         }
+         logger.warn(msg, arguments);
+@@ -176,16 +190,17 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void warn(Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.WARN_INT, e.getMessage(), null, e);
++            locationAwareLogger.log(
++                    null, fqcn, LocationAwareLogger.WARN_INT, e == null ? null : e.getMessage(), null, e);
+             return;
+         }
+-        logger.warn(e.getMessage(), e);
++        logger.warn(e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void warn(String msg, Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.WARN_INT, msg, null, e);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.WARN_INT, msg, null, e);
+             return;
+         }
+         logger.warn(msg, e);
+@@ -194,7 +209,7 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void error(String msg) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.ERROR_INT, msg, null, null);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.ERROR_INT, msg, null, null);
+             return;
+         }
+         logger.error(msg);
+@@ -205,7 +220,7 @@ public class Slf4jLogger implements Logger {
+         if (locationAwareLogger != null && locationAwareLogger.isErrorEnabled()) {
+             FormattingTuple ft = MessageFormatter.arrayFormat(msg, arguments);
+             locationAwareLogger.log(
+-                    null, FQCN, LocationAwareLogger.ERROR_INT, msg, ft.getArgArray(), ft.getThrowable());
++                    null, fqcn, LocationAwareLogger.ERROR_INT, msg, ft.getArgArray(), ft.getThrowable());
+             return;
+         }
+         logger.error(msg, arguments);
+@@ -214,16 +229,17 @@ public class Slf4jLogger implements Logger {
+     @Override
+     public void error(Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.ERROR_INT, e.getMessage(), null, e);
++            locationAwareLogger.log(
++                    null, fqcn, LocationAwareLogger.ERROR_INT, e == null ? null : e.getMessage(), null, e);
+             return;
+         }
+-        logger.error(e.getMessage(), e);
++        logger.error(e == null ? null : e.getMessage(), e);
+     }
+ 
+     @Override
+     public void error(String msg, Throwable e) {
+         if (locationAwareLogger != null) {
+-            locationAwareLogger.log(null, FQCN, LocationAwareLogger.ERROR_INT, msg, null, e);
++            locationAwareLogger.log(null, fqcn, LocationAwareLogger.ERROR_INT, msg, null, e);
+             return;
+         }
+         logger.error(msg, e);
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLoggerAdapter.java b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLoggerAdapter.java
+index c249394f66e5c33a63fe3479b5dedc6b90cb290f..a0e35d1bfd5a0a57962106219d702ea2426960bb 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLoggerAdapter.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/logger/slf4j/Slf4jLoggerAdapter.java
+@@ -47,6 +47,16 @@ public class Slf4jLoggerAdapter implements LoggerAdapter {
+         return new Slf4jLogger(org.slf4j.LoggerFactory.getLogger(key));
+     }
+ 
++    @Override
++    public Logger getLogger(String fqcn, Class<?> key) {
++        return new Slf4jLogger(fqcn, org.slf4j.LoggerFactory.getLogger(key));
++    }
++
++    @Override
++    public Logger getLogger(String fqcn, String key) {
++        return new Slf4jLogger(fqcn, org.slf4j.LoggerFactory.getLogger(key));
++    }
++
+     @Override
+     public Level getLevel() {
+         return level;
+diff --git a/dubbo-common/src/test/java/org/apache/dubbo/common/logger/LoggerTest.java b/dubbo-common/src/test/java/org/apache/dubbo/common/logger/LoggerTest.java
+index 0cac24d2e6f28622ae87270edbd55c14f2dd9eaa..f34a27bcecdd574d3c19bf31ce53b8d7138be635 100644
+--- a/dubbo-common/src/test/java/org/apache/dubbo/common/logger/LoggerTest.java
++++ b/dubbo-common/src/test/java/org/apache/dubbo/common/logger/LoggerTest.java
+@@ -21,6 +21,8 @@ import org.apache.dubbo.common.logger.jdk.JdkLoggerAdapter;
+ import org.apache.dubbo.common.logger.log4j.Log4jLoggerAdapter;
+ import org.apache.dubbo.common.logger.log4j2.Log4j2LoggerAdapter;
+ import org.apache.dubbo.common.logger.slf4j.Slf4jLoggerAdapter;
++import org.apache.dubbo.common.logger.support.FailsafeErrorTypeAwareLogger;
++import org.apache.dubbo.common.logger.support.FailsafeLogger;
+ 
+ import java.lang.reflect.InvocationTargetException;
+ import java.util.stream.Stream;
+@@ -49,7 +51,8 @@ class LoggerTest {
+     void testAllLogMethod(Class<? extends LoggerAdapter> loggerAdapter) throws Exception {
+         LoggerAdapter adapter = loggerAdapter.getDeclaredConstructor().newInstance();
+         adapter.setLevel(Level.ALL);
+-        Logger logger = adapter.getLogger(this.getClass());
++        Logger logger =
++                new FailsafeErrorTypeAwareLogger(adapter.getLogger(FailsafeLogger.class.getName(), this.getClass()));
+         logger.error("error");
+         logger.warn("warn");
+         logger.info("info");

@@ -1,0 +1,852 @@
+diff --git a/.github/workflows/static_analysis.yaml b/.github/workflows/static_analysis.yaml
+index ee731b3ac3817dd12f15c77f848f7e177af584ab..8b15fdfe7606572339cfaf365d2214f3eaa248b1 100644
+--- a/.github/workflows/static_analysis.yaml
++++ b/.github/workflows/static_analysis.yaml
+@@ -51,6 +51,7 @@ jobs:
+                 error|invalid_json
+                 error|misconfigured
+                 welcome_to_element
++                devtools|settings|elementCallUrl
+ 
+     rethemendex_lint:
+         name: "Rethemendex Check"
+diff --git a/Dockerfile b/Dockerfile
+index cd1766347acbb155d2294db2504e798e958073e5..0258850d895db01e2fab75efbb189c0b038470a0 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -19,7 +19,10 @@ RUN /src/scripts/docker-package.sh
+ RUN cp /src/config.sample.json /src/webapp/config.json
+ 
+ # App
+-FROM nginx:alpine-slim
++FROM nginxinc/nginx-unprivileged:alpine-slim
++
++# Need root user to install packages & manipulate the usr directory
++USER root
+ 
+ # Install jq and moreutils for sponge, both used by our entrypoints
+ RUN apk add jq moreutils
+@@ -31,13 +34,6 @@ COPY --from=builder /src/webapp /app
+ COPY /docker/nginx-templates/* /etc/nginx/templates/
+ COPY /docker/docker-entrypoint.d/* /docker-entrypoint.d/
+ 
+-# Tell nginx to put its pidfile elsewhere, so it can run as non-root
+-RUN sed -i -e 's,/var/run/nginx.pid,/tmp/nginx.pid,' /etc/nginx/nginx.conf
+-
+-# nginx user must own the cache and etc directory to write cache and tweak the nginx config
+-RUN chown -R nginx:0 /var/cache/nginx /etc/nginx
+-RUN chmod -R g+w /var/cache/nginx /etc/nginx
+-
+ RUN rm -rf /usr/share/nginx/html \
+   && ln -s /app /usr/share/nginx/html
+ 
+diff --git a/docs/config.md b/docs/config.md
+index 9ae9f2125489b6c8f02ef9d7225b52d469257101..f1ced14fd2844cb46750e91681d184080a5a525a 100644
+--- a/docs/config.md
++++ b/docs/config.md
+@@ -384,8 +384,6 @@ The VoIP and Jitsi options are:
+ 5. `audio_stream_url`: Optional URL to pass to Jitsi to enable live streaming. This option is considered experimental and may be removed
+    at any time without notice.
+ 6. `element_call`: Optional configuration for native group calls using Element Call, with the following subkeys:
+-    - `url`: The URL of the Element Call instance to use for native group calls. This option is considered experimental
+-      and may be removed at any time without notice. Defaults to `https://call.element.io`.
+     - `use_exclusively`: A boolean specifying whether Element Call should be used exclusively as the only VoIP stack in
+       the app, removing the ability to start legacy 1:1 calls or Jitsi calls. Defaults to `false`.
+     - `participant_limit`: The maximum number of users who can join a call; if
+diff --git a/knip.ts b/knip.ts
+index 0188e096e5c26f0a1fc26589f6e6e23925f35930..e129c11481916cbbe978d7454aec97319c848c77 100644
+--- a/knip.ts
++++ b/knip.ts
+@@ -40,6 +40,8 @@ export default {
+         // Used by webpack
+         "process",
+         "util",
++        // Embedded into webapp
++        "@element-hq/element-call-embedded",
+     ],
+     ignoreBinaries: [
+         // Used in scripts & workflows
+diff --git a/package.json b/package.json
+index 4e5494ed8200a7d176e4c8e93fabd07944bd968d..8ccf6d4e772c532ae67a743136e6957ede6a62d1 100644
+--- a/package.json
++++ b/package.json
+@@ -65,7 +65,8 @@
+         "test:playwright:screenshots": "playwright-screenshots --project=Chrome",
+         "coverage": "yarn test --coverage",
+         "analyse:webpack-bundles": "webpack-bundle-analyzer webpack-stats.json webapp",
+-        "update:jitsi": "curl -s https://meet.element.io/libs/external_api.min.js > ./res/jitsi_external_api.min.js"
++        "update:jitsi": "curl -s https://meet.element.io/libs/external_api.min.js > ./res/jitsi_external_api.min.js",
++        "postinstall": "patch-package"
+     },
+     "resolutions": {
+         "@playwright/test": "1.51.1",
+@@ -179,6 +180,7 @@
+         "@babel/preset-typescript": "^7.12.7",
+         "@babel/runtime": "^7.12.5",
+         "@casualbot/jest-sonar-reporter": "2.2.7",
++        "@element-hq/element-call-embedded": "0.9.0",
+         "@element-hq/element-web-playwright-common": "^1.1.5",
+         "@peculiar/webcrypto": "^1.4.3",
+         "@playwright/test": "^1.50.1",
+@@ -265,6 +267,7 @@
+         "minimist": "^1.2.6",
+         "modernizr": "^3.12.0",
+         "node-fetch": "^2.6.7",
++        "patch-package": "^8.0.0",
+         "playwright-core": "^1.51.0",
+         "postcss": "8.4.46",
+         "postcss-easings": "^4.0.0",
+diff --git a/patches/@matrix-org+react-sdk-module-api+2.5.0.patch b/patches/@matrix-org+react-sdk-module-api+2.5.0.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b17244da0aebce72c0b09a7d189f4f84a49e90c
+--- /dev/null
++++ b/patches/@matrix-org+react-sdk-module-api+2.5.0.patch
+@@ -0,0 +1,13 @@
++diff --git a/node_modules/@matrix-org/react-sdk-module-api/lib/ModuleApi.d.ts b/node_modules/@matrix-org/react-sdk-module-api/lib/ModuleApi.d.ts
++index 917a7fc..a2710c6 100644
++--- a/node_modules/@matrix-org/react-sdk-module-api/lib/ModuleApi.d.ts
+++++ b/node_modules/@matrix-org/react-sdk-module-api/lib/ModuleApi.d.ts
++@@ -37,7 +37,7 @@ export interface ModuleApi {
++      * @returns Whether the user submitted the dialog or closed it, and the model returned by the
++      * dialog component if submitted.
++      */
++-    openDialog<M extends object, P extends DialogProps = DialogProps, C extends DialogContent<P> = DialogContent<P>>(initialTitleOrOptions: string | ModuleUiDialogOptions, body: (props: P, ref: React.RefObject<C>) => React.ReactNode, props?: Omit<P, keyof DialogProps>): Promise<{
+++    openDialog<M extends object, P extends DialogProps = DialogProps, C extends DialogContent<P> = DialogContent<P>>(initialTitleOrOptions: string | ModuleUiDialogOptions, body: (props: P, ref: React.RefObject<C | null>) => React.ReactNode, props?: Omit<P, keyof DialogProps>): Promise<{
++         didOkOrSubmit: boolean;
++         model: M;
++     }>;
+diff --git a/patches/@types+react+18.3.18.patch b/patches/@types+react+18.3.18.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..18a1e645246ffdd0afd365fcb2262b143b91aa30
+--- /dev/null
++++ b/patches/@types+react+18.3.18.patch
+@@ -0,0 +1,76 @@
++diff --git a/node_modules/@types/react/index.d.ts b/node_modules/@types/react/index.d.ts
++index 6ea73ef..cb51757 100644
++--- a/node_modules/@types/react/index.d.ts
+++++ b/node_modules/@types/react/index.d.ts
++@@ -151,7 +151,7 @@ declare namespace React {
++         /**
++          * The current value of the ref.
++          */
++-        readonly current: T | null;
+++        current: T;
++     }
++ 
++     interface DO_NOT_USE_OR_YOU_WILL_BE_FIRED_CALLBACK_REF_RETURN_VALUES {
++@@ -186,7 +186,7 @@ declare namespace React {
++      * @see {@link RefObject}
++      */
++ 
++-    type Ref<T> = RefCallback<T> | RefObject<T> | null;
+++    type Ref<T> = RefCallback<T> | RefObject<T | null> | null;
++     /**
++      * A legacy implementation of refs where you can pass a string to a ref prop.
++      *
++@@ -300,7 +300,7 @@ declare namespace React {
++          *
++          * @see {@link https://react.dev/learn/referencing-values-with-refs#refs-and-the-dom React Docs}
++          */
++-        ref?: LegacyRef<T> | undefined;
+++        ref?: LegacyRef<T | null> | undefined;
++     }
++ 
++     /**
++@@ -1234,7 +1234,7 @@ declare namespace React {
++      *
++      * @see {@link ForwardRefRenderFunction}
++      */
++-    type ForwardedRef<T> = ((instance: T | null) => void) | MutableRefObject<T | null> | null;
+++    type ForwardedRef<T> = ((instance: T | null) => void) | RefObject<T | null> | null;
++ 
++     /**
++      * The type of the function passed to {@link forwardRef}. This is considered different
++@@ -1565,7 +1565,7 @@ declare namespace React {
++         [propertyName: string]: any;
++     }
++ 
++-    function createRef<T>(): RefObject<T>;
+++    function createRef<T>(): RefObject<T | null>;
++ 
++     /**
++      * The type of the component returned from {@link forwardRef}.
++@@ -1989,7 +1989,7 @@ declare namespace React {
++      * @version 16.8.0
++      * @see {@link https://react.dev/reference/react/useRef}
++      */
++-    function useRef<T>(initialValue: T): MutableRefObject<T>;
+++    function useRef<T>(initialValue: T): RefObject<T>;
++     // convenience overload for refs given as a ref prop as they typically start with a null value
++     /**
++      * `useRef` returns a mutable ref object whose `.current` property is initialized to the passed argument
++@@ -2004,7 +2004,7 @@ declare namespace React {
++      * @version 16.8.0
++      * @see {@link https://react.dev/reference/react/useRef}
++      */
++-    function useRef<T>(initialValue: T | null): RefObject<T>;
+++    function useRef<T>(initialValue: T | null): RefObject<T | null>;
++     // convenience overload for potentially undefined initialValue / call with 0 arguments
++     // has a default to stop it from defaulting to {} instead
++     /**
++@@ -2017,7 +2017,7 @@ declare namespace React {
++      * @version 16.8.0
++      * @see {@link https://react.dev/reference/react/useRef}
++      */
++-    function useRef<T = undefined>(initialValue?: undefined): MutableRefObject<T | undefined>;
+++    function useRef<T>(initialValue: T | undefined): RefObject<T | undefined>;
++     /**
++      * The signature is identical to `useEffect`, but it fires synchronously after all DOM mutations.
++      * Use this to read layout from the DOM and synchronously re-render. Updates scheduled inside
+diff --git a/scripts/fetchdep.sh b/scripts/fetchdep.sh
+index 1c34beaf42b98872311d06fb2ef93bef7f8d7b23..1299815bbbc114dfce0381f86305809a27d70f47 100755
+--- a/scripts/fetchdep.sh
++++ b/scripts/fetchdep.sh
+@@ -45,10 +45,7 @@ getPRInfo() {
+ 
+ # Some CIs don't give us enough info, so we just get the PR number and ask the
+ # GH API for more info - "fork:branch". Some give us this directly.
+-if [ -n "$BUILDKITE_BRANCH" ]; then
+-    # BuildKite
+-    head=$BUILDKITE_BRANCH
+-elif [ -n "$PR_NUMBER" ]; then
++if [ -n "$PR_NUMBER" ]; then
+     # GitHub
+     getPRInfo $PR_NUMBER
+ elif [ -n "$REVIEW_ID" ]; then
+@@ -79,11 +76,14 @@ if [[ "$GITHUB_EVENT_NAME" == "merge_group" ]]; then
+     clone $deforg $defrepo ${withoutPrefix%%/pr-*}
+ fi
+ 
+-# Try the target branch of the push or PR.
+-if [ -n "$GITHUB_BASE_REF" ]; then
+-    clone $deforg $defrepo $GITHUB_BASE_REF
+-elif [ -n "$BUILDKITE_PULL_REQUEST_BASE_BRANCH" ]; then
+-    clone $deforg $defrepo $BUILDKITE_PULL_REQUEST_BASE_BRANCH
++# Try the target branch of the push or PR, or the branch that was pushed to
++# (ie. the 'master' branch should use matching 'master' dependencies)
++base_or_branch=$GITHUB_BASE_REF
++if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
++    base_or_branch=${GITHUB_REF}
++fi
++if [ -n "$base_or_branch" ]; then
++    clone $deforg $defrepo $base_or_branch
+ fi
+ 
+ # Try HEAD which is the branch name in Netlify (not BRANCH which is pull/xxxx/head for PR builds)
+diff --git a/src/i18n/strings/cs.json b/src/i18n/strings/cs.json
+index 7b1985a835ad47579085cbd55724630b2e2435dd..16158072baa24f412861644b32a58f17b2f31e5a 100644
+--- a/src/i18n/strings/cs.json
++++ b/src/i18n/strings/cs.json
+@@ -12,6 +12,18 @@
+             "one": "Nepřečtená zmínka."
+         },
+         "recent_rooms": "Nedávné místnosti",
++        "room_messsage_not_sent": "Otevřít místnost %(roomName)s s nenastavenou zprávou.",
++        "room_n_unread_invite": "Otevřít pozvánku do místnosti %(roomName)s.",
++        "room_n_unread_messages": {
++            "one": "Otevřít místnost %(roomName)s s 1 nepřečtenou zprávou.",
++            "few": "",
++            "other": "Otevřít místnost %(roomName)s s %(count)s nepřečtenými zprávami."
++        },
++        "room_n_unread_messages_mentions": {
++            "one": "Otevřít místnost %(roomName)s s 1 nepřečtenou zmínkou.",
++            "few": "",
++            "other": "Otevřít místnost %(roomName)s s %(count)s nepřečtenými zprávami včetně zmínek."
++        },
+         "room_name": "Místnost %(name)s",
+         "room_status_bar": "Stavový řádek místnosti",
+         "seek_bar_label": "Panel posunu zvuku",
+diff --git a/src/i18n/strings/cy.json b/src/i18n/strings/cy.json
+index 4cfd2a8921df042826cab261c889d98625d81440..ff5a3a379bc36c40e77be2f79974f5592a213d8d 100644
+--- a/src/i18n/strings/cy.json
++++ b/src/i18n/strings/cy.json
+@@ -56,6 +56,7 @@
+         "go": "Mynd",
+         "go_back": "Nôl",
+         "got_it": "Iawn",
++        "hide": "Cuddio",
+         "hide_advanced": "Cuddio uwch",
+         "hold": "Dal",
+         "ignore": "Anwybyddu",
+@@ -95,6 +96,7 @@
+         "reply": "Ateb",
+         "reply_in_thread": "Ateb i edefyn",
+         "report_content": "Cynnwys yr Adroddiad",
++        "report_room": "Ystafell adrodd",
+         "resend": "Ailanfon",
+         "reset": "Ailosod",
+         "resume": "Ailgychwyn",
+@@ -1741,6 +1743,12 @@
+         "spam_or_propaganda": "Sbam neu bropaganda",
+         "toxic_behaviour": "Ymddygiad Gwenwynig"
+     },
++    "report_room": {
++        "description": "Adroddwch ar yr ystafell hon i weinyddwr eich gweinydd cartref. Bydd hyn yn anfon ID unigryw'r ystafell, ond os yw negeseuon wedi'u hamgryptio, fydd y gweinyddwr ddim yn gallu eu darllen na gweld ffeiliau sy'n cael eu rhannu.",
++        "reason_placeholder": " Rheswm dros adrodd...",
++        "sent": "Anfonwyd eich adroddiad.",
++        "title": "Ystafell Adrodd"
++    },
+     "restore_key_backup_dialog": {
+         "count_of_decryption_failures": "Wedi methu â dadgryptio %(failedCount)s sesiwn!",
+         "count_of_successfully_restored_keys": "Wedi adfer %(sessionCount)s allwedd yn llwyddiannus",
+@@ -2246,7 +2254,7 @@
+             "public_without_alias_warning": "I gysylltu â'r ystafell hon, ychwanegwch gyfeiriad.",
+             "publish_room": "Gwnewch yr ystafell hon yn weladwy yn y cyfeiriadur ystafelloedd cyhoeddus.",
+             "publish_space": "Gwnewch y gofod hwn yn weladwy yn y cyfeiriadur ystafelloedd cyhoeddus.",
+-            "strict_encryption": "Peidiwch byth ag anfon negeseuon wedi'u hamgryptio i sesiynau heb eu gwirio yn yr ystafell hon o'r sesiwn hon",
++            "strict_encryption": "Anfon negeseuon at ddefnyddwyr sydd wedi'u dilysu yn unig.",
+             "title": "Diogelwch a Phreifatrwydd"
+         },
+         "title": "Gosodiadau Ystafell - %(roomName)s",
+@@ -2383,7 +2391,7 @@
+                 "do_not_close_warning": "Peidiwch â chau'r ffenestr hon nes bod yr ailosod wedi'i orffen",
+                 "export_keys": "Allforio allweddi",
+                 "import_keys": "Mewnforio bysellau",
+-                "other_people_device_description": "Yn ragosodedig mewn ystafelloedd wedi'u hamgryptio, peidiwch ag anfon negeseuon wedi'u hamgryptio at unrhyw un nes i chi eu gwirio",
++                "other_people_device_description": "Rhybudd: fydd defnyddwyr sydd heb eu gwirio'n benodol gyda chi (e.e. gan ddefnyddio emoji) yn derbyn eich negeseuon wedi'u hamgryptio. Hefyd, fydd dyfeisiau defnyddwyr sydd wedi'u gwirio heb eu gwirio ddim yn derbyn eich negeseuon wedi'u hamgryptio.",
+                 "other_people_device_label": "Peidiwch byth ag anfon negeseuon wedi'u hamgryptio i ddyfeisiau heb eu gwirio",
+                 "other_people_device_title": "Dyfeisiau pobl eraill",
+                 "reset_identity": "Ailosod hunaniaeth cryptograffig",
+@@ -2975,6 +2983,7 @@
+         "view": "Ystafell golygfeydd gyda chyfeiriad a roddwyd",
+         "whois": "Yn arddangos gwybodaeth am ddefnyddiwr"
+     },
++    "sliding_sync_legacy_no_longer_supported": "Nid yw cydweddu hen lithro bellach yn cael ei gefnogi: allgofnodwch ac yna ail fewngofnodi i alluogi'r faner cydweddu llithro newydd",
+     "space": {
+         "add_existing_room_space": {
+             "create": "Eisiau ychwanegu ystafell newydd yn lle?",
+@@ -3368,7 +3377,8 @@
+         },
+         "m.sticker": "Anfonodd %(senderDisplayName)s sticer.",
+         "m.video": {
+-            "error_decrypting": "Gwall wrth ddadgryptio fideo"
++            "error_decrypting": "Gwall wrth ddadgryptio fideo",
++            "show_video": "Dangos fideo"
+         },
+         "m.widget": {
+             "added": "Mae %(widgetName)s wedi'i ychwanegu gan %(senderName)s",
+diff --git a/src/i18n/strings/de_DE.json b/src/i18n/strings/de_DE.json
+index 3c24710f766a423aededbabbdf24a6e5b960e001..34b27ef1e2f753fb911ea1ba5fb6ae1cebb3d956 100644
+--- a/src/i18n/strings/de_DE.json
++++ b/src/i18n/strings/de_DE.json
+@@ -12,6 +12,16 @@
+             "one": "1 ungelesene Erwähnung."
+         },
+         "recent_rooms": "Kürzlich besuchte Chatrooms",
++        "room_messsage_not_sent": "Öffnen Sie den %(roomName)s Raum mit einer nicht gesetzten Nachricht.",
++        "room_n_unread_invite": "%(roomName)s Einladung zum Raum öffnen.",
++        "room_n_unread_messages": {
++            "one": "Raum %(roomName)s öffnen mit 1 ungelesenen Nachricht.",
++            "other": "Raum %(roomName)s öffnen mit %(count)s ungelesene Nachrichten."
++        },
++        "room_n_unread_messages_mentions": {
++            "one": "Öffnen Sie den Raum %(roomName)s mit 1 ungelesenen Erwähnung.",
++            "other": "Öffnen Sie den Raum %(roomName)s mit %(count)s ungelesenen Nachrichten einschließlich Erwähnungen."
++        },
+         "room_name": "Raum %(name)s",
+         "room_status_bar": "Statusleiste des Chatrooms",
+         "seek_bar_label": "Audio-Suchleiste",
+@@ -104,6 +114,7 @@
+         "reply": "Antworten",
+         "reply_in_thread": "In Thread antworten",
+         "report_content": "Inhalt melden",
++        "report_room": "Raum melden",
+         "resend": "Erneut senden",
+         "reset": "Zurücksetzen",
+         "resume": "Fortsetzen",
+@@ -1810,6 +1821,12 @@
+         "spam_or_propaganda": "Spam oder Propaganda",
+         "toxic_behaviour": "Toxisches Verhalten"
+     },
++    "report_room": {
++        "description": "Melden Sie diesen Raum Ihrem Homeserver-Administrator. Dadurch wird die eindeutige ID des Raums gesendet. Wenn Nachrichten verschlüsselt sind, kann der Administrator sie jedoch nicht lesen oder geteilte Dateien anzeigen.",
++        "reason_placeholder": " Grund für die Meldung...",
++        "sent": "Ihr Bericht wurde gesendet.",
++        "title": "Raum melden"
++    },
+     "restore_key_backup_dialog": {
+         "count_of_decryption_failures": "Konnte %(failedCount)s Sitzungen nicht entschlüsseln!",
+         "count_of_successfully_restored_keys": "%(sessionCount)s Schlüssel erfolgreich wiederhergestellt",
+@@ -2386,7 +2403,7 @@
+             "public_without_alias_warning": "Um den Raum zu verlinken, füge bitte eine Adresse hinzu.",
+             "publish_room": "Diesen Raum im Raumverzeichnis veröffentlichen.",
+             "publish_space": "Diesen Space im Raumverzeichnis veröffentlichen.",
+-            "strict_encryption": "Niemals verschlüsselte Nachrichten von dieser Sitzung zu unverifizierten Sitzungen in diesem Raum senden",
++            "strict_encryption": "Senden Sie Nachrichten nur an verifizierte Benutzer.",
+             "title": "Sicherheit"
+         },
+         "title": "Raumeinstellungen - %(roomName)s",
+@@ -2523,8 +2540,8 @@
+                 "do_not_close_warning": "Schließen Sie dieses Fenster nicht, bis der Reset abgeschlossen ist",
+                 "export_keys": "Schlüssel exportieren",
+                 "import_keys": "Schlüssel importieren",
+-                "other_people_device_description": "Senden Sie in verschlüsselten Räumen standardmäßig keine verschlüsselten Nachrichten an Dritte, bis Sie diese verifiziert haben",
+-                "other_people_device_label": "Senden Sie niemals verschlüsselte Nachrichten an nicht verifizierte Geräte",
++                "other_people_device_description": "Warnung: Benutzer, die sich nicht explizit bei Ihnen verifiziert haben (z. B. mit Emojis), erhalten Ihre verschlüsselten Nachrichten nicht. Außerdem erhalten nicht verifizierte Geräte von verifizierten Benutzern Ihre verschlüsselten Nachrichten nicht.",
++                "other_people_device_label": "Senden Sie in verschlüsselten Räumen Nachrichten nur an verifizierte Benutzer",
+                 "other_people_device_title": "Geräte anderer Personen",
+                 "reset_identity": "Kryptografische Identität zurücksetzen",
+                 "reset_in_progress": "Der Reset wird ausgeführt",
+@@ -2886,7 +2903,7 @@
+             "send_analytics": "Analysedaten senden",
+             "session_id": "Sitzungs-ID:",
+             "session_key": "Sitzungsschlüssel:",
+-            "strict_encryption": "Niemals verschlüsselte Nachrichten von dieser Sitzung zu unverifizierten Sitzungen senden"
++            "strict_encryption": "Senden Sie Nachrichten nur an verifizierte Benutzer"
+         },
+         "send_read_receipts": "Sende Lesebestätigungen",
+         "send_read_receipts_unsupported": "Dein Server unterstützt das Deaktivieren von Lesebestätigungen nicht.",
+@@ -3567,7 +3584,8 @@
+         },
+         "m.sticker": "%(senderDisplayName)s hat einen Sticker gesendet.",
+         "m.video": {
+-            "error_decrypting": "Videoentschlüsselung fehlgeschlagen"
++            "error_decrypting": "Videoentschlüsselung fehlgeschlagen",
++            "show_video": "Video anzeigen"
+         },
+         "m.widget": {
+             "added": "%(senderName)s hat das Widget %(widgetName)s hinzugefügt",
+diff --git a/src/i18n/strings/en_EN.json b/src/i18n/strings/en_EN.json
+index b7339fd9f472127caffd2507819a75612fc3af93..ce1c2e503b2e55bf0358c359ac753e5df4c9621d 100644
+--- a/src/i18n/strings/en_EN.json
++++ b/src/i18n/strings/en_EN.json
+@@ -846,6 +846,9 @@
+         "setting_colon": "Setting:",
+         "setting_definition": "Setting definition:",
+         "setting_id": "Setting ID",
++        "settings": {
++            "elementCallUrl": "Element Call URL"
++        },
+         "settings_explorer": "Settings explorer",
+         "show_hidden_events": "Show hidden events in timeline",
+         "spaces": {
+diff --git a/src/i18n/strings/fr.json b/src/i18n/strings/fr.json
+index a1f54e0eac8b8b09cf4181857e776f834e7cbf9c..f0816eae92f857ded39684d9139b44500dcc0235 100644
+--- a/src/i18n/strings/fr.json
++++ b/src/i18n/strings/fr.json
+@@ -12,6 +12,16 @@
+             "one": "1 mention non lue."
+         },
+         "recent_rooms": "Salons récents",
++        "room_messsage_not_sent": "Ouvrir le salon %(roomName)s avec un message non envoyé.",
++        "room_n_unread_invite": "Ouvrir l'invitation du salon %(roomName)s.",
++        "room_n_unread_messages": {
++            "one": "Ouvrir salon %(roomName)s avec 1 message non lu.",
++            "other": "Ouvrir salon %(roomName)s avec %(count)s messages non lus."
++        },
++        "room_n_unread_messages_mentions": {
++            "one": "Ouvrir salon %(roomName)s avec 1 mention non lue.",
++            "other": "Ouvrir salon %(roomName)s avec %(count)s messages non lus comprenant des mentions."
++        },
+         "room_name": "Salon %(name)s",
+         "room_status_bar": "Barre de statut du salon",
+         "seek_bar_label": "Barre de recherche audio",
+@@ -2530,8 +2540,8 @@
+                 "do_not_close_warning": "Ne fermez pas cette fenêtre tant que la réinitialisation n'est pas terminée",
+                 "export_keys": "Exporter les clés",
+                 "import_keys": "Importer les clés",
+-                "other_people_device_description": "Par défaut, dans les salons chiffrées, n'envoyez pas de messages chiffrés à qui que ce soit avant de les avoir vérifiés",
+-                "other_people_device_label": "N'envoyez jamais de messages chiffrés à des appareils non vérifiés",
++                "other_people_device_description": "Attention : les utilisateurs qui ne se sont pas explicitement vérifiés auprès de vous (par exemple, via des émojis) ne recevront pas vos messages chiffrés. De même, les appareils non vérifiés des utilisateurs vérifiés ne recevront pas vos messages chiffrés.",
++                "other_people_device_label": "Dans les salons chiffrés, envoyez des messages uniquement aux utilisateurs vérifiés",
+                 "other_people_device_title": "Appareils d'autres personnes",
+                 "reset_identity": "Réinitialiser l'identité cryptographique",
+                 "reset_in_progress": "Réinitialisation en cours...",
+diff --git a/src/i18n/strings/pl.json b/src/i18n/strings/pl.json
+index ca77546a0bad48f0a656e61f7f181b89e1bd9e51..826968fea6dfa41c1099958977444204770744ca 100644
+--- a/src/i18n/strings/pl.json
++++ b/src/i18n/strings/pl.json
+@@ -12,6 +12,18 @@
+             "one": "1 nieprzeczytana wzmianka."
+         },
+         "recent_rooms": "Ostatnie pokoje",
++        "room_messsage_not_sent": "Otwórz pokój %(roomName)s z niewysłaną wiadomością.",
++        "room_n_unread_invite": "Otwórz zaproszenie pokoju %(roomName)s.",
++        "room_n_unread_messages": {
++            "one": "Otwórz pokój %(roomName)s z 1 nieprzeczytaną wiadomością.",
++            "few": "Otwórz pokój %(roomName)s z %(count)s nieprzeczytanymi wiadomościami.",
++            "many": "Otwórz pokój %(roomName)s z %(count)s nieprzeczytanymi wiadomościami."
++        },
++        "room_n_unread_messages_mentions": {
++            "one": "Otwórz pokój %(roomName)s z 1 nieprzeczytaną wzmianką.",
++            "few": "Otwórz pokój %(roomName)s z %(count)s nieprzeczytanymi wzmiankami.",
++            "many": "Otwórz pokój %(roomName)s z %(count)s nieprzeczytanymi wzmiankami."
++        },
+         "room_name": "Pokój %(name)s",
+         "room_status_bar": "Pasek stanu pokoju",
+         "seek_bar_label": "Pasek wyszukiwania audio",
+diff --git a/src/i18n/strings/uk.json b/src/i18n/strings/uk.json
+index f9f6c96e928f005980f6e1930bf322e955d94354..a1fb364d74346d3309fad43b7eb45993e075be64 100644
+--- a/src/i18n/strings/uk.json
++++ b/src/i18n/strings/uk.json
+@@ -12,6 +12,18 @@
+             "one": "1 непрочитана згадка."
+         },
+         "recent_rooms": "Недавні кімнати",
++        "room_messsage_not_sent": "Відкрити кімнату %(roomName)s з не надісланим повідомленням.",
++        "room_n_unread_invite": "Відкрити запрошення кімнати %(roomName)s.",
++        "room_n_unread_messages": {
++            "one": "Відкрити кімнату %(roomName)s з 1 непрочитаним повідомленням.",
++            "few": "Відкрити кімнату %(roomName)s з %(count)s непрочитаними повідомленнями.",
++            "many": "Відкрити кімнату %(roomName)s з %(count)s непрочитаними повідомленнями."
++        },
++        "room_n_unread_messages_mentions": {
++            "one": "Відкрити кімнату %(roomName)s з 1 непрочитаною згадкою.",
++            "few": "Відкрити кімнату %(roomName)s з %(count)s непрочитаними згадками.",
++            "many": "Відкрити кімнату %(roomName)s з %(count)s непрочитаними згадками."
++        },
+         "room_name": "Кімната %(name)s",
+         "room_status_bar": "Панель стану кімнати",
+         "seek_bar_label": "Панель гортання аудіо",
+@@ -2398,7 +2410,7 @@
+             "public_without_alias_warning": "Щоб посилатись на цю кімнату, додайте їй адресу.",
+             "publish_room": "Зробити цю кімнату видимою в каталозі загальнодоступних кімнат.",
+             "publish_space": "Зробити цей простір видимим у каталозі загальнодоступних кімнат.",
+-            "strict_encryption": "Ніколи не надсилати зашифровані повідомлення до незвірених сеансів у цій кімнаті з цього сеансу",
++            "strict_encryption": "Надсилати повідомлення лише верифікованим користувачам.",
+             "title": "Безпека й приватність"
+         },
+         "title": "Налаштування кімнати - %(roomName)s",
+@@ -2535,8 +2547,8 @@
+                 "do_not_close_warning": "Не закривайте це вікно, поки не завершиться скидання",
+                 "export_keys": "Експорт ключів",
+                 "import_keys": "Імпорт ключів",
+-                "other_people_device_description": "Усталено, в кімнатах з шифруванням, зашифровані повідомлення не надсилаються, поки є не верифіковані учасники",
+-                "other_people_device_label": "Ніколи не надсилати зашифровані повідомлення на неверифіковані пристрої",
++                "other_people_device_description": "Попередження: користувачі, які не пройшли явну верифікацію з вами (наприклад, за допомогою емодзі), не отримають ваші зашифровані повідомлення. Також неверифіковані пристрої верифікованих користувачів не отримуватимуть ваші зашифровані повідомлення.",
++                "other_people_device_label": "У кімнатах з увімкненим шифруванням надсилати повідомлення лише верифікованим користувачам",
+                 "other_people_device_title": "Пристрої інших людей",
+                 "reset_identity": "Скинути криптографічну ідентичність",
+                 "reset_in_progress": "Виконується скидання...",
+@@ -2898,7 +2910,7 @@
+             "send_analytics": "Надсилати дані аналітики",
+             "session_id": "ID сеансу:",
+             "session_key": "Ключ сеансу:",
+-            "strict_encryption": "Ніколи не надсилати зашифровані повідомлення до незвірених сеансів з цього сеансу"
++            "strict_encryption": "Надсилати повідомлення лише верифікованим користувачам"
+         },
+         "send_read_receipts": "Надсилати підтвердження прочитання",
+         "send_read_receipts_unsupported": "Ваш сервер не підтримує вимкнення надсилання сповіщень про прочитання.",
+diff --git a/webpack.config.js b/webpack.config.js
+index e8413f372c2c49f4b8503a1c1cf512ccdba3ae11..531e9ea2b239f330d04fc777e9dd3183a8cefcf8 100644
+--- a/webpack.config.js
++++ b/webpack.config.js
+@@ -674,6 +674,12 @@ module.exports = (env, argv) => {
+                     { from: "media/**", context: path.resolve(__dirname, "res/") },
+                     { from: "config.json", noErrorOnMissing: true },
+                     "contribute.json",
++                    // Element Call embedded widget
++                    {
++                        from: "**",
++                        context: path.resolve(__dirname, "node_modules/@element-hq/element-call-embedded/dist"),
++                        to: path.join(__dirname, "webapp", "widgets", "element-call"),
++                    },
+                 ],
+             }),
+ 
+diff --git a/yarn.lock b/yarn.lock
+index 1910f970031659c0ce1f2c24fa15ee5c8f106fd0..0e537e5e35fa80ea0385f86057c3f900cdcd980e 100644
+--- a/yarn.lock
++++ b/yarn.lock
+@@ -1560,6 +1560,11 @@
+   resolved "https://registry.yarnpkg.com/@dual-bundle/import-meta-resolve/-/import-meta-resolve-4.1.0.tgz#519c1549b0e147759e7825701ecffd25e5819f7b"
+   integrity sha512-+nxncfwHM5SgAtrVzgpzJOI1ol0PkumhVo469KCf9lUi21IGcY90G98VuHm9VRrUypmAzawAHO9bs6hqeADaVg==
+ 
++"@element-hq/element-call-embedded@0.9.0":
++  version "0.9.0"
++  resolved "https://registry.yarnpkg.com/@element-hq/element-call-embedded/-/element-call-embedded-0.9.0.tgz#459c5a304ad9f97e942120518c70eeaffbe45ac7"
++  integrity sha512-W/ocQqfzU1rqwjLBCjCpeIEJTX2iCqn8CR3GRF0kqd5wsehPDhIsGPnUDmFalY/iN15eRDx/hex2rgOOJzFoGg==
++
+ "@element-hq/element-web-module-api@^0.1.1":
+   version "0.1.1"
+   resolved "https://registry.yarnpkg.com/@element-hq/element-web-module-api/-/element-web-module-api-0.1.1.tgz#e2b24aa38aa9f7b6af3c4993e6402a8b7e2f3cb5"
+@@ -3612,7 +3617,7 @@
+     classnames "^2.5.1"
+     vaul "^1.0.0"
+ 
+-"@vector-im/matrix-wysiwyg-wasm@link:../../../.cache/yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm":
++"@vector-im/matrix-wysiwyg-wasm@link:../../Library/Caches/Yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm":
+   version "0.0.0"
+   uid ""
+ 
+@@ -3621,7 +3626,7 @@
+   resolved "https://registry.yarnpkg.com/@vector-im/matrix-wysiwyg/-/matrix-wysiwyg-2.38.2.tgz#3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8"
+   integrity sha512-TUnLPgZ8/zGUccQZxjIP3MVHjqybgV4u0r6kXibs35wlXgomXjwcN5gchl3FpgGkiHbi8g3D2ao0oHaqi2GaIw==
+   dependencies:
+-    "@vector-im/matrix-wysiwyg-wasm" "link:../../../.cache/yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm"
++    "@vector-im/matrix-wysiwyg-wasm" "link:../../Library/Caches/Yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm"
+ 
+ "@webassemblyjs/ast@1.14.1", "@webassemblyjs/ast@^1.14.1":
+   version "1.14.1"
+@@ -3769,6 +3774,11 @@
+   resolved "https://registry.yarnpkg.com/@xtuc/long/-/long-4.2.2.tgz#d291c6a4e97989b5c61d9acf396ae4fe133a718d"
+   integrity sha512-NuHqBY1PB/D8xU6s/thBgOAiAP7HOYDQ32+BFZILJ8ivkUkAHQnWfn6WhL79Owj1qmUnoN/YPhktdIoucipkAQ==
+ 
++"@yarnpkg/lockfile@^1.1.0":
++  version "1.1.0"
++  resolved "https://registry.yarnpkg.com/@yarnpkg/lockfile/-/lockfile-1.1.0.tgz#e77a97fbd345b76d83245edcd17d393b1b41fb31"
++  integrity sha512-GpSwvyXOcOOlV70vbnzjj4fW5xW/FdUF6nQEt1ENy7m4ZCczi1+/buVUPAqmGfqznsORNFzUMjctTIp8a9tuCQ==
++
+ "@zxcvbn-ts/core@^3.0.4":
+   version "3.0.4"
+   resolved "https://registry.yarnpkg.com/@zxcvbn-ts/core/-/core-3.0.4.tgz#c5bde72235eb6c273cec78b672bb47c0d7045cad"
+@@ -4187,6 +4197,11 @@ asynckit@^0.4.0:
+   resolved "https://registry.yarnpkg.com/asynckit/-/asynckit-0.4.0.tgz#c79ed97f7f34cb8f2ba1bc9790bcc366474b4b79"
+   integrity sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==
+ 
++at-least-node@^1.0.0:
++  version "1.0.0"
++  resolved "https://registry.yarnpkg.com/at-least-node/-/at-least-node-1.0.0.tgz#602cd4b46e844ad4effc92a8011a3c46e0238dc2"
++  integrity sha512-+q/t7Ekv1EDY2l6Gda6LLiX14rU9TV20Wa3ofeQmwPFZbOMo9DXrLbOjFaaclkXKWidIaopwAObQDqwWtGUjqg==
++
+ autoprefixer@^10.4.19:
+   version "10.4.20"
+   resolved "https://registry.yarnpkg.com/autoprefixer/-/autoprefixer-10.4.20.tgz#5caec14d43976ef42e32dcb4bd62878e96be5b3b"
+@@ -4222,9 +4237,9 @@ axe-core@~4.10.2:
+   integrity sha512-Xm7bpRXnDSX2YE2YFfBk2FnF0ep6tmG7xPh8iHee8MIcrgq762Nkce856dYtJYLkuIoYZvGfTs/PbZhideTcEg==
+ 
+ axios@^1.8.1:
+-  version "1.8.1"
+-  resolved "https://registry.yarnpkg.com/axios/-/axios-1.8.1.tgz#7c118d2146e9ebac512b7d1128771cdd738d11e3"
+-  integrity sha512-NN+fvwH/kV01dYUQ3PTOZns4LWtWhOFCAhQ/pHb88WQ1hNe5V/dvFwc4VJcDL11LT9xSX0QtsR8sWUuyOuOq7g==
++  version "1.8.4"
++  resolved "https://registry.yarnpkg.com/axios/-/axios-1.8.4.tgz#78990bb4bc63d2cae072952d374835950a82f447"
++  integrity sha512-eBSYY4Y68NNlHbHBMdeDmKNtDgXWhQsJcGqzO3iLUM0GraQFSS9cVgPX5I9b3lbdFKyYoAEGAZF1DwhTaljNAw==
+   dependencies:
+     follow-redirects "^1.15.6"
+     form-data "^4.0.0"
+@@ -4731,7 +4746,7 @@ chrome-trace-event@^1.0.2:
+   resolved "https://registry.yarnpkg.com/chrome-trace-event/-/chrome-trace-event-1.0.4.tgz#05bffd7ff928465093314708c93bdfa9bd1f0f5b"
+   integrity sha512-rNjApaLzuwaOTjCiT8lSDdGN1APCiqkChLMJxJPWLunPAt5fy8xgU9/jNOchV84wfIxrA0lRQB7oCT8jrn/wrQ==
+ 
+-ci-info@^3.2.0:
++ci-info@^3.2.0, ci-info@^3.7.0:
+   version "3.9.0"
+   resolved "https://registry.yarnpkg.com/ci-info/-/ci-info-3.9.0.tgz#4279a62028a7b1f262f3473fc9605f5e218c59b4"
+   integrity sha512-NIxF55hv4nSqQswkAeiOi1r83xy8JldOFDTWiug55KBu9Jnblncd2U6ViHmYgHf01TPZS77NJBhBMKdWj9HQMQ==
+@@ -6624,6 +6639,13 @@ find-up@^5.0.0:
+     locate-path "^6.0.0"
+     path-exists "^4.0.0"
+ 
++find-yarn-workspace-root@^2.0.0:
++  version "2.0.0"
++  resolved "https://registry.yarnpkg.com/find-yarn-workspace-root/-/find-yarn-workspace-root-2.0.0.tgz#f47fb8d239c900eb78179aa81b66673eac88f7bd"
++  integrity sha512-1IMnbjt4KzsQfnhnzNd8wUEgXZ44IzZaZmnLYx7D5FZlaHt2gW20Cri8Q+E/t5tIj4+epTBub+2Zxu/vNILzqQ==
++  dependencies:
++    micromatch "^4.0.2"
++
+ flat-cache@^3.0.4:
+   version "3.2.0"
+   resolved "https://registry.yarnpkg.com/flat-cache/-/flat-cache-3.2.0.tgz#2c0c2d5040c99b1632771a9d105725c0115363ee"
+@@ -6719,6 +6741,16 @@ fs-constants@^1.0.0:
+   resolved "https://registry.yarnpkg.com/fs-constants/-/fs-constants-1.0.0.tgz#6be0de9be998ce16af8afc24497b9ee9b7ccd9ad"
+   integrity sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==
+ 
++fs-extra@^9.0.0:
++  version "9.1.0"
++  resolved "https://registry.yarnpkg.com/fs-extra/-/fs-extra-9.1.0.tgz#5954460c764a8da2094ba3554bf839e6b9a7c86d"
++  integrity sha512-hcg3ZmepS30/7BSFqRvoo3DOMQu7IjqxO5nCDt+zM9XWjb33Wg7ziNT+Qvqbuc3+gWpzO02JubVyk2G4Zvo1OQ==
++  dependencies:
++    at-least-node "^1.0.0"
++    graceful-fs "^4.2.0"
++    jsonfile "^6.0.1"
++    universalify "^2.0.0"
++
+ fs.realpath@^1.0.0:
+   version "1.0.0"
+   resolved "https://registry.yarnpkg.com/fs.realpath/-/fs.realpath-1.0.0.tgz#1504ad2523158caa40db4a2787cb01411994ea4f"
+@@ -6986,7 +7018,7 @@ gopd@^1.0.1, gopd@^1.2.0:
+   resolved "https://registry.yarnpkg.com/gopd/-/gopd-1.2.0.tgz#89f56b8217bdbc8802bd299df6d7f1081d7e51a1"
+   integrity sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==
+ 
+-graceful-fs@^4.1.2, graceful-fs@^4.2.0, graceful-fs@^4.2.11, graceful-fs@^4.2.4, graceful-fs@^4.2.6, graceful-fs@^4.2.9:
++graceful-fs@^4.1.11, graceful-fs@^4.1.2, graceful-fs@^4.1.6, graceful-fs@^4.2.0, graceful-fs@^4.2.11, graceful-fs@^4.2.4, graceful-fs@^4.2.6, graceful-fs@^4.2.9:
+   version "4.2.11"
+   resolved "https://registry.yarnpkg.com/graceful-fs/-/graceful-fs-4.2.11.tgz#4183e4e8bf08bb6e05bbb2f7d2e0c8f712ca40e3"
+   integrity sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==
+@@ -7537,6 +7569,11 @@ is-date-object@^1.0.5, is-date-object@^1.1.0:
+     call-bound "^1.0.2"
+     has-tostringtag "^1.0.2"
+ 
++is-docker@^2.0.0:
++  version "2.2.1"
++  resolved "https://registry.yarnpkg.com/is-docker/-/is-docker-2.2.1.tgz#33eeabe23cfe86f14bde4408a02c0cfb853acdaa"
++  integrity sha512-F+i2BKsFrH66iaUFc0woD8sLy8getkwTwtOBjvs56Cx4CgJDeKQeqfz8wAYiSb8JOprWhHH5p77PbmYCvvUuXQ==
++
+ is-docker@^3.0.0:
+   version "3.0.0"
+   resolved "https://registry.yarnpkg.com/is-docker/-/is-docker-3.0.0.tgz#90093aa3106277d8a77a5910dbae71747e15a200"
+@@ -7752,6 +7789,13 @@ is-weakset@^2.0.3:
+     call-bound "^1.0.3"
+     get-intrinsic "^1.2.6"
+ 
++is-wsl@^2.1.1:
++  version "2.2.0"
++  resolved "https://registry.yarnpkg.com/is-wsl/-/is-wsl-2.2.0.tgz#74a4c76e77ca9fd3f932f290c17ea326cd157271"
++  integrity sha512-fKzAra0rGJUUBwGBgNkHZuToZcn+TtXHpeCgmkMJMMYx1sQDYaCSyjJBSCa2nH1DGm7s3n1oBnohoVTBaN7Lww==
++  dependencies:
++    is-docker "^2.0.0"
++
+ is-wsl@^3.1.0:
+   version "3.1.0"
+   resolved "https://registry.yarnpkg.com/is-wsl/-/is-wsl-3.1.0.tgz#e1c657e39c10090afcbedec61720f6b924c3cbd2"
+@@ -8376,6 +8420,17 @@ json-stable-stringify-without-jsonify@^1.0.1:
+   resolved "https://registry.yarnpkg.com/json-stable-stringify-without-jsonify/-/json-stable-stringify-without-jsonify-1.0.1.tgz#9db7b59496ad3f3cfef30a75142d2d930ad72651"
+   integrity sha512-Bdboy+l7tA3OGW6FjyFHWkP5LuByj1Tk33Ljyq0axyzdk9//JSi2u3fP1QSmd1KNwq6VOKYGlAu87CisVir6Pw==
+ 
++json-stable-stringify@^1.0.2:
++  version "1.2.1"
++  resolved "https://registry.yarnpkg.com/json-stable-stringify/-/json-stable-stringify-1.2.1.tgz#addb683c2b78014d0b78d704c2fcbdf0695a60e2"
++  integrity sha512-Lp6HbbBgosLmJbjx0pBLbgvx68FaFU1sdkmBuckmhhJ88kL13OA51CDtR2yJB50eCNMH9wRqtQNNiAqQH4YXnA==
++  dependencies:
++    call-bind "^1.0.8"
++    call-bound "^1.0.3"
++    isarray "^2.0.5"
++    jsonify "^0.0.1"
++    object-keys "^1.1.1"
++
+ json-stringify-pretty-compact@^4.0.0:
+   version "4.0.0"
+   resolved "https://registry.yarnpkg.com/json-stringify-pretty-compact/-/json-stringify-pretty-compact-4.0.0.tgz#cf4844770bddee3cb89a6170fe4b00eee5dbf1d4"
+@@ -8393,6 +8448,20 @@ json5@^2.1.2, json5@^2.2.3:
+   resolved "https://registry.yarnpkg.com/json5/-/json5-2.2.3.tgz#78cd6f1a19bdc12b73db5ad0c61efd66c1e29283"
+   integrity sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==
+ 
++jsonfile@^6.0.1:
++  version "6.1.0"
++  resolved "https://registry.yarnpkg.com/jsonfile/-/jsonfile-6.1.0.tgz#bc55b2634793c679ec6403094eb13698a6ec0aae"
++  integrity sha512-5dgndWOriYSm5cnYaJNhalLNDKOqFwyDB/rr1E9ZsGciGvKPs8R2xYGCacuf3z6K1YKDz182fd+fY3cn3pMqXQ==
++  dependencies:
++    universalify "^2.0.0"
++  optionalDependencies:
++    graceful-fs "^4.1.6"
++
++jsonify@^0.0.1:
++  version "0.0.1"
++  resolved "https://registry.yarnpkg.com/jsonify/-/jsonify-0.0.1.tgz#2aa3111dae3d34a0f151c63f3a45d995d9420978"
++  integrity sha512-2/Ki0GcmuqSrgFyelQq9M05y7PS0mEwuIzrf3f1fPqkVDVRvZrPZtVSMHxdgo8Aq0sxAOb/cr2aqqA3LeWHVPg==
++
+ jsqr@^1.4.0:
+   version "1.4.0"
+   resolved "https://registry.yarnpkg.com/jsqr/-/jsqr-1.4.0.tgz#8efb8d0a7cc6863cb6d95116b9069123ce9eb2d1"
+@@ -8459,6 +8528,13 @@ kind-of@^6.0.2, kind-of@^6.0.3:
+   resolved "https://registry.yarnpkg.com/kind-of/-/kind-of-6.0.3.tgz#07c05034a6c349fa06e24fa35aa76db4580ce4dd"
+   integrity sha512-dcS1ul+9tmeD95T+x28/ehLgd9mENa3LsvDTtzm3vyBEO7RPptvAD+t44WVXaUjTBRcrpFeFlC8WCruUR456hw==
+ 
++klaw-sync@^6.0.0:
++  version "6.0.0"
++  resolved "https://registry.yarnpkg.com/klaw-sync/-/klaw-sync-6.0.0.tgz#1fd2cfd56ebb6250181114f0a581167099c2b28c"
++  integrity sha512-nIeuVSzdCCs6TDPTqI8w1Yre34sSq7AkZ4B3sfOBbI2CgVSB4Du4aLQijFU2+lhAFCwt9+42Hel6lQNIv6AntQ==
++  dependencies:
++    graceful-fs "^4.1.11"
++
+ kleur@^3.0.3:
+   version "3.0.3"
+   resolved "https://registry.yarnpkg.com/kleur/-/kleur-3.0.3.tgz#a79c9ecc86ee1ce3fa6206d1216c501f147fc07e"
+@@ -9368,6 +9444,14 @@ open@^10.0.3:
+     is-inside-container "^1.0.0"
+     is-wsl "^3.1.0"
+ 
++open@^7.4.2:
++  version "7.4.2"
++  resolved "https://registry.yarnpkg.com/open/-/open-7.4.2.tgz#b8147e26dcf3e426316c730089fd71edd29c2321"
++  integrity sha512-MVHddDVweXZF3awtlAS+6pgKLlm/JgxZ90+/NBurBoQctVOOB/zDdVjcyPzQ+0laDGbsWgrRkflI65sQeOgT9Q==
++  dependencies:
++    is-docker "^2.0.0"
++    is-wsl "^2.1.1"
++
+ opener@^1.5.2:
+   version "1.5.2"
+   resolved "https://registry.yarnpkg.com/opener/-/opener-1.5.2.tgz#5d37e1f35077b9dcac4301372271afdeb2a13598"
+@@ -9390,6 +9474,11 @@ opus-recorder@^8.0.3:
+   resolved "https://registry.yarnpkg.com/opus-recorder/-/opus-recorder-8.0.5.tgz#06d3e32e15da57ebc3f57e41b93033475fcb4e3e"
+   integrity sha512-tBRXc9Btds7i3bVfA7d5rekAlyOcfsivt5vSIXHxRV1Oa+s6iXFW8omZ0Lm3ABWotVcEyKt96iIIUcgbV07YOw==
+ 
++os-tmpdir@~1.0.2:
++  version "1.0.2"
++  resolved "https://registry.yarnpkg.com/os-tmpdir/-/os-tmpdir-1.0.2.tgz#bbe67406c79aa85c5cfec766fe5734555dfa1274"
++  integrity sha512-D2FR03Vir7FIu45XBY20mTb+/ZSWB00sjU9jdQXt83gDrI4Ztz5Fs7/yy74g2N5SVQY4xY1qDr4rNddwYRVX0g==
++
+ own-keys@^1.0.1:
+   version "1.0.1"
+   resolved "https://registry.yarnpkg.com/own-keys/-/own-keys-1.0.1.tgz#e4006910a2bf913585289676eebd6f390cf51358"
+@@ -9526,6 +9615,27 @@ pascal-case@^3.1.2:
+     no-case "^3.0.4"
+     tslib "^2.0.3"
+ 
++patch-package@^8.0.0:
++  version "8.0.0"
++  resolved "https://registry.yarnpkg.com/patch-package/-/patch-package-8.0.0.tgz#d191e2f1b6e06a4624a0116bcb88edd6714ede61"
++  integrity sha512-da8BVIhzjtgScwDJ2TtKsfT5JFWz1hYoBl9rUQ1f38MC2HwnEIkK8VN3dKMKcP7P7bvvgzNDbfNHtx3MsQb5vA==
++  dependencies:
++    "@yarnpkg/lockfile" "^1.1.0"
++    chalk "^4.1.2"
++    ci-info "^3.7.0"
++    cross-spawn "^7.0.3"
++    find-yarn-workspace-root "^2.0.0"
++    fs-extra "^9.0.0"
++    json-stable-stringify "^1.0.2"
++    klaw-sync "^6.0.0"
++    minimist "^1.2.6"
++    open "^7.4.2"
++    rimraf "^2.6.3"
++    semver "^7.5.3"
++    slash "^2.0.0"
++    tmp "^0.0.33"
++    yaml "^2.2.2"
++
+ path-exists@^4.0.0:
+   version "4.0.0"
+   resolved "https://registry.yarnpkg.com/path-exists/-/path-exists-4.0.0.tgz#513bdbe2d3b95d7762e8c1137efa195c6c61b5b3"
+@@ -11000,6 +11110,13 @@ rfdc@^1.4.1:
+   resolved "https://registry.yarnpkg.com/rfdc/-/rfdc-1.4.1.tgz#778f76c4fb731d93414e8f925fbecf64cce7f6ca"
+   integrity sha512-q1b3N5QkRUWUl7iyylaaj3kOpIT0N2i9MqIEQXP73GVsN9cw3fdx8X63cEmWhJGi2PPCF23Ijp7ktmd39rawIA==
+ 
++rimraf@^2.6.3:
++  version "2.7.1"
++  resolved "https://registry.yarnpkg.com/rimraf/-/rimraf-2.7.1.tgz#35797f13a7fdadc566142c29d4f07ccad483e3ec"
++  integrity sha512-uWjbaKIK3T1OSVptzX7Nl6PvQ3qAGtKEtVRjRuazjfL3Bx5eI409VZSqgND+4UNnmzLVdPj9FqFJNPqBZFve4w==
++  dependencies:
++    glob "^7.1.3"
++
+ rimraf@^3.0.2:
+   version "3.0.2"
+   resolved "https://registry.yarnpkg.com/rimraf/-/rimraf-3.0.2.tgz#f1a5402ba6220ad52cc1282bac1ae3aa49fd061a"
+@@ -11360,6 +11477,11 @@ sisteransi@^1.0.5:
+   resolved "https://registry.yarnpkg.com/sisteransi/-/sisteransi-1.0.5.tgz#134d681297756437cc05ca01370d3a7a571075ed"
+   integrity sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==
+ 
++slash@^2.0.0:
++  version "2.0.0"
++  resolved "https://registry.yarnpkg.com/slash/-/slash-2.0.0.tgz#de552851a1759df3a8f206535442f5ec4ddeab44"
++  integrity sha512-ZYKh3Wh2z1PpEXWr0MpSBZ0V6mZHAQfYevttO11c51CaWjGTaadiKZ+wVt1PbMlDV5qhMFslpZCemhwOK7C89A==
++
+ slash@^3.0.0:
+   version "3.0.0"
+   resolved "https://registry.yarnpkg.com/slash/-/slash-3.0.0.tgz#6539be870c165adbd5240220dbe361f1bc4d4634"
+@@ -12112,6 +12234,13 @@ tinyqueue@^3.0.0:
+   resolved "https://registry.yarnpkg.com/tinyqueue/-/tinyqueue-3.0.0.tgz#101ea761ccc81f979e29200929e78f1556e3661e"
+   integrity sha512-gRa9gwYU3ECmQYv3lslts5hxuIa90veaEcxDYuu3QGOIAEM2mOZkVHp48ANJuu1CURtRdHKUBY5Lm1tHV+sD4g==
+ 
++tmp@^0.0.33:
++  version "0.0.33"
++  resolved "https://registry.yarnpkg.com/tmp/-/tmp-0.0.33.tgz#6d34335889768d21b2bcda0aa277ced3b1bfadf9"
++  integrity sha512-jRCJlojKnZ3addtTOjdIqoRuPEKBvNXcGYqzO6zWZX8KfKEpnGY5jfggJQ3EjKuu8D4bJRr0y+cYJFmYbImXGw==
++  dependencies:
++    os-tmpdir "~1.0.2"
++
+ tmp@^0.2.3:
+   version "0.2.3"
+   resolved "https://registry.yarnpkg.com/tmp/-/tmp-0.2.3.tgz#eb783cc22bc1e8bebd0671476d46ea4eb32a79ae"
+@@ -12404,6 +12533,11 @@ universalify@^0.2.0:
+   resolved "https://registry.yarnpkg.com/universalify/-/universalify-0.2.0.tgz#6451760566fa857534745ab1dde952d1b1761be0"
+   integrity sha512-CJ1QgKmNg3CwvAv/kOFmtnEN05f0D/cn9QntgNOQlQF9dgvVTHj3t+8JPdjqawCHk7V/KA+fbUqzZ9XWhcqPUg==
+ 
++universalify@^2.0.0:
++  version "2.0.1"
++  resolved "https://registry.yarnpkg.com/universalify/-/universalify-2.0.1.tgz#168efc2180964e6386d061e094df61afe239b18d"
++  integrity sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==
++
+ unpipe@1.0.0, unpipe@~1.0.0:
+   version "1.0.0"
+   resolved "https://registry.yarnpkg.com/unpipe/-/unpipe-1.0.0.tgz#b2bf4ee8514aae6165b4817829d21b2ef49904ec"

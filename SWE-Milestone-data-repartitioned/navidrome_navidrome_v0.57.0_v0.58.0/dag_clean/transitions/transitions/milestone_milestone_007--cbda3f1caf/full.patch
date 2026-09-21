@@ -1,0 +1,490 @@
+diff --git a/core/agents/agents.go b/core/agents/agents.go
+index efa9f383d4a893430c5c644bde589788aac7df3f..225411ecdb85c6263fc9e7acce2b664946a59067 100644
+--- a/core/agents/agents.go
++++ b/core/agents/agents.go
+@@ -4,7 +4,6 @@ import (
+ 	"context"
+ 	"slices"
+ 	"strings"
+-	"sync"
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
+@@ -23,54 +22,9 @@ type PluginLoader interface {
+ 	LoadMediaAgent(name string) (Interface, bool)
+ }
+ 
+-type cachedAgent struct {
+-	agent      Interface
+-	expiration time.Time
+-}
+-
+-// Encapsulates agent caching logic
+-// agentCache is a simple TTL cache for agents
+-// Not exported, only used by Agents
+-
+-type agentCache struct {
+-	mu    sync.Mutex
+-	items map[string]cachedAgent
+-	ttl   time.Duration
+-}
+-
+-// TTL for cached agents
+-const agentCacheTTL = 5 * time.Minute
+-
+-func newAgentCache(ttl time.Duration) *agentCache {
+-	return &agentCache{
+-		items: make(map[string]cachedAgent),
+-		ttl:   ttl,
+-	}
+-}
+-
+-func (c *agentCache) Get(name string) Interface {
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
+-	cached, ok := c.items[name]
+-	if ok && cached.expiration.After(time.Now()) {
+-		return cached.agent
+-	}
+-	return nil
+-}
+-
+-func (c *agentCache) Set(name string, agent Interface) {
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
+-	c.items[name] = cachedAgent{
+-		agent:      agent,
+-		expiration: time.Now().Add(c.ttl),
+-	}
+-}
+-
+ type Agents struct {
+ 	ds           model.DataStore
+ 	pluginLoader PluginLoader
+-	cache        *agentCache
+ }
+ 
+ // GetAgents returns the singleton instance of Agents
+@@ -85,18 +39,24 @@ func createAgents(ds model.DataStore, pluginLoader PluginLoader) *Agents {
+ 	return &Agents{
+ 		ds:           ds,
+ 		pluginLoader: pluginLoader,
+-		cache:        newAgentCache(agentCacheTTL),
+ 	}
+ }
+ 
+-// getEnabledAgentNames returns the current list of enabled agent names, including:
++// enabledAgent represents an enabled agent with its type information
++type enabledAgent struct {
++	name     string
++	isPlugin bool
++}
++
++// getEnabledAgentNames returns the current list of enabled agents, including:
+ // 1. Built-in agents and plugins from config (in the specified order)
+ // 2. Always include LocalAgentName
+ // 3. If config is empty, include ONLY LocalAgentName
+-func (a *Agents) getEnabledAgentNames() []string {
++// Each enabledAgent contains the name and whether it's a plugin (true) or built-in (false)
++func (a *Agents) getEnabledAgentNames() []enabledAgent {
+ 	// If no agents configured, ONLY use the local agent
+ 	if conf.Server.Agents == "" {
+-		return []string{LocalAgentName}
++		return []enabledAgent{{name: LocalAgentName, isPlugin: false}}
+ 	}
+ 
+ 	// Get all available plugin names
+@@ -108,19 +68,13 @@ func (a *Agents) getEnabledAgentNames() []string {
+ 	configuredAgents := strings.Split(conf.Server.Agents, ",")
+ 
+ 	// Always add LocalAgentName if not already included
+-	hasLocalAgent := false
+-	for _, name := range configuredAgents {
+-		if name == LocalAgentName {
+-			hasLocalAgent = true
+-			break
+-		}
+-	}
++	hasLocalAgent := slices.Contains(configuredAgents, LocalAgentName)
+ 	if !hasLocalAgent {
+ 		configuredAgents = append(configuredAgents, LocalAgentName)
+ 	}
+ 
+ 	// Filter to only include valid agents (built-in or plugins)
+-	var validNames []string
++	var validAgents []enabledAgent
+ 	for _, name := range configuredAgents {
+ 		// Check if it's a built-in agent
+ 		isBuiltIn := Map[name] != nil
+@@ -128,39 +82,35 @@ func (a *Agents) getEnabledAgentNames() []string {
+ 		// Check if it's a plugin
+ 		isPlugin := slices.Contains(availablePlugins, name)
+ 
+-		if isBuiltIn || isPlugin {
+-			validNames = append(validNames, name)
++		if isBuiltIn {
++			validAgents = append(validAgents, enabledAgent{name: name, isPlugin: false})
++		} else if isPlugin {
++			validAgents = append(validAgents, enabledAgent{name: name, isPlugin: true})
+ 		} else {
+ 			log.Warn("Unknown agent ignored", "name", name)
+ 		}
+ 	}
+-	return validNames
++	return validAgents
+ }
+ 
+-func (a *Agents) getAgent(name string) Interface {
+-	// Check cache first
+-	agent := a.cache.Get(name)
+-	if agent != nil {
+-		return agent
+-	}
+-
+-	// Try to get built-in agent
+-	constructor, ok := Map[name]
+-	if ok {
+-		agent := constructor(a.ds)
+-		if agent != nil {
+-			a.cache.Set(name, agent)
+-			return agent
+-		}
+-		log.Debug("Built-in agent not available. Missing configuration?", "name", name)
+-	}
+-
+-	// Try to load WASM plugin agent (if plugin loader is available)
+-	if a.pluginLoader != nil {
+-		agent, ok := a.pluginLoader.LoadMediaAgent(name)
+-		if ok && agent != nil {
+-			a.cache.Set(name, agent)
+-			return agent
++func (a *Agents) getAgent(ea enabledAgent) Interface {
++	if ea.isPlugin {
++		// Try to load WASM plugin agent (if plugin loader is available)
++		if a.pluginLoader != nil {
++			agent, ok := a.pluginLoader.LoadMediaAgent(ea.name)
++			if ok && agent != nil {
++				return agent
++			}
++		}
++	} else {
++		// Try to get built-in agent
++		constructor, ok := Map[ea.name]
++		if ok {
++			agent := constructor(a.ds)
++			if agent != nil {
++				return agent
++			}
++			log.Debug("Built-in agent not available. Missing configuration?", "name", ea.name)
+ 		}
+ 	}
+ 
+@@ -179,8 +129,8 @@ func (a *Agents) GetArtistMBID(ctx context.Context, id string, name string) (str
+ 		return "", nil
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -208,8 +158,8 @@ func (a *Agents) GetArtistURL(ctx context.Context, id, name, mbid string) (strin
+ 		return "", nil
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -237,8 +187,8 @@ func (a *Agents) GetArtistBiography(ctx context.Context, id, name, mbid string)
+ 		return "", nil
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -271,8 +221,8 @@ func (a *Agents) GetSimilarArtists(ctx context.Context, id, name, mbid string, l
+ 	overLimit := int(float64(limit) * conf.Server.DevExternalArtistFetchMultiplier)
+ 
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -304,8 +254,8 @@ func (a *Agents) GetArtistImages(ctx context.Context, id, name, mbid string) ([]
+ 		return nil, nil
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -338,8 +288,8 @@ func (a *Agents) GetArtistTopSongs(ctx context.Context, id, artistName, mbid str
+ 	overLimit := int(float64(count) * conf.Server.DevExternalArtistFetchMultiplier)
+ 
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -364,8 +314,8 @@ func (a *Agents) GetAlbumInfo(ctx context.Context, name, artist, mbid string) (*
+ 		return nil, ErrNotFound
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+@@ -391,8 +341,8 @@ func (a *Agents) GetAlbumImages(ctx context.Context, name, artist, mbid string)
+ 		return nil, ErrNotFound
+ 	}
+ 	start := time.Now()
+-	for _, agentName := range a.getEnabledAgentNames() {
+-		ag := a.getAgent(agentName)
++	for _, enabledAgent := range a.getEnabledAgentNames() {
++		ag := a.getAgent(enabledAgent)
+ 		if ag == nil {
+ 			continue
+ 		}
+diff --git a/core/agents/agents_plugin_test.go b/core/agents/agents_plugin_test.go
+index 575fcbebe805c2e475712b5293227f4890834988..b2791c00eef4c8f7755a2f680ca3ebeafb52d5a7 100644
+--- a/core/agents/agents_plugin_test.go
++++ b/core/agents/agents_plugin_test.go
+@@ -5,6 +5,7 @@ import (
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/utils/slice"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+ )
+@@ -73,8 +74,10 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			mockLoader.pluginNames = append(mockLoader.pluginNames, "plugin_agent", "another_plugin")
+ 
+ 			// Should only include the local agent
+-			agentNames := agents.getEnabledAgentNames()
+-			Expect(agentNames).To(HaveExactElements(LocalAgentName))
++			enabledAgents := agents.getEnabledAgentNames()
++			Expect(enabledAgents).To(HaveLen(1))
++			Expect(enabledAgents[0].name).To(Equal(LocalAgentName))
++			Expect(enabledAgents[0].isPlugin).To(BeFalse()) // LocalAgent is built-in, not plugin
+ 		})
+ 
+ 		It("should NOT include plugin agents when no config is specified", func() {
+@@ -85,9 +88,10 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			mockLoader.pluginNames = append(mockLoader.pluginNames, "plugin_agent")
+ 
+ 			// Should only include the local agent
+-			agentNames := agents.getEnabledAgentNames()
+-			Expect(agentNames).To(HaveExactElements(LocalAgentName))
+-			Expect(agentNames).NotTo(ContainElement("plugin_agent"))
++			enabledAgents := agents.getEnabledAgentNames()
++			Expect(enabledAgents).To(HaveLen(1))
++			Expect(enabledAgents[0].name).To(Equal(LocalAgentName))
++			Expect(enabledAgents[0].isPlugin).To(BeFalse()) // LocalAgent is built-in, not plugin
+ 		})
+ 
+ 		It("should include plugin agents in the enabled agents list ONLY when explicitly configured", func() {
+@@ -96,14 +100,24 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 
+ 			// With no config, should not include plugin
+ 			conf.Server.Agents = ""
+-			agentNames := agents.getEnabledAgentNames()
+-			Expect(agentNames).To(HaveExactElements(LocalAgentName))
+-			Expect(agentNames).NotTo(ContainElement("plugin_agent"))
++			enabledAgents := agents.getEnabledAgentNames()
++			Expect(enabledAgents).To(HaveLen(1))
++			Expect(enabledAgents[0].name).To(Equal(LocalAgentName))
+ 
+ 			// When explicitly configured, should include plugin
+ 			conf.Server.Agents = "plugin_agent"
+-			agentNames = agents.getEnabledAgentNames()
++			enabledAgents = agents.getEnabledAgentNames()
++			var agentNames []string
++			var pluginAgentFound bool
++			for _, agent := range enabledAgents {
++				agentNames = append(agentNames, agent.name)
++				if agent.name == "plugin_agent" {
++					pluginAgentFound = true
++					Expect(agent.isPlugin).To(BeTrue()) // plugin_agent is a plugin
++				}
++			}
+ 			Expect(agentNames).To(ContainElements(LocalAgentName, "plugin_agent"))
++			Expect(pluginAgentFound).To(BeTrue())
+ 		})
+ 
+ 		It("should only include configured plugin agents when config is specified", func() {
+@@ -114,9 +128,19 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			conf.Server.Agents = "plugin_one"
+ 
+ 			// Verify only the configured one is included
+-			agentNames := agents.getEnabledAgentNames()
+-			Expect(agentNames).To(ContainElement("plugin_one"))
++			enabledAgents := agents.getEnabledAgentNames()
++			var agentNames []string
++			var pluginOneFound bool
++			for _, agent := range enabledAgents {
++				agentNames = append(agentNames, agent.name)
++				if agent.name == "plugin_one" {
++					pluginOneFound = true
++					Expect(agent.isPlugin).To(BeTrue()) // plugin_one is a plugin
++				}
++			}
++			Expect(agentNames).To(ContainElements(LocalAgentName, "plugin_one"))
+ 			Expect(agentNames).NotTo(ContainElement("plugin_two"))
++			Expect(pluginOneFound).To(BeTrue())
+ 		})
+ 
+ 		It("should load plugin agents on demand", func() {
+@@ -140,31 +164,6 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			Expect(mockLoader.pluginCallCount["plugin_agent"]).To(Equal(1))
+ 		})
+ 
+-		It("should cache plugin agents", func() {
+-			ctx := context.Background()
+-
+-			// Configure to use our plugin
+-			conf.Server.Agents = "plugin_agent"
+-
+-			// Add a plugin agent
+-			mockLoader.pluginNames = append(mockLoader.pluginNames, "plugin_agent")
+-			mockLoader.loadedAgents["plugin_agent"] = &MockAgent{
+-				name: "plugin_agent",
+-				mbid: "plugin-mbid",
+-			}
+-
+-			// Call multiple times
+-			_, err := agents.GetArtistMBID(ctx, "123", "Artist")
+-			Expect(err).ToNot(HaveOccurred())
+-			_, err = agents.GetArtistMBID(ctx, "123", "Artist")
+-			Expect(err).ToNot(HaveOccurred())
+-			_, err = agents.GetArtistMBID(ctx, "123", "Artist")
+-			Expect(err).ToNot(HaveOccurred())
+-
+-			// Should only load once
+-			Expect(mockLoader.pluginCallCount["plugin_agent"]).To(Equal(1))
+-		})
+-
+ 		It("should try both built-in and plugin agents", func() {
+ 			// Create a mock built-in agent
+ 			Register("built_in", func(ds model.DataStore) Interface {
+@@ -188,8 +187,23 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			}
+ 
+ 			// Verify that both are in the enabled list
+-			agentNames := agents.getEnabledAgentNames()
+-			Expect(agentNames).To(ContainElements("built_in", "plugin_agent"))
++			enabledAgents := agents.getEnabledAgentNames()
++			var agentNames []string
++			var builtInFound, pluginFound bool
++			for _, agent := range enabledAgents {
++				agentNames = append(agentNames, agent.name)
++				if agent.name == "built_in" {
++					builtInFound = true
++					Expect(agent.isPlugin).To(BeFalse()) // built-in agent
++				}
++				if agent.name == "plugin_agent" {
++					pluginFound = true
++					Expect(agent.isPlugin).To(BeTrue()) // plugin agent
++				}
++			}
++			Expect(agentNames).To(ContainElements("built_in", "plugin_agent", LocalAgentName))
++			Expect(builtInFound).To(BeTrue())
++			Expect(pluginFound).To(BeTrue())
+ 		})
+ 
+ 		It("should respect the order specified in configuration", func() {
+@@ -212,10 +226,56 @@ var _ = Describe("Agents with Plugin Loading", func() {
+ 			conf.Server.Agents = "plugin_y,agent_b,plugin_x,agent_a"
+ 
+ 			// Get the agent names
+-			agentNames := agents.getEnabledAgentNames()
++			enabledAgents := agents.getEnabledAgentNames()
++
++			// Extract just the names to verify the order
++			agentNames := slice.Map(enabledAgents, func(a enabledAgent) string { return a.name })
+ 
+ 			// Verify the order matches configuration, with LocalAgentName at the end
+ 			Expect(agentNames).To(HaveExactElements("plugin_y", "agent_b", "plugin_x", "agent_a", LocalAgentName))
+ 		})
++
++		It("should NOT call LoadMediaAgent for built-in agents", func() {
++			ctx := context.Background()
++
++			// Create a mock built-in agent
++			Register("builtin_agent", func(ds model.DataStore) Interface {
++				return &MockAgent{
++					name: "builtin_agent",
++					mbid: "builtin-mbid",
++				}
++			})
++			defer func() {
++				delete(Map, "builtin_agent")
++			}()
++
++			// Configure to use only built-in agents
++			conf.Server.Agents = "builtin_agent"
++
++			// Call GetArtistMBID which should only use the built-in agent
++			mbid, err := agents.GetArtistMBID(ctx, "123", "Artist")
++
++			Expect(err).ToNot(HaveOccurred())
++			Expect(mbid).To(Equal("builtin-mbid"))
++
++			// Verify LoadMediaAgent was NEVER called (no plugin loading for built-in agents)
++			Expect(mockLoader.pluginCallCount).To(BeEmpty())
++		})
++
++		It("should NOT call LoadMediaAgent for invalid agent names", func() {
++			ctx := context.Background()
++
++			// Configure with an invalid agent name (not built-in, not a plugin)
++			conf.Server.Agents = "invalid_agent"
++
++			// This should only result in using the local agent (as the invalid one is ignored)
++			_, err := agents.GetArtistMBID(ctx, "123", "Artist")
++
++			// Should get ErrNotFound since only local agent is available and it returns not found for this operation
++			Expect(err).To(MatchError(ErrNotFound))
++
++			// Verify LoadMediaAgent was NEVER called for the invalid agent
++			Expect(mockLoader.pluginCallCount).To(BeEmpty())
++		})
+ 	})
+ })
+diff --git a/core/agents/agents_test.go b/core/agents/agents_test.go
+index 0732d43ef6ffe2701b7558165888997c3a14909f..0b7eec282d2c223d57e84ac2e062584d3de39f88 100644
+--- a/core/agents/agents_test.go
++++ b/core/agents/agents_test.go
+@@ -56,8 +56,8 @@ var _ = Describe("Agents", func() {
+ 
+ 		It("does not register disabled agents", func() {
+ 			var ags []string
+-			for _, name := range ag.getEnabledAgentNames() {
+-				agent := ag.getAgent(name)
++			for _, enabledAgent := range ag.getEnabledAgentNames() {
++				agent := ag.getAgent(enabledAgent)
+ 				if agent != nil {
+ 					ags = append(ags, agent.AgentName())
+ 				}

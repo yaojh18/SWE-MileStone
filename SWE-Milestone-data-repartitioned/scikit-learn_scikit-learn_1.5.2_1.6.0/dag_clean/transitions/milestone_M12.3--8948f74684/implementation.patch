@@ -1,0 +1,1070 @@
+diff --git a/sklearn/calibration.py b/sklearn/calibration.py
+index 609f051ab1626eff994d3ff502da0baf30215994..5444f76358b586e20880e5c34dcdb8cbf2784a67 100644
+--- a/sklearn/calibration.py
++++ b/sklearn/calibration.py
+@@ -23,6 +23,7 @@ from .base import (
+     _fit_context,
+     clone,
+ )
++from .frozen import FrozenEstimator
+ from .isotonic import IsotonicRegression
+ from .model_selection import LeaveOneOut, check_cv, cross_val_predict
+ from .preprocessing import LabelEncoder, label_binarize
+@@ -34,6 +35,7 @@ from .utils import (
+ )
+ from .utils._param_validation import (
+     HasMethods,
++    Hidden,
+     Interval,
+     StrOptions,
+     validate_params,
+@@ -75,8 +77,8 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+     `probabilities=True` for :class:`~sklearn.svm.SVC` and :class:`~sklearn.svm.NuSVC`
+     estimators (see :ref:`User Guide <scores_probabilities>` for details).
+ 
+-    Already fitted classifiers can be calibrated via the parameter
+-    `cv="prefit"`. In this case, no cross-validation is used and all provided
++    Already fitted classifiers can be calibrated by wrapping the model in a
++    :class:`~sklearn.frozen.FrozenEstimator`. In this case all provided
+     data is used for calibration. The user has to take care manually that data
+     for model fitting and calibration are disjoint.
+ 
+@@ -101,8 +103,7 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+         use isotonic calibration with too few calibration samples
+         ``(<<1000)`` since it tends to overfit.
+ 
+-    cv : int, cross-validation generator, iterable or "prefit", \
+-            default=None
++    cv : int, cross-validation generator, or iterable, default=None
+         Determines the cross-validation splitting strategy.
+         Possible inputs for cv are:
+ 
+@@ -119,12 +120,13 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+         Refer to the :ref:`User Guide <cross_validation>` for the various
+         cross-validation strategies that can be used here.
+ 
+-        If "prefit" is passed, it is assumed that `estimator` has been
+-        fitted already and all data is used for calibration.
+-
+         .. versionchanged:: 0.22
+             ``cv`` default value if None changed from 3-fold to 5-fold.
+ 
++        .. versionchanged:: 1.6
++            `"prefit"` is deprecated. Use :class:`~sklearn.frozen.FrozenEstimator`
++            instead.
++
+     n_jobs : int, default=None
+         Number of jobs to run in parallel.
+         ``None`` means 1 unless in a :obj:`joblib.parallel_backend` context.
+@@ -137,9 +139,11 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+ 
+         .. versionadded:: 0.24
+ 
+-    ensemble : bool, default=True
+-        Determines how the calibrator is fitted when `cv` is not `'prefit'`.
+-        Ignored if `cv='prefit'`.
++    ensemble : bool, or "auto", default="auto"
++        Determines how the calibrator is fitted.
++
++        "auto" will use `False` if the `estimator` is a
++        :class:`~sklearn.frozen.FrozenEstimator`, and `True` otherwise.
+ 
+         If `True`, the `estimator` is fitted using training data, and
+         calibrated using testing data, for each `cv` fold. The final estimator
+@@ -156,6 +160,9 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+ 
+         .. versionadded:: 0.24
+ 
++        .. versionchanged:: 1.6
++            `"auto"` option is added and is the default.
++
+     Attributes
+     ----------
+     classes_ : ndarray of shape (n_classes,)
+@@ -173,17 +180,13 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+ 
+         .. versionadded:: 1.0
+ 
+-    calibrated_classifiers_ : list (len() equal to cv or 1 if `cv="prefit"` \
+-            or `ensemble=False`)
++    calibrated_classifiers_ : list (len() equal to cv or 1 if `ensemble=False`)
+         The list of classifier and calibrator pairs.
+ 
+-        - When `cv="prefit"`, the fitted `estimator` and fitted
++        - When `ensemble=True`, `n_cv` fitted `estimator` and calibrator pairs.
++          `n_cv` is the number of cross-validation folds.
++        - When `ensemble=False`, the `estimator`, fitted on all the data, and fitted
+           calibrator.
+-        - When `cv` is not "prefit" and `ensemble=True`, `n_cv` fitted
+-          `estimator` and calibrator pairs. `n_cv` is the number of
+-          cross-validation folds.
+-        - When `cv` is not "prefit" and `ensemble=False`, the `estimator`,
+-          fitted on all the data, and fitted calibrator.
+ 
+         .. versionchanged:: 0.24
+             Single calibrated classifier case when `ensemble=False`.
+@@ -235,7 +238,8 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+     >>> base_clf = GaussianNB()
+     >>> base_clf.fit(X_train, y_train)
+     GaussianNB()
+-    >>> calibrated_clf = CalibratedClassifierCV(base_clf, cv="prefit")
++    >>> from sklearn.frozen import FrozenEstimator
++    >>> calibrated_clf = CalibratedClassifierCV(FrozenEstimator(base_clf))
+     >>> calibrated_clf.fit(X_calib, y_calib)
+     CalibratedClassifierCV(...)
+     >>> len(calibrated_clf.calibrated_classifiers_)
+@@ -251,9 +255,9 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+             None,
+         ],
+         "method": [StrOptions({"isotonic", "sigmoid"})],
+-        "cv": ["cv_object", StrOptions({"prefit"})],
++        "cv": ["cv_object", Hidden(StrOptions({"prefit"}))],
+         "n_jobs": [Integral, None],
+-        "ensemble": ["boolean"],
++        "ensemble": ["boolean", StrOptions({"auto"})],
+     }
+ 
+     def __init__(
+@@ -263,7 +267,7 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+         method="sigmoid",
+         cv=None,
+         n_jobs=None,
+-        ensemble=True,
++        ensemble="auto",
+     ):
+         self.estimator = estimator
+         self.method = method
+@@ -318,8 +322,18 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+ 
+         estimator = self._get_estimator()
+ 
++        _ensemble = self.ensemble
++        if _ensemble == "auto":
++            _ensemble = not isinstance(estimator, FrozenEstimator)
++
+         self.calibrated_classifiers_ = []
+         if self.cv == "prefit":
++            # TODO(1.8): Remove this code branch and cv='prefit'
++            warnings.warn(
++                "The `cv='prefit'` option is deprecated in 1.6 and will be removed in"
++                " 1.8. You can use CalibratedClassifierCV(FrozenEstimator(estimator))"
++                " instead."
++            )
+             # `classes_` should be consistent with that of estimator
+             check_is_fitted(self.estimator, attributes=["classes_"])
+             self.classes_ = self.estimator.classes_
+@@ -399,7 +413,7 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+                 )
+             cv = check_cv(self.cv, y, classifier=True)
+ 
+-            if self.ensemble:
++            if _ensemble:
+                 parallel = Parallel(n_jobs=self.n_jobs)
+                 self.calibrated_classifiers_ = parallel(
+                     delayed(_fit_classifier_calibrator_pair)(
+diff --git a/sklearn/datasets/_svmlight_format_io.py b/sklearn/datasets/_svmlight_format_io.py
+index 23f9f0e70533ad60d9599d3e30b79e1ecf943122..6db3842150132805debff92dbc615592572b1d5e 100644
+--- a/sklearn/datasets/_svmlight_format_io.py
++++ b/sklearn/datasets/_svmlight_format_io.py
+@@ -23,22 +23,10 @@ import scipy.sparse as sp
+ from .. import __version__
+ from ..utils import check_array
+ from ..utils._param_validation import HasMethods, Interval, StrOptions, validate_params
+-from ..utils.fixes import _IS_PYPY
+-
+-if not _IS_PYPY:
+-    from ._svmlight_format_fast import (
+-        _dump_svmlight_file,
+-        _load_svmlight_file,
+-    )
+-else:
+-
+-    def _load_svmlight_file(*args, **kwargs):
+-        raise NotImplementedError(
+-            "load_svmlight_file is currently not "
+-            "compatible with PyPy (see "
+-            "https://github.com/scikit-learn/scikit-learn/issues/11543 "
+-            "for the status updates)."
+-        )
++from ._svmlight_format_fast import (
++    _dump_svmlight_file,
++    _load_svmlight_file,
++)
+ 
+ 
+ @validate_params(
+diff --git a/sklearn/decomposition/_base.py b/sklearn/decomposition/_base.py
+index f2d0ad663569a4098672f790d8c26d9293b7bb9f..d5db9f9c5bd13e413b96852af6f0de2755d85aa1 100644
+--- a/sklearn/decomposition/_base.py
++++ b/sklearn/decomposition/_base.py
+@@ -44,7 +44,7 @@ class _BasePCA(
+         exp_var_diff = xp.where(
+             exp_var > self.noise_variance_,
+             exp_var_diff,
+-            xp.asarray(0.0, device=device(exp_var)),
++            xp.asarray(0.0, device=device(exp_var), dtype=exp_var.dtype),
+         )
+         cov = (components_.T * exp_var_diff) @ components_
+         _add_to_diagonal(cov, self.noise_variance_, xp)
+diff --git a/sklearn/decomposition/_kernel_pca.py b/sklearn/decomposition/_kernel_pca.py
+index 3e5652acb5fcfb184beb198f40b2ddc49e098335..d8910f8f49e5d72072e3eae157cfe755c12571f2 100644
+--- a/sklearn/decomposition/_kernel_pca.py
++++ b/sklearn/decomposition/_kernel_pca.py
+@@ -324,10 +324,10 @@ class KernelPCA(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEstimator
+             X, Y, metric=self.kernel, filter_params=True, n_jobs=self.n_jobs, **params
+         )
+ 
+-    def _fit_transform(self, K):
++    def _fit_transform_in_place(self, K):
+         """Fit's using kernel K"""
+-        # center kernel
+-        K = self._centerer.fit_transform(K)
++        # center kernel in place
++        K = self._centerer.fit(K).transform(K, copy=False)
+ 
+         # adjust n_components according to user inputs
+         if self.n_components is None:
+@@ -438,7 +438,9 @@ class KernelPCA(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEstimator
+         self.gamma_ = 1 / X.shape[1] if self.gamma is None else self.gamma
+         self._centerer = KernelCenterer().set_output(transform="default")
+         K = self._get_kernel(X)
+-        self._fit_transform(K)
++        # When kernel="precomputed", K is X but it's safe to perform in place operations
++        # on K because a copy was made before if requested by copy_X.
++        self._fit_transform_in_place(K)
+ 
+         if self.fit_inverse_transform:
+             # no need to use the kernel to transform X, use shortcut expression
+diff --git a/sklearn/discriminant_analysis.py b/sklearn/discriminant_analysis.py
+index caad2de01b13532a6bf05fc8f577d8479fb72377..d7187274bf9219f6440ee5a321b4c11f16c2b6e4 100644
+--- a/sklearn/discriminant_analysis.py
++++ b/sklearn/discriminant_analysis.py
+@@ -518,7 +518,7 @@ class LinearDiscriminantAnalysis(
+         std = xp.std(Xc, axis=0)
+         # avoid division by zero in normalization
+         std[std == 0] = 1.0
+-        fac = xp.asarray(1.0 / (n_samples - n_classes))
++        fac = xp.asarray(1.0 / (n_samples - n_classes), dtype=X.dtype)
+ 
+         # 2) Within variance scaling
+         X = xp.sqrt(fac) * (Xc / std)
+diff --git a/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py b/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+index 78f8456e969deb88092d7d4f035fa0dbe0779f45..02b7258b88d5102b69d723293dd91a63138c2f51 100644
+--- a/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
++++ b/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+@@ -3,7 +3,6 @@
+ # Author: Nicolas Hug
+ 
+ import itertools
+-import warnings
+ from abc import ABC, abstractmethod
+ from contextlib import contextmanager, nullcontext, suppress
+ from functools import partial
+@@ -36,7 +35,7 @@ from ...preprocessing import FunctionTransformer, LabelEncoder, OrdinalEncoder
+ from ...utils import check_random_state, compute_sample_weight, resample
+ from ...utils._missing import is_scalar_nan
+ from ...utils._openmp_helpers import _openmp_effective_n_threads
+-from ...utils._param_validation import Hidden, Interval, RealNotInt, StrOptions
++from ...utils._param_validation import Interval, RealNotInt, StrOptions
+ from ...utils.multiclass import check_classification_targets
+ from ...utils.validation import (
+     _check_monotonic_cst,
+@@ -164,12 +163,7 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):
+         ],
+         "tol": [Interval(Real, 0, None, closed="left")],
+         "max_bins": [Interval(Integral, 2, 255, closed="both")],
+-        "categorical_features": [
+-            "array-like",
+-            StrOptions({"from_dtype"}),
+-            Hidden(StrOptions({"warn"})),
+-            None,
+-        ],
++        "categorical_features": ["array-like", StrOptions({"from_dtype"}), None],
+         "warm_start": ["boolean"],
+         "early_stopping": [StrOptions({"auto"}), "boolean"],
+         "scoring": [str, callable, None],
+@@ -376,7 +370,6 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):
+         if _is_pandas_df(X):
+             X_is_dataframe = True
+             categorical_columns_mask = np.asarray(X.dtypes == "category")
+-            X_has_categorical_columns = categorical_columns_mask.any()
+         elif hasattr(X, "__dataframe__"):
+             X_is_dataframe = True
+             categorical_columns_mask = np.asarray(
+@@ -385,29 +378,11 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):
+                     for c in X.__dataframe__().get_columns()
+                 ]
+             )
+-            X_has_categorical_columns = categorical_columns_mask.any()
+         else:
+             X_is_dataframe = False
+             categorical_columns_mask = None
+-            X_has_categorical_columns = False
+ 
+-        # TODO(1.6): Remove warning and change default to "from_dtype" in v1.6
+-        if (
+-            isinstance(self.categorical_features, str)
+-            and self.categorical_features == "warn"
+-        ):
+-            if X_has_categorical_columns:
+-                warnings.warn(
+-                    (
+-                        "The categorical_features parameter will change to 'from_dtype'"
+-                        " in v1.6. The 'from_dtype' option automatically treats"
+-                        " categorical dtypes in a DataFrame as categorical features."
+-                    ),
+-                    FutureWarning,
+-                )
+-            categorical_features = None
+-        else:
+-            categorical_features = self.categorical_features
++        categorical_features = self.categorical_features
+ 
+         categorical_by_dtype = (
+             isinstance(categorical_features, str)
+@@ -1541,8 +1516,10 @@ class HistGradientBoostingRegressor(RegressorMixin, BaseHistGradientBoosting):
+            Added support for feature names.
+ 
+         .. versionchanged:: 1.4
+-           Added `"from_dtype"` option. The default will change to `"from_dtype"` in
+-           v1.6.
++           Added `"from_dtype"` option.
++
++        .. versionchanged:: 1.6
++           The default value changed from `None` to `"from_dtype"`.
+ 
+     monotonic_cst : array-like of int of shape (n_features) or dict, default=None
+         Monotonic constraint to enforce on each feature are specified using the
+@@ -1714,7 +1691,7 @@ class HistGradientBoostingRegressor(RegressorMixin, BaseHistGradientBoosting):
+         l2_regularization=0.0,
+         max_features=1.0,
+         max_bins=255,
+-        categorical_features="warn",
++        categorical_features="from_dtype",
+         monotonic_cst=None,
+         interaction_cst=None,
+         warm_start=False,
+@@ -1918,8 +1895,10 @@ class HistGradientBoostingClassifier(ClassifierMixin, BaseHistGradientBoosting):
+            Added support for feature names.
+ 
+         .. versionchanged:: 1.4
+-           Added `"from_dtype"` option. The default will change to `"from_dtype"` in
+-           v1.6.
++           Added `"from_dtype"` option.
++
++        .. versionchanged::1.6
++           The default will changed from `None` to `"from_dtype"`.
+ 
+     monotonic_cst : array-like of int of shape (n_features) or dict, default=None
+         Monotonic constraint to enforce on each feature are specified using the
+@@ -2093,7 +2072,7 @@ class HistGradientBoostingClassifier(ClassifierMixin, BaseHistGradientBoosting):
+         l2_regularization=0.0,
+         max_features=1.0,
+         max_bins=255,
+-        categorical_features="warn",
++        categorical_features="from_dtype",
+         monotonic_cst=None,
+         interaction_cst=None,
+         warm_start=False,
+diff --git a/sklearn/inspection/_partial_dependence.py b/sklearn/inspection/_partial_dependence.py
+index b74258615a4471195b61964351b8e75be984f1b5..ac572662448e98c4a27c9ac772fe3420d16e49a3 100644
+--- a/sklearn/inspection/_partial_dependence.py
++++ b/sklearn/inspection/_partial_dependence.py
+@@ -15,7 +15,6 @@ from ..ensemble._gb import BaseGradientBoosting
+ from ..ensemble._hist_gradient_boosting.gradient_boosting import (
+     BaseHistGradientBoosting,
+ )
+-from ..exceptions import NotFittedError
+ from ..tree import DecisionTreeRegressor
+ from ..utils import Bunch, _safe_indexing, check_array
+ from ..utils._indexing import _determine_key_type, _get_column_indices, _safe_assign
+@@ -27,6 +26,7 @@ from ..utils._param_validation import (
+     StrOptions,
+     validate_params,
+ )
++from ..utils._response import _get_response_values
+ from ..utils.extmath import cartesian
+ from ..utils.validation import _check_sample_weight, check_is_fitted
+ from ._pd_utils import _check_feature_names, _get_feature_index
+@@ -261,51 +261,27 @@ def _partial_dependence_brute(
+     predictions = []
+     averaged_predictions = []
+ 
+-    # define the prediction_method (predict, predict_proba, decision_function).
+-    if is_regressor(est):
+-        prediction_method = est.predict
+-    else:
+-        predict_proba = getattr(est, "predict_proba", None)
+-        decision_function = getattr(est, "decision_function", None)
+-        if response_method == "auto":
+-            # try predict_proba, then decision_function if it doesn't exist
+-            prediction_method = predict_proba or decision_function
+-        else:
+-            prediction_method = (
+-                predict_proba
+-                if response_method == "predict_proba"
+-                else decision_function
+-            )
+-        if prediction_method is None:
+-            if response_method == "auto":
+-                raise ValueError(
+-                    "The estimator has no predict_proba and no "
+-                    "decision_function method."
+-                )
+-            elif response_method == "predict_proba":
+-                raise ValueError("The estimator has no predict_proba method.")
+-            else:
+-                raise ValueError("The estimator has no decision_function method.")
++    if response_method == "auto":
++        response_method = (
++            "predict" if is_regressor(est) else ["predict_proba", "decision_function"]
++        )
+ 
+     X_eval = X.copy()
+     for new_values in grid:
+         for i, variable in enumerate(features):
+             _safe_assign(X_eval, new_values[i], column_indexer=variable)
+ 
+-        try:
+-            # Note: predictions is of shape
+-            # (n_points,) for non-multioutput regressors
+-            # (n_points, n_tasks) for multioutput regressors
+-            # (n_points, 1) for the regressors in cross_decomposition (I think)
+-            # (n_points, 2) for binary classification
+-            # (n_points, n_classes) for multiclass classification
+-            pred = prediction_method(X_eval)
+-
+-            predictions.append(pred)
+-            # average over samples
+-            averaged_predictions.append(np.average(pred, axis=0, weights=sample_weight))
+-        except NotFittedError as e:
+-            raise ValueError("'estimator' parameter must be a fitted estimator") from e
++        # Note: predictions is of shape
++        # (n_points,) for non-multioutput regressors
++        # (n_points, n_tasks) for multioutput regressors
++        # (n_points, 1) for the regressors in cross_decomposition (I think)
++        # (n_points, 2) for binary classification
++        # (n_points, n_classes) for multiclass classification
++        pred, _ = _get_response_values(est, X_eval, response_method=response_method)
++
++        predictions.append(pred)
++        # average over samples
++        averaged_predictions.append(np.average(pred, axis=0, weights=sample_weight))
+ 
+     n_samples = X.shape[0]
+ 
+diff --git a/sklearn/linear_model/_passive_aggressive.py b/sklearn/linear_model/_passive_aggressive.py
+index 3c36950a1bb8eb433b9413c4bd7c11870082a3b5..8d4dc2d3a2c23267107f7c66b3264a454f45ecd0 100644
+--- a/sklearn/linear_model/_passive_aggressive.py
++++ b/sklearn/linear_model/_passive_aggressive.py
+@@ -142,13 +142,6 @@ class PassiveAggressiveClassifier(BaseSGDClassifier):
+         Number of weight updates performed during training.
+         Same as ``(n_iter_ * n_samples + 1)``.
+ 
+-    loss_function_ : callable
+-        Loss function used by the algorithm.
+-
+-         .. deprecated:: 1.4
+-            Attribute `loss_function_` was deprecated in version 1.4 and will be
+-            removed in 1.6.
+-
+     See Also
+     --------
+     SGDClassifier : Incrementally trained logistic regression.
+diff --git a/sklearn/linear_model/_perceptron.py b/sklearn/linear_model/_perceptron.py
+index 5f17de8494aeacab74a46e7a7e9cf995c23873e5..d15668bebfef1d99195a8527b5fde2dc528633b5 100644
+--- a/sklearn/linear_model/_perceptron.py
++++ b/sklearn/linear_model/_perceptron.py
+@@ -123,10 +123,6 @@ class Perceptron(BaseSGDClassifier):
+     intercept_ : ndarray of shape (1,) if n_classes == 2 else (n_classes,)
+         Constants in decision function.
+ 
+-    loss_function_ : concrete LossFunction
+-        The function that determines the loss, or difference between the
+-        output of the algorithm and the target values.
+-
+     n_features_in_ : int
+         Number of features seen during :term:`fit`.
+ 
+diff --git a/sklearn/linear_model/_stochastic_gradient.py b/sklearn/linear_model/_stochastic_gradient.py
+index 9277ab7d23ae6d78e9dede1b5c2b41b8eb570929..e85222f23f93fde9a24d292ffd74eeff517ad3ef 100644
+--- a/sklearn/linear_model/_stochastic_gradient.py
++++ b/sklearn/linear_model/_stochastic_gradient.py
+@@ -20,7 +20,7 @@ from ..base import (
+ )
+ from ..exceptions import ConvergenceWarning
+ from ..model_selection import ShuffleSplit, StratifiedShuffleSplit
+-from ..utils import check_random_state, compute_class_weight, deprecated
++from ..utils import check_random_state, compute_class_weight
+ from ..utils._param_validation import Hidden, Interval, StrOptions
+ from ..utils.extmath import safe_sparse_dot
+ from ..utils.metaestimators import available_if
+@@ -321,16 +321,6 @@ class BaseSGD(SparseCoefMixin, BaseEstimator, metaclass=ABCMeta):
+             classes=classes,
+         )
+ 
+-    # TODO(1.6): Remove
+-    # mypy error: Decorated property not supported
+-    @deprecated(  # type: ignore
+-        "Attribute `loss_function_` was deprecated in version 1.4 and will be removed "
+-        "in 1.6."
+-    )
+-    @property
+-    def loss_function_(self):
+-        return self._loss_function_
+-
+ 
+ def _prepare_fit_binary(est, y, i, input_dtype):
+     """Initialization for fit_binary.
+@@ -1159,12 +1149,6 @@ class SGDClassifier(BaseSGDClassifier):
+         The actual number of iterations before reaching the stopping criterion.
+         For multiclass fits, it is the maximum over every binary fit.
+ 
+-    loss_function_ : concrete ``LossFunction``
+-
+-        .. deprecated:: 1.4
+-            Attribute `loss_function_` was deprecated in version 1.4 and will be
+-            removed in 1.6.
+-
+     classes_ : array of shape (n_classes,)
+ 
+     t_ : int
+@@ -2186,12 +2170,6 @@ class SGDOneClassSVM(OutlierMixin, BaseSGD):
+         Number of weight updates performed during training.
+         Same as ``(n_iter_ * n_samples + 1)``.
+ 
+-    loss_function_ : concrete ``LossFunction``
+-
+-        .. deprecated:: 1.4
+-            ``loss_function_`` was deprecated in version 1.4 and will be removed in
+-            1.6.
+-
+     n_features_in_ : int
+         Number of features seen during :term:`fit`.
+ 
+diff --git a/sklearn/metrics/__init__.py b/sklearn/metrics/__init__.py
+index dff0b8e15ade40b8967e9cf3aaae4628edfac444..81a67d9793bb0520ab6e6773b72c710a72db505b 100644
+--- a/sklearn/metrics/__init__.py
++++ b/sklearn/metrics/__init__.py
+@@ -176,11 +176,3 @@ __all__ = [
+     "zero_one_loss",
+     "brier_score_loss",
+ ]
+-
+-# [ENV-PATCH] Inject DEPRECATED_METRICS into _dist_metrics for M12.3 START state compatibility
+-try:
+-    from sklearn.metrics import _dist_metrics
+-    if not hasattr(_dist_metrics, 'DEPRECATED_METRICS'):
+-        _dist_metrics.DEPRECATED_METRICS = frozenset(["sokalmichener", "kulsinski"])
+-except ImportError:
+-    pass
+diff --git a/sklearn/metrics/_classification.py b/sklearn/metrics/_classification.py
+index f9481c9cebdc4273808162f95a134cf49e7b9a18..64769c3cf1e3564631acc946482a1bd77f05e6f1 100644
+--- a/sklearn/metrics/_classification.py
++++ b/sklearn/metrics/_classification.py
+@@ -997,10 +997,15 @@ def jaccard_score(
+         "y_true": ["array-like"],
+         "y_pred": ["array-like"],
+         "sample_weight": ["array-like", None],
++        "zero_division": [
++            Options(Real, {0.0, 1.0}),
++            "nan",
++            StrOptions({"warn"}),
++        ],
+     },
+     prefer_skip_nested_validation=True,
+ )
+-def matthews_corrcoef(y_true, y_pred, *, sample_weight=None):
++def matthews_corrcoef(y_true, y_pred, *, sample_weight=None, zero_division="warn"):
+     """Compute the Matthews correlation coefficient (MCC).
+ 
+     The Matthews correlation coefficient is used in machine learning as a
+@@ -1031,6 +1036,13 @@ def matthews_corrcoef(y_true, y_pred, *, sample_weight=None):
+ 
+         .. versionadded:: 0.18
+ 
++    zero_division : {"warn", 0.0, 1.0, np.nan}, default="warn"
++        Sets the value to return when there is a zero division, i.e. when all
++        predictions and labels are negative. If set to "warn", this acts like 0,
++        but a warning is also raised.
++
++        .. versionadded:: 1.6
++
+     Returns
+     -------
+     mcc : float
+@@ -1083,7 +1095,13 @@ def matthews_corrcoef(y_true, y_pred, *, sample_weight=None):
+     cov_ytyt = n_samples**2 - np.dot(t_sum, t_sum)
+ 
+     if cov_ypyp * cov_ytyt == 0:
+-        return 0.0
++        if zero_division == "warn":
++            msg = (
++                "Matthews correlation coefficient is ill-defined and being set to 0.0. "
++                "Use `zero_division` to control this behaviour."
++            )
++            warnings.warn(msg, UndefinedMetricWarning, stacklevel=2)
++        return _check_zero_division(zero_division)
+     else:
+         return cov_ytyp / np.sqrt(cov_ytyt * cov_ypyp)
+ 
+diff --git a/sklearn/metrics/_dist_metrics.pyx.tp b/sklearn/metrics/_dist_metrics.pyx.tp
+index a9844795cf592d23a91bbbb36c0f67e57b2d3874..e65da23e0d7597504cbd06f1cba380a8511c6b1c 100644
+--- a/sklearn/metrics/_dist_metrics.pyx.tp
++++ b/sklearn/metrics/_dist_metrics.pyx.tp
+@@ -42,15 +42,24 @@ BOOL_METRICS = [
+     "dice",
+     "rogerstanimoto",
+     "russellrao",
+-    "sokalmichener",
+     "sokalsneath",
+ ]
++DEPRECATED_METRICS = []
++if sp_base_version < parse_version("1.17"):
++    # Deprecated in SciPy 1.15 and removed in SciPy 1.17
++    BOOL_METRICS += ["sokalmichener"]
++if sp_base_version >= parse_version("1.15"):
++    DEPRECATED_METRICS.append("sokalmichener")
+ if sp_base_version < parse_version("1.11"):
+     # Deprecated in SciPy 1.9 and removed in SciPy 1.11
+     BOOL_METRICS += ["kulsinski"]
++if sp_base_version >= parse_version("1.9"):
++    DEPRECATED_METRICS.append("kulsinski")
+ if sp_base_version < parse_version("1.9"):
+     # Deprecated in SciPy 1.0 and removed in SciPy 1.9
+     BOOL_METRICS += ["matching"]
++if sp_base_version >= parse_version("1.0"):
++    DEPRECATED_METRICS.append("matching")
+ 
+ def get_valid_metric_ids(L):
+     """Given an iterable of metric class names or class identifiers,
+diff --git a/sklearn/metrics/pairwise.py b/sklearn/metrics/pairwise.py
+index f2e3bfec38ae7bee123a73e5661b9ffe6ac26ead..2b9da25f9bdda9785961df4f132c82aa8dd5ab5c 100644
+--- a/sklearn/metrics/pairwise.py
++++ b/sklearn/metrics/pairwise.py
+@@ -643,7 +643,6 @@ _VALID_METRICS = [
+     "rogerstanimoto",
+     "russellrao",
+     "seuclidean",
+-    "sokalmichener",
+     "sokalsneath",
+     "sqeuclidean",
+     "yule",
+@@ -651,6 +650,9 @@ _VALID_METRICS = [
+     "nan_euclidean",
+     "haversine",
+ ]
++if sp_base_version < parse_version("1.17"):  # pragma: no cover
++    # Deprecated in SciPy 1.15 and removed in SciPy 1.17
++    _VALID_METRICS += ["sokalmichener"]
+ if sp_base_version < parse_version("1.11"):  # pragma: no cover
+     # Deprecated in SciPy 1.9 and removed in SciPy 1.11
+     _VALID_METRICS += ["kulsinski"]
+@@ -2366,10 +2368,12 @@ PAIRWISE_BOOLEAN_FUNCTIONS = [
+     "jaccard",
+     "rogerstanimoto",
+     "russellrao",
+-    "sokalmichener",
+     "sokalsneath",
+     "yule",
+ ]
++if sp_base_version < parse_version("1.17"):
++    # Deprecated in SciPy 1.15 and removed in SciPy 1.17
++    PAIRWISE_BOOLEAN_FUNCTIONS += ["sokalmichener"]
+ if sp_base_version < parse_version("1.11"):
+     # Deprecated in SciPy 1.9 and removed in SciPy 1.11
+     PAIRWISE_BOOLEAN_FUNCTIONS += ["kulsinski"]
+diff --git a/sklearn/model_selection/_validation.py b/sklearn/model_selection/_validation.py
+index 7e1e219df0b18ac49437381adb2015bc732ac702..ddc9c0473bc57eb85b7bedd3893086291373bcd2 100644
+--- a/sklearn/model_selection/_validation.py
++++ b/sklearn/model_selection/_validation.py
+@@ -1499,6 +1499,7 @@ def _check_is_permutation(indices, n_samples):
+         "verbose": ["verbose"],
+         "scoring": [StrOptions(set(get_scorer_names())), callable, None],
+         "fit_params": [dict, None],
++        "params": [dict, None],
+     },
+     prefer_skip_nested_validation=False,  # estimator is not validated yet
+ )
+@@ -1515,6 +1516,7 @@ def permutation_test_score(
+     verbose=0,
+     scoring=None,
+     fit_params=None,
++    params=None,
+ ):
+     """Evaluate the significance of a cross-validated score with permutations.
+ 
+@@ -1554,6 +1556,13 @@ def permutation_test_score(
+         cross-validator uses them for grouping the samples  while splitting
+         the dataset into train/test set.
+ 
++        .. versionchanged:: 1.6
++            ``groups`` can only be passed if metadata routing is not enabled
++            via ``sklearn.set_config(enable_metadata_routing=True)``. When routing
++            is enabled, pass ``groups`` alongside other metadata via the ``params``
++            argument instead. E.g.:
++            ``permutation_test_score(..., params={'groups': groups})``.
++
+     cv : int, cross-validation generator or an iterable, default=None
+         Determines the cross-validation splitting strategy.
+         Possible inputs for cv are:
+@@ -1600,7 +1609,24 @@ def permutation_test_score(
+     fit_params : dict, default=None
+         Parameters to pass to the fit method of the estimator.
+ 
+-        .. versionadded:: 0.24
++        .. deprecated:: 1.6
++            This parameter is deprecated and will be removed in version 1.6. Use
++            ``params`` instead.
++
++    params : dict, default=None
++        Parameters to pass to the `fit` method of the estimator, the scorer
++        and the cv splitter.
++
++            - If `enable_metadata_routing=False` (default):
++              Parameters directly passed to the `fit` method of the estimator.
++
++            - If `enable_metadata_routing=True`:
++              Parameters safely routed to the `fit` method of the estimator,
++              `cv` object and `scorer`.
++              See :ref:`Metadata Routing User Guide <metadata_routing>` for more
++              details.
++
++            .. versionadded:: 1.6
+ 
+     Returns
+     -------
+@@ -1649,26 +1675,86 @@ def permutation_test_score(
+     >>> print(f"P-value: {pvalue:.3f}")
+     P-value: 0.010
+     """
++    params = _check_params_groups_deprecation(fit_params, params, groups, "1.8")
++
+     X, y, groups = indexable(X, y, groups)
+ 
+     cv = check_cv(cv, y, classifier=is_classifier(estimator))
+     scorer = check_scoring(estimator, scoring=scoring)
+     random_state = check_random_state(random_state)
+ 
++    if _routing_enabled():
++        router = (
++            MetadataRouter(owner="permutation_test_score")
++            .add(
++                estimator=estimator,
++                # TODO(SLEP6): also pass metadata to the predict method for
++                # scoring?
++                method_mapping=MethodMapping().add(caller="fit", callee="fit"),
++            )
++            .add(
++                splitter=cv,
++                method_mapping=MethodMapping().add(caller="fit", callee="split"),
++            )
++            .add(
++                scorer=scorer,
++                method_mapping=MethodMapping().add(caller="fit", callee="score"),
++            )
++        )
++
++        try:
++            routed_params = process_routing(router, "fit", **params)
++        except UnsetMetadataPassedError as e:
++            # The default exception would mention `fit` since in the above
++            # `process_routing` code, we pass `fit` as the caller. However,
++            # the user is not calling `fit` directly, so we change the message
++            # to make it more suitable for this case.
++            unrequested_params = sorted(e.unrequested_params)
++            raise UnsetMetadataPassedError(
++                message=(
++                    f"{unrequested_params} are passed to `permutation_test_score`"
++                    " but are not explicitly set as requested or not requested"
++                    " for permutation_test_score's"
++                    f" estimator: {estimator.__class__.__name__}. Call"
++                    " `.set_fit_request({{metadata}}=True)` on the estimator for"
++                    f" each metadata in {unrequested_params} that you"
++                    " want to use and `metadata=False` for not using it. See the"
++                    " Metadata Routing User guide"
++                    " <https://scikit-learn.org/stable/metadata_routing.html> for more"
++                    " information."
++                ),
++                unrequested_params=e.unrequested_params,
++                routed_params=e.routed_params,
++            )
++
++    else:
++        routed_params = Bunch()
++        routed_params.estimator = Bunch(fit=params)
++        routed_params.splitter = Bunch(split={"groups": groups})
++        routed_params.scorer = Bunch(score={})
++
+     # We clone the estimator to make sure that all the folds are
+     # independent, and that it is pickle-able.
+     score = _permutation_test_score(
+-        clone(estimator), X, y, groups, cv, scorer, fit_params=fit_params
++        clone(estimator),
++        X,
++        y,
++        cv,
++        scorer,
++        split_params=routed_params.splitter.split,
++        fit_params=routed_params.estimator.fit,
++        score_params=routed_params.scorer.score,
+     )
+     permutation_scores = Parallel(n_jobs=n_jobs, verbose=verbose)(
+         delayed(_permutation_test_score)(
+             clone(estimator),
+             X,
+             _shuffle(y, groups, random_state),
+-            groups,
+             cv,
+             scorer,
+-            fit_params=fit_params,
++            split_params=routed_params.splitter.split,
++            fit_params=routed_params.estimator.fit,
++            score_params=routed_params.scorer.score,
+         )
+         for _ in range(n_permutations)
+     )
+@@ -1677,17 +1763,22 @@ def permutation_test_score(
+     return score, permutation_scores, pvalue
+ 
+ 
+-def _permutation_test_score(estimator, X, y, groups, cv, scorer, fit_params):
++def _permutation_test_score(
++    estimator, X, y, cv, scorer, split_params, fit_params, score_params
++):
+     """Auxiliary function for permutation_test_score"""
+     # Adjust length of sample weights
+     fit_params = fit_params if fit_params is not None else {}
++    score_params = score_params if score_params is not None else {}
++
+     avg_score = []
+-    for train, test in cv.split(X, y, groups):
++    for train, test in cv.split(X, y, **split_params):
+         X_train, y_train = _safe_split(estimator, X, y, train)
+         X_test, y_test = _safe_split(estimator, X, y, test, train)
+-        fit_params = _check_method_params(X, params=fit_params, indices=train)
+-        estimator.fit(X_train, y_train, **fit_params)
+-        avg_score.append(scorer(estimator, X_test, y_test))
++        fit_params_train = _check_method_params(X, params=fit_params, indices=train)
++        score_params_test = _check_method_params(X, params=score_params, indices=test)
++        estimator.fit(X_train, y_train, **fit_params_train)
++        avg_score.append(scorer(estimator, X_test, y_test, **score_params_test))
+     return np.mean(avg_score)
+ 
+ 
+diff --git a/sklearn/neighbors/_base.py b/sklearn/neighbors/_base.py
+index 969fac6d09ac02d084ea4e38db4bc8652ce79d17..acc05ed0757dca31f66723ae4c03c2327dc84b9d 100644
+--- a/sklearn/neighbors/_base.py
++++ b/sklearn/neighbors/_base.py
+@@ -47,11 +47,13 @@ SCIPY_METRICS = [
+     "rogerstanimoto",
+     "russellrao",
+     "seuclidean",
+-    "sokalmichener",
+     "sokalsneath",
+     "sqeuclidean",
+     "yule",
+ ]
++if sp_base_version < parse_version("1.17"):
++    # Deprecated in SciPy 1.15 and removed in SciPy 1.17
++    SCIPY_METRICS += ["sokalmichener"]
+ if sp_base_version < parse_version("1.11"):
+     # Deprecated in SciPy 1.9 and removed in SciPy 1.11
+     SCIPY_METRICS += ["kulsinski"]
+@@ -690,15 +692,6 @@ class NeighborsBase(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
+         return {"pairwise": self.metric == "precomputed"}
+ 
+ 
+-def _tree_query_parallel_helper(tree, *args, **kwargs):
+-    """Helper for the Parallel calls in KNeighborsMixin.kneighbors.
+-
+-    The Cython method tree.query is not directly picklable by cloudpickle
+-    under PyPy.
+-    """
+-    return tree.query(*args, **kwargs)
+-
+-
+ class KNeighborsMixin:
+     """Mixin for k-neighbors searches."""
+ 
+@@ -896,9 +889,7 @@ class KNeighborsMixin:
+                     "or set algorithm='brute'" % self._fit_method
+                 )
+             chunked_results = Parallel(n_jobs, prefer="threads")(
+-                delayed(_tree_query_parallel_helper)(
+-                    self._tree, X[s], n_neighbors, return_distance
+-                )
++                delayed(self._tree.query)(X[s], n_neighbors, return_distance)
+                 for s in gen_even_slices(X.shape[0], n_jobs)
+             )
+         else:
+@@ -1025,15 +1016,6 @@ class KNeighborsMixin:
+         return kneighbors_graph
+ 
+ 
+-def _tree_query_radius_parallel_helper(tree, *args, **kwargs):
+-    """Helper for the Parallel calls in RadiusNeighborsMixin.radius_neighbors.
+-
+-    The Cython method tree.query_radius is not directly picklable by
+-    cloudpickle under PyPy.
+-    """
+-    return tree.query_radius(*args, **kwargs)
+-
+-
+ class RadiusNeighborsMixin:
+     """Mixin for radius-based neighbors searches."""
+ 
+@@ -1251,11 +1233,9 @@ class RadiusNeighborsMixin:
+                 )
+ 
+             n_jobs = effective_n_jobs(self.n_jobs)
+-            delayed_query = delayed(_tree_query_radius_parallel_helper)
++            delayed_query = delayed(self._tree.query_radius)
+             chunked_results = Parallel(n_jobs, prefer="threads")(
+-                delayed_query(
+-                    self._tree, X[s], radius, return_distance, sort_results=sort_results
+-                )
++                delayed_query(X[s], radius, return_distance, sort_results=sort_results)
+                 for s in gen_even_slices(X.shape[0], n_jobs)
+             )
+             if return_distance:
+diff --git a/sklearn/preprocessing/_data.py b/sklearn/preprocessing/_data.py
+index 98d4116954a163df28eddf54b335b58a64561f9d..0835f566a7fe7ebb99c6f4d758c5eaf5f30b7cbb 100644
+--- a/sklearn/preprocessing/_data.py
++++ b/sklearn/preprocessing/_data.py
+@@ -2366,10 +2366,6 @@ class KernelCenterer(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEsti
+            [ -5., -14.,  19.]])
+     """
+ 
+-    def __init__(self):
+-        # Needed for backported inspect.signature compatibility with PyPy
+-        pass
+-
+     def fit(self, K, y=None):
+         """Fit KernelCenterer.
+ 
+diff --git a/sklearn/utils/__init__.py b/sklearn/utils/__init__.py
+index 1e38b807973b239c32ba301e02bcd51034ecfca9..011347cb2d4435542d7584359d87005ec40b1ba0 100644
+--- a/sklearn/utils/__init__.py
++++ b/sklearn/utils/__init__.py
+@@ -1,5 +1,6 @@
+ """Various utilities to help with development."""
+ 
++import platform
+ import warnings
+ from collections.abc import Sequence
+ 
+@@ -89,9 +90,7 @@ def __getattr__(name):
+             "IS_PYPY is deprecated and will be removed in 1.7.",
+             FutureWarning,
+         )
+-        from .fixes import _IS_PYPY
+-
+-        return _IS_PYPY
++        return platform.python_implementation() == "PyPy"
+     raise AttributeError(f"module {__name__} has no attribute {name}")
+ 
+ 
+diff --git a/sklearn/utils/_testing.py b/sklearn/utils/_testing.py
+index 288c84e15a74b6720fcd7e0b327953509220c327..961091e4af71a46bb261adc2c16702dfc8e26244 100644
+--- a/sklearn/utils/_testing.py
++++ b/sklearn/utils/_testing.py
+@@ -36,7 +36,6 @@ import sklearn
+ from sklearn.utils._array_api import _check_array_api_dispatch
+ from sklearn.utils.fixes import (
+     _IS_32BIT,
+-    _IS_PYPY,
+     VisibleDeprecationWarning,
+     _in_unstable_openblas_configuration,
+     parse_version,
+@@ -304,7 +303,6 @@ try:
+     import pytest
+ 
+     skip_if_32bit = pytest.mark.skipif(_IS_32BIT, reason="skipped on 32bit platforms")
+-    fails_if_pypy = pytest.mark.xfail(_IS_PYPY, reason="not compatible with PyPy")
+     fails_if_unstable_openblas = pytest.mark.xfail(
+         _in_unstable_openblas_configuration(),
+         reason="OpenBLAS is unstable for this configuration",
+diff --git a/sklearn/utils/discovery.py b/sklearn/utils/discovery.py
+index c7bebe5df00932bedf93e040f4a873fa5c2711c7..7a6c73997ef8cb73b35ced04ca10bfc6b97a6f21 100644
+--- a/sklearn/utils/discovery.py
++++ b/sklearn/utils/discovery.py
+@@ -76,7 +76,6 @@ def all_estimators(type_filter=None):
+         TransformerMixin,
+     )
+     from ._testing import ignore_warnings
+-    from .fixes import _IS_PYPY
+ 
+     def is_abstract(c):
+         if not (hasattr(c, "__abstractmethods__")):
+@@ -103,15 +102,6 @@ def all_estimators(type_filter=None):
+                 (name, est_cls) for name, est_cls in classes if not name.startswith("_")
+             ]
+ 
+-            # TODO: Remove when FeatureHasher is implemented in PYPY
+-            # Skips FeatureHasher for PYPY
+-            if _IS_PYPY and "feature_extraction" in module_name:
+-                classes = [
+-                    (name, est_cls)
+-                    for name, est_cls in classes
+-                    if name == "FeatureHasher"
+-                ]
+-
+             all_classes.extend(classes)
+ 
+     all_classes = set(all_classes)
+diff --git a/sklearn/utils/estimator_checks.py b/sklearn/utils/estimator_checks.py
+index 49862e3fb0798d71a7214740a06f42fa4bc0761c..5ee8c0dcdd07bdda2e26bac83dc93ac96817c1c8 100644
+--- a/sklearn/utils/estimator_checks.py
++++ b/sklearn/utils/estimator_checks.py
+@@ -80,7 +80,7 @@ from ._testing import (
+     raises,
+     set_random_state,
+ )
+-from .fixes import _IS_PYPY, SPARSE_ARRAY_PRESENT, parse_version, sp_version
++from .fixes import SPARSE_ARRAY_PRESENT, parse_version, sp_version
+ from .validation import _num_samples, check_is_fitted, has_fit_parameter
+ 
+ REGRESSION_DATASET = None
+@@ -3344,11 +3344,6 @@ def check_no_attributes_set_in_init(name, estimator_orig):
+         return
+ 
+     init_params = _get_args(type(estimator).__init__)
+-    if _IS_PYPY:
+-        # __init__ signature has additional objects in PyPy
+-        for key in ["obj"]:
+-            if key in init_params:
+-                init_params.remove(key)
+     parents_init_params = [
+         param
+         for params_parent in (_get_args(parent) for parent in type(estimator).__mro__)
+diff --git a/sklearn/utils/fixes.py b/sklearn/utils/fixes.py
+index af28a708be1c8376c9b413c213a46f0f0fec1f7c..ecd71176945ea0869abc3129fb32f0ea06ae79b4 100644
+--- a/sklearn/utils/fixes.py
++++ b/sklearn/utils/fixes.py
+@@ -19,7 +19,6 @@ import sklearn
+ 
+ from ..externals._packaging.version import parse as parse_version
+ 
+-_IS_PYPY = platform.python_implementation() == "PyPy"
+ _IS_32BIT = 8 * struct.calcsize("P") == 32
+ _IS_WASM = platform.machine() in ["wasm32", "wasm64"]
+ 
+diff --git a/sklearn/utils/validation.py b/sklearn/utils/validation.py
+index 9d05a22be9510cb45cb770524e53cd2addabddc5..507606fe2c596d276fd39438d0f424fd6d00df8d 100644
+--- a/sklearn/utils/validation.py
++++ b/sklearn/utils/validation.py
+@@ -964,6 +964,13 @@ def check_array(
+             estimator_name=estimator_name,
+             input_name=input_name,
+         )
++        if ensure_2d and array.ndim < 2:
++            raise ValueError(
++                f"Expected 2D input, got input with shape {array.shape}.\n"
++                "Reshape your data either using array.reshape(-1, 1) if "
++                "your data has a single feature or array.reshape(1, -1) "
++                "if it contains a single sample."
++            )
+     else:
+         # If np.array(..) gives ComplexWarning, then we convert the warning
+         # to an error. This is needed because specifying a non complex

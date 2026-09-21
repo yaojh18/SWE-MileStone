@@ -1,0 +1,197 @@
+diff --git a/rest/engine_test.go b/rest/engine_test.go
+index 4f86d2173efdd421c87b8ba5e772832c56d1390c..fe5358f1bebb76c8308f74306465ccfc7fd33299 100644
+--- a/rest/engine_test.go
++++ b/rest/engine_test.go
+@@ -435,7 +435,7 @@ type mockedRouter struct {
+ func (m mockedRouter) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {
+ }
+ 
+-func (m mockedRouter) Handle(_, _ string, _ http.Handler) error {
++func (m mockedRouter) Handle(_, _ string, handler http.Handler) error {
+ 	return errors.New("foo")
+ }
+ 
+diff --git a/rest/handler/contentsecurityhandler_test.go b/rest/handler/contentsecurityhandler_test.go
+index 6da9820c52dcbe26a5f01ca858beca3c0bd32174..dfbcc9db192ffb9f6a4eafde8a797794a00a1246 100644
+--- a/rest/handler/contentsecurityhandler_test.go
++++ b/rest/handler/contentsecurityhandler_test.go
+@@ -327,7 +327,7 @@ func buildRequest(rs requestSettings) (*http.Request, error) {
+ 			query,
+ 			bodySign,
+ 		}, "\n")
+-		rs.signature = codec.HmacBase64(key, contentOfSign)
++		rs.signature = codec.HmacBase64([]byte(key), contentOfSign)
+ 	}
+ 
+ 	var mode string
+diff --git a/rest/handler/cryptionhandler_test.go b/rest/handler/cryptionhandler_test.go
+index f993cac581510e5847f8039f3757c5e8a26e850b..b76384d6a03e573d6f7cbeb9e9d5c577783b1394 100644
+--- a/rest/handler/cryptionhandler_test.go
++++ b/rest/handler/cryptionhandler_test.go
+@@ -224,7 +224,7 @@ func (m flushableResponseWriter) Write(p []byte) (int, error) {
+ 	return m.writer.Write(p)
+ }
+ 
+-func (m flushableResponseWriter) WriteHeader(_ int) {
++func (m flushableResponseWriter) WriteHeader(statusCode int) {
+ 	panic("implement me")
+ }
+ 
+@@ -240,6 +240,6 @@ func (t *halfWriter) Write(p []byte) (n int, err error) {
+ type badWriter struct {
+ }
+ 
+-func (b *badWriter) Write(_ []byte) (n int, err error) {
++func (b *badWriter) Write(p []byte) (n int, err error) {
+ 	return 0, io.ErrClosedPipe
+ }
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index b6f81e1d993e22000ba26065d85849e1821379c2..c57633796b8aff447bd2edd2412339908d4f1e39 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -164,7 +164,7 @@ type mockedReadCloser struct {
+ 	errMsg string
+ }
+ 
+-func (m mockedReadCloser) Read(_ []byte) (n int, err error) {
++func (m mockedReadCloser) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New(m.errMsg)
+ }
+ 
+diff --git a/rest/httpc/responses_test.go b/rest/httpc/responses_test.go
+index c6c7dd3ef7e9056964b2d46369a69f2804a397ac..31369ee1b6d008afe7146b6eaf0325ea88263571 100644
+--- a/rest/httpc/responses_test.go
++++ b/rest/httpc/responses_test.go
+@@ -175,6 +175,6 @@ func (m mockedReader) Close() error {
+ 	return nil
+ }
+ 
+-func (m mockedReader) Read(_ []byte) (n int, err error) {
++func (m mockedReader) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New("dummy")
+ }
+diff --git a/zrpc/internal/balancer/p2c/p2c_test.go b/zrpc/internal/balancer/p2c/p2c_test.go
+index 8e1ec4b22bf1f570ba6626d5a70d018946fe3723..8d42362269ce09edd843fac6512366d242bac31e 100644
+--- a/zrpc/internal/balancer/p2c/p2c_test.go
++++ b/zrpc/internal/balancer/p2c/p2c_test.go
+@@ -142,7 +142,7 @@ func (m mockClientConn) GetOrBuildProducer(builder balancer.ProducerBuilder) (
+ 	return builder.Build(m)
+ }
+ 
+-func (m mockClientConn) UpdateAddresses(_ []resolver.Address) {
++func (m mockClientConn) UpdateAddresses(addresses []resolver.Address) {
+ }
+ 
+ func (m mockClientConn) Connect() {
+diff --git a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+index 3c25d50c7a8a9cd795435e3777171c715ab3f0d0..91952ef4d6d063a7e4b6aec32480eb65e5a38cb3 100644
+--- a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+@@ -420,10 +420,10 @@ func (m *mockedClientStream) Context() context.Context {
+ 	return context.Background()
+ }
+ 
+-func (m *mockedClientStream) SendMsg(_ any) error {
++func (m *mockedClientStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientStream) RecvMsg(_ any) error {
++func (m *mockedClientStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/internal/serverinterceptors/authinterceptor_test.go b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+index 3b09b7cb37011c36ec36c0db4bb3d5fde7e997f5..12d83a096a4b70d10645da38bb8ee2ce38a1a1df 100644
+--- a/zrpc/internal/serverinterceptors/authinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+@@ -169,25 +169,25 @@ type mockedStream struct {
+ 	ctx context.Context
+ }
+ 
+-func (m mockedStream) SetHeader(_ metadata.MD) error {
++func (m mockedStream) SetHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SendHeader(_ metadata.MD) error {
++func (m mockedStream) SendHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SetTrailer(_ metadata.MD) {
++func (m mockedStream) SetTrailer(md metadata.MD) {
+ }
+ 
+ func (m mockedStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m mockedStream) SendMsg(_ any) error {
++func (m mockedStream) SendMsg(v any) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) RecvMsg(_ any) error {
++func (m mockedStream) RecvMsg(v any) error {
+ 	return nil
+ }
+diff --git a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+index 2b3fee86bd04d3753f26d8feb5b863db5adaf29a..9fb85a9bc50729c52dd5f0dbd72d32f0cc88b430 100644
+--- a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+@@ -309,15 +309,15 @@ type mockedServerStream struct {
+ 	err error
+ }
+ 
+-func (m *mockedServerStream) SetHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SetHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SendHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SendHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SetTrailer(_ metadata.MD) {
++func (m *mockedServerStream) SetTrailer(md metadata.MD) {
+ 	panic("implement me")
+ }
+ 
+@@ -329,10 +329,10 @@ func (m *mockedServerStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m *mockedServerStream) SendMsg(_ any) error {
++func (m *mockedServerStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedServerStream) RecvMsg(_ any) error {
++func (m *mockedServerStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/resolver/internal/resolver_test.go b/zrpc/resolver/internal/resolver_test.go
+index 7dd10ee79d10123ff7a236885f684ffdbd6d71c1..62c8238707bccb97e0840b925d81c82348373af5 100644
+--- a/zrpc/resolver/internal/resolver_test.go
++++ b/zrpc/resolver/internal/resolver_test.go
+@@ -28,15 +28,15 @@ func (m *mockedClientConn) UpdateState(state resolver.State) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientConn) ReportError(_ error) {
++func (m *mockedClientConn) ReportError(err error) {
+ }
+ 
+-func (m *mockedClientConn) NewAddress(_ []resolver.Address) {
++func (m *mockedClientConn) NewAddress(addresses []resolver.Address) {
+ }
+ 
+-func (m *mockedClientConn) NewServiceConfig(_ string) {
++func (m *mockedClientConn) NewServiceConfig(serviceConfig string) {
+ }
+ 
+-func (m *mockedClientConn) ParseServiceConfig(_ string) *serviceconfig.ParseResult {
++func (m *mockedClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
+ 	return nil
+ }

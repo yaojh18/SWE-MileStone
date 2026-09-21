@@ -1,0 +1,2091 @@
+diff --git a/.codecov.yml b/.codecov.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea0a4218a33bf3e86985a356d246d78b10bc4cd3
+--- /dev/null
++++ b/.codecov.yml
+@@ -0,0 +1,13 @@
++coverage:
++  status:
++    patch: true
++    project: false # disabled because project coverage is not stable
++comment:
++  layout: "flags, files"
++  behavior: once
++  require_changes: true
++ignore:
++  - "tools"
++  - "**/mock"
++  - "**/*_mock.go"
++  - "**/*test"
+diff --git a/.github/workflows/go.yml b/.github/workflows/go.yml
+index 25ca782c63696aac3f932550fed76ac9f2aea977..4cadaa56780cb0a14bb75ec6a0cd71051017390e 100644
+--- a/.github/workflows/go.yml
++++ b/.github/workflows/go.yml
+@@ -41,11 +41,6 @@ jobs:
+ 
+       - name: Codecov
+         uses: codecov/codecov-action@v5
+-        with:
+-          files: ./coverage.txt
+-          flags: unittests
+-          name: codecov-umbrella
+-          fail_ci_if_error: false
+ 
+   test-win:
+     name: Windows
+diff --git a/core/collection/set.go b/core/collection/set.go
+index 41fbb3cb547d39500a8fd386f3345e3f18464eb2..b65e33fbdcf87ebd10f4a10ada1e981bd0bbecd6 100644
+--- a/core/collection/set.go
++++ b/core/collection/set.go
+@@ -1,53 +1,235 @@
+ package collection
+ 
+-import "github.com/zeromicro/go-zero/core/lang"
++import (
++	"github.com/zeromicro/go-zero/core/lang"
++	"github.com/zeromicro/go-zero/core/logx"
++)
+ 
+-// Set is a type-safe generic set collection.
+-// It's not thread-safe, use with synchronization for concurrent access.
+-type Set[T comparable] struct {
+-	data map[T]lang.PlaceholderType
++const (
++	unmanaged = iota
++	untyped
++	intType
++	int64Type
++	uintType
++	uint64Type
++	stringType
++)
++
++// Set is not thread-safe, for concurrent use, make sure to use it with synchronization.
++type Set struct {
++	data map[any]lang.PlaceholderType
++	tp   int
+ }
+ 
+-// NewSet returns a new type-safe set.
+-func NewSet[T comparable]() *Set[T] {
+-	return &Set[T]{
+-		data: make(map[T]lang.PlaceholderType),
++// NewSet returns a managed Set, can only put the values with the same type.
++func NewSet() *Set {
++	return &Set{
++		data: make(map[any]lang.PlaceholderType),
++		tp:   untyped,
+ 	}
+ }
+ 
+-// Add adds items to the set. Duplicates are automatically ignored.
+-func (s *Set[T]) Add(items ...T) {
+-	for _, item := range items {
+-		s.data[item] = lang.Placeholder
++// NewUnmanagedSet returns an unmanaged Set, which can put values with different types.
++func NewUnmanagedSet() *Set {
++	return &Set{
++		data: make(map[any]lang.PlaceholderType),
++		tp:   unmanaged,
+ 	}
+ }
+ 
+-// Clear removes all items from the set.
+-func (s *Set[T]) Clear() {
+-	clear(s.data)
++// Add adds i into s.
++func (s *Set) Add(i ...any) {
++	for _, each := range i {
++		s.add(each)
++	}
+ }
+ 
+-// Contains checks if an item exists in the set.
+-func (s *Set[T]) Contains(item T) bool {
+-	_, ok := s.data[item]
+-	return ok
++// AddInt adds int values ii into s.
++func (s *Set) AddInt(ii ...int) {
++	for _, each := range ii {
++		s.add(each)
++	}
+ }
+ 
+-// Count returns the number of items in the set.
+-func (s *Set[T]) Count() int {
+-	return len(s.data)
++// AddInt64 adds int64 values ii into s.
++func (s *Set) AddInt64(ii ...int64) {
++	for _, each := range ii {
++		s.add(each)
++	}
++}
++
++// AddUint adds uint values ii into s.
++func (s *Set) AddUint(ii ...uint) {
++	for _, each := range ii {
++		s.add(each)
++	}
++}
++
++// AddUint64 adds uint64 values ii into s.
++func (s *Set) AddUint64(ii ...uint64) {
++	for _, each := range ii {
++		s.add(each)
++	}
++}
++
++// AddStr adds string values ss into s.
++func (s *Set) AddStr(ss ...string) {
++	for _, each := range ss {
++		s.add(each)
++	}
++}
++
++// Contains checks if i is in s.
++func (s *Set) Contains(i any) bool {
++	if len(s.data) == 0 {
++		return false
++	}
++
++	s.validate(i)
++	_, ok := s.data[i]
++	return ok
+ }
+ 
+-// Keys returns all elements in the set as a slice.
+-func (s *Set[T]) Keys() []T {
+-	keys := make([]T, 0, len(s.data))
++// Keys returns the keys in s.
++func (s *Set) Keys() []any {
++	var keys []any
++
+ 	for key := range s.data {
+ 		keys = append(keys, key)
+ 	}
++
++	return keys
++}
++
++// KeysInt returns the int keys in s.
++func (s *Set) KeysInt() []int {
++	var keys []int
++
++	for key := range s.data {
++		if intKey, ok := key.(int); ok {
++			keys = append(keys, intKey)
++		}
++	}
++
++	return keys
++}
++
++// KeysInt64 returns int64 keys in s.
++func (s *Set) KeysInt64() []int64 {
++	var keys []int64
++
++	for key := range s.data {
++		if intKey, ok := key.(int64); ok {
++			keys = append(keys, intKey)
++		}
++	}
++
+ 	return keys
+ }
+ 
+-// Remove removes an item from the set.
+-func (s *Set[T]) Remove(item T) {
+-	delete(s.data, item)
++// KeysUint returns uint keys in s.
++func (s *Set) KeysUint() []uint {
++	var keys []uint
++
++	for key := range s.data {
++		if intKey, ok := key.(uint); ok {
++			keys = append(keys, intKey)
++		}
++	}
++
++	return keys
++}
++
++// KeysUint64 returns uint64 keys in s.
++func (s *Set) KeysUint64() []uint64 {
++	var keys []uint64
++
++	for key := range s.data {
++		if intKey, ok := key.(uint64); ok {
++			keys = append(keys, intKey)
++		}
++	}
++
++	return keys
++}
++
++// KeysStr returns string keys in s.
++func (s *Set) KeysStr() []string {
++	var keys []string
++
++	for key := range s.data {
++		if strKey, ok := key.(string); ok {
++			keys = append(keys, strKey)
++		}
++	}
++
++	return keys
++}
++
++// Remove removes i from s.
++func (s *Set) Remove(i any) {
++	s.validate(i)
++	delete(s.data, i)
++}
++
++// Count returns the number of items in s.
++func (s *Set) Count() int {
++	return len(s.data)
++}
++
++func (s *Set) add(i any) {
++	switch s.tp {
++	case unmanaged:
++		// do nothing
++	case untyped:
++		s.setType(i)
++	default:
++		s.validate(i)
++	}
++	s.data[i] = lang.Placeholder
++}
++
++func (s *Set) setType(i any) {
++	// s.tp can only be untyped here
++	switch i.(type) {
++	case int:
++		s.tp = intType
++	case int64:
++		s.tp = int64Type
++	case uint:
++		s.tp = uintType
++	case uint64:
++		s.tp = uint64Type
++	case string:
++		s.tp = stringType
++	}
++}
++
++func (s *Set) validate(i any) {
++	if s.tp == unmanaged {
++		return
++	}
++
++	switch i.(type) {
++	case int:
++		if s.tp != intType {
++			logx.Errorf("element is int, but set contains elements with type %d", s.tp)
++		}
++	case int64:
++		if s.tp != int64Type {
++			logx.Errorf("element is int64, but set contains elements with type %d", s.tp)
++		}
++	case uint:
++		if s.tp != uintType {
++			logx.Errorf("element is uint, but set contains elements with type %d", s.tp)
++		}
++	case uint64:
++		if s.tp != uint64Type {
++			logx.Errorf("element is uint64, but set contains elements with type %d", s.tp)
++		}
++	case string:
++		if s.tp != stringType {
++			logx.Errorf("element is string, but set contains elements with type %d", s.tp)
++		}
++	}
+ }
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 0ca8eccf39ff8b6b152148a89f676b5f3123f69b..6428abd7da953e9ab6d3d71157675db3fb40f634 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -316,7 +316,7 @@ func toLowerCaseInterface(v any, info *fieldInfo) any {
+ 	case map[string]any:
+ 		return toLowerCaseKeyMap(vv, info)
+ 	case []any:
+-		arr := make([]any, 0, len(vv))
++		var arr []any
+ 		for _, vvv := range vv {
+ 			arr = append(arr, toLowerCaseInterface(vvv, info))
+ 		}
+diff --git a/core/discov/internal/registry.go b/core/discov/internal/registry.go
+index 416645560a28255c7e69e3503ce19bf1f307cffb..49463f7bcc9211a0c4d4668162b659e50aca213b 100644
+--- a/core/discov/internal/registry.go
++++ b/core/discov/internal/registry.go
+@@ -207,7 +207,7 @@ func (c *cluster) getCurrent(key watchKey) []KV {
+ 		return nil
+ 	}
+ 
+-	kvs := make([]KV, 0, len(watcher.values))
++	var kvs []KV
+ 	for k, v := range watcher.values {
+ 		kvs = append(kvs, KV{
+ 			Key: k,
+@@ -308,7 +308,7 @@ func (c *cluster) load(cli EtcdClient, key watchKey) int64 {
+ 		time.Sleep(coolDownUnstable.AroundDuration(coolDownInterval))
+ 	}
+ 
+-	kvs := make([]KV, 0, len(resp.Kvs))
++	var kvs []KV
+ 	for _, ev := range resp.Kvs {
+ 		kvs = append(kvs, KV{
+ 			Key: string(ev.Key),
+@@ -352,7 +352,7 @@ func (c *cluster) reload(cli EtcdClient) {
+ 	// cancel the previous watches
+ 	close(c.done)
+ 	c.watchGroup.Wait()
+-	keys := make([]watchKey, 0, len(c.watchers))
++	var keys []watchKey
+ 	for wk, wval := range c.watchers {
+ 		keys = append(keys, wk)
+ 		if wval.cancel != nil {
+diff --git a/core/discov/publisher.go b/core/discov/publisher.go
+index 549a81e7ee0bfb284881fbdad981728ab5d227a9..03f23a52d60f0e227c82ad90a1b36784893be1bc 100644
+--- a/core/discov/publisher.go
++++ b/core/discov/publisher.go
+@@ -92,12 +92,12 @@ func (p *Publisher) doKeepAlive() error {
+ 		default:
+ 			cli, err := p.doRegister()
+ 			if err != nil {
+-				logc.Errorf(cli.Ctx(), "etcd publisher doRegister: %v", err)
++				logc.Errorf(cli.Ctx(), "etcd publisher doRegister: %s", err.Error())
+ 				break
+ 			}
+ 
+ 			if err := p.keepAliveAsync(cli); err != nil {
+-				logc.Errorf(cli.Ctx(), "etcd publisher keepAliveAsync: %v", err)
++				logc.Errorf(cli.Ctx(), "etcd publisher keepAliveAsync: %s", err.Error())
+ 				break
+ 			}
+ 
+@@ -125,48 +125,23 @@ func (p *Publisher) keepAliveAsync(cli internal.EtcdClient) error {
+ 	}
+ 
+ 	threading.GoSafe(func() {
+-		wch := cli.Watch(cli.Ctx(), p.fullKey, clientv3.WithFilterPut())
+-
+ 		for {
+ 			select {
+ 			case _, ok := <-ch:
+ 				if !ok {
+ 					p.revoke(cli)
+ 					if err := p.doKeepAlive(); err != nil {
+-						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
++						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %s", err.Error())
+ 					}
+ 					return
+ 				}
+-
+-			case c := <-wch:
+-				if c.Err() != nil {
+-					logc.Errorf(cli.Ctx(), "etcd publisher watch: %v", c.Err())
+-					if err := p.doKeepAlive(); err != nil {
+-						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
+-					}
+-					return
+-				}
+-
+-				for _, evt := range c.Events {
+-					if evt.Type == clientv3.EventTypeDelete {
+-						logc.Infof(cli.Ctx(), "etcd publisher watch: %s, event: %v",
+-							evt.Kv.Key, evt.Type)
+-						_, err := cli.Put(cli.Ctx(), p.fullKey, p.value, clientv3.WithLease(p.lease))
+-						if err != nil {
+-							logc.Errorf(cli.Ctx(), "etcd publisher re-put key: %v", err)
+-						} else {
+-							logc.Infof(cli.Ctx(), "etcd publisher re-put key: %s, value: %s",
+-								p.fullKey, p.value)
+-						}
+-					}
+-				}
+ 			case <-p.pauseChan:
+ 				logc.Infof(cli.Ctx(), "paused etcd renew, key: %s, value: %s", p.key, p.value)
+ 				p.revoke(cli)
+ 				select {
+ 				case <-p.resumeChan:
+ 					if err := p.doKeepAlive(); err != nil {
+-						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %v", err)
++						logc.Errorf(cli.Ctx(), "etcd publisher KeepAlive: %s", err.Error())
+ 					}
+ 					return
+ 				case <-p.quit.Done():
+@@ -201,7 +176,7 @@ func (p *Publisher) register(client internal.EtcdClient) (clientv3.LeaseID, erro
+ 
+ func (p *Publisher) revoke(cli internal.EtcdClient) {
+ 	if _, err := cli.Revoke(cli.Ctx(), p.lease); err != nil {
+-		logc.Errorf(cli.Ctx(), "etcd publisher revoke: %v", err)
++		logc.Errorf(cli.Ctx(), "etcd publisher revoke: %s", err.Error())
+ 	}
+ }
+ 
+diff --git a/core/jsonx/json.go b/core/jsonx/json.go
+index 61b4a4193e525616e06af01318025868ea8a6ddf..1b522e55a35b2d4facd47b536c3e056ad618e5f3 100644
+--- a/core/jsonx/json.go
++++ b/core/jsonx/json.go
+@@ -8,25 +8,9 @@ import (
+ 	"strings"
+ )
+ 
+-// Marshal marshals v into json bytes, without escaping HTML and removes the trailing newline.
++// Marshal marshals v into json bytes.
+ func Marshal(v any) ([]byte, error) {
+-	// why not use json.Marshal?  https://github.com/golang/go/issues/28453
+-	// it changes the behavior of json.Marshal, like & -> \u0026, < -> \u003c, > -> \u003e
+-	// which is not what we want in API responses
+-	var buf bytes.Buffer
+-	enc := json.NewEncoder(&buf)
+-	enc.SetEscapeHTML(false)
+-	if err := enc.Encode(v); err != nil {
+-		return nil, err
+-	}
+-
+-	bs := buf.Bytes()
+-	// Remove trailing newline added by json.Encoder.Encode
+-	if len(bs) > 0 && bs[len(bs)-1] == '\n' {
+-		bs = bs[:len(bs)-1]
+-	}
+-
+-	return bs, nil
++	return json.Marshal(v)
+ }
+ 
+ // MarshalToString marshals v into a string.
+diff --git a/core/logx/fields.go b/core/logx/fields.go
+index 20b458818db4b035a4a3f0db521b1b4592adc727..80d5d261964b237b3523a0b24e5f1c7542451675 100644
+--- a/core/logx/fields.go
++++ b/core/logx/fields.go
+@@ -7,11 +7,12 @@ import (
+ )
+ 
+ var (
++	fieldsContextKey contextKey
+ 	globalFields     atomic.Value
+ 	globalFieldsLock sync.Mutex
+ )
+ 
+-type fieldsKey struct{}
++type contextKey struct{}
+ 
+ // AddGlobalFields adds global fields.
+ func AddGlobalFields(fields ...LogField) {
+@@ -28,16 +29,16 @@ func AddGlobalFields(fields ...LogField) {
+ 
+ // ContextWithFields returns a new context with the given fields.
+ func ContextWithFields(ctx context.Context, fields ...LogField) context.Context {
+-	if val := ctx.Value(fieldsKey{}); val != nil {
++	if val := ctx.Value(fieldsContextKey); val != nil {
+ 		if arr, ok := val.([]LogField); ok {
+ 			allFields := make([]LogField, 0, len(arr)+len(fields))
+ 			allFields = append(allFields, arr...)
+ 			allFields = append(allFields, fields...)
+-			return context.WithValue(ctx, fieldsKey{}, allFields)
++			return context.WithValue(ctx, fieldsContextKey, allFields)
+ 		}
+ 	}
+ 
+-	return context.WithValue(ctx, fieldsKey{}, fields)
++	return context.WithValue(ctx, fieldsContextKey, fields)
+ }
+ 
+ // WithFields returns a new logger with the given fields.
+diff --git a/core/logx/logs.go b/core/logx/logs.go
+index 404f47fab4bb6187fcc768e40c3fe2e34d323f9c..447de86a1d58327d4f277e02d9ad3dc62c6e2e4d 100644
+--- a/core/logx/logs.go
++++ b/core/logx/logs.go
+@@ -10,6 +10,7 @@ import (
+ 	"runtime/debug"
+ 	"sync"
+ 	"sync/atomic"
++	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/sysx"
+ )
+@@ -186,9 +187,39 @@ func Errorw(msg string, fields ...LogField) {
+ 
+ // Field returns a LogField for the given key and value.
+ func Field(key string, value any) LogField {
+-	return LogField{
+-		Key:   key,
+-		Value: value,
++	switch val := value.(type) {
++	case error:
++		return LogField{Key: key, Value: encodeError(val)}
++	case []error:
++		var errs []string
++		for _, err := range val {
++			errs = append(errs, encodeError(err))
++		}
++		return LogField{Key: key, Value: errs}
++	case time.Duration:
++		return LogField{Key: key, Value: fmt.Sprint(val)}
++	case []time.Duration:
++		var durs []string
++		for _, dur := range val {
++			durs = append(durs, fmt.Sprint(dur))
++		}
++		return LogField{Key: key, Value: durs}
++	case []time.Time:
++		var times []string
++		for _, t := range val {
++			times = append(times, fmt.Sprint(t))
++		}
++		return LogField{Key: key, Value: times}
++	case fmt.Stringer:
++		return LogField{Key: key, Value: encodeStringer(val)}
++	case []fmt.Stringer:
++		var strs []string
++		for _, str := range val {
++			strs = append(strs, encodeStringer(str))
++		}
++		return LogField{Key: key, Value: strs}
++	default:
++		return LogField{Key: key, Value: val}
+ 	}
+ }
+ 
+diff --git a/core/logx/richlogger.go b/core/logx/richlogger.go
+index 95ae70c1433f874b15ea053fcb2066c170601d45..dc80ead228596df057eca05f5bbae6cec69599e9 100644
+--- a/core/logx/richlogger.go
++++ b/core/logx/richlogger.go
+@@ -224,7 +224,7 @@ func (l *richLogger) buildFields(fields ...LogField) []LogField {
+ 		fields = append(fields, Field(spanKey, spanID))
+ 	}
+ 
+-	val := l.ctx.Value(fieldsKey{})
++	val := l.ctx.Value(fieldsContextKey)
+ 	if val != nil {
+ 		if arr, ok := val.([]LogField); ok {
+ 			fields = append(fields, arr...)
+diff --git a/core/logx/rotatelogger.go b/core/logx/rotatelogger.go
+index 6d252ef93de9b896c098eaadd7129a1edc80dbba..987eb5fcb7b51242ed979e46ecacd9af4deed605 100644
+--- a/core/logx/rotatelogger.go
++++ b/core/logx/rotatelogger.go
+@@ -211,7 +211,7 @@ func (r *SizeLimitRotateRule) OutdatedFiles() []string {
+ 		}
+ 	}
+ 
+-	result := make([]string, 0, len(outdated))
++	var result []string
+ 	for k := range outdated {
+ 		result = append(result, k)
+ 	}
+diff --git a/core/logx/sensitive.go b/core/logx/sensitive.go
+deleted file mode 100644
+index b0b2dac0c3e16b939745086431eae40fe4bec2ad..0000000000000000000000000000000000000000
+--- a/core/logx/sensitive.go
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package logx
+-
+-// Sensitive is an interface that defines a method for masking sensitive information in logs.
+-// It is typically implemented by types that contain sensitive data,
+-// such as passwords or personal information.
+-// Infov, Errorv, Debugv, and Slowv methods will call this method to mask sensitive data.
+-// The values in LogField will also be masked if they implement the Sensitive interface.
+-type Sensitive interface {
+-	// MaskSensitive masks sensitive information in the log.
+-	MaskSensitive() any
+-}
+-
+-// maskSensitive returns the value returned by MaskSensitive method,
+-// if the value implements Sensitive interface.
+-func maskSensitive(v any) any {
+-	if s, ok := v.(Sensitive); ok {
+-		return s.MaskSensitive()
+-	}
+-
+-	return v
+-}
+diff --git a/core/logx/writer.go b/core/logx/writer.go
+index c7140874639e350d747f77b914aa9b55d04d894e..ce57c811b2d0834da66533a2874038d9c5afd8bd 100644
+--- a/core/logx/writer.go
++++ b/core/logx/writer.go
+@@ -10,7 +10,6 @@ import (
+ 	"runtime/debug"
+ 	"sync"
+ 	"sync/atomic"
+-	"time"
+ 
+ 	fatihcolor "github.com/fatih/color"
+ 	"github.com/zeromicro/go-zero/core/color"
+@@ -366,25 +365,19 @@ func mergeGlobalFields(fields []LogField) []LogField {
+ }
+ 
+ func output(writer io.Writer, level string, val any, fields ...LogField) {
+-	switch v := val.(type) {
+-	case string:
+-		// only truncate string content, don't know how to truncate the values of other types.
++	// only truncate string content, don't know how to truncate the values of other types.
++	if v, ok := val.(string); ok {
+ 		maxLen := atomic.LoadUint32(&maxContentLength)
+ 		if maxLen > 0 && len(v) > int(maxLen) {
+ 			val = v[:maxLen]
+ 			fields = append(fields, truncatedField)
+ 		}
+-	case Sensitive:
+-		val = v.MaskSensitive()
+ 	}
+ 
+ 	// +3 for timestamp, level and content
+ 	entry := make(logEntry, len(fields)+3)
+ 	for _, field := range fields {
+-		// mask sensitive data before processing types,
+-		// in case field.Value is a sensitive type and also implemented fmt.Stringer.
+-		mval := maskSensitive(field.Value)
+-		entry[field.Key] = processFieldValue(mval)
++		entry[field.Key] = field.Value
+ 	}
+ 
+ 	switch atomic.LoadUint32(&encoding) {
+@@ -399,43 +392,6 @@ func output(writer io.Writer, level string, val any, fields ...LogField) {
+ 	}
+ }
+ 
+-func processFieldValue(value any) any {
+-	switch val := value.(type) {
+-	case error:
+-		return encodeError(val)
+-	case []error:
+-		var errs []string
+-		for _, err := range val {
+-			errs = append(errs, encodeError(err))
+-		}
+-		return errs
+-	case time.Duration:
+-		return fmt.Sprint(val)
+-	case []time.Duration:
+-		var durs []string
+-		for _, dur := range val {
+-			durs = append(durs, fmt.Sprint(dur))
+-		}
+-		return durs
+-	case []time.Time:
+-		var times []string
+-		for _, t := range val {
+-			times = append(times, fmt.Sprint(t))
+-		}
+-		return times
+-	case fmt.Stringer:
+-		return encodeStringer(val)
+-	case []fmt.Stringer:
+-		var strs []string
+-		for _, str := range val {
+-			strs = append(strs, encodeStringer(str))
+-		}
+-		return strs
+-	default:
+-		return val
+-	}
+-}
+-
+ func wrapLevelWithColor(level string) string {
+ 	var colour color.Color
+ 	switch level {
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index d6d73e9d2829b42b65812e9da3ff474503e71b0f..48deb9b7c25c4823ddfc95db7c8ee2350c638b2a 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -30,7 +30,9 @@ var (
+ 	errValueNotSettable = errors.New("value is not settable")
+ 	errValueNotStruct   = errors.New("value type is not struct")
+ 	keyUnmarshaler      = NewUnmarshaler(defaultKeyName)
++	boolType            = reflect.TypeOf(false)
+ 	durationType        = reflect.TypeOf(time.Duration(0))
++	stringType          = reflect.TypeOf("")
+ 	cacheKeys           = make(map[string][]string)
+ 	cacheKeysLock       sync.Mutex
+ 	defaultCache        = make(map[string]any)
+@@ -766,25 +768,23 @@ func (u *Unmarshaler) processFieldWithEnvValue(fieldType reflect.Type, value ref
+ 	}
+ 
+ 	derefType := Deref(fieldType)
+-	derefKind := derefType.Kind()
+-	switch {
+-	case derefKind == reflect.String:
+-		SetValue(fieldType, value, toReflectValue(derefType, envVal))
+-		return nil
+-	case derefKind == reflect.Bool:
++	switch derefType {
++	case boolType:
+ 		val, err := strconv.ParseBool(envVal)
+ 		if err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		SetValue(fieldType, value, toReflectValue(derefType, val))
++		SetValue(fieldType, value, reflect.ValueOf(val))
+ 		return nil
+-	case derefType == durationType:
+-		// time.Duration is a special case, its derefKind is reflect.Int64.
++	case durationType:
+ 		if err := fillDurationValue(fieldType, value, envVal); err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
++		return nil
++	case stringType:
++		SetValue(fieldType, value, reflect.ValueOf(envVal))
+ 		return nil
+ 	default:
+ 		return u.processFieldPrimitiveWithJSONNumber(fieldType, value, json.Number(envVal), opts, fullName)
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index 3e08095adb420ff9482fa3a1fdf155f8b4e0db99..b59fde7f161d36e83ba91426900bb989c6a1e03c 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -583,10 +583,6 @@ func toFloat64(v any) (float64, bool) {
+ 	}
+ }
+ 
+-func toReflectValue(tp reflect.Type, v any) reflect.Value {
+-	return reflect.ValueOf(v).Convert(Deref(tp))
+-}
+-
+ func usingDifferentKeys(key string, field reflect.StructField) bool {
+ 	if len(field.Tag) > 0 {
+ 		if _, ok := field.Tag.Lookup(key); !ok {
+diff --git a/core/stores/redis/redis.go b/core/stores/redis/redis.go
+index 76691c0e58209a5df0d9f523cc0f1726755a5753..66fcef4e0ad934c433c9c8fadb651e1086235c42 100644
+--- a/core/stores/redis/redis.go
++++ b/core/stores/redis/redis.go
+@@ -65,6 +65,7 @@ type (
+ 	// RedisNode interface represents a redis node.
+ 	RedisNode interface {
+ 		red.Cmdable
++		red.BitMapCmdable
+ 	}
+ 
+ 	// GeoLocation is used with GeoAdd to add geospatial location.
+@@ -1284,12 +1285,10 @@ func (s *Redis) RpushCtx(ctx context.Context, key string, values ...any) (int, e
+ 	return int(v), nil
+ }
+ 
+-// RPopLPush atomically removes the last element from source list and prepends it to destination list.
+ func (s *Redis) RPopLPush(source string, destination string) (string, error) {
+ 	return s.RPopLPushCtx(context.Background(), source, destination)
+ }
+ 
+-// RPopLPushCtx is the context-aware version of RPopLPush.
+ func (s *Redis) RPopLPushCtx(ctx context.Context, source string, destination string) (string, error) {
+ 	conn, err := getRedis(s)
+ 	if err != nil {
+@@ -1696,17 +1695,14 @@ func (s *Redis) TtlCtx(ctx context.Context, key string) (int, error) {
+ 	return int(duration), nil
+ }
+ 
+-// TxPipeline returns a Redis transaction pipeline for executing multiple commands atomically.
+ func (s *Redis) TxPipeline() (pipe Pipeliner, err error) {
+ 	conn, err := getRedis(s)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-
+ 	return conn.TxPipeline(), nil
+ }
+ 
+-// Unlink is similar to Del but removes keys asynchronously in a separate thread.
+ func (s *Redis) Unlink(keys ...string) (int64, error) {
+ 	return s.UnlinkCtx(context.Background(), keys...)
+ }
+@@ -1716,154 +1712,9 @@ func (s *Redis) UnlinkCtx(ctx context.Context, keys ...string) (int64, error) {
+ 	if err != nil {
+ 		return 0, err
+ 	}
+-
+ 	return conn.Unlink(ctx, keys...).Result()
+ }
+ 
+-// XAck acknowledges one or more messages in a Redis stream consumer group.
+-// It marks the specified messages as successfully processed.
+-func (s *Redis) XAck(stream string, group string, ids ...string) (int64, error) {
+-	return s.XAckCtx(context.Background(), stream, group, ids...)
+-}
+-
+-// XAckCtx is the context-aware version of XAck.
+-func (s *Redis) XAckCtx(ctx context.Context, stream string, group string, ids ...string) (int64, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return 0, err
+-	}
+-
+-	return conn.XAck(ctx, stream, group, ids...).Result()
+-}
+-
+-// XAdd adds a new entry to a Redis stream with the specified ID and field-value pairs.
+-// If noMkStream is true, the command will fail if the stream doesn't exist.
+-func (s *Redis) XAdd(stream string, noMkStream bool, id string, values any) (string, error) {
+-	return s.XAddCtx(context.Background(), stream, noMkStream, id, values)
+-}
+-
+-// XAddCtx is the context-aware version of XAdd.
+-func (s *Redis) XAddCtx(ctx context.Context, stream string, noMkStream bool, id string, values any) (
+-	string, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return "", err
+-	}
+-
+-	return conn.XAdd(ctx, &red.XAddArgs{
+-		Stream:     stream,
+-		ID:         id,
+-		Values:     values,
+-		NoMkStream: noMkStream,
+-	}).Result()
+-}
+-
+-// XGroupCreateMkStream creates a consumer group for a Redis stream.
+-// If the stream doesn't exist, it will be created automatically.
+-func (s *Redis) XGroupCreateMkStream(stream string, group string, start string) (string, error) {
+-	return s.XGroupCreateMkStreamCtx(context.Background(), stream, group, start)
+-}
+-
+-// XGroupCreateMkStreamCtx is the context-aware version of XGroupCreateMkStream.
+-func (s *Redis) XGroupCreateMkStreamCtx(ctx context.Context, stream string, group string,
+-	start string) (string, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return "", err
+-	}
+-
+-	return conn.XGroupCreateMkStream(ctx, stream, group, start).Result()
+-}
+-
+-// XGroupCreate creates a consumer group for a Redis stream.
+-// The stream must already exist, otherwise the command will fail.
+-func (s *Redis) XGroupCreate(stream string, group string, start string) (string, error) {
+-	return s.XGroupCreateCtx(context.Background(), stream, group, start)
+-}
+-
+-// XGroupCreateCtx is the context-aware version of XGroupCreate.
+-func (s *Redis) XGroupCreateCtx(ctx context.Context, stream string, group string, start string) (
+-	string, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return "", err
+-	}
+-
+-	return conn.XGroupCreate(ctx, stream, group, start).Result()
+-}
+-
+-// XInfoConsumers returns information about consumers in a Redis stream consumer group.
+-func (s *Redis) XInfoConsumers(stream string, group string) ([]red.XInfoConsumer, error) {
+-	return s.XInfoConsumersCtx(context.Background(), stream, group)
+-}
+-
+-// XInfoConsumersCtx is the context-aware version of XInfoConsumers.
+-func (s *Redis) XInfoConsumersCtx(ctx context.Context, stream string, group string) (
+-	[]red.XInfoConsumer, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return conn.XInfoConsumers(ctx, stream, group).Result()
+-}
+-
+-// XInfoGroups returns information about consumer groups for a Redis stream.
+-func (s *Redis) XInfoGroups(stream string) ([]red.XInfoGroup, error) {
+-	return s.XInfoGroupsCtx(context.Background(), stream)
+-}
+-
+-// XInfoGroupsCtx is the context-aware version of XInfoGroups.
+-func (s *Redis) XInfoGroupsCtx(ctx context.Context, stream string) ([]red.XInfoGroup, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return conn.XInfoGroups(ctx, stream).Result()
+-}
+-
+-// XInfoStream returns general information about a Redis stream.
+-func (s *Redis) XInfoStream(stream string) (*red.XInfoStream, error) {
+-	return s.XInfoStreamCtx(context.Background(), stream)
+-}
+-
+-// XInfoStreamCtx is the context-aware version of XInfoStream.
+-func (s *Redis) XInfoStreamCtx(ctx context.Context, stream string) (*red.XInfoStream, error) {
+-	conn, err := getRedis(s)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return conn.XInfoStream(ctx, stream).Result()
+-}
+-
+-// XReadGroup reads messages from Redis streams as part of a consumer group.
+-// It allows for distributed processing of stream messages with automatic message delivery semantics.
+-// Doesn't benefit from pooling redis connections of blocking queries.
+-func (s *Redis) XReadGroup(node RedisNode, group string, consumerId string, count int64,
+-	block time.Duration, noAck bool, streams ...string) ([]red.XStream, error) {
+-	return s.XReadGroupCtx(context.Background(), node, group, consumerId, count, block, noAck, streams...)
+-}
+-
+-// XReadGroupCtx is the context-aware version of XReadGroup.
+-// Doesn't benefit from pooling redis connections of blocking queries.
+-func (s *Redis) XReadGroupCtx(ctx context.Context, node RedisNode, group string, consumerId string,
+-	count int64, block time.Duration, noAck bool, streams ...string) ([]red.XStream, error) {
+-	if node == nil {
+-		return nil, ErrNilNode
+-	}
+-
+-	return node.XReadGroup(ctx, &red.XReadGroupArgs{
+-		Group:    group,
+-		Consumer: consumerId,
+-		Count:    count,
+-		Block:    block,
+-		NoAck:    noAck,
+-		Streams:  streams,
+-	}).Result()
+-}
+-
+ // Zadd is the implementation of redis zadd command.
+ func (s *Redis) Zadd(key string, score int64, value string) (bool, error) {
+ 	return s.ZaddCtx(context.Background(), key, score, value)
+@@ -1944,7 +1795,7 @@ func (s *Redis) ZaddsCtx(ctx context.Context, key string, ps ...Pair) (int64, er
+ 		return 0, err
+ 	}
+ 
+-	zs := make([]red.Z, 0, len(ps))
++	var zs []red.Z
+ 	for _, p := range ps {
+ 		z := red.Z{Score: float64(p.Score), Member: p.Key}
+ 		zs = append(zs, z)
+diff --git a/core/stores/sqlx/bulkinserter.go b/core/stores/sqlx/bulkinserter.go
+index c4eb732fe0b26342ca0db28e0c4cfd29d2b5aba1..f251b76b9b963df3cffa090a83c89c4a582fa44f 100644
+--- a/core/stores/sqlx/bulkinserter.go
++++ b/core/stores/sqlx/bulkinserter.go
+@@ -25,8 +25,8 @@ type (
+ 	ResultHandler func(sql.Result, error)
+ 
+ 	// A BulkInserter is used to batch insert records.
+-	// Postgresql is not supported yet, because of the sql is formatted with symbol `$`.
+-	// Oracle is not supported yet, because of the sql is formatted with symbol `:`.
++	// Postgresql is not supported yet, because of the sql is formated with symbol `$`.
++	// Oracle is not supported yet, because of the sql is formated with symbol `:`.
+ 	BulkInserter struct {
+ 		executor *executors.PeriodicalExecutor
+ 		inserter *dbInserter
+diff --git a/core/stores/sqlx/config.go b/core/stores/sqlx/config.go
+deleted file mode 100644
+index 700e6d00d0b9d1eb832d86414976828ac5338691..0000000000000000000000000000000000000000
+--- a/core/stores/sqlx/config.go
++++ /dev/null
+@@ -1,29 +0,0 @@
+-package sqlx
+-
+-import "errors"
+-
+-var (
+-	errEmptyDatasource = errors.New("empty datasource")
+-	errEmptyDriverName = errors.New("empty driver name")
+-)
+-
+-// SqlConf defines the configuration for sqlx.
+-type SqlConf struct {
+-	DataSource string
+-	DriverName string   `json:",default=mysql"`
+-	Replicas   []string `json:",optional"`
+-	Policy     string   `json:",default=round-robin,options=round-robin|random"`
+-}
+-
+-// Validate validates the SqlxConf.
+-func (sc SqlConf) Validate() error {
+-	if len(sc.DataSource) == 0 {
+-		return errEmptyDatasource
+-	}
+-
+-	if len(sc.DriverName) == 0 {
+-		return errEmptyDriverName
+-	}
+-
+-	return nil
+-}
+diff --git a/core/stores/sqlx/orm.go b/core/stores/sqlx/orm.go
+index e03104cfa5e1b2ed88e16d61c18af311c3b48f82..678847e12a7723e1246a22060ecbdb5e916cd5d9 100644
+--- a/core/stores/sqlx/orm.go
++++ b/core/stores/sqlx/orm.go
+@@ -9,10 +9,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/mapping"
+ )
+ 
+-const (
+-	tagIgnore = "-"
+-	tagName   = "db"
+-)
++const tagName = "db"
+ 
+ var (
+ 	// ErrNotMatchDestination is an error that indicates not matching destination to scan.
+@@ -272,17 +269,13 @@ func unwrapFields(v reflect.Value) []reflect.Value {
+ 			continue
+ 		}
+ 
+-		childType := indirect.Type().Field(i)
+-		if parseTagName(childType) == tagIgnore {
+-			continue
+-		}
+-
+ 		if child.Kind() == reflect.Ptr && child.IsNil() {
+ 			baseValueType := mapping.Deref(child.Type())
+ 			child.Set(reflect.New(baseValueType))
+ 		}
+ 
+ 		child = reflect.Indirect(child)
++		childType := indirect.Type().Field(i)
+ 		if child.Kind() == reflect.Struct && childType.Anonymous {
+ 			fields = append(fields, unwrapFields(child)...)
+ 		} else {
+diff --git a/core/stores/sqlx/rwstrategy.go b/core/stores/sqlx/rwstrategy.go
+deleted file mode 100644
+index 31fe3a03579df9a5febb1a94f718126b89731f14..0000000000000000000000000000000000000000
+--- a/core/stores/sqlx/rwstrategy.go
++++ /dev/null
+@@ -1,65 +0,0 @@
+-package sqlx
+-
+-import "context"
+-
+-const (
+-	// policyRoundRobin round-robin policy for selecting replicas.
+-	policyRoundRobin = "round-robin"
+-	// policyRandom random policy for selecting replicas.
+-	policyRandom = "random"
+-
+-	// readPrimaryMode indicates that the operation is a read,
+-	// but should be performed on the primary database instance.
+-	//
+-	// This mode is used in scenarios where data freshness and consistency are critical,
+-	// such as immediately after writes or where replication lag may cause stale reads.
+-	readPrimaryMode readWriteMode = "read-primary"
+-
+-	// readReplicaMode indicates that the operation is a read from replicas.
+-	// This is suitable for scenarios where eventual consistency is acceptable,
+-	// and the goal is to offload traffic from the primary and improve read scalability.
+-	readReplicaMode readWriteMode = "read-replica"
+-
+-	// writeMode indicates that the operation is a write operation (to primary).
+-	writeMode readWriteMode = "write"
+-
+-	// notSpecifiedMode indicates that the read/write mode is not specified.
+-	notSpecifiedMode readWriteMode = ""
+-)
+-
+-type readWriteModeKey struct{}
+-
+-// WithReadPrimary sets the context to read-primary mode.
+-func WithReadPrimary(ctx context.Context) context.Context {
+-	return context.WithValue(ctx, readWriteModeKey{}, readPrimaryMode)
+-}
+-
+-// WithReadReplica sets the context to read-replica mode.
+-func WithReadReplica(ctx context.Context) context.Context {
+-	return context.WithValue(ctx, readWriteModeKey{}, readReplicaMode)
+-}
+-
+-// WithWrite sets the context to write mode, indicating that the operation is a write operation.
+-func WithWrite(ctx context.Context) context.Context {
+-	return context.WithValue(ctx, readWriteModeKey{}, writeMode)
+-}
+-
+-type readWriteMode string
+-
+-func (m readWriteMode) isValid() bool {
+-	return m == readPrimaryMode || m == readReplicaMode || m == writeMode
+-}
+-
+-func getReadWriteMode(ctx context.Context) readWriteMode {
+-	if mode := ctx.Value(readWriteModeKey{}); mode != nil {
+-		if v, ok := mode.(readWriteMode); ok && v.isValid() {
+-			return v
+-		}
+-	}
+-
+-	return notSpecifiedMode
+-}
+-
+-func usePrimary(ctx context.Context) bool {
+-	return getReadWriteMode(ctx) != readReplicaMode
+-}
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 81fe9c9bf58a7c439a3f6016e4aded6ede72d624..34a4f386a4480b1f7270cb00f7c27bdb1971bca7 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -4,9 +4,6 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
+-	"fmt"
+-	"math/rand"
+-	"sync/atomic"
+ 
+ 	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/errorx"
+@@ -55,10 +52,9 @@ type (
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+ 		accept   breaker.Acceptable
+-		index    uint32
+ 	}
+ 
+-	connProvider func(ctx context.Context) (*sql.DB, error)
++	connProvider func() (*sql.DB, error)
+ 
+ 	sessionConn interface {
+ 		Exec(query string, args ...any) (sql.Result, error)
+@@ -68,41 +64,10 @@ type (
+ 	}
+ )
+ 
+-// MustNewConn returns a SqlConn with the given SqlConf.
+-func MustNewConn(c SqlConf, opts ...SqlOption) SqlConn {
+-	conn, err := NewConn(c, opts...)
+-	if err != nil {
+-		logx.Must(err)
+-	}
+-
+-	return conn
+-}
+-
+-// NewConn returns a SqlConn with the given SqlConf.
+-func NewConn(c SqlConf, opts ...SqlOption) (SqlConn, error) {
+-	if err := c.Validate(); err != nil {
+-		return nil, err
+-	}
+-
+-	conn := &commonSqlConn{
+-		onError: func(ctx context.Context, err error) {
+-			logInstanceError(ctx, c.DataSource, err)
+-		},
+-		beginTx: begin,
+-		brk:     breaker.NewBreaker(),
+-	}
+-	for _, opt := range opts {
+-		opt(conn)
+-	}
+-	conn.connProv = getConnProvider(conn, c.DriverName, c.DataSource, c.Policy, c.Replicas)
+-
+-	return conn, nil
+-}
+-
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+ func NewSqlConn(driverName, datasource string, opts ...SqlOption) SqlConn {
+ 	conn := &commonSqlConn{
+-		connProv: func(context.Context) (*sql.DB, error) {
++		connProv: func() (*sql.DB, error) {
+ 			return getSqlConn(driverName, datasource)
+ 		},
+ 		onError: func(ctx context.Context, err error) {
+@@ -122,7 +87,7 @@ func NewSqlConn(driverName, datasource string, opts ...SqlOption) SqlConn {
+ // Use it with caution; it's provided for other ORM to interact with.
+ func NewSqlConnFromDB(db *sql.DB, opts ...SqlOption) SqlConn {
+ 	conn := &commonSqlConn{
+-		connProv: func(ctx context.Context) (*sql.DB, error) {
++		connProv: func() (*sql.DB, error) {
+ 			return db, nil
+ 		},
+ 		onError: func(ctx context.Context, err error) {
+@@ -158,7 +123,7 @@ func (db *commonSqlConn) ExecCtx(ctx context.Context, q string, args ...any) (
+ 
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+ 		var conn *sql.DB
+-		conn, err = db.connProv(ctx)
++		conn, err = db.connProv()
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -186,7 +151,7 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+ 		var conn *sql.DB
+-		conn, err = db.connProv(ctx)
++		conn, err = db.connProv()
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -277,7 +242,7 @@ func (db *commonSqlConn) QueryRowsPartialCtx(ctx context.Context, v any,
+ }
+ 
+ func (db *commonSqlConn) RawDB() (*sql.DB, error) {
+-	return db.connProv(context.Background())
++	return db.connProv()
+ }
+ 
+ func (db *commonSqlConn) Transact(fn func(Session) error) error {
+@@ -323,7 +288,7 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	q string, args ...any) (err error) {
+ 	var scanFailed bool
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+-		conn, err := db.connProv(ctx)
++		conn, err := db.connProv()
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -346,38 +311,6 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func getConnProvider(sc *commonSqlConn, driverName, datasource, policy string, replicas []string) connProvider {
+-	return func(ctx context.Context) (*sql.DB, error) {
+-		replicaCount := len(replicas)
+-
+-		if replicaCount == 0 || usePrimary(ctx) {
+-			return getSqlConn(driverName, datasource)
+-		}
+-
+-		var dsn string
+-
+-		if replicaCount == 1 {
+-			dsn = replicas[0]
+-		} else {
+-			if len(policy) == 0 {
+-				policy = policyRoundRobin
+-			}
+-
+-			switch policy {
+-			case policyRandom:
+-				dsn = replicas[rand.Intn(replicaCount)]
+-			case policyRoundRobin:
+-				index := atomic.AddUint32(&sc.index, 1) - 1
+-				dsn = replicas[index%uint32(replicaCount)]
+-			default:
+-				return nil, fmt.Errorf("unknown policy: %s", policy)
+-			}
+-		}
+-
+-		return getSqlConn(driverName, dsn)
+-	}
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index 02370ca07dcde5f2315d3e41a6cde0af7aa4d581..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -156,7 +156,7 @@ func begin(db *sql.DB) (trans, error) {
+ 
+ func transact(ctx context.Context, db *commonSqlConn, b beginnable,
+ 	fn func(context.Context, Session) error) (err error) {
+-	conn, err := db.connProv(ctx)
++	conn, err := db.connProv()
+ 	if err != nil {
+ 		db.onError(ctx, err)
+ 		return err
+diff --git a/core/syncx/immutableresource.go b/core/syncx/immutableresource.go
+index e8fa364a325db2de0fb7d59b1c5179cbad84360a..dd9e4733aa00e5c662236b2eb0fc4d7ce1a72bd8 100644
+--- a/core/syncx/immutableresource.go
++++ b/core/syncx/immutableresource.go
+@@ -47,31 +47,30 @@ func (ir *ImmutableResource) Get() (any, error) {
+ 		return resource, nil
+ 	}
+ 
+-	ir.lock.Lock()
+-	defer ir.lock.Unlock()
++	ir.maybeRefresh(func() {
++		res, err := ir.fetch()
++		ir.lock.Lock()
++		if err != nil {
++			ir.err = err
++		} else {
++			ir.resource, ir.err = res, nil
++		}
++		ir.lock.Unlock()
++	})
+ 
+-	// double check
+-	if ir.resource != nil {
+-		return ir.resource, nil
+-	}
+-	if ir.err != nil && !ir.shouldRefresh() {
+-		return ir.resource, ir.err
+-	}
+-
+-	res, err := ir.fetch()
+-	ir.lastTime.Set(timex.Now())
+-	if err != nil {
+-		ir.err = err
+-		return nil, err
+-	}
+-
+-	ir.resource, ir.err = res, nil
+-	return res, nil
++	ir.lock.RLock()
++	resource, err := ir.resource, ir.err
++	ir.lock.RUnlock()
++	return resource, err
+ }
+ 
+-func (ir *ImmutableResource) shouldRefresh() bool {
++func (ir *ImmutableResource) maybeRefresh(execute func()) {
++	now := timex.Now()
+ 	lastTime := ir.lastTime.Load()
+-	return lastTime == 0 || lastTime+ir.refreshInterval < timex.Now()
++	if lastTime == 0 || lastTime+ir.refreshInterval < now {
++		ir.lastTime.Set(now)
++		execute()
++	}
+ }
+ 
+ // WithRefreshIntervalOnFailure sets refresh interval on failure.
+diff --git a/gateway/server.go b/gateway/server.go
+index cc6f3db7b9048fe5b03f867a30529db44fdee50c..fe27039533d58ac272ec0ecd93ee8e7d6f443f4f 100644
+--- a/gateway/server.go
++++ b/gateway/server.go
+@@ -34,7 +34,6 @@ type (
+ 		conns         []zrpc.Client
+ 		processHeader func(http.Header) []string
+ 		dialer        func(conf zrpc.RpcClientConf) zrpc.Client
+-		middlewares   []rest.Middleware
+ 	}
+ 
+ 	// Option defines the method to customize Server.
+@@ -104,16 +103,9 @@ func (s *Server) build() error {
+ 	})
+ }
+ 
+-func (s *Server) buildChainHandler(handler http.HandlerFunc) http.HandlerFunc {
+-	for i := len(s.middlewares) - 1; i >= 0; i-- {
+-		handler = s.middlewares[i](handler)
+-	}
+-	return handler
+-}
+-
+ func (s *Server) buildGrpcHandler(source grpcurl.DescriptorSource, resolver jsonpb.AnyResolver,
+ 	cli zrpc.Client, rpcPath string) func(http.ResponseWriter, *http.Request) {
+-	handler := func(w http.ResponseWriter, r *http.Request) {
++	return func(w http.ResponseWriter, r *http.Request) {
+ 		parser, err := internal.NewRequestParser(r, resolver)
+ 		if err != nil {
+ 			httpx.ErrorCtx(r.Context(), w, err)
+@@ -132,8 +124,6 @@ func (s *Server) buildGrpcHandler(source grpcurl.DescriptorSource, resolver json
+ 			httpx.ErrorCtx(r.Context(), w, st.Err())
+ 		}
+ 	}
+-
+-	return s.buildChainHandler(handler)
+ }
+ 
+ func (s *Server) buildGrpcRoute(up Upstream, writer mr.Writer[rest.Route], cancel func(error)) {
+@@ -187,7 +177,7 @@ func (s *Server) buildGrpcRoute(up Upstream, writer mr.Writer[rest.Route], cance
+ }
+ 
+ func (s *Server) buildHttpHandler(target *HttpClientConf) http.HandlerFunc {
+-	handler := func(w http.ResponseWriter, r *http.Request) {
++	return func(w http.ResponseWriter, r *http.Request) {
+ 		w.Header().Set(httpx.ContentType, httpx.JsonContentType)
+ 		req, err := buildRequestWithNewTarget(r, target)
+ 		if err != nil {
+@@ -223,8 +213,6 @@ func (s *Server) buildHttpHandler(target *HttpClientConf) http.HandlerFunc {
+ 			logc.Error(r.Context(), err)
+ 		}
+ 	}
+-
+-	return s.buildChainHandler(handler)
+ }
+ 
+ func (s *Server) buildHttpRoute(up Upstream, writer mr.Writer[rest.Route]) {
+@@ -275,14 +263,6 @@ func WithHeaderProcessor(processHeader func(http.Header) []string) func(*Server)
+ 	}
+ }
+ 
+-// WithMiddleware adds one or more middleware functions to process HTTP requests.
+-// Multiple middlewares will be executed in the order they were passed (like an onion model).
+-func WithMiddleware(middlewares ...rest.Middleware) func(*Server) {
+-	return func(s *Server) {
+-		s.middlewares = append(s.middlewares, middlewares...)
+-	}
+-}
+-
+ func buildRequestWithNewTarget(r *http.Request, target *HttpClientConf) (*http.Request, error) {
+ 	u := *r.URL
+ 	u.Host = target.Target
+diff --git a/go.mod b/go.mod
+index 8066796c4f80c410dc666a886200073d4c6388d9..9aca378642e09eac83cc13826b8df0183f4f1fbb 100644
+--- a/go.mod
++++ b/go.mod
+@@ -12,12 +12,12 @@ require (
+ 	github.com/golang/mock v1.6.0
+ 	github.com/golang/protobuf v1.5.4
+ 	github.com/google/uuid v1.6.0
+-	github.com/grafana/pyroscope-go v1.2.4
++	github.com/grafana/pyroscope-go v1.2.2
+ 	github.com/jackc/pgx/v5 v5.7.4
+ 	github.com/jhump/protoreflect v1.17.0
+ 	github.com/pelletier/go-toml/v2 v2.2.2
+ 	github.com/prometheus/client_golang v1.21.1
+-	github.com/redis/go-redis/v9 v9.12.0
++	github.com/redis/go-redis/v9 v9.11.0
+ 	github.com/spaolacci/murmur3 v1.1.0
+ 	github.com/stretchr/testify v1.10.0
+ 	go.etcd.io/etcd/api/v3 v3.5.15
+diff --git a/go.sum b/go.sum
+index 155f9d0427f909e0e63fcb3961148a06eef0b7d3..490c607b75e11e82fbc057debb8d4b622979762b 100644
+--- a/go.sum
++++ b/go.sum
+@@ -80,8 +80,8 @@ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1 h1:K6RDEckDVWvDI9JAJY
+ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1/go.mod h1:kpwsk12EmLew5upagYY7GY0pfYCcupk39gWOCRROcvE=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+-github.com/grafana/pyroscope-go v1.2.4 h1:B22GMXz+O0nWLatxLuaP7o7L9dvP0clLvIpmeEQQM0Q=
+-github.com/grafana/pyroscope-go v1.2.4/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
++github.com/grafana/pyroscope-go v1.2.2 h1:uvKCyZMD724RkaCEMrSTC38Yn7AnFe8S2wiAIYdDPCE=
++github.com/grafana/pyroscope-go v1.2.2/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
+ github.com/grafana/pyroscope-go/godeltaprof v0.1.8 h1:iwOtYXeeVSAeYefJNaxDytgjKtUuKQbJqgAIjlnicKg=
+ github.com/grafana/pyroscope-go/godeltaprof v0.1.8/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+@@ -158,8 +158,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.12.0 h1:XlVPGlflh4nxfhsNXPA8Qp6EmEfTo0rp8oaBzPipXnU=
+-github.com/redis/go-redis/v9 v9.12.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.11.0 h1:E3S08Gl/nJNn5vkxd2i78wZxWAPNZgUNTp8WIJUAiIs=
++github.com/redis/go-redis/v9 v9.11.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rivo/uniseg v0.2.0 h1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=
+ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
+ github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
+diff --git a/mcp/server.go b/mcp/server.go
+index 8897b4b9105c83e0995cfdd6c9f468d0c1dfdc9e..1c95095ce7616ba75fac90b42fca9d03568b9041 100644
+--- a/mcp/server.go
++++ b/mcp/server.go
+@@ -392,8 +392,8 @@ func (s *sseMcpServer) processListTools(ctx context.Context, client *mcpClient,
+ 		}
+ 	}
+ 
++	var toolsList []Tool
+ 	s.toolsLock.Lock()
+-	toolsList := make([]Tool, 0, len(s.tools))
+ 	for _, tool := range s.tools {
+ 		if len(tool.InputSchema.Type) == 0 {
+ 			tool.InputSchema.Type = ContentTypeObject
+@@ -437,8 +437,8 @@ func (s *sseMcpServer) processListPrompts(ctx context.Context, client *mcpClient
+ 	}
+ 
+ 	// Prepare prompt list
++	var promptsList []Prompt
+ 	s.promptsLock.Lock()
+-	promptsList := make([]Prompt, 0, len(s.prompts))
+ 	for _, prompt := range s.prompts {
+ 		promptsList = append(promptsList, prompt)
+ 	}
+@@ -475,8 +475,8 @@ func (s *sseMcpServer) processListResources(ctx context.Context, client *mcpClie
+ 		}
+ 	}
+ 
++	var resourcesList []Resource
+ 	s.resourcesLock.Lock()
+-	resourcesList := make([]Resource, 0, len(s.resources))
+ 	for _, resource := range s.resources {
+ 		// Create a copy without the handler function which shouldn't be sent to clients
+ 		resourceCopy := Resource{
+diff --git a/rest/engine.go b/rest/engine.go
+index 87a3d340ecb746d05c6e46e8f78d54fd511f6854..f7a53987e9674151271fef94ba952f0f0586dd3a 100644
+--- a/rest/engine.go
++++ b/rest/engine.go
+@@ -10,7 +10,6 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/core/codec"
+ 	"github.com/zeromicro/go-zero/core/load"
+-	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/rest/chain"
+ 	"github.com/zeromicro/go-zero/rest/handler"
+@@ -67,6 +66,20 @@ func (ng *engine) addRoutes(r featuredRoutes) {
+ 	ng.mightUpdateTimeout(r)
+ }
+ 
++func buildSSERoutes(routes []Route) []Route {
++	for i, route := range routes {
++		h := route.Handler
++		routes[i].Handler = func(w http.ResponseWriter, r *http.Request) {
++			w.Header().Set(header.ContentType, header.ContentTypeEventStream)
++			w.Header().Set(header.CacheControl, header.CacheControlNoCache)
++			w.Header().Set(header.Connection, header.ConnectionKeepAlive)
++			h(w, r)
++		}
++	}
++
++	return routes
++}
++
+ func (ng *engine) appendAuthHandler(fr featuredRoutes, chn chain.Chain,
+ 	verifier func(chain.Chain) chain.Chain) chain.Chain {
+ 	if fr.jwt.enabled {
+@@ -381,27 +394,6 @@ func (ng *engine) withNetworkTimeout() internal.StartOption {
+ 	}
+ }
+ 
+-func buildSSERoutes(routes []Route) []Route {
+-	for i, route := range routes {
+-		h := route.Handler
+-		routes[i].Handler = func(w http.ResponseWriter, r *http.Request) {
+-			// remove the default write deadline set by http.Server,
+-			// because SSE requires the connection to be kept alive indefinitely.
+-			rc := http.NewResponseController(w)
+-			if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+-				logc.Errorf(r.Context(), "set conn write deadline failed: %v", err)
+-			}
+-
+-			w.Header().Set(header.ContentType, header.ContentTypeEventStream)
+-			w.Header().Set(header.CacheControl, header.CacheControlNoCache)
+-			w.Header().Set(header.Connection, header.ConnectionKeepAlive)
+-			h(w, r)
+-		}
+-	}
+-
+-	return routes
+-}
+-
+ func convertMiddleware(ware Middleware) func(http.Handler) http.Handler {
+ 	return func(next http.Handler) http.Handler {
+ 		return ware(next.ServeHTTP)
+diff --git a/rest/handler/loghandler.go b/rest/handler/loghandler.go
+index e6552fc0210109db8467f2da250f1b6da54991d2..62f48c56bc8324d987b4bb466823962bbb5fa496 100644
+--- a/rest/handler/loghandler.go
++++ b/rest/handler/loghandler.go
+@@ -24,9 +24,8 @@ import (
+ )
+ 
+ const (
+-	limitBodyBytes         = 1024
+-	limitDetailedBodyBytes = 4096
+-	defaultSlowThreshold   = time.Millisecond * 500
++	limitBodyBytes       = 1024
++	defaultSlowThreshold = time.Millisecond * 500
+ )
+ 
+ var slowThreshold = syncx.ForAtomicDuration(defaultSlowThreshold)
+@@ -95,8 +94,7 @@ func DetailedLogHandler(next http.Handler) http.Handler {
+ 		lrw := newDetailLoggedResponseWriter(rw, &buf)
+ 
+ 		var dup io.ReadCloser
+-		// https://github.com/zeromicro/go-zero/issues/3564
+-		r.Body, dup = iox.LimitDupReadCloser(r.Body, limitDetailedBodyBytes)
++		r.Body, dup = iox.DupReadCloser(r.Body)
+ 		logs := new(internal.LogCollector)
+ 		next.ServeHTTP(lrw, r.WithContext(internal.WithLogCollector(r.Context(), logs)))
+ 		r.Body = dup
+diff --git a/rest/handler/tracehandler.go b/rest/handler/tracehandler.go
+index 5df49db2e5b4b39f1cbacef7ee805d9969105f26..7a11da4629a2491f3bfd358c2e1bd11eb4925585 100644
+--- a/rest/handler/tracehandler.go
++++ b/rest/handler/tracehandler.go
+@@ -29,8 +29,8 @@ func TraceHandler(serviceName, path string, opts ...TraceOption) func(http.Handl
+ 		opt(&options)
+ 	}
+ 
+-	ignorePaths := collection.NewSet[string]()
+-	ignorePaths.Add(options.traceIgnorePaths...)
++	ignorePaths := collection.NewSet()
++	ignorePaths.AddStr(options.traceIgnorePaths...)
+ 
+ 	return func(next http.Handler) http.Handler {
+ 		tracer := otel.Tracer(trace.TraceName)
+diff --git a/rest/httpx/responses.go b/rest/httpx/responses.go
+index dc1a7ecedcdbb3527da9dafe8ec66aef105c8c9f..6f2de0953921091e4a5be99337b6348aba809922 100644
+--- a/rest/httpx/responses.go
++++ b/rest/httpx/responses.go
+@@ -2,13 +2,13 @@ package httpx
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+ 	"net/http"
+ 	"sync"
+ 
+-	"github.com/zeromicro/go-zero/core/jsonx"
+ 	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/rest/internal/errcode"
+@@ -173,7 +173,7 @@ func doHandleError(w http.ResponseWriter, err error, handler func(error) (int, a
+ }
+ 
+ func doWriteJson(w http.ResponseWriter, code int, v any) error {
+-	bs, err := jsonx.Marshal(v)
++	bs, err := json.Marshal(v)
+ 	if err != nil {
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+ 		return fmt.Errorf("marshal json failed, error: %w", err)
+diff --git a/rest/internal/response/withcoderesponsewriter.go b/rest/internal/response/withcoderesponsewriter.go
+index 9f818b7c6ad2c5134eb3fc158444b71046f0ace4..2a49c79a760c53b20395d90d6a96540655216698 100644
+--- a/rest/internal/response/withcoderesponsewriter.go
++++ b/rest/internal/response/withcoderesponsewriter.go
+@@ -49,12 +49,6 @@ func (w *WithCodeResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+ 	return nil, nil, errors.New("server doesn't support hijacking")
+ }
+ 
+-// Unwrap returns the underlying http.ResponseWriter.
+-// This is used by http.ResponseController to unwrap the response writer.
+-func (w *WithCodeResponseWriter) Unwrap() http.ResponseWriter {
+-	return w.Writer
+-}
+-
+ // Write writes bytes into w.
+ func (w *WithCodeResponseWriter) Write(bytes []byte) (int, error) {
+ 	return w.Writer.Write(bytes)
+diff --git a/rest/server.go b/rest/server.go
+index 3809d876fdb41e5fa6941fc76d1e90b626b735d1..df025ebfc12147f740ea82c41db521ccc5686cc3 100644
+--- a/rest/server.go
++++ b/rest/server.go
+@@ -119,16 +119,6 @@ func (s *Server) Use(middleware Middleware) {
+ 	s.ngin.use(middleware)
+ }
+ 
+-// build builds the Server and binds the routes to the router.
+-func (s *Server) build() error {
+-	return s.ngin.bindRoutes(s.router)
+-}
+-
+-// serve serves the HTTP requests using the Server's router.
+-func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+-	s.router.ServeHTTP(w, r)
+-}
+-
+ // ToMiddleware converts the given handler to a Middleware.
+ func ToMiddleware(handler func(next http.Handler) http.Handler) Middleware {
+ 	return func(handle http.HandlerFunc) http.HandlerFunc {
+@@ -293,6 +283,7 @@ func WithSignature(signature SignatureConf) RouteOption {
+ func WithSSE() RouteOption {
+ 	return func(r *featuredRoutes) {
+ 		r.sse = true
++		r.timeout = ptrOfDuration(0)
+ 	}
+ }
+ 
+@@ -334,6 +325,10 @@ func handleError(err error) {
+ 	panic(err)
+ }
+ 
++func ptrOfDuration(d time.Duration) *time.Duration {
++	return &d
++}
++
+ func validateSecret(secret string) {
+ 	if len(secret) < 8 {
+ 		panic("secret's length can't be less than 8")
+diff --git a/rest/serverless.go b/rest/serverless.go
+deleted file mode 100644
+index 84c25c949b4602a3ed497e70cdb0512bb314cef0..0000000000000000000000000000000000000000
+--- a/rest/serverless.go
++++ /dev/null
+@@ -1,27 +0,0 @@
+-package rest
+-
+-import "net/http"
+-
+-// Serverless is a wrapper around Server that allows it to be used in serverless environments.
+-type Serverless struct {
+-	server *Server
+-}
+-
+-// NewServerless creates a new Serverless instance from the provided Server.
+-func NewServerless(server *Server) (*Serverless, error) {
+-	// Ensure the server is built before using it in a serverless context.
+-	// Why not call server.build() when serving requests,
+-	// is because we need to ensure fail fast behavior.
+-	if err := server.build(); err != nil {
+-		return nil, err
+-	}
+-
+-	return &Serverless{
+-		server: server,
+-	}, nil
+-}
+-
+-// Serve handles HTTP requests by delegating them to the underlying Server instance.
+-func (s *Serverless) Serve(w http.ResponseWriter, r *http.Request) {
+-	s.server.serve(w, r)
+-}
+diff --git a/tools/goctl/api/dartgen/util.go b/tools/goctl/api/dartgen/util.go
+index d781fe2635e1e8697528339828cbb49821d7c2da..79d94e80971c1135251146ee168f4a63a6d95a79 100644
+--- a/tools/goctl/api/dartgen/util.go
++++ b/tools/goctl/api/dartgen/util.go
+@@ -250,9 +250,8 @@ func extractPositionalParamsFromPath(route spec.Route) string {
+ 		return ""
+ 	}
+ 
+-	tagMembers := ds.GetTagMembers(pathTagKey)
+-	params := make([]string, 0, len(tagMembers))
+-	for _, member := range tagMembers {
++	var params []string
++	for _, member := range ds.GetTagMembers(pathTagKey) {
+ 		dartType := member.Type.Name()
+ 		params = append(params, fmt.Sprintf("%s %s", dartType, getPropertyFromMember(member)))
+ 	}
+diff --git a/tools/goctl/api/gogen/genconfig.go b/tools/goctl/api/gogen/genconfig.go
+index 67740f7cbb0ee99c8d144721bc65aeb7cc02811e..0f3920d7f567d4bd5ccabf3d4cac91a937925e9d 100644
+--- a/tools/goctl/api/gogen/genconfig.go
++++ b/tools/goctl/api/gogen/genconfig.go
+@@ -36,13 +36,13 @@ func genConfig(dir string, cfg *config.Config, api *spec.ApiSpec) error {
+ 	}
+ 
+ 	authNames := getAuths(api)
+-	auths := make([]string, 0, len(authNames))
++	var auths []string
+ 	for _, item := range authNames {
+ 		auths = append(auths, fmt.Sprintf("%s %s", item, jwtTemplate))
+ 	}
+ 
+ 	jwtTransNames := getJwtTrans(api)
+-	jwtTransList := make([]string, 0, len(jwtTransNames))
++	var jwtTransList []string
+ 	for _, item := range jwtTransNames {
+ 		jwtTransList = append(jwtTransList, fmt.Sprintf("%s %s", item, jwtTransTemplate))
+ 	}
+diff --git a/tools/goctl/api/gogen/genmain.go b/tools/goctl/api/gogen/genmain.go
+index 21453c54cff26833a4adfb318c164bcabff1923d..154a7dccf46b180b6b30030c92eda32983deb88f 100644
+--- a/tools/goctl/api/gogen/genmain.go
++++ b/tools/goctl/api/gogen/genmain.go
+@@ -43,7 +43,7 @@ func genMain(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+ }
+ 
+ func genMainImports(parentPkg string) string {
+-	imports := make([]string, 0, 5)
++	var imports []string
+ 	imports = append(imports, fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, configDir)))
+ 	imports = append(imports, fmt.Sprintf("\"%s\"", pathx.JoinPackages(parentPkg, handlerDir)))
+ 	imports = append(imports, fmt.Sprintf("\"%s\"\n", pathx.JoinPackages(parentPkg, contextDir)))
+diff --git a/tools/goctl/api/gogen/gentypes.go b/tools/goctl/api/gogen/gentypes.go
+index c99a065110d79c39cdc634dea5714c244ac38325..80d78e51be6407b74f229cc75a589a7f82418f03 100644
+--- a/tools/goctl/api/gogen/gentypes.go
++++ b/tools/goctl/api/gogen/gentypes.go
+@@ -154,7 +154,7 @@ func genTypesWithGroup(dir string, cfg *config.Config, api *spec.ApiSpec) error
+ 	}
+ 
+ 	for group, typeGroup := range groupTypes {
+-		types := make([]spec.Type, 0, len(typeGroup))
++		var types []spec.Type
+ 		for _, v := range typeGroup {
+ 			types = append(types, v)
+ 		}
+diff --git a/tools/goctl/api/parser/g4/ast/type.go b/tools/goctl/api/parser/g4/ast/type.go
+index 7fe1202ae82acc0b00941cf9cb659e18aa4ce997..4302317670686fe95d867ecac21cbba44971be81 100644
+--- a/tools/goctl/api/parser/g4/ast/type.go
++++ b/tools/goctl/api/parser/g4/ast/type.go
+@@ -126,7 +126,7 @@ func (v *ApiVisitor) VisitTypeLit(ctx *api.TypeLitContext) any {
+ // VisitTypeBlock implements from api.BaseApiParserVisitor
+ func (v *ApiVisitor) VisitTypeBlock(ctx *api.TypeBlockContext) any {
+ 	list := ctx.AllTypeBlockBody()
+-	types := make([]TypeExpr, 0, len(list))
++	var types []TypeExpr
+ 	for _, each := range list {
+ 		types = append(types, each.Accept(v).(TypeExpr))
+ 	}
+diff --git a/tools/goctl/api/parser/parser.go b/tools/goctl/api/parser/parser.go
+index 7c3642325a20404781e4587f86577ee094929afa..d29be54ad2c8e30c26f8c103a31bca2171276eec 100644
+--- a/tools/goctl/api/parser/parser.go
++++ b/tools/goctl/api/parser/parser.go
+@@ -125,7 +125,7 @@ func (p parser) fillTypes() error {
+ 	for _, item := range p.ast.Type {
+ 		switch v := (item).(type) {
+ 		case *ast.TypeStruct:
+-			members := make([]spec.Member, 0, len(v.Fields))
++			var members []spec.Member
+ 			for _, item := range v.Fields {
+ 				members = append(members, p.fieldToMember(item))
+ 			}
+diff --git a/tools/goctl/api/parser/readme.md b/tools/goctl/api/parser/readme.md
+index be3356a7bf41b39f5bd3ceaf88b75fc02f7075f0..93eae48059f681cf441058aefc99681f913ff034 100644
+--- a/tools/goctl/api/parser/readme.md
++++ b/tools/goctl/api/parser/readme.md
+@@ -639,7 +639,7 @@ line comments
+ 以下为对应语法块解析后细带doc和comment的写法
+ ``` api
+ // syntaxLit doc
+-syntax = "v1" // syntaxLit comment
++syntax = "v1" // syntaxLit commnet
+ 
+ info(
+   // kvLit doc
+diff --git a/tools/goctl/api/spec/fn.go b/tools/goctl/api/spec/fn.go
+index 9555411b198d0a2eb5435ee3f499c4dc9b987614..441f27a21bcc6278aeb1f63b17e64d0fa8a818a5 100644
+--- a/tools/goctl/api/spec/fn.go
++++ b/tools/goctl/api/spec/fn.go
+@@ -20,11 +20,11 @@ const (
+ var definedKeys = []string{bodyTagKey, formTagKey, pathTagKey, headerTagKey}
+ 
+ func (s Service) JoinPrefix() Service {
+-	groups := make([]Group, 0, len(s.Groups))
++	var groups []Group
+ 	for _, g := range s.Groups {
+ 		prefix := strings.TrimSpace(g.GetAnnotation(RoutePrefixKey))
+ 		prefix = strings.ReplaceAll(prefix, `"`, "")
+-		routes := make([]Route, 0, len(g.Routes))
++		var routes []Route
+ 		for _, r := range g.Routes {
+ 			r.Path = path.Join("/", prefix, r.Path)
+ 			routes = append(routes, r)
+diff --git a/tools/goctl/api/spec/tags.go b/tools/goctl/api/spec/tags.go
+index 31d45303e7f906ea2106f3c379d3b899c192b7b3..1e3d153b3bbe0f7f4a20775c34599723f2b93625 100644
+--- a/tools/goctl/api/spec/tags.go
++++ b/tools/goctl/api/spec/tags.go
+@@ -66,7 +66,7 @@ func (t *Tags) Keys() []string {
+ 	if t == nil {
+ 		return []string{}
+ 	}
+-	keys := make([]string, 0, len(t.tags))
++	var keys []string
+ 	for _, tag := range t.tags {
+ 		keys = append(keys, tag.Key)
+ 	}
+diff --git a/tools/goctl/api/swagger/api.go b/tools/goctl/api/swagger/api.go
+index ed32c45c8529ee26e005ce194cec91858188d946..9f9baba1b2dadefa7129694f7b3467cce45c7b40 100644
+--- a/tools/goctl/api/swagger/api.go
++++ b/tools/goctl/api/swagger/api.go
+@@ -19,7 +19,7 @@ func fillAllStructs(api *spec.ApiSpec) {
+ 	}
+ 
+ 	for _, group := range api.Service.Groups {
+-		routes := make([]spec.Route, 0, len(group.Routes))
++		var routes []spec.Route
+ 		for _, route := range group.Routes {
+ 			route.RequestType = fillStruct("", route.RequestType, structTypes)
+ 			route.ResponseType = fillStruct("", route.ResponseType, structTypes)
+@@ -74,7 +74,7 @@ func fillStruct(parent string, tp spec.Type, allTypes map[string]spec.DefineStru
+ 		val.Members = members
+ 		return val
+ 	case spec.NestedStruct:
+-		members := make([]spec.Member, 0, len(val.Members))
++		var members []spec.Member
+ 		for _, member := range val.Members {
+ 			switch memberType := member.Type.(type) {
+ 			case spec.PointerType:
+diff --git a/tools/goctl/api/swagger/options.go b/tools/goctl/api/swagger/options.go
+index 61b6b6e69c5cc30e5c5e839eb0797efb1bb76c89..a2a35fa4d5f0e767eb6ef3867135c531ea09de30 100644
+--- a/tools/goctl/api/swagger/options.go
++++ b/tools/goctl/api/swagger/options.go
+@@ -67,11 +67,11 @@ func enumsValueFromOptions(options []string) []any {
+ 	}
+ 	for _, option := range options {
+ 		if strings.HasPrefix(option, enumFlag) {
++			var resp = make([]any, 0)
+ 			val := option[8:]
+ 			fields := util.FieldsAndTrimSpace(val, func(r rune) bool {
+ 				return r == '|'
+ 			})
+-			var resp = make([]any, 0, len(fields))
+ 			for _, field := range fields {
+ 				resp = append(resp, field)
+ 			}
+diff --git a/tools/goctl/api/swagger/parameter.go b/tools/goctl/api/swagger/parameter.go
+index 1683161acd003c853f9c00f45c8d664cda6cc734..2f5970535f0be278c378d06d4167e823bc763631 100644
+--- a/tools/goctl/api/swagger/parameter.go
++++ b/tools/goctl/api/swagger/parameter.go
+@@ -9,7 +9,7 @@ import (
+ )
+ 
+ func isPostJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
+-	if !strings.EqualFold(method, http.MethodPost) {
++	if strings.EqualFold(method, http.MethodPost) {
+ 		return "", false
+ 	}
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+diff --git a/tools/goctl/api/swagger/swagger.go b/tools/goctl/api/swagger/swagger.go
+index 106b041ef2fdf3ec4944dd11466661f2051b3507..41966bf775370c0fdad8453290fd7b0a1d599a72 100644
+--- a/tools/goctl/api/swagger/swagger.go
++++ b/tools/goctl/api/swagger/swagger.go
+@@ -244,7 +244,7 @@ func isOptional(_ Context, options []string) bool {
+ 
+ func pathVariable2SwaggerVariable(_ Context, path string) string {
+ 	pathItems := strings.FieldsFunc(path, slashRune)
+-	resp := make([]string, 0, len(pathItems))
++	var resp []string
+ 	for _, v := range pathItems {
+ 		if strings.HasPrefix(v, ":") {
+ 			resp = append(resp, "{"+v[1:]+"}")
+diff --git a/tools/goctl/api/util/case.go b/tools/goctl/api/util/case.go
+index c01115d1fb7848272139750f65d89fadf7bbd3f7..b48f735766ef027db6b302d6d775e5afe1e69358 100644
+--- a/tools/goctl/api/util/case.go
++++ b/tools/goctl/api/util/case.go
+@@ -90,7 +90,7 @@ func ToUpperCase(r rune) rune {
+ 
+ // ToLower returns a copy string by converting it into lower
+ func ToLower(s string) string {
+-	out := make([]rune, 0, len(s))
++	var out []rune
+ 	for _, r := range s {
+ 		out = append(out, ToLowerCase(r))
+ 	}
+@@ -99,7 +99,7 @@ func ToLower(s string) string {
+ 
+ // ToUpper returns a copy string by converting it into upper
+ func ToUpper(s string) string {
+-	out := make([]rune, 0, len(s))
++	var out []rune
+ 	for _, r := range s {
+ 		out = append(out, ToUpperCase(r))
+ 	}
+diff --git a/tools/goctl/config/default.yaml b/tools/goctl/config/default.yaml
+index b61c625704506e3d568658305f89cf21f41e625d..6da7fa6b52d2bf951e00242345e18fbffb82f7b8 100644
+--- a/tools/goctl/config/default.yaml
++++ b/tools/goctl/config/default.yaml
+@@ -10,9 +10,6 @@ model:
+     decimal:
+       null_type: sql.NullFloat64
+       type: float64
+-    numeric:
+-      null_type: sql.NullFloat64
+-      type: float64
+     double:
+       null_type: sql.NullFloat64
+       type: float64
+diff --git a/tools/goctl/go.mod b/tools/goctl/go.mod
+index 386a0a5667862737a41c240d05aea2751f18332f..80fc74467061b6f89a341dd394ec5801d8573ef6 100644
+--- a/tools/goctl/go.mod
++++ b/tools/goctl/go.mod
+@@ -11,12 +11,12 @@ require (
+ 	github.com/gookit/color v1.5.4
+ 	github.com/iancoleman/strcase v0.3.0
+ 	github.com/spf13/cobra v1.9.1
+-	github.com/spf13/pflag v1.0.7
++	github.com/spf13/pflag v1.0.6
+ 	github.com/stretchr/testify v1.10.0
+ 	github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1
+ 	github.com/zeromicro/antlr v0.0.1
+ 	github.com/zeromicro/ddl-parser v1.0.5
+-	github.com/zeromicro/go-zero v1.8.5
++	github.com/zeromicro/go-zero v1.8.4
+ 	golang.org/x/text v0.22.0
+ 	google.golang.org/grpc v1.65.0
+ 	google.golang.org/protobuf v1.36.5
+@@ -73,7 +73,7 @@ require (
+ 	github.com/prometheus/client_model v0.6.1 // indirect
+ 	github.com/prometheus/common v0.62.0 // indirect
+ 	github.com/prometheus/procfs v0.15.1 // indirect
+-	github.com/redis/go-redis/v9 v9.11.0 // indirect
++	github.com/redis/go-redis/v9 v9.10.0 // indirect
+ 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+ 	github.com/xo/terminfo v0.0.0-20210125001918-ca9a967f8778 // indirect
+ 	github.com/yuin/gopher-lua v1.1.1 // indirect
+diff --git a/tools/goctl/go.sum b/tools/goctl/go.sum
+index 74bcf5866fa91167535c0272b37505a0bd688b1b..cf141dc0f43925016ce3c2e584d36851d779ca1d 100644
+--- a/tools/goctl/go.sum
++++ b/tools/goctl/go.sum
+@@ -148,8 +148,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.11.0 h1:E3S08Gl/nJNn5vkxd2i78wZxWAPNZgUNTp8WIJUAiIs=
+-github.com/redis/go-redis/v9 v9.11.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.10.0 h1:FxwK3eV8p/CQa0Ch276C7u2d0eNC9kCmAYQ7mCXCzVs=
++github.com/redis/go-redis/v9 v9.10.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rogpeppe/go-internal v1.11.0 h1:cWPaGQEPrBb5/AsnsZesgZZ9yb1OQ+GOISoDNXVBh4M=
+ github.com/rogpeppe/go-internal v1.11.0/go.mod h1:ddIwULY96R17DhadqLgMfk9H9tvdUzkipdSkR5nkCZA=
+ github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+@@ -157,9 +157,8 @@ github.com/spaolacci/murmur3 v1.1.0 h1:7c1g84S4BPRrfL5Xrdp6fOJ206sU9y293DDHaoy0b
+ github.com/spaolacci/murmur3 v1.1.0/go.mod h1:JwIasOWyU6f++ZhiEuf87xNszmSA2myDM2Kzu9HwQUA=
+ github.com/spf13/cobra v1.9.1 h1:CXSaggrXdbHK9CF+8ywj8Amf7PBRmPCOJugH954Nnlo=
+ github.com/spf13/cobra v1.9.1/go.mod h1:nDyEzZ8ogv936Cinf6g1RU9MRY64Ir93oCnqb9wxYW0=
++github.com/spf13/pflag v1.0.6 h1:jFzHGLGAlb3ruxLB8MhbI6A8+AQX/2eW4qeyNZXNp2o=
+ github.com/spf13/pflag v1.0.6/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
+-github.com/spf13/pflag v1.0.7 h1:vN6T9TfwStFPFM5XzjsvmzZkLuaLX+HS+0SeFLRgU6M=
+-github.com/spf13/pflag v1.0.7/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
+ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+ github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+ github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+@@ -186,8 +185,8 @@ github.com/zeromicro/antlr v0.0.1 h1:CQpIn/dc0pUjgGQ81y98s/NGOm2Hfru2NNio2I9mQgk
+ github.com/zeromicro/antlr v0.0.1/go.mod h1:nfpjEwFR6Q4xGDJMcZnCL9tEfQRgszMwu3rDz2Z+p5M=
+ github.com/zeromicro/ddl-parser v1.0.5 h1:LaVqHdzMTjasua1yYpIYaksxKqRzFrEukj2Wi2EbWaQ=
+ github.com/zeromicro/ddl-parser v1.0.5/go.mod h1:ISU/8NuPyEpl9pa17Py9TBPetMjtsiHrb9f5XGiYbo8=
+-github.com/zeromicro/go-zero v1.8.5 h1:YkdQhYllE+BPOrxcni0oCewebs7qHfXvjN9glnpcmJQ=
+-github.com/zeromicro/go-zero v1.8.5/go.mod h1:P0DKW1vJx+2J3TReptbeg0H9tRSvehymr0HX4SCfZ6g=
++github.com/zeromicro/go-zero v1.8.4 h1:3s7kOoThCnkDoqCafsqSX58Y9osYTBIa5QEmomw07TE=
++github.com/zeromicro/go-zero v1.8.4/go.mod h1:eM5f6If/RF+jG1wSCmlvfXD2h2l23vJwETI8oDpjYt4=
+ go.etcd.io/etcd/api/v3 v3.5.15 h1:3KpLJir1ZEBrYuV2v+Twaa/e2MdDCEZ/70H+lzEiwsk=
+ go.etcd.io/etcd/api/v3 v3.5.15/go.mod h1:N9EhGzXq58WuMllgH9ZvnEr7SI9pS0k0+DHZezGp7jM=
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5fWlA=
+diff --git a/tools/goctl/internal/version/version.go b/tools/goctl/internal/version/version.go
+index 6c6795f36e7d6cedd831c897fed407d72a33470b..2a58b6e8ba5e014aad2375bbefe158b5a0d12d8a 100644
+--- a/tools/goctl/internal/version/version.go
++++ b/tools/goctl/internal/version/version.go
+@@ -6,7 +6,7 @@ import (
+ )
+ 
+ // BuildVersion is the version of goctl.
+-const BuildVersion = "1.8.5"
++const BuildVersion = "1.8.4"
+ 
+ var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-bata": 2, "beta": 3, "released": 4, "": 5}
+ 
+diff --git a/tools/goctl/model/sql/command/command.go b/tools/goctl/model/sql/command/command.go
+index 27760521d318a7c1edf196f86ff112e97596f1d3..e67c2dc755a1f4335f7b1880e0d7caa03b0eb42f 100644
+--- a/tools/goctl/model/sql/command/command.go
++++ b/tools/goctl/model/sql/command/command.go
+@@ -172,7 +172,7 @@ func (p pattern) Match(s string) bool {
+ }
+ 
+ func (p pattern) list() []string {
+-	ret := make([]string, 0, len(p))
++	var ret []string
+ 	for v := range p {
+ 		ret = append(ret, v)
+ 	}
+diff --git a/tools/goctl/model/sql/gen/keys.go b/tools/goctl/model/sql/gen/keys.go
+index b752c95c44b49ca6df2dcff6a87e79f41b20b7d5..ff4f931858121f8f1939b763e9aba01ffa10b2f0 100644
+--- a/tools/goctl/model/sql/gen/keys.go
++++ b/tools/goctl/model/sql/gen/keys.go
+@@ -39,7 +39,7 @@ type Join []string
+ 
+ func genCacheKeys(prefix string, table parser.Table) (Key, []Key) {
+ 	var primaryKey Key
+-	uniqueKey := make([]Key, 0, len(table.UniqueIndex))
++	var uniqueKey []Key
+ 	primaryKey = genCacheKey(prefix, table.Db, table.Name, []*parser.Field{&table.PrimaryKey.Field})
+ 	for _, each := range table.UniqueIndex {
+ 		uniqueKey = append(uniqueKey, genCacheKey(prefix, table.Db, table.Name, each))
+diff --git a/tools/goctl/model/sql/model/postgresqlmodel.go b/tools/goctl/model/sql/model/postgresqlmodel.go
+index e80855f2a998ae563a69280971ccf3bc0bf11c13..28c74f5a3fb8a600a40c1e2472ee3be5d578327f 100644
+--- a/tools/goctl/model/sql/model/postgresqlmodel.go
++++ b/tools/goctl/model/sql/model/postgresqlmodel.go
+@@ -9,6 +9,8 @@ import (
+ 
+ var p2m = map[string]string{
+ 	"int8":        "bigint",
++	"numeric":     "double",
++	"decimal":     "double",
+ 	"float8":      "double",
+ 	"float4":      "float",
+ 	"int2":        "smallint",
+diff --git a/zrpc/internal/serverinterceptors/statinterceptor.go b/zrpc/internal/serverinterceptors/statinterceptor.go
+index 32279ba5abb7992e71d87a82105e6818790beedb..b98721f556b79b492789cd25915570acf1fecfe8 100644
+--- a/zrpc/internal/serverinterceptors/statinterceptor.go
++++ b/zrpc/internal/serverinterceptors/statinterceptor.go
+@@ -43,8 +43,8 @@ func SetSlowThreshold(threshold time.Duration) {
+ 
+ // UnaryStatInterceptor returns a func that uses given metrics to report stats.
+ func UnaryStatInterceptor(metrics *stat.Metrics, conf StatConf) grpc.UnaryServerInterceptor {
+-	staticNotLoggingContentMethods := collection.NewSet[string]()
+-	staticNotLoggingContentMethods.Add(conf.IgnoreContentMethods...)
++	staticNotLoggingContentMethods := collection.NewSet()
++	staticNotLoggingContentMethods.AddStr(conf.IgnoreContentMethods...)
+ 
+ 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo,
+ 		handler grpc.UnaryHandler) (resp any, err error) {
+@@ -68,7 +68,7 @@ func isSlow(duration, durationThreshold time.Duration) bool {
+ }
+ 
+ func logDuration(ctx context.Context, method string, req any, duration time.Duration,
+-	ignoreMethods *collection.Set[string], durationThreshold time.Duration) {
++	ignoreMethods *collection.Set, durationThreshold time.Duration) {
+ 	var addr string
+ 	client, ok := peer.FromContext(ctx)
+ 	if ok {
+@@ -92,7 +92,7 @@ func logDuration(ctx context.Context, method string, req any, duration time.Dura
+ 	}
+ }
+ 
+-func shouldLogContent(method string, ignoreMethods *collection.Set[string]) bool {
++func shouldLogContent(method string, ignoreMethods *collection.Set) bool {
+ 	_, ok := ignoreContentMethods.Load(method)
+ 	return !ok && !ignoreMethods.Contains(method)
+ }

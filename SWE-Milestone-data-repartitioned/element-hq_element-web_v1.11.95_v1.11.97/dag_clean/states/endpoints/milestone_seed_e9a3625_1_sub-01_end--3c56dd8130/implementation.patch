@@ -1,0 +1,1296 @@
+diff --git a/src/@types/global.d.ts b/src/@types/global.d.ts
+index 1df84ad344b8815b34cba7aa73b5202d0cdfe2a3..3bbeda067bde522f8924ce76eaa7d1cf999fc0b1 100644
+--- a/src/@types/global.d.ts
++++ b/src/@types/global.d.ts
+@@ -47,6 +47,7 @@ import { type DeepReadonly } from "./common";
+ import type MatrixChat from "../components/structures/MatrixChat";
+ import { type InitialCryptoSetupStore } from "../stores/InitialCryptoSetupStore";
+ import { type ModuleApiType } from "../modules/Api.ts";
++import type { RoomListStoreV3Class } from "../stores/room-list-v3/RoomListStoreV3.ts";
+ 
+ /* eslint-disable @typescript-eslint/naming-convention */
+ 
+@@ -99,6 +100,7 @@ declare global {
+         mxToastStore: ToastStore;
+         mxDeviceListener: DeviceListener;
+         mxRoomListStore: RoomListStore;
++        mxRoomListStoreV3: RoomListStoreV3Class;
+         mxRoomListLayoutStore: RoomListLayoutStore;
+         mxPlatformPeg: PlatformPeg;
+         mxIntegrationManagers: typeof IntegrationManagers;
+diff --git a/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx b/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9e141c13790d72cc361336990d41077c57a0bd23
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/MessagePreviewViewModel.tsx
+@@ -0,0 +1,57 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import { useCallback, useEffect, useState } from "react";
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import { type MessagePreview, MessagePreviewStore } from "../../../stores/room-list/MessagePreviewStore";
++import { useEventEmitter } from "../../../hooks/useEventEmitter";
++
++interface MessagePreviewViewState {
++    /**
++     * A string representation of the message preview if available.
++     */
++    message?: string;
++}
++
++/**
++ * View model for rendering a message preview for a given room list item.
++ * @param room The room for which we're rendering the message preview.
++ * @see {@link MessagePreviewViewState} for what this view model returns.
++ */
++export function useMessagePreviewViewModel(room: Room): MessagePreviewViewState {
++    const [messagePreview, setMessagePreview] = useState<MessagePreview | null>(null);
++
++    const updatePreview = useCallback(async (): Promise<void> => {
++        /**
++         * The second argument to getPreviewForRoom is a tag id which doesn't really make
++         * much sense within the context of the new room list. We can pass an empty string
++         * to match all tags for now but we should remember to actually change the implementation
++         * in the store once we remove the legacy room list.
++         */
++        const newPreview = await MessagePreviewStore.instance.getPreviewForRoom(room, "");
++        setMessagePreview(newPreview);
++    }, [room]);
++
++    /**
++     * Update when the message preview has changed for this room.
++     */
++    useEventEmitter(MessagePreviewStore.instance, MessagePreviewStore.getPreviewChangedEventName(room), () => {
++        updatePreview();
++    });
++
++    /**
++     * Do an initial fetch of the message preview.
++     */
++    useEffect(() => {
++        updatePreview();
++    }, [updatePreview]);
++
++    return {
++        message: messagePreview?.text,
++    };
++}
+diff --git a/src/components/viewmodels/roomlist/RoomListViewModel.tsx b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+index 1dacd030e2d46dc288738c81ba23e95bb21a757b..a7dc25b312e36901dcd22724a2e88351a3f707cd 100644
+--- a/src/components/viewmodels/roomlist/RoomListViewModel.tsx
++++ b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+@@ -5,14 +5,62 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
++import { useCallback } from "react";
++
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import type { ViewRoomPayload } from "../../../dispatcher/payloads/ViewRoomPayload";
++import dispatcher from "../../../dispatcher/dispatcher";
++import { Action } from "../../../dispatcher/actions";
++import { type PrimaryFilter, type SecondaryFilters, useFilteredRooms } from "./useFilteredRooms";
++import { type SortOption, useSorter } from "./useSorter";
++import { useMessagePreviewToggle } from "./useMessagePreviewToggle";
+ 
+ export interface RoomListViewState {
+     /**
+      * A list of rooms to be displayed in the left panel.
+      */
+     rooms: Room[];
++
++    /**
++     * Open the room having given roomId.
++     */
++    openRoom: (roomId: string) => void;
++
++    /**
++     * A list of objects that provide the view enough information
++     * to render primary room filters.
++     */
++    primaryFilters: PrimaryFilter[];
++
++    /**
++     * A function to activate a given secondary filter.
++     */
++    activateSecondaryFilter: (filter: SecondaryFilters) => void;
++
++    /**
++     * The currently active secondary filter.
++     */
++    activeSecondaryFilter: SecondaryFilters;
++
++    /**
++     * Change the sort order of the room-list.
++     */
++    sort: (option: SortOption) => void;
++
++    /**
++     * The currently active sort option.
++     */
++    activeSortOption: SortOption;
++
++    /**
++     * Whether message previews must be shown or not.
++     */
++    shouldShowMessagePreview: boolean;
++
++    /**
++     * A function to turn on/off message previews.
++     */
++    toggleMessagePreview: () => void;
+ }
+ 
+ /**
+@@ -20,6 +68,27 @@ export interface RoomListViewState {
+  * @see {@link RoomListViewState} for more information about what this view model returns.
+  */
+ export function useRoomListViewModel(): RoomListViewState {
+-    const rooms = RoomListStoreV3.instance.getSortedRooms();
+-    return { rooms };
++    const { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter } = useFilteredRooms();
++    const { activeSortOption, sort } = useSorter();
++    const { shouldShowMessagePreview, toggleMessagePreview } = useMessagePreviewToggle();
++
++    const openRoom = useCallback((roomId: string): void => {
++        dispatcher.dispatch<ViewRoomPayload>({
++            action: Action.ViewRoom,
++            room_id: roomId,
++            metricsTrigger: "RoomList",
++        });
++    }, []);
++
++    return {
++        rooms,
++        openRoom,
++        primaryFilters,
++        activateSecondaryFilter,
++        activeSecondaryFilter,
++        activeSortOption,
++        sort,
++        shouldShowMessagePreview,
++        toggleMessagePreview,
++    };
+ }
+diff --git a/src/components/viewmodels/roomlist/useFilteredRooms.tsx b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b78dcd16b19216d9bcae49517644ac039ae0c0c
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+@@ -0,0 +1,180 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { useCallback, useMemo, useState } from "react";
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import { FilterKey } from "../../../stores/room-list-v3/skip-list/filters";
++import { _t, _td, type TranslationKey } from "../../../languageHandler";
++import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import { LISTS_UPDATE_EVENT } from "../../../stores/room-list/RoomListStore";
++import { useEventEmitter } from "../../../hooks/useEventEmitter";
++
++/**
++ * Provides information about a primary filter.
++ * A primary filter is a commonly used filter that is given
++ * more precedence in the UI. For eg, primary filters may be
++ * rendered as pills above the room list.
++ */
++export interface PrimaryFilter {
++    // A function to toggle this filter on and off.
++    toggle: () => void;
++    // Whether this filter is currently applied
++    active: boolean;
++    // Text that can be used in the UI to represent this filter.
++    name: string;
++}
++
++interface FilteredRooms {
++    primaryFilters: PrimaryFilter[];
++    rooms: Room[];
++    activateSecondaryFilter: (filter: SecondaryFilters) => void;
++    activeSecondaryFilter: SecondaryFilters;
++}
++
++const filterKeyToNameMap: Map<FilterKey, TranslationKey> = new Map([
++    [FilterKey.UnreadFilter, _td("room_list|filters|unread")],
++    [FilterKey.FavouriteFilter, _td("room_list|filters|favourite")],
++    [FilterKey.PeopleFilter, _td("room_list|filters|people")],
++    [FilterKey.RoomsFilter, _td("room_list|filters|rooms")],
++]);
++
++/**
++ * These are the secondary filters which are not prominently shown
++ * in the UI.
++ */
++export const enum SecondaryFilters {
++    AllActivity,
++    MentionsOnly,
++    InvitesOnly,
++    LowPriority,
++}
++
++/**
++ * A map from {@link SecondaryFilters} which the UI understands to
++ * {@link FilterKey} which the store understands.
++ */
++const secondaryFiltersToFilterKeyMap = new Map([
++    [SecondaryFilters.AllActivity, undefined],
++    [SecondaryFilters.MentionsOnly, FilterKey.MentionsFilter],
++    [SecondaryFilters.InvitesOnly, FilterKey.InvitesFilter],
++    [SecondaryFilters.LowPriority, FilterKey.LowPriorityFilter],
++]);
++
++/**
++ * Use this function to determine if a given primary filter is compatible with
++ * a given secondary filter. Practically, this determines whether it makes sense
++ * to expose two filters together in the UI - for eg, it does not make sense to show the
++ * favourite primary filter if the active secondary filter is low priority.
++ * @param primary Primary filter key
++ * @param secondary Secondary filter key
++ * @returns true if compatible, false otherwise
++ */
++function isPrimaryFilterCompatible(primary: FilterKey, secondary: FilterKey): boolean {
++    if (secondary === FilterKey.MentionsFilter) {
++        if (primary === FilterKey.UnreadFilter) return false;
++    } else if (secondary === FilterKey.InvitesFilter) {
++        if (primary === FilterKey.UnreadFilter || primary === FilterKey.FavouriteFilter) return false;
++    } else if (secondary === FilterKey.LowPriorityFilter) {
++        if (primary === FilterKey.FavouriteFilter) return false;
++    }
++    return true;
++}
++
++/**
++ * Track available filters and provide a filtered list of rooms.
++ */
++export function useFilteredRooms(): FilteredRooms {
++    /**
++     * Primary filter refers to the pill based filters
++     * rendered above the room list.
++     */
++    const [primaryFilter, setPrimaryFilter] = useState<FilterKey | undefined>();
++    /**
++     * Secondary filters are also filters but they are hidden
++     * away in a popup menu.
++     */
++    const [activeSecondaryFilter, setActiveSecondaryFilter] = useState<SecondaryFilters>(SecondaryFilters.AllActivity);
++
++    const secondaryFilter = useMemo(
++        () => secondaryFiltersToFilterKeyMap.get(activeSecondaryFilter),
++        [activeSecondaryFilter],
++    );
++
++    const [rooms, setRooms] = useState(() => RoomListStoreV3.instance.getSortedRoomsInActiveSpace());
++
++    const updateRoomsFromStore = useCallback((filters: FilterKey[] = []): void => {
++        const newRooms = RoomListStoreV3.instance.getSortedRoomsInActiveSpace(filters);
++        setRooms(newRooms);
++    }, []);
++
++    const filterUndefined = (array: (FilterKey | undefined)[]): FilterKey[] =>
++        array.filter((f) => f !== undefined) as FilterKey[];
++
++    const getAppliedFilters = (): FilterKey[] => {
++        return filterUndefined([primaryFilter, secondaryFilter]);
++    };
++
++    useEventEmitter(RoomListStoreV3.instance, LISTS_UPDATE_EVENT, () => {
++        const filters = getAppliedFilters();
++        updateRoomsFromStore(filters);
++    });
++
++    /**
++     * Secondary filters are activated using this function.
++     * This is different to how primary filters work because the secondary
++     * filters are static i.e they are always available and don't need to be
++     * hidden.
++     */
++    const activateSecondaryFilter = useCallback(
++        (filter: SecondaryFilters): void => {
++            // If the filter is already active, just return.
++            if (filter === activeSecondaryFilter) return;
++
++            // SecondaryFilter is an enum for the UI, let's convert it to something
++            // that the store will understand.
++            const secondary = secondaryFiltersToFilterKeyMap.get(filter);
++            setActiveSecondaryFilter(filter);
++
++            // Reset any active primary filters.
++            setPrimaryFilter(undefined);
++
++            updateRoomsFromStore(filterUndefined([secondary]));
++        },
++        [activeSecondaryFilter, updateRoomsFromStore],
++    );
++
++    /**
++     * This tells the view which primary filters are available, how to toggle them
++     * and whether a given primary filter is active. @see {@link PrimaryFilter}
++     */
++    const primaryFilters = useMemo(() => {
++        const createPrimaryFilter = (key: FilterKey, name: string): PrimaryFilter => {
++            return {
++                toggle: () => {
++                    setPrimaryFilter((currentFilter) => {
++                        const filter = currentFilter === key ? undefined : key;
++                        updateRoomsFromStore(filterUndefined([filter, secondaryFilter]));
++                        return filter;
++                    });
++                },
++                active: primaryFilter === key,
++                name,
++            };
++        };
++        const filters: PrimaryFilter[] = [];
++        for (const [key, name] of filterKeyToNameMap.entries()) {
++            if (secondaryFilter && !isPrimaryFilterCompatible(key, secondaryFilter)) {
++                continue;
++            }
++            filters.push(createPrimaryFilter(key, _t(name)));
++        }
++        return filters;
++    }, [primaryFilter, updateRoomsFromStore, secondaryFilter]);
++
++    return { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter };
++}
+diff --git a/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx b/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..27ccd4010664c114699d734358698358078000e0
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useMessagePreviewToggle.tsx
+@@ -0,0 +1,36 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++import { useCallback, useState } from "react";
++
++import SettingsStore from "../../../settings/SettingsStore";
++import { SettingLevel } from "../../../settings/SettingLevel";
++
++interface MessagePreviewToggleState {
++    shouldShowMessagePreview: boolean;
++    toggleMessagePreview: () => void;
++}
++
++/**
++ * This hook:
++ * - Provides a state that tracks whether message previews are turned on or off.
++ * - Provides a function to toggle message previews.
++ */
++export function useMessagePreviewToggle(): MessagePreviewToggleState {
++    const [shouldShowMessagePreview, setShouldShowMessagePreview] = useState(() =>
++        SettingsStore.getValue("RoomList.showMessagePreview"),
++    );
++
++    const toggleMessagePreview = useCallback((): void => {
++        setShouldShowMessagePreview((current) => {
++            const toggled = !current;
++            SettingsStore.setValue("RoomList.showMessagePreview", null, SettingLevel.DEVICE, toggled);
++            return toggled;
++        });
++    }, []);
++
++    return { toggleMessagePreview, shouldShowMessagePreview };
++}
+diff --git a/src/components/viewmodels/roomlist/useSorter.ts b/src/components/viewmodels/roomlist/useSorter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7a880d430f0c00624fff9beeaa3bf53da848471
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useSorter.ts
+@@ -0,0 +1,62 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++import { useState } from "react";
++
++import RoomListStoreV3 from "../../../stores/room-list-v3/RoomListStoreV3";
++import { SortingAlgorithm } from "../../../stores/room-list-v3/skip-list/sorters";
++import SettingsStore from "../../../settings/SettingsStore";
++
++/**
++ * Sorting options made available to the view.
++ */
++export const enum SortOption {
++    Activity = SortingAlgorithm.Recency,
++    AToZ = SortingAlgorithm.Alphabetic,
++}
++
++/**
++ * {@link SortOption} holds almost the same information as
++ * {@link SortingAlgorithm}. This is done intentionally to
++ * prevent the view from having a dependence on the
++ * model (which is the store in this case).
++ */
++const sortingAlgorithmToSortingOption = {
++    [SortingAlgorithm.Alphabetic]: SortOption.AToZ,
++    [SortingAlgorithm.Recency]: SortOption.Activity,
++};
++
++const sortOptionToSortingAlgorithm = {
++    [SortOption.AToZ]: SortingAlgorithm.Alphabetic,
++    [SortOption.Activity]: SortingAlgorithm.Recency,
++};
++
++interface SortState {
++    sort: (option: SortOption) => void;
++    activeSortOption: SortOption;
++}
++
++/**
++ * This hook does two things:
++ * - Provides a way to track the currently active sort option.
++ * - Provides a function to resort the room list.
++ */
++export function useSorter(): SortState {
++    const [activeSortingAlgorithm, setActiveSortingAlgorithm] = useState(() =>
++        SettingsStore.getValue("RoomList.preferredSorting"),
++    );
++
++    const sort = (option: SortOption): void => {
++        const sortingAlgorithm = sortOptionToSortingAlgorithm[option];
++        RoomListStoreV3.instance.resort(sortingAlgorithm);
++        setActiveSortingAlgorithm(sortingAlgorithm);
++    };
++
++    return {
++        sort,
++        activeSortOption: sortingAlgorithmToSortingOption[activeSortingAlgorithm!],
++    };
++}
+diff --git a/src/components/views/avatars/RoomAvatar.tsx b/src/components/views/avatars/RoomAvatar.tsx
+index 9e75652dcce92bb912311e85a87d5117582351cf..e1e3e9157d60d0f010120a1e768b9c14a9b212bf 100644
+--- a/src/components/views/avatars/RoomAvatar.tsx
++++ b/src/components/views/avatars/RoomAvatar.tsx
+@@ -1,5 +1,5 @@
+ /*
+-Copyright 2024 New Vector Ltd.
++Copyright 2024, 2025 New Vector Ltd.
+ Copyright 2015, 2016 OpenMarket Ltd
+ 
+ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+@@ -7,7 +7,14 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import React, { type ComponentProps } from "react";
+-import { type Room, RoomStateEvent, type MatrixEvent, EventType, RoomType } from "matrix-js-sdk/src/matrix";
++import {
++    type Room,
++    RoomStateEvent,
++    type MatrixEvent,
++    EventType,
++    RoomType,
++    KnownMembership,
++} from "matrix-js-sdk/src/matrix";
+ 
+ import BaseAvatar from "./BaseAvatar";
+ import ImageView from "../elements/ImageView";
+@@ -19,6 +26,7 @@ import { mediaFromMxc } from "../../../customisations/Media";
+ import { type IOOBData } from "../../../stores/ThreepidInviteStore";
+ import { LocalRoom } from "../../../models/LocalRoom";
+ import { filterBoolean } from "../../../utils/arrays";
++import SettingsStore from "../../../settings/SettingsStore";
+ 
+ interface IProps extends Omit<ComponentProps<typeof BaseAvatar>, "name" | "idName" | "url" | "onClick"> {
+     // Room may be left unset here, but if it is,
+@@ -86,6 +94,13 @@ export default class RoomAvatar extends React.Component<IProps, IState> {
+     };
+ 
+     private static getImageUrls(props: IProps): string[] {
++        const myMembership = props.room?.getMyMembership();
++        if (myMembership === KnownMembership.Invite || !myMembership) {
++            if (SettingsStore.getValue("showAvatarsOnInvites") === false) {
++                // The user has opted out of showing avatars, so return no urls here.
++                return [];
++            }
++        }
+         let oobAvatar: string | null = null;
+         if (props.oobData.avatarUrl) {
+             oobAvatar = mediaFromMxc(props.oobData.avatarUrl).getThumbnailOfSourceHttp(
+diff --git a/src/components/views/settings/tabs/user/PreferencesUserSettingsTab.tsx b/src/components/views/settings/tabs/user/PreferencesUserSettingsTab.tsx
+index cb22bb2a0cfad834364527578b3b622ba13b316e..a7166fdb6bd2b7eaa2ac9820048812cc9cec3830 100644
+--- a/src/components/views/settings/tabs/user/PreferencesUserSettingsTab.tsx
++++ b/src/components/views/settings/tabs/user/PreferencesUserSettingsTab.tsx
+@@ -1,5 +1,5 @@
+ /*
+-Copyright 2024 New Vector Ltd.
++Copyright 2024, 2025 New Vector Ltd.
+ Copyright 2019-2023 The Matrix.org Foundation C.I.C.
+ Copyright 2019 Michael Telatynski <7t3chguy@gmail.com>
+ 
+@@ -116,7 +116,7 @@ const SpellCheckSection: React.FC = () => {
+ };
+ 
+ export default class PreferencesUserSettingsTab extends React.Component<IProps, IState> {
+-    private static ROOM_LIST_SETTINGS: BooleanSettingKey[] = ["breadcrumbs"];
++    private static ROOM_LIST_SETTINGS: BooleanSettingKey[] = ["breadcrumbs", "showAvatarsOnInvites"];
+ 
+     private static SPACES_SETTINGS: BooleanSettingKey[] = ["Spaces.allRoomsInHome"];
+ 
+diff --git a/src/i18n/strings/en_EN.json b/src/i18n/strings/en_EN.json
+index 19fd6475d8a52e893b64e7771df805d99d437c95..5607a613eb7e90cecf391a9a66c2247ff8b21f59 100644
+--- a/src/i18n/strings/en_EN.json
++++ b/src/i18n/strings/en_EN.json
+@@ -104,7 +104,6 @@
+         "reply": "Reply",
+         "reply_in_thread": "Reply in thread",
+         "report_content": "Report Content",
+-        "report_room": "Report room",
+         "resend": "Resend",
+         "reset": "Reset",
+         "resume": "Resume",
+@@ -1811,12 +1810,6 @@
+         "spam_or_propaganda": "Spam or propaganda",
+         "toxic_behaviour": "Toxic Behaviour"
+     },
+-    "report_room": {
+-        "description": "Report this room to your homeserver admin. This will send the room's unique ID, but if messages are encrypted, the administrator won't be able to read them or view shared files.",
+-        "reason_placeholder": " Reason for reporting...",
+-        "sent": "Your report was sent.",
+-        "title": "Report Room"
+-    },
+     "restore_key_backup_dialog": {
+         "count_of_decryption_failures": "Failed to decrypt %(failedCount)s sessions!",
+         "count_of_successfully_restored_keys": "Successfully restored %(sessionCount)s keys",
+diff --git a/src/settings/Settings.tsx b/src/settings/Settings.tsx
+index 439b0c112f5ed5d3a0e9d4982b2f5c15b42cac2f..d887c9bb49b0b2f45ca899c35b1ffa679d8c93bb 100644
+--- a/src/settings/Settings.tsx
++++ b/src/settings/Settings.tsx
+@@ -1,5 +1,5 @@
+ /*
+-Copyright 2024 New Vector Ltd.
++Copyright 2024, 2025 New Vector Ltd.
+ Copyright 2018-2024 The Matrix.org Foundation C.I.C.
+ Copyright 2017 Travis Ralston
+ 
+@@ -44,6 +44,7 @@ import { type ReleaseAnnouncementData } from "../stores/ReleaseAnnouncementStore
+ import { type Json, type JsonValue } from "../@types/json.ts";
+ import { type RecentEmojiData } from "../emojipicker/recent.ts";
+ import { type Assignable } from "../@types/common.ts";
++import { SortingAlgorithm } from "../stores/room-list-v3/skip-list/sorters/index.ts";
+ 
+ export const defaultWatchManager = new WatchManager();
+ 
+@@ -311,6 +312,9 @@ export interface Settings {
+     "lowBandwidth": IBaseSetting<boolean>;
+     "fallbackICEServerAllowed": IBaseSetting<boolean | null>;
+     "showImages": IBaseSetting<boolean>;
++    "showAvatarsOnInvites": IBaseSetting<boolean>;
++    "RoomList.preferredSorting": IBaseSetting<SortingAlgorithm>;
++    "RoomList.showMessagePreview": IBaseSetting<boolean>;
+     "RightPanel.phasesGlobal": IBaseSetting<IRightPanelForRoomStored | null>;
+     "RightPanel.phases": IBaseSetting<IRightPanelForRoomStored | null>;
+     "enableEventIndexing": IBaseSetting<boolean>;
+@@ -1114,6 +1118,19 @@ export const SETTINGS: Settings = {
+         displayName: _td("settings|image_thumbnails"),
+         default: true,
+     },
++    "showAvatarsOnInvites": {
++        supportedLevels: LEVELS_ACCOUNT_SETTINGS,
++        displayName: _td("settings|invite_avatars"),
++        default: true,
++    },
++    "RoomList.preferredSorting": {
++        supportedLevels: [SettingLevel.DEVICE],
++        default: SortingAlgorithm.Recency,
++    },
++    "RoomList.showMessagePreview": {
++        supportedLevels: [SettingLevel.DEVICE],
++        default: false,
++    },
+     "RightPanel.phasesGlobal": {
+         supportedLevels: [SettingLevel.DEVICE],
+         default: null,
+diff --git a/src/stores/room-list-v3/RoomListStoreV3.ts b/src/stores/room-list-v3/RoomListStoreV3.ts
+index 36a05f8357ae61b47a1f1715f5d92a48b1ef873c..3d4af05e3908dd41f431d46e91d2c7915817de89 100644
+--- a/src/stores/room-list-v3/RoomListStoreV3.ts
++++ b/src/stores/room-list-v3/RoomListStoreV3.ts
+@@ -11,6 +11,7 @@ import { EventType } from "matrix-js-sdk/src/matrix";
+ import type { EmptyObject, Room, RoomState } from "matrix-js-sdk/src/matrix";
+ import type { MatrixDispatcher } from "../../dispatcher/dispatcher";
+ import type { ActionPayload } from "../../dispatcher/payloads";
++import type { FilterKey } from "./skip-list/filters";
+ import { AsyncStoreWithClient } from "../AsyncStoreWithClient";
+ import SettingsStore from "../../settings/SettingsStore";
+ import { VisibilityProvider } from "../room-list/filters/VisibilityProvider";
+@@ -23,6 +24,29 @@ import { readReceiptChangeIsFor } from "../../utils/read-receipts";
+ import { EffectiveMembership, getEffectiveMembership, getEffectiveMembershipTag } from "../../utils/membership";
+ import SpaceStore from "../spaces/SpaceStore";
+ import { UPDATE_HOME_BEHAVIOUR, UPDATE_SELECTED_SPACE } from "../spaces";
++import { FavouriteFilter } from "./skip-list/filters/FavouriteFilter";
++import { UnreadFilter } from "./skip-list/filters/UnreadFilter";
++import { PeopleFilter } from "./skip-list/filters/PeopleFilter";
++import { RoomsFilter } from "./skip-list/filters/RoomsFilter";
++import { InvitesFilter } from "./skip-list/filters/InvitesFilter";
++import { MentionsFilter } from "./skip-list/filters/MentionsFilter";
++import { LowPriorityFilter } from "./skip-list/filters/LowPriorityFilter";
++import { type Sorter, SortingAlgorithm } from "./skip-list/sorters";
++import { SettingLevel } from "../../settings/SettingLevel";
++import { MARKED_UNREAD_TYPE_STABLE, MARKED_UNREAD_TYPE_UNSTABLE } from "../../utils/notifications";
++
++/**
++ * These are the filters passed to the room skip list.
++ */
++const FILTERS = [
++    new FavouriteFilter(),
++    new UnreadFilter(),
++    new PeopleFilter(),
++    new RoomsFilter(),
++    new InvitesFilter(),
++    new MentionsFilter(),
++    new LowPriorityFilter(),
++];
+ 
+ /**
+  * This store allows for fast retrieval of the room list in a sorted and filtered manner.
+@@ -61,38 +85,46 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
+ 
+     /**
+      * Get a list of sorted rooms that belong to the currently active space.
++     * If filterKeys is passed, only the rooms that match the given filters are
++     * returned.
++
++     * @param filterKeys Optional array of filters that the rooms must match against.
+      */
+-    public getSortedRoomsInActiveSpace(): Room[] {
+-        if (this.roomSkipList?.initialized) return Array.from(this.roomSkipList.getRoomsInActiveSpace());
++    public getSortedRoomsInActiveSpace(filterKeys?: FilterKey[]): Room[] {
++        if (this.roomSkipList?.initialized) return Array.from(this.roomSkipList.getRoomsInActiveSpace(filterKeys));
+         else return [];
+     }
+ 
+     /**
+-     * Re-sort the list of rooms by alphabetic order.
++     * Resort the list of rooms using a different algorithm.
++     * @param algorithm The sorting algorithm to use.
+      */
+-    public useAlphabeticSorting(): void {
+-        if (this.roomSkipList) {
+-            const sorter = new AlphabeticSorter();
+-            this.roomSkipList.useNewSorter(sorter, this.getRooms());
+-        }
++    public resort(algorithm: SortingAlgorithm): void {
++        if (!this.roomSkipList) throw new Error("Cannot resort room list before skip list is created.");
++        if (!this.matrixClient) throw new Error("Cannot resort room list without matrix client.");
++        if (this.roomSkipList.activeSortAlgorithm === algorithm) return;
++        const sorter =
++            algorithm === SortingAlgorithm.Alphabetic
++                ? new AlphabeticSorter()
++                : new RecencySorter(this.matrixClient.getSafeUserId());
++        this.roomSkipList.useNewSorter(sorter, this.getRooms());
++        this.emit(LISTS_UPDATE_EVENT);
++        SettingsStore.setValue("RoomList.preferredSorting", null, SettingLevel.DEVICE, algorithm);
+     }
+ 
+     /**
+-     * Re-sort the list of rooms by recency.
++     * Currently active sorting algorithm if the store is ready or undefined otherwise.
+      */
+-    public useRecencySorting(): void {
+-        if (this.roomSkipList && this.matrixClient) {
+-            const sorter = new RecencySorter(this.matrixClient?.getSafeUserId() ?? "");
+-            this.roomSkipList.useNewSorter(sorter, this.getRooms());
+-        }
++    public get activeSortAlgorithm(): SortingAlgorithm | undefined {
++        return this.roomSkipList?.activeSortAlgorithm;
+     }
+ 
+     protected async onReady(): Promise<any> {
+         if (this.roomSkipList?.initialized || !this.matrixClient) return;
+-        const sorter = new RecencySorter(this.matrixClient.getSafeUserId());
+-        this.roomSkipList = new RoomSkipList(sorter);
+-        const rooms = this.getRooms();
++        const sorter = this.getPreferredSorter(this.matrixClient.getSafeUserId());
++        this.roomSkipList = new RoomSkipList(sorter, FILTERS);
+         await SpaceStore.instance.storeReadyPromise;
++        const rooms = this.getRooms();
+         this.roomSkipList.seed(rooms);
+         this.emit(LISTS_UPDATE_EVENT);
+     }
+@@ -125,6 +157,15 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
+                 break;
+             }
+ 
++            case "MatrixActions.Room.accountData": {
++                const eventType = payload.event_type;
++                if (eventType === MARKED_UNREAD_TYPE_STABLE || eventType === MARKED_UNREAD_TYPE_UNSTABLE) {
++                    const room = payload.room;
++                    this.addRoomAndEmit(room);
++                }
++                break;
++            }
++
+             case "MatrixActions.Event.decrypted": {
+                 const roomId = payload.event.getRoomId();
+                 if (!roomId) return;
+@@ -167,6 +208,11 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
+             case "MatrixActions.Room.myMembership": {
+                 const oldMembership = getEffectiveMembership(payload.oldMembership);
+                 const newMembership = getEffectiveMembershipTag(payload.room, payload.membership);
++                if (oldMembership === EffectiveMembership.Join && newMembership === EffectiveMembership.Leave) {
++                    this.roomSkipList.removeRoom(payload.room);
++                    this.emit(LISTS_UPDATE_EVENT);
++                    return;
++                }
+                 if (oldMembership !== EffectiveMembership.Join && newMembership === EffectiveMembership.Join) {
+                     // If we're joining an upgraded room, we'll want to make sure we don't proliferate
+                     // the dead room in the list.
+@@ -184,6 +230,23 @@ export class RoomListStoreV3Class extends AsyncStoreWithClient<EmptyObject> {
+         }
+     }
+ 
++    /**
++     * Create the correct sorter depending on the persisted user preference.
++     * @param myUserId The user-id of our user.
++     * @returns Sorter object that can be passed to the skip list.
++     */
++    private getPreferredSorter(myUserId: string): Sorter {
++        const preferred = SettingsStore.getValue("RoomList.preferredSorting");
++        switch (preferred) {
++            case SortingAlgorithm.Alphabetic:
++                return new AlphabeticSorter();
++            case SortingAlgorithm.Recency:
++                return new RecencySorter(myUserId);
++            default:
++                throw new Error(`Got unknown sort preference from RoomList.preferredSorting setting`);
++        }
++    }
++
+     /**
+      * Add a room to the skiplist and emit an update.
+      * @param room The room to add to the skiplist
+@@ -214,3 +277,5 @@ export default class RoomListStoreV3 {
+         return this.internalInstance;
+     }
+ }
++
++window.mxRoomListStoreV3 = RoomListStoreV3.instance;
+diff --git a/src/stores/room-list-v3/skip-list/RoomNode.ts b/src/stores/room-list-v3/skip-list/RoomNode.ts
+index af792aa757c0b2845ddd425634b9e6967d45365a..6fbcb65588f02a94d3b5f2764b6ef591eeadd748 100644
+--- a/src/stores/room-list-v3/skip-list/RoomNode.ts
++++ b/src/stores/room-list-v3/skip-list/RoomNode.ts
+@@ -6,6 +6,7 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter, FilterKey } from "./filters";
+ import SpaceStore from "../../spaces/SpaceStore";
+ 
+ /**
+@@ -48,4 +49,31 @@ export class RoomNode {
+         const activeSpace = SpaceStore.instance.activeSpace;
+         this._isInActiveSpace = SpaceStore.instance.isRoomInSpace(activeSpace, this.room.roomId);
+     }
++
++    /**
++     * Aggregates all the filter keys that apply to this room.
++     * eg: if filterKeysSet.has(Filter.FavouriteFilter) is true, then this room is a favourite room.
++     */
++    private filterKeysSet: Set<FilterKey> = new Set();
++
++    /**
++     * Returns true if the associated room matches all the provided filters.
++     * Returns false otherwise.
++     * @param filterKeys An array of filter keys to check against.
++     */
++    public doesRoomMatchFilters(filterKeys: FilterKey[]): boolean {
++        return !filterKeys.some((key) => !this.filterKeysSet.has(key));
++    }
++
++    /**
++     * Populates {@link RoomNode#filterKeysSet} by checking if the associated room
++     * satisfies the given filters.
++     * @param filters A list of filters
++     */
++    public applyFilters(filters: Filter[]): void {
++        this.filterKeysSet = new Set();
++        for (const filter of filters) {
++            if (filter.matches(this.room)) this.filterKeysSet.add(filter.key);
++        }
++    }
+ }
+diff --git a/src/stores/room-list-v3/skip-list/RoomSkipList.ts b/src/stores/room-list-v3/skip-list/RoomSkipList.ts
+index 323b4c8fcbf17b8eeb1286d35d56152163473df4..5de15eaa467b1f7c892f05ff8fc0ff750990e982 100644
+--- a/src/stores/room-list-v3/skip-list/RoomSkipList.ts
++++ b/src/stores/room-list-v3/skip-list/RoomSkipList.ts
+@@ -6,10 +6,12 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import type { Sorter } from "./sorters";
++import type { Sorter, SortingAlgorithm } from "./sorters";
++import type { Filter, FilterKey } from "./filters";
+ import { RoomNode } from "./RoomNode";
+ import { shouldPromote } from "./utils";
+ import { Level } from "./Level";
++import { SortedRoomIterator, SortedSpaceFilteredIterator } from "./iterators";
+ 
+ /**
+  * Implements a skip list that stores rooms using a given sorting algorithm.
+@@ -20,7 +22,10 @@ export class RoomSkipList implements Iterable<Room> {
+     private roomNodeMap: Map<string, RoomNode> = new Map();
+     public initialized: boolean = false;
+ 
+-    public constructor(private sorter: Sorter) {}
++    public constructor(
++        private sorter: Sorter,
++        private filters: Filter[] = [],
++    ) {}
+ 
+     private reset(): void {
+         this.levels = [new Level(0)];
+@@ -35,6 +40,7 @@ export class RoomSkipList implements Iterable<Room> {
+         const sortedRoomNodes = this.sorter.sort(rooms).map((room) => new RoomNode(room));
+         let currentLevel = this.levels[0];
+         for (const node of sortedRoomNodes) {
++            node.applyFilters(this.filters);
+             currentLevel.setNext(node);
+             this.roomNodeMap.set(node.room.roomId, node);
+         }
+@@ -95,6 +101,7 @@ export class RoomSkipList implements Iterable<Room> {
+ 
+         const newNode = new RoomNode(room);
+         newNode.checkIfRoomBelongsToActiveSpace();
++        newNode.applyFilters(this.filters);
+         this.roomNodeMap.set(room.roomId, newNode);
+ 
+         /**
+@@ -173,8 +180,22 @@ export class RoomSkipList implements Iterable<Room> {
+         return new SortedRoomIterator(this.levels[0].head!);
+     }
+ 
+-    public getRoomsInActiveSpace(): SortedSpaceFilteredIterator {
+-        return new SortedSpaceFilteredIterator(this.levels[0].head!);
++    /**
++     * Returns an iterator that can be used to generate a list of sorted rooms that belong
++     * to the currently active space. Passing filterKeys will further filter the list such
++     * that only rooms that match the filters are returned.
++     *
++     * @example To get an array of rooms:
++     * Array.from(RLS.getRoomsInActiveSpace());
++     *
++     * @example Use a for ... of loop to iterate over rooms:
++     * for(const room of RLS.getRoomsInActiveSpace()) { something(room); }
++     *
++     * @example Additional filtering:
++     * Array.from(RLS.getRoomsInActiveSpace([FilterKeys.Favourite]));
++     */
++    public getRoomsInActiveSpace(filterKeys: FilterKey[] = []): SortedSpaceFilteredIterator {
++        return new SortedSpaceFilteredIterator(this.levels[0].head!, filterKeys);
+     }
+ 
+     /**
+@@ -183,37 +204,11 @@ export class RoomSkipList implements Iterable<Room> {
+     public get size(): number {
+         return this.levels[0].size;
+     }
+-}
+-
+-class SortedRoomIterator implements Iterator<Room> {
+-    public constructor(private current: RoomNode) {}
+-
+-    public next(): IteratorResult<Room> {
+-        const current = this.current;
+-        if (!current) return { value: undefined, done: true };
+-        this.current = current.next[0];
+-        return {
+-            value: current.room,
+-        };
+-    }
+-}
+ 
+-class SortedSpaceFilteredIterator implements Iterator<Room> {
+-    public constructor(private current: RoomNode) {}
+-
+-    public [Symbol.iterator](): SortedSpaceFilteredIterator {
+-        return this;
+-    }
+-
+-    public next(): IteratorResult<Room> {
+-        let current = this.current;
+-        while (current && !current.isInActiveSpace) {
+-            current = current.next[0];
+-        }
+-        if (!current) return { value: undefined, done: true };
+-        this.current = current.next[0];
+-        return {
+-            value: current.room,
+-        };
++    /**
++     * The currently active sorting algorithm.
++     */
++    public get activeSortAlgorithm(): SortingAlgorithm {
++        return this.sorter.type;
+     }
+ }
+diff --git a/src/stores/room-list-v3/skip-list/filters/FavouriteFilter.ts b/src/stores/room-list-v3/skip-list/filters/FavouriteFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6af657b81e3e94628fbeb02ebc130e6e719be854
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/FavouriteFilter.ts
+@@ -0,0 +1,20 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import { DefaultTagID } from "../../../room-list/models";
++
++export class FavouriteFilter implements Filter {
++    public matches(room: Room): boolean {
++        return !!room.tags[DefaultTagID.Favourite];
++    }
++
++    public get key(): FilterKey.FavouriteFilter {
++        return FilterKey.FavouriteFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/InvitesFilter.ts b/src/stores/room-list-v3/skip-list/filters/InvitesFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fb9fff9b4419eeb5439d3ccffaa2fb022a04b1ce
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/InvitesFilter.ts
+@@ -0,0 +1,20 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { type Room, KnownMembership } from "matrix-js-sdk/src/matrix";
++
++import type { Filter } from ".";
++import { FilterKey } from ".";
++
++export class InvitesFilter implements Filter {
++    public matches(room: Room): boolean {
++        return room.getMyMembership() === KnownMembership.Invite;
++    }
++
++    public get key(): FilterKey.InvitesFilter {
++        return FilterKey.InvitesFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/LowPriorityFilter.ts b/src/stores/room-list-v3/skip-list/filters/LowPriorityFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..da47761d6e306de61bf3539f6d6cc48d6bf24e49
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/LowPriorityFilter.ts
+@@ -0,0 +1,20 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import { DefaultTagID } from "../../../room-list/models";
++
++export class LowPriorityFilter implements Filter {
++    public matches(room: Room): boolean {
++        return !!room.tags[DefaultTagID.LowPriority];
++    }
++
++    public get key(): FilterKey.LowPriorityFilter {
++        return FilterKey.LowPriorityFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/MentionsFilter.ts b/src/stores/room-list-v3/skip-list/filters/MentionsFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8897e766d412efe926bb3e864233e49cf1db7510
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/MentionsFilter.ts
+@@ -0,0 +1,20 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import { RoomNotificationStateStore } from "../../../notifications/RoomNotificationStateStore";
++
++export class MentionsFilter implements Filter {
++    public matches(room: Room): boolean {
++        return RoomNotificationStateStore.instance.getRoomState(room).hasMentions;
++    }
++
++    public get key(): FilterKey.MentionsFilter {
++        return FilterKey.MentionsFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/PeopleFilter.ts b/src/stores/room-list-v3/skip-list/filters/PeopleFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..742eb40abe1208c827ed1ed0c3047a5783aaad3c
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/PeopleFilter.ts
+@@ -0,0 +1,21 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import DMRoomMap from "../../../../utils/DMRoomMap";
++
++export class PeopleFilter implements Filter {
++    public matches(room: Room): boolean {
++        // Match rooms that are DMs
++        return !!DMRoomMap.shared().getUserIdForRoomId(room.roomId);
++    }
++
++    public get key(): FilterKey.PeopleFilter {
++        return FilterKey.PeopleFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/RoomsFilter.ts b/src/stores/room-list-v3/skip-list/filters/RoomsFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..58349dcea215f405a40b2def09ffc694b8a7cce0
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/RoomsFilter.ts
+@@ -0,0 +1,21 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import DMRoomMap from "../../../../utils/DMRoomMap";
++
++export class RoomsFilter implements Filter {
++    public matches(room: Room): boolean {
++        // This should filter rooms that are not DMs
++        return !DMRoomMap.shared().getUserIdForRoomId(room.roomId);
++    }
++
++    public get key(): FilterKey.RoomsFilter {
++        return FilterKey.RoomsFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/UnreadFilter.ts b/src/stores/room-list-v3/skip-list/filters/UnreadFilter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..db29861cd1e6e61141522e8f09fea2cdf3d54d81
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/UnreadFilter.ts
+@@ -0,0 +1,21 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Filter } from ".";
++import { FilterKey } from ".";
++import { RoomNotificationStateStore } from "../../../notifications/RoomNotificationStateStore";
++import { getMarkedUnreadState } from "../../../../utils/notifications";
++
++export class UnreadFilter implements Filter {
++    public matches(room: Room): boolean {
++        return RoomNotificationStateStore.instance.getRoomState(room).hasUnreadCount || !!getMarkedUnreadState(room);
++    }
++
++    public get key(): FilterKey.UnreadFilter {
++        return FilterKey.UnreadFilter;
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/filters/index.ts b/src/stores/room-list-v3/skip-list/filters/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4c65167b3cdd1e7937d0c90d9ab3efa76cc5986
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/filters/index.ts
+@@ -0,0 +1,30 @@
++/*
++Copyright 2025 New Vector Ltd.
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++
++export const enum FilterKey {
++    FavouriteFilter,
++    UnreadFilter,
++    PeopleFilter,
++    RoomsFilter,
++    LowPriorityFilter,
++    MentionsFilter,
++    InvitesFilter,
++}
++
++export interface Filter {
++    /**
++     * Boolean return value indicates whether this room satisfies
++     * the filter condition.
++     */
++    matches(room: Room): boolean;
++
++    /**
++     * Used to identify this particular filter.
++     */
++    key: FilterKey;
++}
+diff --git a/src/stores/room-list-v3/skip-list/iterators.ts b/src/stores/room-list-v3/skip-list/iterators.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a992c79aef907f99982cc634acb8d33438e4526f
+--- /dev/null
++++ b/src/stores/room-list-v3/skip-list/iterators.ts
+@@ -0,0 +1,47 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { RoomNode } from "./RoomNode";
++import type { FilterKey } from "./filters";
++
++export class SortedRoomIterator implements Iterator<Room> {
++    public constructor(private current: RoomNode) {}
++
++    public next(): IteratorResult<Room> {
++        const current = this.current;
++        if (!current) return { value: undefined, done: true };
++        this.current = current.next[0];
++        return {
++            value: current.room,
++        };
++    }
++}
++
++export class SortedSpaceFilteredIterator implements Iterator<Room> {
++    public constructor(
++        private current: RoomNode,
++        private readonly filters: FilterKey[],
++    ) {}
++
++    public [Symbol.iterator](): SortedSpaceFilteredIterator {
++        return this;
++    }
++
++    public next(): IteratorResult<Room> {
++        let current = this.current;
++        while (current) {
++            if (current.isInActiveSpace && current.doesRoomMatchFilters(this.filters)) break;
++            current = current.next[0];
++        }
++        if (!current) return { value: undefined, done: true };
++        this.current = current.next[0];
++        return {
++            value: current.room,
++        };
++    }
++}
+diff --git a/src/stores/room-list-v3/skip-list/sorters/AlphabeticSorter.ts b/src/stores/room-list-v3/skip-list/sorters/AlphabeticSorter.ts
+index 5c279efb0812c01f5fc2586a854274573f61ab64..50a1b09d174db3f5685032c1f36d7daf1568f561 100644
+--- a/src/stores/room-list-v3/skip-list/sorters/AlphabeticSorter.ts
++++ b/src/stores/room-list-v3/skip-list/sorters/AlphabeticSorter.ts
+@@ -6,7 +6,7 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import type { Sorter } from ".";
++import { type Sorter, SortingAlgorithm } from ".";
+ 
+ export class AlphabeticSorter implements Sorter {
+     private readonly collator = new Intl.Collator();
+@@ -20,4 +20,8 @@ export class AlphabeticSorter implements Sorter {
+     public comparator(roomA: Room, roomB: Room): number {
+         return this.collator.compare(roomA.name, roomB.name);
+     }
++
++    public get type(): SortingAlgorithm.Alphabetic {
++        return SortingAlgorithm.Alphabetic;
++    }
+ }
+diff --git a/src/stores/room-list-v3/skip-list/sorters/RecencySorter.ts b/src/stores/room-list-v3/skip-list/sorters/RecencySorter.ts
+index 7e8b3bd8c74d80baae12939eb59732f30d88b72b..38eb9a298b72c60fd59421b9396521c5650612e3 100644
+--- a/src/stores/room-list-v3/skip-list/sorters/RecencySorter.ts
++++ b/src/stores/room-list-v3/skip-list/sorters/RecencySorter.ts
+@@ -6,7 +6,7 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import type { Sorter } from ".";
++import { type Sorter, SortingAlgorithm } from ".";
+ import { getLastTs } from "../../../room-list/algorithms/tag-sorting/RecentAlgorithm";
+ 
+ export class RecencySorter implements Sorter {
+@@ -23,6 +23,10 @@ export class RecencySorter implements Sorter {
+         return roomBLastTs - roomALastTs;
+     }
+ 
++    public get type(): SortingAlgorithm.Recency {
++        return SortingAlgorithm.Recency;
++    }
++
+     private getTs(room: Room, cache?: { [roomId: string]: number }): number {
+         const ts = cache?.[room.roomId] ?? getLastTs(room, this.myUserId);
+         if (cache) {
+diff --git a/src/stores/room-list-v3/skip-list/sorters/index.ts b/src/stores/room-list-v3/skip-list/sorters/index.ts
+index c71553665e66d30197c729b7dccb95c08cdf8891..40381448c8affa3139b829c45de0402c68a2179f 100644
+--- a/src/stores/room-list-v3/skip-list/sorters/index.ts
++++ b/src/stores/room-list-v3/skip-list/sorters/index.ts
+@@ -8,6 +8,29 @@ Please see LICENSE files in the repository root for full details.
+ import type { Room } from "matrix-js-sdk/src/matrix";
+ 
+ export interface Sorter {
++    /**
++     * Performs an initial sort of rooms and returns a new array containing
++     * the result.
++     * @param rooms An array of rooms.
++     */
+     sort(rooms: Room[]): Room[];
++    /**
++     * The comparator used for sorting.
++     * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort#comparefn
++     * @param roomA Room
++     * @param roomB Room
++     */
+     comparator(roomA: Room, roomB: Room): number;
++    /**
++     * A string that uniquely identifies this given sorter.
++     */
++    type: SortingAlgorithm;
++}
++
++/**
++ * All the available sorting algorithms.
++ */
++export const enum SortingAlgorithm {
++    Recency = "Recency",
++    Alphabetic = "Alphabetic",
+ }

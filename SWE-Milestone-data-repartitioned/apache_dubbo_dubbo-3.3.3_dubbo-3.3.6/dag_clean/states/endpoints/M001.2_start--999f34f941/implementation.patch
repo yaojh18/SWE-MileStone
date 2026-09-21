@@ -1,0 +1,1862 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.github/workflows/build-and-test-pr.yml b/.github/workflows/build-and-test-pr.yml
+index 921791f7666e8cb91496f4da2c3ffe9567406c06..1bd5e2e982472286917886501ffa3820d76e760f 100644
+--- a/.github/workflows/build-and-test-pr.yml
++++ b/.github/workflows/build-and-test-pr.yml
+@@ -207,12 +207,10 @@ jobs:
+ 
+   unit-test:
+     needs: [check-format, unit-test-prepare]
+-    name: "Unit Test On ubuntu-latest Java: ${{ matrix.java }}"
++    name: "Unit Test On ubuntu-latest"
+     runs-on: ubuntu-latest
+     strategy:
+       fail-fast: false
+-      matrix:
+-        java: [ 8, 11, 17, 21 ]
+     env:
+       DISABLE_FILE_SYSTEM_TEST: true
+       CURRENT_ROLE: ${{ matrix.case-role }}
+@@ -222,11 +220,11 @@ jobs:
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+-      - name: "Set up JDK ${{ matrix.java }}"
++      - name: "Set up JDK 21"
+         uses: actions/setup-java@v4
+         with:
+           distribution: 'zulu'
+-          java-version: ${{ matrix.java }}
++          java-version: 21
+       - name: "Set current date as env variable"
+         run: echo "TODAY=$(date +'%Y%m%d')" >> $GITHUB_ENV
+       - name: "Cache local maven repository"
+@@ -245,15 +243,8 @@ jobs:
+           key: zookeeper-${{ runner.os }}-${{ env.ZOOKEEPER_VERSION }}
+           restore-keys: |
+             zookeeper-${{ runner.os }}-
+-      - name: "Test with maven on Java: 8"
+-        timeout-minutes: 90
+-        if: ${{ matrix.java == '8' }}
+-        run: |
+-          set -o pipefail
+-          ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+-      - name: "Test with maven on Java: ${{ matrix.java }}"
++      - name: "Test with maven"
+         timeout-minutes: 90
+-        if: ${{ matrix.java != '8' }}
+         run: |
+           set -o pipefail
+           ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,jdk15ge-simple,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+@@ -265,13 +256,13 @@ jobs:
+         with:
+           token: ${{ secrets.CODECOV_TOKEN }}
+           verbose: true
+-          flags: unit-tests-java${{ matrix.java }}
++          flags: unit-tests
+         env:
+           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+       - name: "Upload surefire reports"
+         uses: actions/upload-artifact@v4
+         with:
+-          name: surefire-reports-java${{ matrix.java }}
++          name: surefire-reports
+           path: "**/target/surefire-reports/**"
+ 
+   samples-test-prepare:
+@@ -302,7 +293,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -343,7 +334,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -374,7 +365,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -417,7 +408,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -458,7 +449,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -489,7 +480,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -510,7 +501,7 @@ jobs:
+     needs: [check-format, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+@@ -560,7 +551,7 @@ jobs:
+     needs: [check-format, integration-test-result, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+diff --git a/.github/workflows/build-and-test-scheduled-3.1.yml b/.github/workflows/build-and-test-scheduled-3.1.yml
+index 29fffd081e69b088dff50e48a1b29fab1ed8a860..d53f36a7db396964f70f629944b981a70fd4c3ae 100644
+--- a/.github/workflows/build-and-test-scheduled-3.1.yml
++++ b/.github/workflows/build-and-test-scheduled-3.1.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.2.yml b/.github/workflows/build-and-test-scheduled-3.2.yml
+index 514097e7796c16c7beaef02b690987a8c4c651e1..72d67ef65a1a9cd00efa8313abd5667b9e0a6ac0 100644
+--- a/.github/workflows/build-and-test-scheduled-3.2.yml
++++ b/.github/workflows/build-and-test-scheduled-3.2.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.3.yml b/.github/workflows/build-and-test-scheduled-3.3.yml
+index 014b120a046aedcd1e5bcaeec0d3af68a3806cdb..944cbfa9247576d1945f173a924a0540f07c6f5a 100644
+--- a/.github/workflows/build-and-test-scheduled-3.3.yml
++++ b/.github/workflows/build-and-test-scheduled-3.3.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/release-test.yml b/.github/workflows/release-test.yml
+index a579ba3727cfea46da6c97ef49c6970e87148b96..e010b7e8335a17b05191bda8d00d9e82faa0e8b8 100644
+--- a/.github/workflows/release-test.yml
++++ b/.github/workflows/release-test.yml
+@@ -283,7 +283,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+@@ -383,7 +383,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+diff --git a/README.md b/README.md
+index 3350b17742d80d8542d524baf57368702d1a0de2..56f43e9a6702c497d95f8df453be8e061373e529 100644
+--- a/README.md
++++ b/README.md
+@@ -73,7 +73,7 @@ Explore more through our hands-on tasks:
+ 
+ | Version  | JDK Support | Dependencies                                                                                          | Highlights                                                                                                     |
+ |----------|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+-| **3.3.5**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.5/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
++| **3.3.2**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.2/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
+ | **3.2.16** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.5/dubbo-dependencies-bom/pom.xml#L94) | ✅ Actively Maintained <br> ✅ Metrics & Tracing <br> ✅ Thread Pool Isolation <br> ✅ +30% Performance <br> ✅ Native Image Support |
+ | **3.1.11** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.11/dubbo-dependencies-bom/pom.xml#L90) | ⚠️ Stable, but Not Actively Maintained                                                                         |
+ 
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index 1075b795dcd02c1e428dac78f53b79fb294c7560..b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -90,7 +90,6 @@
+   <build>
+     <plugins>
+       <plugin>
+-        <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+         <version>${maven_os_plugin_version}</version>
+@@ -113,13 +112,5 @@
+         </configuration>
+       </plugin>
+     </plugins>
+-    <extensions>
+-      <!-- add os-maven-plugin to extensions for `mvn install` -->
+-      <extension>
+-        <groupId>kr.motd.maven</groupId>
+-        <artifactId>os-maven-plugin</artifactId>
+-        <version>${maven_os_plugin_version}</version>
+-      </extension>
+-    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index a1ab6004d0e3fbd9c56ec020f8cd2e5fa7a24cb4..78c1e2325938a0d936e20ca703a1f568e8e3512a 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -96,6 +96,7 @@
+     <byte-buddy_version>1.17.5</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+     <netty4_version>4.2.2.Final</netty4_version>
++    <netty_http3_version>0.0.29.Final</netty_http3_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+@@ -299,6 +300,11 @@
+         <artifactId>netty-all</artifactId>
+         <version>${netty4_version}</version>
+       </dependency>
++      <dependency>
++        <groupId>io.netty.incubator</groupId>
++        <artifactId>netty-incubator-codec-http3</artifactId>
++        <version>${netty_http3_version}</version>
++      </dependency>
+       <dependency>
+         <groupId>org.javassist</groupId>
+         <artifactId>javassist</artifactId>
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-plugin/dubbo-rest-jaxrs/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/jaxrs/FallbackArgumentResolver.java b/dubbo-plugin/dubbo-rest-jaxrs/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/jaxrs/FallbackArgumentResolver.java
+index 11d88ddabefa1b54bae070601d14e55492052636..ff6243c22522e7b1e756d7d7edf4ec4845c278c6 100644
+--- a/dubbo-plugin/dubbo-rest-jaxrs/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/jaxrs/FallbackArgumentResolver.java
++++ b/dubbo-plugin/dubbo-rest-jaxrs/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/jaxrs/FallbackArgumentResolver.java
+@@ -51,6 +51,9 @@ public class FallbackArgumentResolver extends AbstractArgumentResolver {
+         if (value != null) {
+             return value;
+         }
++        if (meta.parameter().isStream()) {
++            return null;
++        }
+         if (meta.parameter().isSimple()) {
+             return request.parameter(meta.name());
+         }
+diff --git a/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/FallbackArgumentResolver.java b/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/FallbackArgumentResolver.java
+index e9e2806bea29c087b94cf9041e41b279b3622d64..2f698435fb010d1dd41844cf206cd83febe68581 100644
+--- a/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/FallbackArgumentResolver.java
++++ b/dubbo-plugin/dubbo-rest-spring/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/spring/FallbackArgumentResolver.java
+@@ -42,6 +42,9 @@ public class FallbackArgumentResolver extends AbstractArgumentResolver {
+     @Override
+     protected Object resolveValue(NamedValueMeta meta, HttpRequest request, HttpResponse response) {
+         ParameterMeta parameter = meta.parameter();
++        if (parameter.isStream()) {
++            return null;
++        }
+         if (parameter.isSimple()) {
+             return request.parameter(meta.name());
+         }
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3979728e7ba05928bc4a9e03f4e11ab16eb4c426 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,8 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -57,6 +59,26 @@
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
++
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
+ 
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+@@ -65,6 +87,13 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
+index e70aeaeb9e94985d2786f96866ec9bfc12945e6c..37416cba1bd06f449ad2de7d7d1280d7c6826e73 100644
+--- a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
+@@ -21,15 +21,18 @@ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.common.utils.StringUtils;
++import org.apache.dubbo.spring.security.oauth2.OAuth2SecurityModule;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.function.Consumer;
+ 
++import com.fasterxml.jackson.databind.Module;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.fasterxml.jackson.databind.module.SimpleModule;
+ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+ import org.springframework.security.jackson2.CoreJackson2Module;
++import org.springframework.security.jackson2.SecurityJackson2Modules;
+ 
+ public class ObjectMapperCodec {
+ 
+@@ -100,6 +103,10 @@ public class ObjectMapperCodec {
+     private void registerDefaultModule() {
+         mapper.registerModule(new CoreJackson2Module());
+         mapper.registerModule(new JavaTimeModule());
++        mapper.registerModule(new OAuth2SecurityModule());
++        List<Module> securityModules =
++                SecurityJackson2Modules.getModules(this.getClass().getClassLoader());
++        mapper.registerModules(securityModules);
+ 
+         List<String> jacksonModuleClassNameList = new ArrayList<>();
+         jacksonModuleClassNameList.add(
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..724e8efa54ffe36acd9e7008550468cc77d3ffdd
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class AuthorizationGrantTypeMixin {
++
++    @JsonCreator
++    public AuthorizationGrantTypeMixin(@JsonProperty("value") String value) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca2d80f5f964d6002ac4f527ef6dc6ad8873dd67
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java
+@@ -0,0 +1,44 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Collection;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.core.GrantedAuthority;
++import org.springframework.security.oauth2.core.OAuth2AccessToken;
++import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class BearerTokenAuthenticationMixin {
++
++    @JsonCreator
++    public BearerTokenAuthenticationMixin(
++            @JsonProperty("principal") OAuth2AuthenticatedPrincipal principal,
++            @JsonProperty("credentials") OAuth2AccessToken credentials,
++            @JsonProperty("authorities") Collection<? extends GrantedAuthority> authorities) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d43671357a6747ff31ff318627ebacf759ff711
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class ClientAuthenticationMethodMixin {
++
++    @JsonCreator
++    public ClientAuthenticationMethodMixin(@JsonProperty("value") String value) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..4ca8dae66b40fc95713c1f1a2420e8aeaf1181ad
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java
+@@ -0,0 +1,38 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class ClientSettingsMixin {
++
++    @JsonCreator
++    public ClientSettingsMixin(@JsonProperty("settings") Map<String, Object> settings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8626a6e7f9e35ed2cf77096027b0f58825673c12
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java
+@@ -0,0 +1,43 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Collection;
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.core.GrantedAuthority;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class OAuth2AuthenticatedPrincipalMixin {
++
++    @JsonCreator
++    public OAuth2AuthenticatedPrincipalMixin(
++            @JsonProperty("name") String name,
++            @JsonProperty("attributes") Map<String, Object> attributes,
++            @JsonProperty("authorities") Collection<? extends GrantedAuthority> authorities) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..b864fa0d412491cc5812f23c8533d8c94e19884b
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java
+@@ -0,0 +1,44 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.lang.Nullable;
++import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class OAuth2ClientAuthenticationTokenMixin {
++
++    @JsonCreator
++    public OAuth2ClientAuthenticationTokenMixin(
++            @JsonProperty("clientId") String clientId,
++            @JsonProperty("clientAuthenticationMethod") ClientAuthenticationMethod clientAuthenticationMethod,
++            @JsonProperty("credentials") @Nullable Object credentials,
++            @JsonProperty("additionalParameters") @Nullable Map<String, Object> additionalParameters) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..93be4aef610f12bdc94a08d05aed7a70f2906230
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java
+@@ -0,0 +1,96 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import org.apache.dubbo.common.utils.ClassUtils;
++
++import java.util.ArrayList;
++import java.util.Collections;
++
++import com.fasterxml.jackson.databind.module.SimpleModule;
++
++public class OAuth2SecurityModule extends SimpleModule {
++
++    public OAuth2SecurityModule() {
++        super(OAuth2SecurityModule.class.getName());
++    }
++
++    @Override
++    public void setupModule(SetupContext context) {
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2AuthenticatedPrincipalMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.DefaultOAuth2AuthenticatedPrincipal",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2AuthenticatedPrincipalMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthentication",
++                "org.apache.dubbo.spring.security.oauth2.BearerTokenAuthenticationMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2ClientAuthenticationTokenMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.ClientAuthenticationMethod",
++                ClientAuthenticationMethodMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.client.RegisteredClient",
++                "org.apache.dubbo.spring.security.oauth2.RegisteredClientMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.AuthorizationGrantType",
++                AuthorizationGrantTypeMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.settings.ClientSettings",
++                ClientSettingsMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.settings.TokenSettings",
++                TokenSettingsMixin.class);
++        context.setMixInAnnotations(
++                Collections.unmodifiableCollection(new ArrayList<>()).getClass(), UnmodifiableCollectionMixin.class);
++    }
++
++    private void setMixInAnnotations(SetupContext context, String oauth2ClassName, String mixinClassName) {
++        Class<?> oauth2Class = loadClassIfPresent(oauth2ClassName);
++        if (oauth2Class != null) {
++            context.setMixInAnnotations(oauth2Class, loadClassIfPresent(mixinClassName));
++        }
++    }
++
++    private void setMixInAnnotations(SetupContext context, String oauth2ClassName, Class<?> mixinClass) {
++        Class<?> oauth2Class = loadClassIfPresent(oauth2ClassName);
++        if (oauth2Class != null) {
++            context.setMixInAnnotations(oauth2Class, mixinClass);
++        }
++    }
++
++    private Class<?> loadClassIfPresent(String oauth2ClassName) {
++        try {
++            return ClassUtils.forName(oauth2ClassName, OAuth2SecurityModule.class.getClassLoader());
++
++        } catch (Throwable ignored) {
++        }
++        return null;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f4977a22208407494f4aa552c5fc9912ae1319ca
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java
+@@ -0,0 +1,59 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.time.Instant;
++import java.util.Set;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.oauth2.core.AuthorizationGrantType;
++import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class RegisteredClientMixin {
++
++    /**
++     * declare clientSettings and tokenSettings as Object type to avoid COMPILATION ERROR when compile it with jdk8
++     * or jdk11, both ClientSettings and TokenSettings class file version are 61.0 which is higher than the version
++     * which jdk8 (class file version: 52.0) or jdk11 (class file version: 55.0) could support.
++     */
++    @JsonCreator
++    public RegisteredClientMixin(
++            @JsonProperty("id") String id,
++            @JsonProperty("clientId") String clientId,
++            @JsonProperty("clientIdIssuedAt") Instant clientIdIssuedAt,
++            @JsonProperty("clientSecret") String clientSecret,
++            @JsonProperty("clientSecretExpiresAt") Instant clientSecretExpiresAt,
++            @JsonProperty("clientName") String clientName,
++            @JsonProperty("clientAuthenticationMethods") Set<ClientAuthenticationMethod> clientAuthenticationMethods,
++            @JsonProperty("authorizationGrantTypes") Set<AuthorizationGrantType> authorizationGrantTypes,
++            @JsonProperty("redirectUris") Set<String> redirectUris,
++            @JsonProperty("postLogoutRedirectUris") Set<String> postLogoutRedirectUris,
++            @JsonProperty("scopes") Set<String> scopes,
++            @JsonProperty("clientSettings") Object clientSettings,
++            @JsonProperty("tokenSettings") Object tokenSettings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..093f68e7fb2f2ff05a9521e92749c7536b444f1f
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java
+@@ -0,0 +1,38 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class TokenSettingsMixin {
++
++    @JsonCreator
++    public TokenSettingsMixin(@JsonProperty("settings") Map<String, Object> settings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c1097b6591d5b85c82e8ea644282c9d41b6f71a
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java
+@@ -0,0 +1,37 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import org.apache.dubbo.spring.security.oauth2.UnmodifiableCollectionMixin.UnmodifiableCollectionConverter;
++
++import java.util.Collection;
++import java.util.Collections;
++
++import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
++import com.fasterxml.jackson.databind.util.StdConverter;
++
++@JsonDeserialize(converter = UnmodifiableCollectionConverter.class)
++abstract class UnmodifiableCollectionMixin {
++
++    public static class UnmodifiableCollectionConverter extends StdConverter<Collection<Object>, Collection<Object>> {
++
++        @Override
++        public Collection<Object> convert(Collection<Object> value) {
++            return Collections.unmodifiableCollection(value);
++        }
++    }
++}
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/AbstractServerHttpChannelObserver.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/AbstractServerHttpChannelObserver.java
+index e6c4277bb44bda0c7134cd104bcfc5f3e4fad336..c2473c85abbbd5cfe94d091f3af209a6ddacb761 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/AbstractServerHttpChannelObserver.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/AbstractServerHttpChannelObserver.java
+@@ -166,13 +166,13 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
+         if (message != null) {
+             headers.set(HttpHeaderNames.CONTENT_TYPE.getKey(), responseEncoder.contentType());
+         }
++        customizeHeaders(headers, throwable, message);
+         if (data instanceof HttpResult) {
+             HttpResult<?> result = (HttpResult<?>) data;
+             if (result.getHeaders() != null) {
+                 headers.set(result.getHeaders());
+             }
+         }
+-        customizeHeaders(headers, throwable, message);
+         return metadata;
+     }
+ 
+@@ -188,6 +188,9 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
+     }
+ 
+     protected final void sendMetadata(HttpMetadata metadata) {
++        if (headerSent) {
++            return;
++        }
+         getHttpChannel().writeHeader(metadata);
+         headerSent = true;
+         if (LOGGER.isDebugEnabled()) {
+@@ -195,7 +198,7 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
+         }
+     }
+ 
+-    protected final HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
++    protected HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
+         if (statusCode < 200 || statusCode == 204 || statusCode == 304) {
+             return null;
+         }
+@@ -327,6 +330,10 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
+         return responseEncoder.contentType();
+     }
+ 
++    protected boolean isHeaderSent() {
++        return headerSent;
++    }
++
+     protected void customizeTrailers(HttpHeaders headers, Throwable throwable) {
+         List<BiConsumer<HttpHeaders, Throwable>> trailersCustomizers = this.trailersCustomizers;
+         if (trailersCustomizers != null) {
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpConstants.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpConstants.java
+index ef6995b85790fbd85e30d340ea2dd4408635e6d4..a746bbc2f26ea36c4cd47a33d14560d844a2016b 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpConstants.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpConstants.java
+@@ -16,8 +16,6 @@
+  */
+ package org.apache.dubbo.remoting.http12;
+ 
+-import java.nio.charset.StandardCharsets;
+-
+ public final class HttpConstants {
+ 
+     public static final String TRAILERS = "trailers";
+@@ -33,8 +31,5 @@ public final class HttpConstants {
+     public static final String HTTPS = "https";
+     public static final String HTTP = "http";
+ 
+-    public static final byte[] SERVER_SENT_EVENT_DATA_PREFIX_BYTES = "data:".getBytes(StandardCharsets.US_ASCII);
+-    public static final byte[] SERVER_SENT_EVENT_LF_BYTES = "\n\n".getBytes(StandardCharsets.US_ASCII);
+-
+     private HttpConstants() {}
+ }
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/h1/Http1SseServerChannelObserver.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/h1/Http1SseServerChannelObserver.java
+deleted file mode 100644
+index 486af06e2a1bd4291c6226312e8a575c9f588a74..0000000000000000000000000000000000000000
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/h1/Http1SseServerChannelObserver.java
++++ /dev/null
+@@ -1,53 +0,0 @@
+-/*
+- * Licensed to the Apache Software Foundation (ASF) under one or more
+- * contributor license agreements.  See the NOTICE file distributed with
+- * this work for additional information regarding copyright ownership.
+- * The ASF licenses this file to You under the Apache License, Version 2.0
+- * (the "License"); you may not use this file except in compliance with
+- * the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.dubbo.remoting.http12.h1;
+-
+-import org.apache.dubbo.remoting.http12.HttpChannel;
+-import org.apache.dubbo.remoting.http12.HttpConstants;
+-import org.apache.dubbo.remoting.http12.HttpHeaderNames;
+-import org.apache.dubbo.remoting.http12.HttpMetadata;
+-import org.apache.dubbo.remoting.http12.HttpOutputMessage;
+-
+-import java.io.IOException;
+-
+-public class Http1SseServerChannelObserver extends Http1ServerChannelObserver {
+-
+-    public Http1SseServerChannelObserver(HttpChannel httpChannel) {
+-        super(httpChannel);
+-    }
+-
+-    @Override
+-    protected HttpMetadata encodeHttpMetadata(boolean endStream) {
+-        return super.encodeHttpMetadata(endStream)
+-                .header(HttpHeaderNames.TRANSFER_ENCODING.getKey(), HttpConstants.CHUNKED)
+-                .header(HttpHeaderNames.CACHE_CONTROL.getKey(), HttpConstants.NO_CACHE);
+-    }
+-
+-    @Override
+-    protected void preOutputMessage(HttpOutputMessage message) throws IOException {
+-        HttpOutputMessage prefixMessage = getHttpChannel().newOutputMessage();
+-        prefixMessage.getBody().write(HttpConstants.SERVER_SENT_EVENT_DATA_PREFIX_BYTES);
+-        getHttpChannel().writeMessage(prefixMessage);
+-    }
+-
+-    @Override
+-    protected void postOutputMessage(HttpOutputMessage message) throws IOException {
+-        HttpOutputMessage lfMessage = getHttpChannel().newOutputMessage();
+-        lfMessage.getBody().write(HttpConstants.SERVER_SENT_EVENT_LF_BYTES);
+-        getHttpChannel().writeMessage(lfMessage);
+-    }
+-}
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEvent.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEvent.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..1bd7bd5868fdb9736a189f9cecca31de18912356
+--- /dev/null
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEvent.java
+@@ -0,0 +1,227 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.remoting.http12.message;
++
++import java.time.Duration;
++
++/**
++ * Represents a Server-Sent Event according to the HTML specification.
++ * <p>
++ * Server-Sent Events (SSE) is a server push technology enabling a client to receive automatic updates from a server via HTTP connection.
++ * The server can send new data to the client at any time by pushing messages, without the need to reestablish the connection.
++ * <p>
++ * This class encapsulates the structure of a Server-Sent Event, which may include:
++ * <ul>
++ *   <li>An event ID</li>
++ *   <li>An event type</li>
++ *   <li>A retry interval</li>
++ *   <li>A comment</li>
++ *   <li>Data payload</li>
++ * </ul>
++ * <p>
++ * Use the {@link #builder()} method to create instances of this class.
++ *
++ * @param <T> the type of data that this event contains
++ * @see <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html">Server-Sent Events</a>
++ */
++public final class ServerSentEvent<T> {
++
++    /**
++     * The event ID that can be used for tracking or resuming event streams.
++     */
++    private final String id;
++
++    /**
++     * The event type or name that identifies the type of event.
++     */
++    private final String event;
++
++    /**
++     * The reconnection time in milliseconds that the client should wait before reconnecting
++     * after a connection is closed.
++     */
++    private final Duration retry;
++
++    /**
++     * A comment that will be ignored by event-processing clients but can be useful for debugging.
++     */
++    private final String comment;
++
++    /**
++     * The data payload of this event.
++     */
++    private final T data;
++
++    /**
++     * Constructs a new ServerSentEvent with the specified properties.
++     * <p>
++     * It's recommended to use the {@link #builder()} method instead of this constructor directly.
++     *
++     * @param id      the event ID, can be null
++     * @param event   the event type, can be null
++     * @param retry   the reconnection time, can be null
++     * @param comment the comment, can be null
++     * @param data    the data payload, can be null
++     */
++    public ServerSentEvent(String id, String event, Duration retry, String comment, T data) {
++        this.id = id;
++        this.event = event;
++        this.retry = retry;
++        this.comment = comment;
++        this.data = data;
++    }
++
++    /**
++     * Returns the event ID.
++     *
++     * @return the event ID, may be null
++     */
++    public String getId() {
++        return id;
++    }
++
++    /**
++     * Returns the event type.
++     *
++     * @return the event type, may be null
++     */
++    public String getEvent() {
++        return event;
++    }
++
++    /**
++     * Returns the reconnection time that clients should wait before reconnecting.
++     *
++     * @return the reconnection time as a Duration, may be null
++     */
++    public Duration getRetry() {
++        return retry;
++    }
++
++    /**
++     * Returns the comment associated with this event.
++     *
++     * @return the comment, may be null
++     */
++    public String getComment() {
++        return comment;
++    }
++
++    /**
++     * Returns the data payload of this event.
++     *
++     * @return the data payload, may be null
++     */
++    public T getData() {
++        return data;
++    }
++
++    @Override
++    public String toString() {
++        return "ServerSentEvent{id='" + id + '\'' + ", event='" + event + '\'' + ", retry=" + retry + ", comment='"
++                + comment + '\'' + ", data=" + data + '}';
++    }
++
++    /**
++     * Creates a new {@link Builder} instance.
++     *
++     * @param <T> the type of data that the event will contain
++     * @return a new builder
++     */
++    public static <T> Builder<T> builder() {
++        return new Builder<>();
++    }
++
++    /**
++     * Builder for {@link ServerSentEvent}.
++     *
++     * @param <T> the type of data that the event will contain
++     */
++    public static final class Builder<T> {
++        private String id;
++        private String event;
++        private Duration retry;
++        private String comment;
++        private T data;
++
++        private Builder() {}
++
++        /**
++         * Sets the id of the event.
++         *
++         * @param id the id
++         * @return this builder
++         */
++        public Builder<T> id(String id) {
++            this.id = id;
++            return this;
++        }
++
++        /**
++         * Sets the event type.
++         *
++         * @param event the event type
++         * @return this builder
++         */
++        public Builder<T> event(String event) {
++            this.event = event;
++            return this;
++        }
++
++        /**
++         * Sets the retry duration.
++         *
++         * @param retry the retry duration
++         * @return this builder
++         */
++        public Builder<T> retry(Duration retry) {
++            this.retry = retry;
++            return this;
++        }
++
++        /**
++         * Sets the comment.
++         *
++         * @param comment the comment
++         * @return this builder
++         */
++        public Builder<T> comment(String comment) {
++            this.comment = comment;
++            return this;
++        }
++
++        /**
++         * Sets the data.
++         *
++         * @param data the data
++         * @return this builder
++         */
++        public Builder<T> data(T data) {
++            this.data = data;
++            return this;
++        }
++
++        /**
++         * Builds a new {@link ServerSentEvent} with the configured properties.
++         *
++         * @return the built event
++         */
++        public ServerSentEvent<T> build() {
++            return new ServerSentEvent<>(id, event, retry, comment, data);
++        }
++    }
++}
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEventEncoder.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEventEncoder.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..7338271df6754a3991403c8a146c88dd27bd9416
+--- /dev/null
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/ServerSentEventEncoder.java
+@@ -0,0 +1,108 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.remoting.http12.message;
++
++import org.apache.dubbo.common.utils.StringUtils;
++import org.apache.dubbo.remoting.http12.exception.EncodeException;
++
++import java.io.ByteArrayOutputStream;
++import java.io.OutputStream;
++import java.nio.charset.Charset;
++import java.util.List;
++
++/**
++ * Encode the data according to the Server-Sent Events specification.
++ * <p>
++ * The formatted string follows the text/event-stream format as defined in the HTML specification.
++ * Each field is formatted as a line with the field name, followed by a colon, followed by the field value,
++ * and ending with a newline character.
++ *
++ * @see <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation">Event stream interpretation</a>
++ */
++public final class ServerSentEventEncoder implements HttpMessageEncoder {
++
++    private final HttpMessageEncoder httpMessageEncoder;
++
++    public ServerSentEventEncoder(HttpMessageEncoder httpMessageEncoder) {
++        this.httpMessageEncoder = httpMessageEncoder;
++    }
++
++    @Override
++    public void encode(OutputStream outputStream, Object data, Charset charset) throws EncodeException {
++        StringBuilder sb = new StringBuilder(256);
++
++        if (data instanceof ServerSentEvent) {
++            ServerSentEvent<?> event = (ServerSentEvent<?>) data;
++            if (event.getId() != null) {
++                appendField(sb, "id", event.getId());
++            }
++            if (event.getEvent() != null) {
++                appendField(sb, "event", event.getEvent());
++            }
++            if (event.getRetry() != null) {
++                appendField(sb, "retry", event.getRetry().toMillis());
++            }
++            if (event.getComment() != null) {
++                sb.append(':')
++                        .append(StringUtils.replace(event.getComment(), "\n", "\n:"))
++                        .append('\n');
++            }
++            if (event.getData() != null) {
++                encodeData(sb, event.getData(), charset);
++            }
++        } else {
++            encodeData(sb, data, charset);
++        }
++
++        sb.append('\n');
++
++        try {
++            outputStream.write(sb.toString().getBytes(charset));
++        } catch (Exception e) {
++            throw new EncodeException("Error encoding ServerSentEvent", e);
++        }
++    }
++
++    private void encodeData(StringBuilder sb, Object data, Charset charset) {
++        ByteArrayOutputStream bos = new ByteArrayOutputStream(256);
++        httpMessageEncoder.encode(bos, data, charset);
++        String dataStr = new String(bos.toByteArray(), charset);
++        List<String> lines = StringUtils.splitToList(dataStr, '\n');
++        for (int i = 0, size = lines.size(); i < size; i++) {
++            appendField(sb, "data", lines.get(i));
++        }
++    }
++
++    private static void appendField(StringBuilder sb, String name, Object value) {
++        sb.append(name).append(':').append(value).append('\n');
++    }
++
++    @Override
++    public String contentType() {
++        return httpMessageEncoder.contentType();
++    }
++
++    @Override
++    public MediaType mediaType() {
++        return httpMessageEncoder.mediaType();
++    }
++
++    @Override
++    public boolean supports(String mediaType) {
++        return httpMessageEncoder.supports(mediaType);
++    }
++}
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
+index 8fc8867a4382e73c585e77d97732fc3e6cb8be71..ca38ce08f81ffd160c9f1f50b80024bf4ae57b0f 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/ReflectionPackableMethod.java
+@@ -125,7 +125,7 @@ public class ReflectionPackableMethod implements PackableMethod {
+         return new ReflectionPackableMethod(methodDescriptor, url, serializeName, allSerialize);
+     }
+ 
+-    static boolean isStreamType(Class<?> type) {
++    public static boolean isStreamType(Class<?> type) {
+         return StreamObserver.class.isAssignableFrom(type) || GRPC_STREAM_CLASS.equalsIgnoreCase(type.getName());
+     }
+ 
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/ServerStreamServerCallListener.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/ServerStreamServerCallListener.java
+index 8c6a83f37a1a8eb55b385e1b3d01342c3c4cb0b9..8315ff7aba792b890c604818bba6afd16b237c4f 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/ServerStreamServerCallListener.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/ServerStreamServerCallListener.java
+@@ -17,6 +17,7 @@
+ package org.apache.dubbo.rpc.protocol.tri.h12;
+ 
+ import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.remoting.http12.HttpResult;
+ import org.apache.dubbo.remoting.http12.exception.HttpStatusException;
+ import org.apache.dubbo.rpc.Invoker;
+ import org.apache.dubbo.rpc.RpcInvocation;
+@@ -29,7 +30,12 @@ public class ServerStreamServerCallListener extends AbstractServerCallListener {
+     }
+ 
+     @Override
+-    public void onReturn(Object value) {}
++    public void onReturn(Object value) {
++        if (value instanceof HttpResult) {
++            responseObserver.onNext(value);
++            responseObserver.onCompleted();
++        }
++    }
+ 
+     @Override
+     public void onMessage(Object message) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/DefaultHttp11ServerTransportListener.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/DefaultHttp11ServerTransportListener.java
+index 5e03be4c404a6ee0e92de1d3debbe98ff699c09d..8aae457476b75a62f2b63e535d31cff6b7dbb57d 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/DefaultHttp11ServerTransportListener.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/DefaultHttp11ServerTransportListener.java
+@@ -25,7 +25,6 @@ import org.apache.dubbo.remoting.http12.HttpInputMessage;
+ import org.apache.dubbo.remoting.http12.RequestMetadata;
+ import org.apache.dubbo.remoting.http12.h1.Http1ServerChannelObserver;
+ import org.apache.dubbo.remoting.http12.h1.Http1ServerTransportListener;
+-import org.apache.dubbo.remoting.http12.h1.Http1SseServerChannelObserver;
+ import org.apache.dubbo.remoting.http12.message.DefaultListeningDecoder;
+ import org.apache.dubbo.remoting.http12.message.MediaType;
+ import org.apache.dubbo.remoting.http12.message.codec.JsonCodec;
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/Http1SseServerChannelObserver.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/Http1SseServerChannelObserver.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..7499a16c95c893821ea0222836244a564ffe8c00
+--- /dev/null
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http1/Http1SseServerChannelObserver.java
+@@ -0,0 +1,78 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.protocol.tri.h12.http1;
++
++import org.apache.dubbo.remoting.http12.HttpChannel;
++import org.apache.dubbo.remoting.http12.HttpConstants;
++import org.apache.dubbo.remoting.http12.HttpHeaderNames;
++import org.apache.dubbo.remoting.http12.HttpMetadata;
++import org.apache.dubbo.remoting.http12.HttpOutputMessage;
++import org.apache.dubbo.remoting.http12.HttpResult;
++import org.apache.dubbo.remoting.http12.h1.Http1ServerChannelObserver;
++import org.apache.dubbo.remoting.http12.message.HttpMessageEncoder;
++import org.apache.dubbo.remoting.http12.message.ServerSentEventEncoder;
++
++public class Http1SseServerChannelObserver extends Http1ServerChannelObserver {
++
++    private HttpMessageEncoder originalResponseEncoder;
++
++    public Http1SseServerChannelObserver(HttpChannel httpChannel) {
++        super(httpChannel);
++    }
++
++    @Override
++    public void setResponseEncoder(HttpMessageEncoder responseEncoder) {
++        super.setResponseEncoder(new ServerSentEventEncoder(responseEncoder));
++        this.originalResponseEncoder = responseEncoder;
++    }
++
++    @Override
++    protected void doOnCompleted(Throwable throwable) {
++        if (!isHeaderSent()) {
++            sendMetadata(encodeHttpMetadata(true));
++        }
++        super.doOnCompleted(throwable);
++    }
++
++    @Override
++    protected HttpMetadata encodeHttpMetadata(boolean endStream) {
++        return super.encodeHttpMetadata(endStream)
++                .header(HttpHeaderNames.TRANSFER_ENCODING.getKey(), HttpConstants.CHUNKED)
++                .header(HttpHeaderNames.CACHE_CONTROL.getKey(), HttpConstants.NO_CACHE);
++    }
++
++    @Override
++    protected HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
++        if (data instanceof HttpResult) {
++            data = ((HttpResult<?>) data).getBody();
++
++            if (data == null && statusCode != 200) {
++                return null;
++            }
++
++            HttpOutputMessage message = encodeHttpOutputMessage(data);
++            try {
++                originalResponseEncoder.encode(message.getBody(), data);
++            } catch (Throwable t) {
++                message.close();
++                throw t;
++            }
++            return message;
++        }
++        return super.buildMessage(statusCode, data);
++    }
++}
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http2/Http2SseServerChannelObserver.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http2/Http2SseServerChannelObserver.java
+index b36dc5e35368f010094f287dcca81d5753e21a60..dfc50c928787e13cbedca0fa66ff4c7ae9000a48 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http2/Http2SseServerChannelObserver.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h12/http2/Http2SseServerChannelObserver.java
+@@ -20,17 +20,26 @@ import org.apache.dubbo.remoting.http12.HttpConstants;
+ import org.apache.dubbo.remoting.http12.HttpHeaderNames;
+ import org.apache.dubbo.remoting.http12.HttpMetadata;
+ import org.apache.dubbo.remoting.http12.HttpOutputMessage;
++import org.apache.dubbo.remoting.http12.HttpResult;
+ import org.apache.dubbo.remoting.http12.h2.H2StreamChannel;
++import org.apache.dubbo.remoting.http12.message.HttpMessageEncoder;
++import org.apache.dubbo.remoting.http12.message.ServerSentEventEncoder;
+ import org.apache.dubbo.rpc.model.FrameworkModel;
+ 
+-import java.io.IOException;
+-
+ public final class Http2SseServerChannelObserver extends Http2StreamServerChannelObserver {
+ 
++    private HttpMessageEncoder originalResponseEncoder;
++
+     public Http2SseServerChannelObserver(FrameworkModel frameworkModel, H2StreamChannel h2StreamChannel) {
+         super(frameworkModel, h2StreamChannel);
+     }
+ 
++    @Override
++    public void setResponseEncoder(HttpMessageEncoder responseEncoder) {
++        super.setResponseEncoder(new ServerSentEventEncoder(responseEncoder));
++        this.originalResponseEncoder = responseEncoder;
++    }
++
+     @Override
+     protected HttpMetadata encodeHttpMetadata(boolean endStream) {
+         return super.encodeHttpMetadata(endStream)
+@@ -38,16 +47,32 @@ public final class Http2SseServerChannelObserver extends Http2StreamServerChanne
+     }
+ 
+     @Override
+-    protected void preOutputMessage(HttpOutputMessage message) throws IOException {
+-        HttpOutputMessage prefixMessage = getHttpChannel().newOutputMessage();
+-        prefixMessage.getBody().write(HttpConstants.SERVER_SENT_EVENT_DATA_PREFIX_BYTES);
+-        getHttpChannel().writeMessage(prefixMessage);
++    protected HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
++        if (data instanceof HttpResult) {
++            data = ((HttpResult<?>) data).getBody();
++
++            if (data == null && statusCode != 200) {
++                return null;
++            }
++
++            HttpOutputMessage message = encodeHttpOutputMessage(data);
++            try {
++                originalResponseEncoder.encode(message.getBody(), data);
++            } catch (Throwable t) {
++                message.close();
++                throw t;
++            }
++            return message;
++        }
++        return super.buildMessage(statusCode, data);
+     }
+ 
+     @Override
+-    protected void postOutputMessage(HttpOutputMessage message) throws IOException {
+-        HttpOutputMessage lfMessage = getHttpChannel().newOutputMessage();
+-        lfMessage.getBody().write(HttpConstants.SERVER_SENT_EVENT_LF_BYTES);
+-        getHttpChannel().writeMessage(lfMessage);
++    protected void doOnCompleted(Throwable throwable) {
++        // if throwable is not null, the header will be flushed by super.doOnCompleted(throwable)
++        if (!isHeaderSent() && throwable == null) {
++            sendMetadata(encodeHttpMetadata(true));
++        }
++        super.doOnCompleted(throwable);
+     }
+ }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/meta/ParameterMeta.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/meta/ParameterMeta.java
+index d9a46ef29668eab9367102cd279b270df298da09..1b9a34503c47a302a448d2234c28a8d7a192e26b 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/meta/ParameterMeta.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/meta/ParameterMeta.java
+@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.protocol.tri.rest.mapping.meta;
+ 
+ import org.apache.dubbo.remoting.http12.HttpRequest;
+ import org.apache.dubbo.remoting.http12.HttpResponse;
++import org.apache.dubbo.rpc.protocol.tri.ReflectionPackableMethod;
+ import org.apache.dubbo.rpc.protocol.tri.rest.Messages;
+ import org.apache.dubbo.rpc.protocol.tri.rest.RestException;
+ import org.apache.dubbo.rpc.protocol.tri.rest.util.RestToolKit;
+@@ -79,6 +80,10 @@ public abstract class ParameterMeta extends AnnotationSupport {
+         return simple;
+     }
+ 
++    public final boolean isStream() {
++        return ReflectionPackableMethod.isStreamType(getType());
++    }
++
+     public final Class<?> getActualType() {
+         Class<?> type = actualType;
+         if (type == null) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/basic/FallbackArgumentResolver.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/basic/FallbackArgumentResolver.java
+index 82caf9dfd5a97b804810f14587aaf2598595dbde..1e42dfe223a2f50352b1f43a36f1c74c3a7d3ed5 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/basic/FallbackArgumentResolver.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/support/basic/FallbackArgumentResolver.java
+@@ -111,6 +111,10 @@ public class FallbackArgumentResolver extends AbstractArgumentResolver {
+             }
+         }
+ 
++        if (meta.parameter().isStream()) {
++            return null;
++        }
++
+         if (single) {
+             if (Map.class.isAssignableFrom(meta.type())) {
+                 return RequestUtils.getParametersMap(request);
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 28a86e7b62272991e0be5eae2a001d1975b2c2f5..4d511307d427448cec8d3b04c71a67a763f44d6e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -60,6 +60,8 @@ public class WelcomeLogoApplicationListener implements ApplicationListener<Appli
+ 
+         if (logger.isInfoEnabled()) {
+             logger.info(bannerText);
++        } else {
++            System.out.print(bannerText);
+         }
+ 
+         // mark processed to be true
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..f8507cdf785109a93b95677ffc71830ef7a6790c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -157,7 +157,7 @@
+     <build_helper_maven_plugin_version>3.6.0</build_helper_maven_plugin_version>
+     <maven_jacoco_version>0.8.13</maven_jacoco_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+-    <maven_enforce_version>3.6.0</maven_enforce_version>
++    <maven_enforce_version>3.5.0</maven_enforce_version>
+     <maven_antrun_version>3.1.0</maven_antrun_version>
+     <maven_os_plugin_version>1.7.1</maven_os_plugin_version>
+     <maven_protobuf_plugin_version>0.6.1</maven_protobuf_plugin_version>
+@@ -165,12 +165,10 @@
+ 
+     <!-- For unify spring boot 3 version -->
+     <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+-    <!-- grpc_version should be same as grpc.version at dubbo-dependencies-bom -->
+-    <grpc_version>1.73.0</grpc_version>
++    <grpc_version>1.54.0</grpc_version>
+     <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+@@ -497,7 +495,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +644,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

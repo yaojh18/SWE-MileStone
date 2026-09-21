@@ -1,0 +1,1151 @@
+diff --git a/cmd/wire_gen.go b/cmd/wire_gen.go
+index d876a48a820af28c1f9aa1dcec1f4d0f2cfc34a1..187ab488d91f03212b33b626b4f6b4a575a726a5 100644
+--- a/cmd/wire_gen.go
++++ b/cmd/wire_gen.go
+@@ -62,7 +62,17 @@ func CreateNativeAPIRouter(ctx context.Context) *nativeapi.Router {
+ 	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
+ 	manager := plugins.GetManager(dataStore, metricsMetrics)
+ 	insights := metrics.GetInstance(dataStore, manager)
+-	router := nativeapi.New(dataStore, share, playlists, insights)
++	fileCache := artwork.GetImageCache()
++	fFmpeg := ffmpeg.New()
++	agentsAgents := agents.GetAgents(dataStore, manager)
++	provider := external.NewProvider(dataStore, agentsAgents)
++	artworkArtwork := artwork.NewArtwork(dataStore, fileCache, fFmpeg, provider)
++	cacheWarmer := artwork.NewCacheWarmer(artworkArtwork, fileCache)
++	broker := events.GetBroker()
++	scannerScanner := scanner.New(ctx, dataStore, cacheWarmer, broker, playlists, metricsMetrics)
++	watcher := scanner.GetWatcher(dataStore, scannerScanner)
++	library := core.NewLibrary(dataStore, scannerScanner, watcher, broker)
++	router := nativeapi.New(dataStore, share, playlists, insights, library)
+ 	return router
+ }
+ 
+diff --git a/core/share.go b/core/share.go
+index add88322d60995f42ecdd60ba8fda271a1c0c43e..202c27d897c955099cc715473f41b056438a90fd 100644
+--- a/core/share.go
++++ b/core/share.go
+@@ -149,7 +149,7 @@ func (r *shareRepositoryWrapper) contentsLabelFromArtist(shareID string, ids str
+ 
+ func (r *shareRepositoryWrapper) contentsLabelFromAlbums(shareID string, ids string) string {
+ 	idList := strings.Split(ids, ",")
+-	all, err := r.ds.Album(r.ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"id": idList}})
++	all, err := r.ds.Album(r.ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album.id": idList}})
+ 	if err != nil {
+ 		log.Error(r.ctx, "Error retrieving album names for share", "share", shareID, err)
+ 		return ""
+diff --git a/model/searchable.go b/model/searchable.go
+index cc4f0b44ea7e11f1973f3d0c25572e46ece5d368..631a117268244c52a93e44c5f175828b572551c8 100644
+--- a/model/searchable.go
++++ b/model/searchable.go
+@@ -1,5 +1,5 @@
+ package model
+ 
+ type SearchableRepository[T any] interface {
+-	Search(q string, offset, size int, includeMissing bool, options ...QueryOptions) (T, error)
++	Search(q string, offset, size int, options ...QueryOptions) (T, error)
+ }
+diff --git a/model/tag.go b/model/tag.go
+index 8f9c60f37aa4bb3fe95b27f2723510c50513674f..674f688cae3b5a1a953ca2e214e89034f66a941b 100644
+--- a/model/tag.go
++++ b/model/tag.go
+@@ -12,11 +12,11 @@ import (
+ )
+ 
+ type Tag struct {
+-	ID             string  `json:"id,omitempty"`
+-	TagName        TagName `json:"tagName,omitempty"`
+-	TagValue       string  `json:"tagValue,omitempty"`
+-	AlbumCount     int     `json:"albumCount,omitempty"`
+-	MediaFileCount int     `json:"songCount,omitempty"`
++	ID         string  `json:"id,omitempty"`
++	TagName    TagName `json:"tagName,omitempty"`
++	TagValue   string  `json:"tagValue,omitempty"`
++	AlbumCount int     `json:"albumCount,omitempty"`
++	SongCount  int     `json:"songCount,omitempty"`
+ }
+ 
+ type TagList []Tag
+diff --git a/persistence/album_repository.go b/persistence/album_repository.go
+index 682a409a11c2420b1bb9d25bca9fc708e31cbfd9..6f9bb3b482f8d1a6580706d5f6727614e9b169d9 100644
+--- a/persistence/album_repository.go
++++ b/persistence/album_repository.go
+@@ -349,15 +349,15 @@ func (r *albumRepository) purgeEmpty() error {
+ 	return nil
+ }
+ 
+-func (r *albumRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Albums, error) {
++func (r *albumRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Albums, error) {
+ 	var res dbAlbums
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectAlbum(options...), q, []string{"mbz_album_id", "mbz_release_group_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectAlbum(options...), q, []string{"mbz_album_id", "mbz_release_group_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectAlbum(options...), q, offset, size, includeMissing, &res, "name")
++		err := r.doSearch(r.selectAlbum(options...), q, offset, size, &res, "album.rowid", "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/artist_repository.go b/persistence/artist_repository.go
+index 3f85ed6d75c48ee02cc024b997e8c8800971e40c..a7cf9272abee8cfb9245af198b89ecd149d82e55 100644
+--- a/persistence/artist_repository.go
++++ b/persistence/artist_repository.go
+@@ -156,7 +156,7 @@ func NewArtistRepository(ctx context.Context, db dbx.Builder) model.ArtistReposi
+ func roleFilter(_ string, role any) Sqlizer {
+ 	if role, ok := role.(string); ok {
+ 		if _, ok := model.AllRoles[role]; ok {
+-			return Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL)")
++			return Expr("JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL")
+ 		}
+ 	}
+ 	return Eq{"1": 2}
+@@ -170,15 +170,17 @@ func artistLibraryIdFilter(_ string, value interface{}) Sqlizer {
+ // applyLibraryFilterToArtistQuery applies library filtering to artist queries through the library_artist junction table
+ func (r *artistRepository) applyLibraryFilterToArtistQuery(query SelectBuilder) SelectBuilder {
+ 	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		// No user context - return empty result set
+-		return query.Where(Eq{"1": "0"})
++	// Join with library_artist first to ensure only artists with content in libraries are included
++	// Exclude artists with empty stats (no actual content in the library)
++	query = query.Join("library_artist on library_artist.artist_id = artist.id")
++	//query = query.Join("library_artist on library_artist.artist_id = artist.id AND library_artist.stats != '{}'")
++
++	// Admin users see all artists from all libraries, no additional filtering needed
++	if user.ID != invalidUserId && !user.IsAdmin {
++		// Apply library filtering only for non-admin users by joining with their accessible libraries
++		query = query.Join("user_library on user_library.library_id = library_artist.library_id AND user_library.user_id = ?", user.ID)
+ 	}
+ 
+-	// Apply library filtering by joining only with accessible libraries
+-	query = query.LeftJoin("library_artist on library_artist.artist_id = artist.id").
+-		Join("user_library on user_library.library_id = library_artist.library_id AND user_library.user_id = ?", user.ID)
+-
+ 	return query
+ }
+ 
+@@ -503,19 +505,29 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+ 		totalRowsAffected += rowsAffected
+ 	}
+ 
++	// // Remove library_artist entries for artists that no longer have any content in any library
++	cleanupSQL := Delete("library_artist").Where("stats = '{}'")
++	cleanupRows, err := r.executeSQL(cleanupSQL)
++	if err != nil {
++		log.Warn(r.ctx, "Failed to cleanup empty library_artist entries", "error", err)
++	} else if cleanupRows > 0 {
++		log.Debug(r.ctx, "Cleaned up empty library_artist entries", "rowsDeleted", cleanupRows)
++	}
++
+ 	log.Debug(r.ctx, "RefreshStats: Successfully updated stats.", "totalArtistsProcessed", len(allTouchedArtistIDs), "totalDBRowsAffected", totalRowsAffected)
+ 	return totalRowsAffected, nil
+ }
+ 
+-func (r *artistRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Artists, error) {
++func (r *artistRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Artists, error) {
+ 	var res dbArtists
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectArtist(options...), q, []string{"mbz_artist_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectArtist(options...), q, []string{"mbz_artist_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectArtist(options...), q, offset, size, includeMissing, &res,
++		// Natural order for artists is more performant by ID, due to GROUP BY clause in selectArtist
++		err := r.doSearch(r.selectArtist(options...), q, offset, size, &res, "artist.id",
+ 			"sum(json_extract(stats, '$.total.m')) desc", "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by query %q: %w", q, err)
+diff --git a/persistence/genre_repository.go b/persistence/genre_repository.go
+index 311eb0a68d97c09515d00b1f9621214cd9e46719..5857350a68696d86f96d6f296afaab181a8391c9 100644
+--- a/persistence/genre_repository.go
++++ b/persistence/genre_repository.go
+@@ -21,7 +21,7 @@ func NewGenreRepository(ctx context.Context, db dbx.Builder) model.GenreReposito
+ }
+ 
+ func (r *genreRepository) selectGenre(opt ...model.QueryOptions) SelectBuilder {
+-	return r.newSelect(opt...)
++	return r.newSelect(opt...).Columns("tag.tag_value as name")
+ }
+ 
+ func (r *genreRepository) GetAll(opt ...model.QueryOptions) (model.Genres, error) {
+diff --git a/persistence/mediafile_repository.go b/persistence/mediafile_repository.go
+index 7c2ac577815303ef1300d7953b9bd29460d04d80..e7883947a73e27650201f487fd75b4390b64dabf 100644
+--- a/persistence/mediafile_repository.go
++++ b/persistence/mediafile_repository.go
+@@ -339,15 +339,15 @@ func (r *mediaFileRepository) FindRecentFilesByProperties(missing model.MediaFil
+ 	return res.toModels(), nil
+ }
+ 
+-func (r *mediaFileRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.MediaFiles, error) {
++func (r *mediaFileRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.MediaFiles, error) {
+ 	var res dbMediaFiles
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectMediaFile(options...), q, []string{"mbz_recording_id", "mbz_release_track_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectMediaFile(options...), q, []string{"mbz_recording_id", "mbz_release_track_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectMediaFile(options...), q, offset, size, includeMissing, &res, "title")
++		err := r.doSearch(r.selectMediaFile(options...), q, offset, size, &res, "media_file.rowid", "title")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/scrobble_buffer_repository.go b/persistence/scrobble_buffer_repository.go
+index ac0d8adebdf3d22a17257f57ffd4c577f66bb422..d0f88903ee12158b8ee5b7ee366e954201f8b39d 100644
+--- a/persistence/scrobble_buffer_repository.go
++++ b/persistence/scrobble_buffer_repository.go
+@@ -8,7 +8,6 @@ import (
+ 	. "github.com/Masterminds/squirrel"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/id"
+-	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/pocketbase/dbx"
+ )
+ 
+@@ -83,20 +82,7 @@ func (r *scrobbleBufferRepository) Next(service string, userId string) (*model.S
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-
+-	// Create context with user information for getParticipants call
+-	// This is needed because the artist repository requires user context for multi-library support
+-	userRepo := NewUserRepository(r.ctx, r.db)
+-	user, err := userRepo.Get(res.ScrobbleEntry.UserID)
+-	if err != nil {
+-		return nil, err
+-	}
+-	// Temporarily use user context for getParticipants
+-	originalCtx := r.ctx
+-	r.ctx = request.WithUser(r.ctx, *user)
+ 	res.ScrobbleEntry.Participants, err = r.getParticipants(&res.ScrobbleEntry.MediaFile)
+-	r.ctx = originalCtx // Restore original context
+-
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/persistence/share_repository.go b/persistence/share_repository.go
+index abe1ea6e6bfeb351da57b8bac3ab2dec328fb70a..d943943e007d47f244a54d70b4ce84c3e7736906 100644
+--- a/persistence/share_repository.go
++++ b/persistence/share_repository.go
+@@ -95,7 +95,7 @@ func (r *shareRepository) loadMedia(share *model.Share) error {
+ 		return err
+ 	case "album":
+ 		albumRepo := NewAlbumRepository(r.ctx, r.db)
+-		share.Albums, err = albumRepo.GetAll(model.QueryOptions{Filters: noMissing(Eq{"id": ids})})
++		share.Albums, err = albumRepo.GetAll(model.QueryOptions{Filters: noMissing(Eq{"album.id": ids})})
+ 		if err != nil {
+ 			return err
+ 		}
+diff --git a/persistence/sql_base_repository.go b/persistence/sql_base_repository.go
+index 9e7a58713da0281768eb56d38e60b9ef8dce8e28..ce026a3c39f7e2547d8525fe9e1bed53c5a77087 100644
+--- a/persistence/sql_base_repository.go
++++ b/persistence/sql_base_repository.go
+@@ -205,27 +205,20 @@ func libraryIdFilter(_ string, value interface{}) Sqlizer {
+ func (r sqlRepository) applyLibraryFilter(sq SelectBuilder, tableName ...string) SelectBuilder {
+ 	user := loggedUser(r.ctx)
+ 
+-	// Admin users see all content
+-	if user.IsAdmin {
++	// If the user is an admin, or the user ID is invalid (e.g., when no user is logged in), skip the library filter
++	if user.IsAdmin || user.ID == invalidUserId {
+ 		return sq
+ 	}
+ 
+-	// Get user's accessible library IDs
+-	userID := loggedUser(r.ctx).ID
+-	if userID == invalidUserId {
+-		// No user context - return empty result set
+-		return sq.Where(Eq{"1": "0"})
+-	}
+-
+ 	table := r.tableName
+ 	if len(tableName) > 0 {
+ 		table = tableName[0]
+ 	}
+ 
++	// Get user's accessible library IDs
+ 	// Use subquery to filter by user's library access
+-	// This approach doesn't require DataStore in context
+ 	return sq.Where(Expr(table+".library_id IN ("+
+-		"SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)", userID))
++		"SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)", user.ID))
+ }
+ 
+ func (r sqlRepository) seedKey() string {
+diff --git a/persistence/sql_participations.go b/persistence/sql_participations.go
+index 006b7063bf35d0b4e2b2917f9dfdde4dc00239fb..4345184f156c69f79bfd9b6e907ae002c05ae4ed 100644
+--- a/persistence/sql_participations.go
++++ b/persistence/sql_participations.go
+@@ -68,7 +68,7 @@ func (r sqlRepository) updateParticipants(itemID string, participants model.Part
+ func (r *sqlRepository) getParticipants(m *model.MediaFile) (model.Participants, error) {
+ 	ar := NewArtistRepository(r.ctx, r.db)
+ 	ids := m.Participants.AllIDs()
+-	artists, err := ar.GetAll(model.QueryOptions{Filters: Eq{"id": ids}})
++	artists, err := ar.GetAll(model.QueryOptions{Filters: Eq{"artist.id": ids}})
+ 	if err != nil {
+ 		return nil, fmt.Errorf("getting participants: %w", err)
+ 	}
+diff --git a/persistence/sql_search.go b/persistence/sql_search.go
+index d4d068945b134ae1f214890315ed428de18bdce3..0d3bfb7434232967d9cfb7937394a5addc124bae 100644
+--- a/persistence/sql_search.go
++++ b/persistence/sql_search.go
+@@ -15,7 +15,11 @@ func formatFullText(text ...string) string {
+ 	return " " + fullText
+ }
+ 
+-func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, includeMissing bool, results any, orderBys ...string) error {
++// doSearch performs a full-text search with the specified parameters.
++// The naturalOrder is used to sort results when no full-text filter is applied. It is useful for cases like
++// OpenSubsonic, where an empty search query should return all results in a natural order. Normally the parameter
++// should be `tableName + ".rowid"`, but some repositories (ex: artist) may use a different natural order.
++func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, results any, naturalOrder string, orderBys ...string) error {
+ 	q = strings.TrimSpace(q)
+ 	q = strings.TrimSuffix(q, "*")
+ 	if len(q) < 2 {
+@@ -27,23 +31,18 @@ func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, in
+ 		sq = sq.Where(filter)
+ 		sq = sq.OrderBy(orderBys...)
+ 	} else {
+-		// If the filter is empty, we sort by id.
+ 		// This is to speed up the results of `search3?query=""`, for OpenSubsonic
+-		sq = sq.OrderBy(r.tableName + ".id")
+-	}
+-	if !includeMissing {
+-		sq = sq.Where(Eq{r.tableName + ".missing": false})
++		// If the filter is empty, we sort by the specified natural order.
++		sq = sq.OrderBy(naturalOrder)
+ 	}
++	sq = sq.Where(Eq{r.tableName + ".missing": false})
+ 	sq = sq.Limit(uint64(size)).Offset(uint64(offset))
+ 	return r.queryAll(sq, results, model.QueryOptions{Offset: offset})
+ }
+ 
+-func (r sqlRepository) searchByMBID(sq SelectBuilder, mbid string, mbidFields []string, includeMissing bool, results any) error {
++func (r sqlRepository) searchByMBID(sq SelectBuilder, mbid string, mbidFields []string, results any) error {
+ 	sq = sq.Where(mbidExpr(r.tableName, mbid, mbidFields...))
+-
+-	if !includeMissing {
+-		sq = sq.Where(Eq{r.tableName + ".missing": false})
+-	}
++	sq = sq.Where(Eq{r.tableName + ".missing": false})
+ 
+ 	return r.queryAll(sq, results)
+ }
+diff --git a/persistence/sql_tags.go b/persistence/sql_tags.go
+index b92e18e60a8bc365132ef531e1353c9e957f1dca..8c3c1e89ddfc52ae94e65341baa15103bb390526 100644
+--- a/persistence/sql_tags.go
++++ b/persistence/sql_tags.go
+@@ -91,61 +91,66 @@ func newBaseTagRepository(ctx context.Context, db dbx.Builder, tagFilter *model.
+ 	return r
+ }
+ 
+-// newSelect overrides the base implementation to apply tag name filtering and library filtering.
+-func (r *baseTagRepository) newSelect(options ...model.QueryOptions) SelectBuilder {
++// applyLibraryFiltering adds the appropriate library joins based on user context
++func (r *baseTagRepository) applyLibraryFiltering(sq SelectBuilder) SelectBuilder {
++	// Add library_tag join
++	sq = sq.LeftJoin("library_tag on library_tag.tag_id = tag.id")
++
++	// For authenticated users, also join with user_library to filter by accessible libraries
+ 	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		// No user context - return empty result set
+-		return SelectBuilder{}.Where(Eq{"1": "0"})
++	if user.ID != invalidUserId {
++		sq = sq.Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID)
+ 	}
++
++	return sq
++}
++
++// newSelect overrides the base implementation to apply tag name filtering and library filtering.
++func (r *baseTagRepository) newSelect(options ...model.QueryOptions) SelectBuilder {
+ 	sq := r.sqlRepository.newSelect(options...)
++
++	// Apply tag name filtering if specified
+ 	if r.tagFilter != nil {
+ 		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
+ 	}
+-	sq = sq.Columns(
++
++	// Apply library filtering and set up aggregation columns
++	sq = r.applyLibraryFiltering(sq).Columns(
+ 		"tag.id",
+-		"tag.tag_value as name",
++		"tag.tag_name",
++		"tag.tag_value",
+ 		"COALESCE(SUM(library_tag.album_count), 0) as album_count",
+ 		"COALESCE(SUM(library_tag.media_file_count), 0) as song_count",
+-	).
+-		LeftJoin("library_tag on library_tag.tag_id = tag.id").
+-		// Apply library filtering by joining only with accessible libraries
+-		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID).
+-		GroupBy("tag.id", "tag.tag_value")
++	).GroupBy("tag.id", "tag.tag_name", "tag.tag_value")
++
+ 	return sq
+ }
+ 
+ // ResourceRepository interface implementation
+ 
+ func (r *baseTagRepository) Count(options ...rest.QueryOptions) (int64, error) {
+-	// Create a query that counts distinct tags without GROUP BY
+-	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		return 0, nil
+-	}
++	sq := Select("COUNT(DISTINCT tag.id)").From("tag")
+ 
+-	// Build the same base query as newSelect but for counting
+-	sq := Select()
++	// Apply tag name filtering if specified
+ 	if r.tagFilter != nil {
+ 		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
+ 	}
+ 
+-	// Apply the same joins as newSelect
+-	sq = sq.LeftJoin("library_tag on library_tag.tag_id = tag.id").
+-		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID)
++	// Apply library filtering
++	sq = r.applyLibraryFiltering(sq)
+ 
+ 	return r.count(sq, r.parseRestOptions(r.ctx, options...))
+ }
+ 
+ func (r *baseTagRepository) Read(id string) (interface{}, error) {
+-	query := r.newSelect().Columns("*").Where(Eq{"id": id})
++	query := r.newSelect().Where(Eq{"id": id})
+ 	var res model.Tag
+ 	err := r.queryOne(query, &res)
+ 	return &res, err
+ }
+ 
+ func (r *baseTagRepository) ReadAll(options ...rest.QueryOptions) (interface{}, error) {
+-	query := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns("*")
++	query := r.newSelect(r.parseRestOptions(r.ctx, options...))
+ 	var res model.TagList
+ 	err := r.queryAll(query, &res)
+ 	return res, err
+diff --git a/server/nativeapi/config.go b/server/nativeapi/config.go
+index d708d72f90a2946dfc2a514959fe052aabd8a581..9a86a9add7ffad93d077732123949666017c62ed 100644
+--- a/server/nativeapi/config.go
++++ b/server/nativeapi/config.go
+@@ -9,7 +9,6 @@ import (
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/log"
+-	"github.com/navidrome/navidrome/model/request"
+ )
+ 
+ // sensitiveFieldsPartialMask contains configuration field names that should be redacted
+@@ -99,11 +98,6 @@ func applySensitiveFieldMasking(ctx context.Context, config map[string]interface
+ 
+ func getConfig(w http.ResponseWriter, r *http.Request) {
+ 	ctx := r.Context()
+-	user, _ := request.UserFrom(ctx)
+-	if !user.IsAdmin {
+-		http.Error(w, "Config endpoint is only available to admin users", http.StatusUnauthorized)
+-		return
+-	}
+ 
+ 	// Marshal the actual configuration struct to preserve original field names
+ 	configBytes, err := json.Marshal(*conf.Server)
+diff --git a/server/nativeapi/inspect.go b/server/nativeapi/inspect.go
+index e74dc99c08ec8835e8e5b17b436a6370ef18835b..3178395cedf840947da5efede248053fdac84440 100644
+--- a/server/nativeapi/inspect.go
++++ b/server/nativeapi/inspect.go
+@@ -9,7 +9,6 @@ import (
+ 	"github.com/navidrome/navidrome/core"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+-	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/utils/req"
+ )
+ 
+@@ -30,11 +29,6 @@ func inspect(ds model.DataStore) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		ctx := r.Context()
+ 
+-		user, _ := request.UserFrom(ctx)
+-		if !user.IsAdmin {
+-			http.Error(w, "Inspect is only available to admin users", http.StatusUnauthorized)
+-		}
+-
+ 		p := req.Params(r)
+ 		id, err := p.String("id")
+ 
+diff --git a/server/nativeapi/library.go b/server/nativeapi/library.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f081eca789cc1f0951c666b8f9894a14a0132f4a
+--- /dev/null
++++ b/server/nativeapi/library.go
+@@ -0,0 +1,101 @@
++package nativeapi
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++
++	"github.com/go-chi/chi/v5"
++	"github.com/navidrome/navidrome/core"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++)
++
++// User-library association endpoints (admin only)
++func (n *Router) addUserLibraryRoute(r chi.Router) {
++	r.Route("/user/{id}/library", func(r chi.Router) {
++		r.Use(parseUserIDMiddleware)
++		r.Get("/", getUserLibraries(n.libs))
++		r.Put("/", setUserLibraries(n.libs))
++	})
++}
++
++// Middleware to parse user ID from URL
++func parseUserIDMiddleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		userID := chi.URLParam(r, "id")
++		if userID == "" {
++			http.Error(w, "Invalid user ID", http.StatusBadRequest)
++			return
++		}
++		ctx := context.WithValue(r.Context(), "userID", userID)
++		next.ServeHTTP(w, r.WithContext(ctx))
++	})
++}
++
++// User-library association handlers
++
++func getUserLibraries(service core.Library) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		userID := r.Context().Value("userID").(string)
++
++		libraries, err := service.GetUserLibraries(r.Context(), userID)
++		if err != nil {
++			if errors.Is(err, model.ErrNotFound) {
++				http.Error(w, "User not found", http.StatusNotFound)
++				return
++			}
++			log.Error(r.Context(), "Error getting user libraries", "userID", userID, err)
++			http.Error(w, "Internal server error", http.StatusInternalServerError)
++			return
++		}
++
++		w.Header().Set("Content-Type", "application/json")
++		if err := json.NewEncoder(w).Encode(libraries); err != nil {
++			log.Error(r.Context(), "Error encoding user libraries response", err)
++		}
++	}
++}
++
++func setUserLibraries(service core.Library) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		userID := r.Context().Value("userID").(string)
++
++		var request struct {
++			LibraryIDs []int `json:"libraryIds"`
++		}
++		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
++			log.Error(r.Context(), "Error decoding request", err)
++			http.Error(w, "Invalid request body", http.StatusBadRequest)
++			return
++		}
++
++		if err := service.SetUserLibraries(r.Context(), userID, request.LibraryIDs); err != nil {
++			log.Error(r.Context(), "Error setting user libraries", "userID", userID, err)
++			if errors.Is(err, model.ErrNotFound) {
++				http.Error(w, "User not found", http.StatusNotFound)
++				return
++			}
++			if errors.Is(err, model.ErrValidation) {
++				http.Error(w, err.Error(), http.StatusBadRequest)
++				return
++			}
++			http.Error(w, "Failed to set user libraries", http.StatusInternalServerError)
++			return
++		}
++
++		// Return updated user libraries
++		libraries, err := service.GetUserLibraries(r.Context(), userID)
++		if err != nil {
++			log.Error(r.Context(), "Error getting updated user libraries", "userID", userID, err)
++			http.Error(w, "Internal server error", http.StatusInternalServerError)
++			return
++		}
++
++		w.Header().Set("Content-Type", "application/json")
++		if err := json.NewEncoder(w).Encode(libraries); err != nil {
++			log.Error(r.Context(), "Error encoding user libraries response", err)
++		}
++	}
++}
+diff --git a/server/nativeapi/native_api.go b/server/nativeapi/native_api.go
+index aed24e9631a6d99313616f18c242fa526626ba52..370bdbd1e0f1691198cf94b76101ba933c955128 100644
+--- a/server/nativeapi/native_api.go
++++ b/server/nativeapi/native_api.go
+@@ -16,6 +16,7 @@ import (
+ 	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/server"
+ )
+ 
+@@ -25,10 +26,11 @@ type Router struct {
+ 	share     core.Share
+ 	playlists core.Playlists
+ 	insights  metrics.Insights
++	libs      core.Library
+ }
+ 
+-func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights) *Router {
+-	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights}
++func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights, libraryService core.Library) *Router {
++	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights, libs: libraryService}
+ 	r.Handler = r.routes()
+ 	return r
+ }
+@@ -62,10 +64,15 @@ func (n *Router) routes() http.Handler {
+ 		n.addSongPlaylistsRoute(r)
+ 		n.addQueueRoute(r)
+ 		n.addMissingFilesRoute(r)
+-		n.addInspectRoute(r)
+-		n.addConfigRoute(r)
+ 		n.addKeepAliveRoute(r)
+ 		n.addInsightsRoute(r)
++
++		r.With(adminOnlyMiddleware).Group(func(r chi.Router) {
++			n.addInspectRoute(r)
++			n.addConfigRoute(r)
++			n.addUserLibraryRoute(r)
++			n.RX(r, "/library", n.libs.NewRepository, true)
++		})
+ 	})
+ 
+ 	return r
+@@ -227,3 +234,15 @@ func (n *Router) addInsightsRoute(r chi.Router) {
+ 		}
+ 	})
+ }
++
++// Middleware to ensure only admin users can access endpoints
++func adminOnlyMiddleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		user, ok := request.UserFrom(r.Context())
++		if !ok || !user.IsAdmin {
++			http.Error(w, "Access denied: admin privileges required", http.StatusForbidden)
++			return
++		}
++		next.ServeHTTP(w, r)
++	})
++}
+diff --git a/server/subsonic/album_lists.go b/server/subsonic/album_lists.go
+index 39a1645009c034802725abebe20b56628c15bcc9..56cf469c55480a6575069a4ea176e0ef8f7a4ca7 100644
+--- a/server/subsonic/album_lists.go
++++ b/server/subsonic/album_lists.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/navidrome/navidrome/server/subsonic/filter"
+ 	"github.com/navidrome/navidrome/server/subsonic/responses"
+ 	"github.com/navidrome/navidrome/utils/req"
++	"github.com/navidrome/navidrome/utils/run"
+ 	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+@@ -61,6 +62,13 @@ func (api *Router) getAlbumList(r *http.Request) (model.Albums, int64, error) {
+ 		return nil, 0, newError(responses.ErrorGeneric, "type '%s' not implemented", typ)
+ 	}
+ 
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, 0, err
++	}
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
+ 	opts.Offset = p.IntOr("offset", 0)
+ 	opts.Max = min(p.IntOr("size", 10), 500)
+ 	albums, err := api.ds.Album(r.Context()).GetAll(opts)
+@@ -109,57 +117,87 @@ func (api *Router) GetAlbumList2(w http.ResponseWriter, r *http.Request) (*respo
+ 	return response, nil
+ }
+ 
+-func (api *Router) GetStarred(r *http.Request) (*responses.Subsonic, error) {
++func (api *Router) getStarredItems(r *http.Request) (model.Artists, model.Albums, model.MediaFiles, error) {
+ 	ctx := r.Context()
+-	artists, err := api.ds.Artist(ctx).GetAll(filter.ArtistsByStarred())
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred artists", err)
+-		return nil, err
++		return nil, nil, nil, err
+ 	}
+-	options := filter.ByStarred()
+-	albums, err := api.ds.Album(ctx).GetAll(options)
++
++	// Prepare variables to capture results from parallel execution
++	var artists model.Artists
++	var albums model.Albums
++	var mediaFiles model.MediaFiles
++
++	// Execute all three queries in parallel for better performance
++	err = run.Parallel(
++		// Query starred artists
++		func() error {
++			artistOpts := filter.ApplyArtistLibraryFilter(filter.ArtistsByStarred(), musicFolderIds)
++			var err error
++			artists, err = api.ds.Artist(ctx).GetAll(artistOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred artists", err)
++			}
++			return err
++		},
++		// Query starred albums
++		func() error {
++			albumOpts := filter.ApplyLibraryFilter(filter.ByStarred(), musicFolderIds)
++			var err error
++			albums, err = api.ds.Album(ctx).GetAll(albumOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred albums", err)
++			}
++			return err
++		},
++		// Query starred media files
++		func() error {
++			mediaFileOpts := filter.ApplyLibraryFilter(filter.ByStarred(), musicFolderIds)
++			var err error
++			mediaFiles, err = api.ds.MediaFile(ctx).GetAll(mediaFileOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred mediaFiles", err)
++			}
++			return err
++		},
++	)()
++
++	// Return the first error if any occurred
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred albums", err)
+-		return nil, err
++		return nil, nil, nil, err
+ 	}
+-	mediaFiles, err := api.ds.MediaFile(ctx).GetAll(options)
++
++	return artists, albums, mediaFiles, nil
++}
++
++func (api *Router) GetStarred(r *http.Request) (*responses.Subsonic, error) {
++	artists, albums, mediaFiles, err := api.getStarredItems(r)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred mediaFiles", err)
+ 		return nil, err
+ 	}
+ 
+ 	response := newResponse()
+ 	response.Starred = &responses.Starred{}
+ 	response.Starred.Artist = slice.MapWithArg(artists, r, toArtist)
+-	response.Starred.Album = slice.MapWithArg(albums, ctx, childFromAlbum)
+-	response.Starred.Song = slice.MapWithArg(mediaFiles, ctx, childFromMediaFile)
++	response.Starred.Album = slice.MapWithArg(albums, r.Context(), childFromAlbum)
++	response.Starred.Song = slice.MapWithArg(mediaFiles, r.Context(), childFromMediaFile)
+ 	return response, nil
+ }
+ 
+ func (api *Router) GetStarred2(r *http.Request) (*responses.Subsonic, error) {
+-	ctx := r.Context()
+-	artists, err := api.ds.Artist(ctx).GetAll(filter.ArtistsByStarred())
+-	if err != nil {
+-		log.Error(r, "Error retrieving starred artists", err)
+-		return nil, err
+-	}
+-	options := filter.ByStarred()
+-	albums, err := api.ds.Album(ctx).GetAll(options)
++	artists, albums, mediaFiles, err := api.getStarredItems(r)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred albums", err)
+-		return nil, err
+-	}
+-	mediaFiles, err := api.ds.MediaFile(ctx).GetAll(options)
+-	if err != nil {
+-		log.Error(r, "Error retrieving starred mediaFiles", err)
+ 		return nil, err
+ 	}
+ 
+ 	response := newResponse()
+ 	response.Starred2 = &responses.Starred2{}
+ 	response.Starred2.Artist = slice.MapWithArg(artists, r, toArtistID3)
+-	response.Starred2.Album = slice.MapWithArg(albums, ctx, buildAlbumID3)
+-	response.Starred2.Song = slice.MapWithArg(mediaFiles, ctx, childFromMediaFile)
++	response.Starred2.Album = slice.MapWithArg(albums, r.Context(), buildAlbumID3)
++	response.Starred2.Song = slice.MapWithArg(mediaFiles, r.Context(), childFromMediaFile)
+ 	return response, nil
+ }
+ 
+@@ -193,7 +231,15 @@ func (api *Router) GetRandomSongs(r *http.Request) (*responses.Subsonic, error)
+ 	fromYear := p.IntOr("fromYear", 0)
+ 	toYear := p.IntOr("toYear", 0)
+ 
+-	songs, err := api.getSongs(r.Context(), 0, size, filter.SongsByRandom(genre, fromYear, toYear))
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	opts := filter.SongsByRandom(genre, fromYear, toYear)
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
++	songs, err := api.getSongs(r.Context(), 0, size, opts)
+ 	if err != nil {
+ 		log.Error(r, "Error retrieving random songs", err)
+ 		return nil, err
+@@ -211,8 +257,16 @@ func (api *Router) GetSongsByGenre(r *http.Request) (*responses.Subsonic, error)
+ 	offset := p.IntOr("offset", 0)
+ 	genre, _ := p.String("genre")
+ 
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	opts := filter.ByGenre(genre)
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
+ 	ctx := r.Context()
+-	songs, err := api.getSongs(ctx, offset, count, filter.ByGenre(genre))
++	songs, err := api.getSongs(ctx, offset, count, opts)
+ 	if err != nil {
+ 		log.Error(r, "Error retrieving random songs", err)
+ 		return nil, err
+diff --git a/server/subsonic/browsing.go b/server/subsonic/browsing.go
+index cd77041e091bdda1436646fcb086d85917e43257..c8584543d448a9b5cd9bb3e58b5dd0ba5f8520bf 100644
+--- a/server/subsonic/browsing.go
++++ b/server/subsonic/browsing.go
+@@ -7,6 +7,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
++	"github.com/navidrome/navidrome/consts"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/server/public"
+@@ -17,7 +18,8 @@ import (
+ )
+ 
+ func (api *Router) GetMusicFolders(r *http.Request) (*responses.Subsonic, error) {
+-	libraries, _ := api.ds.Library(r.Context()).GetAll()
++	libraries := getUserAccessibleLibraries(r.Context())
++
+ 	folders := make([]responses.MusicFolder, len(libraries))
+ 	for i, f := range libraries {
+ 		folders[i].Id = int32(f.ID)
+@@ -28,28 +30,37 @@ func (api *Router) GetMusicFolders(r *http.Request) (*responses.Subsonic, error)
+ 	return response, nil
+ }
+ 
+-func (api *Router) getArtist(r *http.Request, libId int, ifModifiedSince time.Time) (model.ArtistIndexes, int64, error) {
++func (api *Router) getArtist(r *http.Request, libIds []int, ifModifiedSince time.Time) (model.ArtistIndexes, int64, error) {
+ 	ctx := r.Context()
+-	lib, err := api.ds.Library(ctx).Get(libId)
++
++	lastScanStr, err := api.ds.Property(ctx).DefaultGet(consts.LastScanStartTimeKey, "")
+ 	if err != nil {
+-		log.Error(ctx, "Error retrieving Library", "id", libId, err)
++		log.Error(ctx, "Error retrieving last scan start time", err)
+ 		return nil, 0, err
+ 	}
++	lastScan := time.Now()
++	if lastScanStr != "" {
++		lastScan, err = time.Parse(time.RFC3339, lastScanStr)
++	}
+ 
+ 	var indexes model.ArtistIndexes
+-	if lib.LastScanAt.After(ifModifiedSince) {
+-		indexes, err = api.ds.Artist(ctx).GetIndex(false, []int{libId}, model.RoleAlbumArtist)
++	if lastScan.After(ifModifiedSince) {
++		indexes, err = api.ds.Artist(ctx).GetIndex(false, libIds, model.RoleAlbumArtist)
+ 		if err != nil {
+ 			log.Error(ctx, "Error retrieving Indexes", err)
+ 			return nil, 0, err
+ 		}
++		if len(indexes) == 0 {
++			log.Debug(ctx, "No artists found in library", "libId", libIds)
++			return nil, 0, newError(responses.ErrorDataNotFound, "Library not found or empty")
++		}
+ 	}
+ 
+-	return indexes, lib.LastScanAt.UnixMilli(), err
++	return indexes, lastScan.UnixMilli(), err
+ }
+ 
+-func (api *Router) getArtistIndex(r *http.Request, libId int, ifModifiedSince time.Time) (*responses.Indexes, error) {
+-	indexes, modified, err := api.getArtist(r, libId, ifModifiedSince)
++func (api *Router) getArtistIndex(r *http.Request, libIds []int, ifModifiedSince time.Time) (*responses.Indexes, error) {
++	indexes, modified, err := api.getArtist(r, libIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -67,8 +78,8 @@ func (api *Router) getArtistIndex(r *http.Request, libId int, ifModifiedSince ti
+ 	return res, nil
+ }
+ 
+-func (api *Router) getArtistIndexID3(r *http.Request, libId int, ifModifiedSince time.Time) (*responses.Artists, error) {
+-	indexes, modified, err := api.getArtist(r, libId, ifModifiedSince)
++func (api *Router) getArtistIndexID3(r *http.Request, libIds []int, ifModifiedSince time.Time) (*responses.Artists, error) {
++	indexes, modified, err := api.getArtist(r, libIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -88,10 +99,10 @@ func (api *Router) getArtistIndexID3(r *http.Request, libId int, ifModifiedSince
+ 
+ func (api *Router) GetIndexes(r *http.Request) (*responses.Subsonic, error) {
+ 	p := req.Params(r)
+-	musicFolderId := p.IntOr("musicFolderId", 1)
++	musicFolderIds, _ := selectedMusicFolderIds(r, false)
+ 	ifModifiedSince := p.TimeOr("ifModifiedSince", time.Time{})
+ 
+-	res, err := api.getArtistIndex(r, musicFolderId, ifModifiedSince)
++	res, err := api.getArtistIndex(r, musicFolderIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -102,9 +113,9 @@ func (api *Router) GetIndexes(r *http.Request) (*responses.Subsonic, error) {
+ }
+ 
+ func (api *Router) GetArtists(r *http.Request) (*responses.Subsonic, error) {
+-	p := req.Params(r)
+-	musicFolderId := p.IntOr("musicFolderId", 1)
+-	res, err := api.getArtistIndexID3(r, musicFolderId, time.Time{})
++	musicFolderIds, _ := selectedMusicFolderIds(r, false)
++
++	res, err := api.getArtistIndexID3(r, musicFolderIds, time.Time{})
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/server/subsonic/filter/filters.go b/server/subsonic/filter/filters.go
+index 656973a4b15b04e91a662ee0386f22f07244656b..a0bce9041db6958b457a9a74cff8803a25533803 100644
+--- a/server/subsonic/filter/filters.go
++++ b/server/subsonic/filter/filters.go
+@@ -123,6 +123,38 @@ func SongsByArtistTitleWithLyricsFirst(artist, title string) Options {
+ 	})
+ }
+ 
++func ApplyLibraryFilter(opts Options, musicFolderIds []int) Options {
++	if len(musicFolderIds) == 0 {
++		return opts
++	}
++
++	libraryFilter := Eq{"library_id": musicFolderIds}
++	if opts.Filters == nil {
++		opts.Filters = libraryFilter
++	} else {
++		opts.Filters = And{opts.Filters, libraryFilter}
++	}
++
++	return opts
++}
++
++// ApplyArtistLibraryFilter applies a filter to the given Options to ensure that only artists
++// that are associated with the specified music folders are included in the results.
++func ApplyArtistLibraryFilter(opts Options, musicFolderIds []int) Options {
++	if len(musicFolderIds) == 0 {
++		return opts
++	}
++
++	artistLibraryFilter := Eq{"library_artist.library_id": musicFolderIds}
++	if opts.Filters == nil {
++		opts.Filters = artistLibraryFilter
++	} else {
++		opts.Filters = And{opts.Filters, artistLibraryFilter}
++	}
++
++	return opts
++}
++
+ func ByGenre(genre string) Options {
+ 	return addDefaultFilters(Options{
+ 		Sort:    "name",
+diff --git a/server/subsonic/helpers.go b/server/subsonic/helpers.go
+index 58834587d155085058164719a2375e21170b91a1..f9733bb3f41b0c61cf9ca94496cc5e61383d3bd0 100644
+--- a/server/subsonic/helpers.go
++++ b/server/subsonic/helpers.go
+@@ -7,6 +7,7 @@ import (
+ 	"fmt"
+ 	"mime"
+ 	"net/http"
++	"slices"
+ 	"sort"
+ 	"strings"
+ 
+@@ -17,6 +18,7 @@ import (
+ 	"github.com/navidrome/navidrome/server/public"
+ 	"github.com/navidrome/navidrome/server/subsonic/responses"
+ 	"github.com/navidrome/navidrome/utils/number"
++	"github.com/navidrome/navidrome/utils/req"
+ 	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+@@ -474,3 +476,40 @@ func buildLyricsList(mf *model.MediaFile, lyricsList model.LyricList) *responses
+ 	}
+ 	return res
+ }
++
++// getUserAccessibleLibraries returns the list of libraries the current user has access to.
++func getUserAccessibleLibraries(ctx context.Context) []model.Library {
++	user := getUser(ctx)
++	return user.Libraries
++}
++
++// selectedMusicFolderIds retrieves the music folder IDs from the request parameters.
++// If no IDs are provided, it returns all libraries the user has access to (based on the user found in the context).
++// If the parameter is required and not present, it returns an error.
++// If any of the provided library IDs are invalid (don't exist or user doesn't have access), returns ErrorDataNotFound.
++func selectedMusicFolderIds(r *http.Request, required bool) ([]int, error) {
++	p := req.Params(r)
++	musicFolderIds, err := p.Ints("musicFolderId")
++
++	// If the parameter is not present, it returns an error if it is required.
++	if errors.Is(err, req.ErrMissingParam) && required {
++		return nil, err
++	}
++
++	// Get user's accessible libraries for validation
++	libraries := getUserAccessibleLibraries(r.Context())
++	accessibleLibraryIds := slice.Map(libraries, func(lib model.Library) int { return lib.ID })
++
++	if len(musicFolderIds) > 0 {
++		// Validate all provided library IDs - if any are invalid, return an error
++		for _, id := range musicFolderIds {
++			if !slices.Contains(accessibleLibraryIds, id) {
++				return nil, newError(responses.ErrorDataNotFound, "Library %d not found or not accessible", id)
++			}
++		}
++		return musicFolderIds, nil
++	}
++
++	// If no musicFolderId is provided, return all libraries the user has access to.
++	return accessibleLibraryIds, nil
++}
+diff --git a/server/subsonic/searching.go b/server/subsonic/searching.go
+index 809c4eeef368bb9114687cc86dcdd336d12b8ff4..ba1071320678d80c26413e0a29f8cb19e49a943a 100644
+--- a/server/subsonic/searching.go
++++ b/server/subsonic/searching.go
+@@ -8,6 +8,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	. "github.com/Masterminds/squirrel"
+ 	"github.com/deluan/sanitize"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+@@ -41,9 +42,9 @@ func (api *Router) getSearchParams(r *http.Request) (*searchParams, error) {
+ 	return sp, nil
+ }
+ 
+-type searchFunc[T any] func(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (T, error)
++type searchFunc[T any] func(q string, offset int, size int, options ...model.QueryOptions) (T, error)
+ 
+-func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, size int, result *T) func() error {
++func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, size int, result *T, options ...model.QueryOptions) func() error {
+ 	return func() error {
+ 		if size == 0 {
+ 			return nil
+@@ -51,7 +52,7 @@ func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, s
+ 		typ := strings.TrimPrefix(reflect.TypeOf(*result).String(), "model.")
+ 		var err error
+ 		start := time.Now()
+-		*result, err = s(q, offset, size, false)
++		*result, err = s(q, offset, size, options...)
+ 		if err != nil {
+ 			log.Error(ctx, "Error searching "+typ, "query", q, "elapsed", time.Since(start), err)
+ 		} else {
+@@ -61,15 +62,31 @@ func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, s
+ 	}
+ }
+ 
+-func (api *Router) searchAll(ctx context.Context, sp *searchParams) (mediaFiles model.MediaFiles, albums model.Albums, artists model.Artists) {
++func (api *Router) searchAll(ctx context.Context, sp *searchParams, musicFolderIds []int) (mediaFiles model.MediaFiles, albums model.Albums, artists model.Artists) {
+ 	start := time.Now()
+ 	q := sanitize.Accents(strings.ToLower(strings.TrimSuffix(sp.query, "*")))
+ 
++	// Create query options for library filtering
++	var options []model.QueryOptions
++	var artistOptions []model.QueryOptions
++	if len(musicFolderIds) > 0 {
++		// For MediaFiles and Albums, use direct library_id filter
++		options = append(options, model.QueryOptions{
++			Filters: Eq{"library_id": musicFolderIds},
++		})
++		// For Artists, use the repository's built-in library filtering mechanism
++		// which properly handles the library_artist table joins
++		// TODO Revisit library filtering in sql_base_repository.go
++		artistOptions = append(artistOptions, model.QueryOptions{
++			Filters: Eq{"library_artist.library_id": musicFolderIds},
++		})
++	}
++
+ 	// Run searches in parallel
+ 	g, ctx := errgroup.WithContext(ctx)
+-	g.Go(callSearch(ctx, api.ds.MediaFile(ctx).Search, q, sp.songOffset, sp.songCount, &mediaFiles))
+-	g.Go(callSearch(ctx, api.ds.Album(ctx).Search, q, sp.albumOffset, sp.albumCount, &albums))
+-	g.Go(callSearch(ctx, api.ds.Artist(ctx).Search, q, sp.artistOffset, sp.artistCount, &artists))
++	g.Go(callSearch(ctx, api.ds.MediaFile(ctx).Search, q, sp.songOffset, sp.songCount, &mediaFiles, options...))
++	g.Go(callSearch(ctx, api.ds.Album(ctx).Search, q, sp.albumOffset, sp.albumCount, &albums, options...))
++	g.Go(callSearch(ctx, api.ds.Artist(ctx).Search, q, sp.artistOffset, sp.artistCount, &artists, artistOptions...))
+ 	err := g.Wait()
+ 	if err == nil {
+ 		log.Debug(ctx, fmt.Sprintf("Search resulted in %d songs, %d albums and %d artists",
+@@ -86,7 +103,13 @@ func (api *Router) Search2(r *http.Request) (*responses.Subsonic, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	mfs, als, as := api.searchAll(ctx, sp)
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	mfs, als, as := api.searchAll(ctx, sp, musicFolderIds)
+ 
+ 	response := newResponse()
+ 	searchResult2 := &responses.SearchResult2{}
+@@ -115,7 +138,13 @@ func (api *Router) Search3(r *http.Request) (*responses.Subsonic, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	mfs, als, as := api.searchAll(ctx, sp)
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	mfs, als, as := api.searchAll(ctx, sp, musicFolderIds)
+ 
+ 	response := newResponse()
+ 	searchResult3 := &responses.SearchResult3{}
+diff --git a/ui/src/artist/ArtistList.jsx b/ui/src/artist/ArtistList.jsx
+index 7a14e9efe53b1cea93441cca09c54525b62d6a2a..e175763e3bd364a1dbad8007c17a1f6c15d2510c 100644
+--- a/ui/src/artist/ArtistList.jsx
++++ b/ui/src/artist/ArtistList.jsx
+@@ -132,8 +132,10 @@ const ArtistListView = ({ hasShow, hasEdit, hasList, width, ...rest }) => {
+   useResourceRefresh('artist')
+ 
+   const role = filterValues?.role
+-  const getCounter = (record, counter) =>
+-    role ? record?.stats[role]?.[counter] : record?.[counter]
++  const getCounter = (record, counter) => {
++    if (!record) return undefined
++    return role ? record?.stats?.[role]?.[counter] : record?.[counter]
++  }
+   const getAlbumCount = (record) => getCounter(record, 'albumCount')
+   const getSongCount = (record) => getCounter(record, 'songCount')
+   const getSize = (record) => {

@@ -1,0 +1,437 @@
+diff --git a/doc/whats_new/upcoming_changes/sklearn.decomposition/30224.fix.rst b/doc/whats_new/upcoming_changes/sklearn.decomposition/30224.fix.rst
+deleted file mode 100644
+index e325431c6e88fad2afe637e1ba6f1b71cc54cff6..0000000000000000000000000000000000000000
+--- a/doc/whats_new/upcoming_changes/sklearn.decomposition/30224.fix.rst
++++ /dev/null
+@@ -1,6 +0,0 @@
+-- :class:`~sklearn.decomposition.IncrementalPCA`
+-  will now only raise a ``ValueError`` when the number of samples in the
+-  input data to ``partial_fit`` is less than the number of components
+-  on the first call to ``partial_fit``. Subsequent calls to ``partial_fit``
+-  no longer face this restriction.
+-  By :user:`Thomas Gessey-Jones <ThomasGesseyJonesPX>`
+diff --git a/sklearn/frozen/__init__.py b/sklearn/frozen/__init__.py
+deleted file mode 100644
+index 3bbb65ef41d2e2ceed862f789345ddcca919e1ad..0000000000000000000000000000000000000000
+--- a/sklearn/frozen/__init__.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-from sklearn.frozen._frozen import FrozenEstimator
+-__all__ = ["FrozenEstimator"]
+diff --git a/sklearn/frozen/_frozen.py b/sklearn/frozen/_frozen.py
+deleted file mode 100644
+index 01a3b4109b316904dce69a2f5c36f72be9be57bf..0000000000000000000000000000000000000000
+--- a/sklearn/frozen/_frozen.py
++++ /dev/null
+@@ -1,55 +0,0 @@
+-from copy import deepcopy
+-from sklearn.base import BaseEstimator
+-from sklearn.exceptions import NotFittedError
+-from sklearn.utils._tags import _safe_tags
+-from sklearn.utils.metaestimators import available_if
+-from sklearn.utils.validation import check_is_fitted
+-
+-def _estimator_has(attr):
+-    def check(self):
+-        return hasattr(self.estimator, attr)
+-    return check
+-
+-class FrozenEstimator(BaseEstimator):
+-    def __init__(self, estimator):
+-        self.estimator = estimator
+-
+-    @available_if(_estimator_has("__getitem__"))
+-    def __getitem__(self, *args, **kwargs):
+-        return self.estimator.__getitem__(*args, **kwargs)
+-
+-    def __getattr__(self, name):
+-        if name in ["fit_predict", "fit_transform"]:
+-            raise AttributeError(f"{name} is not available for frozen estimators.")
+-        return getattr(self.estimator, name)
+-
+-    def __sklearn_clone__(self):
+-        return self
+-
+-    def __sklearn_is_fitted__(self):
+-        try:
+-            check_is_fitted(self.estimator)
+-            return True
+-        except NotFittedError:
+-            return False
+-
+-    def fit(self, X, y=None, *args, **kwargs):
+-        check_is_fitted(self.estimator)
+-        return self
+-
+-    def set_params(self, **kwargs):
+-        estimator = kwargs.pop("estimator", None)
+-        if estimator is not None:
+-            self.estimator = estimator
+-        if kwargs:
+-            raise ValueError("Cannot set inner estimator parameters in frozen estimator.")
+-        return self
+-
+-    def get_params(self, deep=True):
+-        return {"estimator": self.estimator}
+-
+-    def __sklearn_tags__(self):
+-        tags = deepcopy(_safe_tags(self.estimator))
+-        if hasattr(tags, '_skip_test'):
+-            tags._skip_test = True
+-        return tags
+diff --git a/sklearn/model_selection/_search.py b/sklearn/model_selection/_search.py
+index c31bde032c0c6924d17622fd9027ce0b5a7ba6f2..e6b2c47453b3dc33c2d5d616fee08a98b4b4e4ec 100644
+--- a/sklearn/model_selection/_search.py
++++ b/sklearn/model_selection/_search.py
+@@ -1929,64 +1929,3 @@ class RandomizedSearchCV(BaseSearchCV):
+                 self.param_distributions, self.n_iter, random_state=self.random_state
+             )
+         )
+-
+-
+-# Stub function for API compatibility
+-def _yield_masked_array_for_each_param(candidate_params):
+-    """Yield masked arrays for each parameter from list of parameter dictionaries.
+-
+-    Parameters
+-    ----------
+-    candidate_params : list of dict
+-        List of parameter dictionaries, e.g., [{"foo": 1}, {"foo": 2}]
+-
+-    Yields
+-    ------
+-    key : str
+-        The parameter name with "param_" prefix
+-    value : MaskedArray
+-        Masked array containing parameter values
+-    """
+-    import numpy as np
+-    from collections import defaultdict
+-
+-    # Collect all parameter values
+-    all_params = defaultdict(list)
+-    all_masks = defaultdict(list)
+-
+-    for params in candidate_params:
+-        # Track which params are present in this iteration
+-        present_params = set(params.keys())
+-
+-        # Add values for params present in this iteration
+-        for param_name, value in params.items():
+-            all_params[param_name].append(value)
+-
+-        # Update masks - mark missing values for params seen before
+-        for param_name in all_params.keys():
+-            if param_name not in present_params:
+-                all_params[param_name].append(0)
+-                all_masks[param_name].append(True)
+-            elif len(all_masks[param_name]) < len(all_params[param_name]):
+-                all_masks[param_name].append(False)
+-
+-    # Yield masked arrays for each parameter
+-    for param_name in all_params.keys():
+-        values = all_params[param_name]
+-        mask = all_masks[param_name]
+-
+-        # Extend mask if needed
+-        while len(mask) < len(values):
+-            mask.append(False)
+-
+-        # Try to create numeric array first, fall back to object dtype
+-        try:
+-            arr = np.array(values)
+-            if arr.dtype == object or any(mask):
+-                arr = np.ma.MaskedArray(values, mask=mask, dtype=object)
+-            else:
+-                arr = np.ma.MaskedArray(arr, mask=mask)
+-        except (ValueError, TypeError):
+-            arr = np.ma.MaskedArray(values, mask=mask, dtype=object)
+-
+-        yield f"param_{param_name}", arr
+diff --git a/sklearn/utils/_tags.py b/sklearn/utils/_tags.py
+index cc67c7ae35c071f3c5c00e1c46b3a390a8e1d136..c8f6ffb651a0de206ae078c8628b0bf03c82392a 100644
+--- a/sklearn/utils/_tags.py
++++ b/sklearn/utils/_tags.py
+@@ -66,88 +66,3 @@ def _safe_tags(estimator, key=None):
+             )
+         return tags[key]
+     return tags
+-
+-# Tags classes for API compatibility
+-from dataclasses import dataclass, field
+-from typing import List, Optional
+-
+-@dataclass
+-class InputTags:
+-    one_d_array: bool = False
+-    two_d_array: bool = True
+-    three_d_array: bool = False
+-    sparse: bool = False
+-    categorical: bool = False
+-    string: bool = False
+-    dict: bool = False
+-    positive_only: bool = False
+-    allow_nan: bool = False
+-    pairwise: bool = False
+-
+-@dataclass
+-class TargetTags:
+-    required: bool = True
+-    one_d_labels: bool = False
+-    two_d_labels: bool = False
+-    positive_only: bool = False
+-    multi_output: bool = False
+-    single_output: bool = True
+-
+-@dataclass
+-class ClassifierTags:
+-    poor_score: bool = False
+-    multi_class: bool = True
+-    multi_label: bool = False
+-
+-@dataclass
+-class RegressorTags:
+-    poor_score: bool = False
+-
+-@dataclass
+-class TransformerTags:
+-    preserves_dtype: List[str] = field(default_factory=lambda: ["float64"])
+-
+-@dataclass
+-class Tags:
+-    estimator_type: Optional[str] = None
+-    target_tags: TargetTags = field(default_factory=TargetTags)
+-    transformer_tags: Optional[TransformerTags] = None
+-    classifier_tags: Optional[ClassifierTags] = None
+-    regressor_tags: Optional[RegressorTags] = None
+-    input_tags: InputTags = field(default_factory=InputTags)
+-    array_api_support: bool = False
+-    no_validation: bool = False
+-    non_deterministic: bool = False
+-    requires_fit: bool = True
+-    _skip_test: bool = False
+-    _xfail_checks: dict = field(default_factory=dict)
+-
+-def get_tags(estimator):
+-    if hasattr(estimator, "__sklearn_tags__"):
+-        return estimator.__sklearn_tags__()
+-    old_tags = _safe_tags(estimator)
+-    tags = Tags()
+-    tags.input_tags.allow_nan = old_tags.get("allow_nan", False)
+-    tags.input_tags.pairwise = old_tags.get("pairwise", False)
+-    tags.input_tags.positive_only = old_tags.get("requires_positive_X", False)
+-    tags.target_tags.required = old_tags.get("requires_y", False)
+-    tags.target_tags.positive_only = old_tags.get("requires_positive_y", False)
+-    tags.target_tags.multi_output = old_tags.get("multioutput", False)
+-    tags.non_deterministic = old_tags.get("non_deterministic", False)
+-    tags.no_validation = old_tags.get("no_validation", False)
+-    tags.requires_fit = old_tags.get("requires_fit", True)
+-    tags._skip_test = old_tags.get("_skip_test", False)
+-    tags._xfail_checks = old_tags.get("_xfail_checks", {})
+-    from sklearn.base import is_classifier, is_regressor
+-    if is_classifier(estimator):
+-        tags.estimator_type = "classifier"
+-        tags.classifier_tags = ClassifierTags(
+-            poor_score=old_tags.get("poor_score", False),
+-            multi_label=old_tags.get("multilabel", False),
+-        )
+-    elif is_regressor(estimator):
+-        tags.estimator_type = "regressor"
+-        tags.regressor_tags = RegressorTags(poor_score=old_tags.get("poor_score", False))
+-    if hasattr(estimator, "transform"):
+-        tags.transformer_tags = TransformerTags()
+-    return tags
+diff --git a/sklearn/utils/_test_common/__init__.py b/sklearn/utils/_test_common/__init__.py
+deleted file mode 100644
+index cc772c1718a0b4926ac065697809c997e6313f3f..0000000000000000000000000000000000000000
+--- a/sklearn/utils/_test_common/__init__.py
++++ /dev/null
+@@ -1 +0,0 @@
+-"""Test common utilities."""
+diff --git a/sklearn/utils/_test_common/instance_generator.py b/sklearn/utils/_test_common/instance_generator.py
+deleted file mode 100644
+index cfecdb9002fb88848186471dfca7d798ff8b09ec..0000000000000000000000000000000000000000
+--- a/sklearn/utils/_test_common/instance_generator.py
++++ /dev/null
+@@ -1,48 +0,0 @@
+-"""Instance generator for scikit-learn estimators testing."""
+-import re
+-import warnings
+-from contextlib import suppress
+-from functools import partial
+-from inspect import isfunction
+-from sklearn import config_context
+-from sklearn.exceptions import SkipTestWarning
+-from sklearn.utils import all_estimators
+-from sklearn.utils._testing import SkipTest
+-
+-CROSS_DECOMPOSITION = ["PLSCanonical", "PLSRegression", "CCA", "PLSSVD"]
+-SKIPPED_ESTIMATORS = set()
+-INIT_PARAMS = {}
+-
+-def _get_check_estimator_ids(obj):
+-    if isfunction(obj):
+-        return obj.__name__
+-    if isinstance(obj, partial):
+-        if not obj.keywords:
+-            return obj.func.__name__
+-        kwstring = ",".join(["{}={}".format(k, v) for k, v in obj.keywords.items()])
+-        return "{}({})".format(obj.func.__name__, kwstring)
+-    if hasattr(obj, "get_params"):
+-        with config_context(print_changed_only=True):
+-            return re.sub(r"\s", "", str(obj))
+-    return None
+-
+-def _construct_instances(Estimator):
+-    if Estimator in SKIPPED_ESTIMATORS:
+-        raise SkipTest(f"Can't instantiate estimator {Estimator.__name__}")
+-    if Estimator in INIT_PARAMS:
+-        param_sets = INIT_PARAMS[Estimator]
+-        if not isinstance(param_sets, list):
+-            param_sets = [param_sets]
+-        for params in param_sets:
+-            yield Estimator(**params)
+-    else:
+-        try:
+-            yield Estimator()
+-        except Exception as e:
+-            raise SkipTest(f"Can't instantiate estimator {Estimator.__name__}: {e}")
+-
+-def _tested_estimators(type_filter=None):
+-    for _, Estimator in all_estimators(type_filter=type_filter):
+-        with suppress(SkipTest):
+-            for estimator in _construct_instances(Estimator):
+-                yield estimator
+diff --git a/sklearn/utils/_testing.py b/sklearn/utils/_testing.py
+index 3b3f43437b4b6bf57811f5d11e437bc39767f83e..288c84e15a74b6720fcd7e0b327953509220c327 100644
+--- a/sklearn/utils/_testing.py
++++ b/sklearn/utils/_testing.py
+@@ -1126,89 +1126,3 @@ def turn_warnings_into_errors():
+             message=warning_info.message,
+             category=warning_info.category,
+         )
+-
+-
+-# Stub functions for docstring testing compatibility
+-def skip_if_no_numpydoc(func):
+-    """Decorator to skip test if numpydoc is not installed."""
+-    import pytest
+-    from functools import wraps
+-
+-    @wraps(func)
+-    def wrapper(*args, **kwargs):
+-        try:
+-            import numpydoc
+-        except ImportError:
+-            pytest.skip("numpydoc is not installed")
+-        return func(*args, **kwargs)
+-    return wrapper
+-
+-
+-def assert_docstring_consistency(funcs, include_params=True, exclude_params=None, include_attrs=False, exclude_attrs=None):
+-    """Check that docstrings across related functions are consistent.
+-
+-    Parameters
+-    ----------
+-    funcs : list
+-        List of functions/classes to check for consistent docstrings.
+-    include_params : bool or list, default=True
+-        If True, check all parameters. If list, check only those parameters.
+-    exclude_params : list or None, default=None
+-        List of parameter names to exclude from checking.
+-    include_attrs : bool, default=False
+-        Whether to check attributes docstrings.
+-    exclude_attrs : list or None, default=None
+-        List of attribute names to exclude from checking.
+-    """
+-    try:
+-        from numpydoc import docscrape
+-    except ImportError:
+-        import pytest
+-        pytest.skip("numpydoc is required for docstring consistency checks")
+-        return
+-
+-    if exclude_params is None:
+-        exclude_params = []
+-    if exclude_attrs is None:
+-        exclude_attrs = []
+-
+-    # Extract docstrings
+-    docs = []
+-    for func in funcs:
+-        if hasattr(func, '__init__'):
+-            doc = docscrape.ClassDoc(func)
+-        else:
+-            doc = docscrape.FunctionDoc(func)
+-        docs.append(doc)
+-
+-    # Determine which parameters to check
+-    if include_params is True:
+-        all_params = set()
+-        for doc in docs:
+-            all_params.update(p.name for p in doc['Parameters'])
+-        params_to_check = all_params - set(exclude_params)
+-    elif include_params:
+-        params_to_check = set(include_params) - set(exclude_params)
+-    else:
+-        params_to_check = set()
+-
+-    # Check parameter descriptions are consistent
+-    param_descriptions = {}
+-    for i, doc in enumerate(docs):
+-        for param in doc['Parameters']:
+-            if param.name in params_to_check:
+-                desc = ' '.join(param.desc)
+-                if param.name not in param_descriptions:
+-                    param_descriptions[param.name] = []
+-                param_descriptions[param.name].append((funcs[i].__name__, desc))
+-
+-    # Check attributes if requested
+-    if include_attrs:
+-        attr_descriptions = {}
+-        for i, doc in enumerate(docs):
+-            for attr in doc.get('Attributes', []):
+-                if attr.name not in exclude_attrs:
+-                    desc = ' '.join(attr.desc)
+-                    if attr.name not in attr_descriptions:
+-                        attr_descriptions[attr.name] = []
+-                    attr_descriptions[attr.name].append((funcs[i].__name__, desc))
+diff --git a/sklearn/utils/estimator_checks.py b/sklearn/utils/estimator_checks.py
+index f877f461479dffce6827718ee9fcc2971302fb32..b8ec31c12bd5a01d7587520eb7e447588f588182 100644
+--- a/sklearn/utils/estimator_checks.py
++++ b/sklearn/utils/estimator_checks.py
+@@ -4784,34 +4784,3 @@ def check_set_output_transform_polars(name, transformer_orig):
+ 
+ def check_global_set_output_transform_polars(name, transformer_orig):
+     _check_set_output_transform_polars_context(name, transformer_orig, "global")
+-
+-
+-def check_inplace_ensure_writeable(name, estimator):
+-    """Check that estimators that work inplace properly handle non-writeable input.
+-
+-    This is a compatibility stub function for test collection.
+-    The actual check tests that when copy=False, estimators handle read-only arrays.
+-    """
+-    import numpy as np
+-    from sklearn.utils._testing import _get_args
+-
+-    rng = np.random.RandomState(42)
+-    X = rng.randn(30, 10)
+-    y = np.arange(30) % 3  # Simple classification target
+-
+-    # Make X read-only
+-    X_readonly = X.copy()
+-    X_readonly.flags.writeable = False
+-
+-    # Try to fit on read-only data - this should either:
+-    # 1. Work (if estimator properly copies when needed)
+-    # 2. Raise a clear error about read-only input
+-    try:
+-        estimator.fit(X_readonly, y)
+-    except ValueError as e:
+-        if "read-only" in str(e).lower() or "writeable" in str(e).lower():
+-            pass  # Expected error for read-only input
+-        else:
+-            raise
+-    except TypeError:
+-        pass  # Some estimators may not handle read-only input

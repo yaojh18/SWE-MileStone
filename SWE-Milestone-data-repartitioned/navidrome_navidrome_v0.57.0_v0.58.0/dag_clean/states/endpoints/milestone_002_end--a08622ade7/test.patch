@@ -1,0 +1,145 @@
+diff --git a/plugins/adapter_media_agent_test.go b/plugins/adapter_media_agent_test.go
+index 709fd62cd25ce0a462f4e20f7fe00c0dafc69658..e730507f3b8f4a69cd1560b782d5b1483b0c8df6 100644
+--- a/plugins/adapter_media_agent_test.go
++++ b/plugins/adapter_media_agent_test.go
+@@ -14,7 +14,7 @@ import (
+ 
+ var _ = Describe("Adapter Media Agent", func() {
+ 	var ctx context.Context
+-	var mgr *Manager
++	var mgr *managerImpl
+ 
+ 	BeforeEach(func() {
+ 		ctx = GinkgoT().Context()
+diff --git a/plugins/host_scheduler_test.go b/plugins/host_scheduler_test.go
+index f544d716e44daa8a389fcbb9dba7e77e1f92a6cc..1a3efaae91caf055feacc941ed78fbb94079588d 100644
+--- a/plugins/host_scheduler_test.go
++++ b/plugins/host_scheduler_test.go
+@@ -2,7 +2,9 @@ package plugins
+ 
+ import (
+ 	"context"
++	"time"
+ 
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/host/scheduler"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -11,12 +13,12 @@ import (
+ var _ = Describe("SchedulerService", func() {
+ 	var (
+ 		ss         *schedulerService
+-		manager    *Manager
++		manager    *managerImpl
+ 		pluginName = "test_plugin"
+ 	)
+ 
+ 	BeforeEach(func() {
+-		manager = createManager(nil, nil)
++		manager = createManager(nil, metrics.NewNoopInstance())
+ 		ss = manager.schedulerService
+ 	})
+ 
+@@ -163,4 +165,28 @@ var _ = Describe("SchedulerService", func() {
+ 			Expect(ss.scheduleCount()).To(Equal(beforeCount), "Job count should remain the same after replacement")
+ 		})
+ 	})
++
++	Describe("TimeNow", func() {
++		It("returns current time in RFC3339Nano, Unix milliseconds, and local timezone", func() {
++			now := time.Now()
++			req := &scheduler.TimeNowRequest{}
++			resp, err := ss.timeNow(context.Background(), req)
++
++			Expect(err).ToNot(HaveOccurred())
++			Expect(resp.UnixMilli).To(BeNumerically(">=", now.UnixMilli()))
++			Expect(resp.LocalTimeZone).ToNot(BeEmpty())
++
++			// Validate RFC3339Nano format can be parsed
++			parsedTime, parseErr := time.Parse(time.RFC3339Nano, resp.Rfc3339Nano)
++			Expect(parseErr).ToNot(HaveOccurred())
++
++			// Validate that Unix milliseconds is reasonably close to the RFC3339Nano time
++			expectedMillis := parsedTime.UnixMilli()
++			Expect(resp.UnixMilli).To(Equal(expectedMillis))
++
++			// Validate local timezone matches the current system timezone
++			expectedTimezone := now.Location().String()
++			Expect(resp.LocalTimeZone).To(Equal(expectedTimezone))
++		})
++	})
+ })
+diff --git a/plugins/host_websocket_test.go b/plugins/host_websocket_test.go
+index b6f4e20945a1539ec5689f66d8977350fb2cd4fc..00b20b452989e9766fc2302d53ba6d274c44112d 100644
+--- a/plugins/host_websocket_test.go
++++ b/plugins/host_websocket_test.go
+@@ -17,7 +17,7 @@ import (
+ var _ = Describe("WebSocket Host Service", func() {
+ 	var (
+ 		wsService      *websocketService
+-		manager        *Manager
++		manager        *managerImpl
+ 		ctx            context.Context
+ 		server         *httptest.Server
+ 		upgrader       gorillaws.Upgrader
+diff --git a/plugins/manager_test.go b/plugins/manager_test.go
+index 55a3b8f728cd09426872e2900a8df598e1ea96fd..a6bb8ff0f3ec42f10b6f8d418621fd11f0821fc9 100644
+--- a/plugins/manager_test.go
++++ b/plugins/manager_test.go
+@@ -12,7 +12,7 @@ import (
+ )
+ 
+ var _ = Describe("Plugin Manager", func() {
+-	var mgr *Manager
++	var mgr *managerImpl
+ 	var ctx context.Context
+ 
+ 	BeforeEach(func() {
+@@ -76,7 +76,7 @@ var _ = Describe("Plugin Manager", func() {
+ 
+ 	Describe("ScanPlugins", func() {
+ 		var tempPluginsDir string
+-		var m *Manager
++		var m *managerImpl
+ 
+ 		BeforeEach(func() {
+ 			tempPluginsDir, _ = os.MkdirTemp("", "navidrome-plugins-test-*")
+diff --git a/plugins/manifest_permissions_test.go b/plugins/manifest_permissions_test.go
+index da221eb56ec7edff9c89cbc2dfaa5b412645aa62..188e1774600d19f6d4a7005d200d511bdb40cd02 100644
+--- a/plugins/manifest_permissions_test.go
++++ b/plugins/manifest_permissions_test.go
+@@ -47,7 +47,7 @@ func createTestPlugin(tempDir, name string, permissions schema.PluginManifestPer
+ 
+ var _ = Describe("Plugin Permissions", func() {
+ 	var (
+-		mgr     *Manager
++		mgr     *managerImpl
+ 		tempDir string
+ 		ctx     context.Context
+ 	)
+diff --git a/plugins/plugin_lifecycle_manager_test.go b/plugins/plugin_lifecycle_manager_test.go
+index c0621b2a708e9000844ff4067bae52507e99d9ac..e46f29b7658980fb0006df0738e5902861290b9a 100644
+--- a/plugins/plugin_lifecycle_manager_test.go
++++ b/plugins/plugin_lifecycle_manager_test.go
+@@ -18,7 +18,7 @@ func hasInitService(info *plugin) bool {
+ }
+ 
+ var _ = Describe("LifecycleManagement", func() {
+-	Describe("Plugin Lifecycle Manager", func() {
++	Describe("Plugin Lifecycle managerImpl", func() {
+ 		var lifecycleManager *pluginLifecycleManager
+ 
+ 		BeforeEach(func() {
+diff --git a/plugins/runtime_test.go b/plugins/runtime_test.go
+index 32cd421181b096da1408751536fa14ca4716b230..507f68b20abf53c3cc6af0ebf44f626dafefdda1 100644
+--- a/plugins/runtime_test.go
++++ b/plugins/runtime_test.go
+@@ -34,7 +34,7 @@ var _ = Describe("Runtime", func() {
+ var _ = Describe("CachingRuntime", func() {
+ 	var (
+ 		ctx    context.Context
+-		mgr    *Manager
++		mgr    *managerImpl
+ 		plugin *wasmScrobblerPlugin
+ 	)
+ 

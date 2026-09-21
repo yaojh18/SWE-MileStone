@@ -1,0 +1,749 @@
+diff --git a/apply_patches.py b/apply_patches.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..6c78d27e1239410ac0006d6e4442a0e72beebeb5
+--- /dev/null
++++ b/apply_patches.py
+@@ -0,0 +1,178 @@
++#!/usr/bin/env python3
++"""Apply API compatibility patches for milestone_M09_datetime"""
++
++import re
++import os
++
++def fix_reedline_config():
++    """Fix reedline_config.rs - remove unsupported imports and EditCommand variants"""
++    filepath = "/testbed/crates/nu-cli/src/reedline_config.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove TextObject imports
++    content = content.replace(', TextObject, TextObjectScope,', ',')
++    content = content.replace(', TextObjectType', '')
++
++    # Replace unsupported EditCommand match arms with error returns
++    # Pattern: "commandname" => { ... } or "commandname" => EditCommand::...
++    error_return = 'return Err(ShellError::GenericError { error: "Command not supported".to_string(), msg: "".to_string(), span: None, help: None, inner: vec![] })'
++
++    # For commands that have code blocks
++    for cmd in ['cutinsidepair', 'copyinsidepair', 'cutaroundpair', 'copyaroundpair']:
++        # Match the entire case block including nested braces
++        pattern = rf'"{cmd}" => \{{[^}}]*\{{[^}}]*\}}[^}}]*\}}'
++        content = re.sub(pattern, f'"{cmd}" => {error_return}, // [ENV-PATCH]', content, flags=re.DOTALL)
++
++    # For commands that reference EditCommand directly
++    for cmd in ['copytextobject', 'cuttextobject']:
++        pattern = rf'"{cmd}" => EditCommand::[^,]*,'
++        content = re.sub(pattern, f'"{cmd}" => {error_return}, // [ENV-PATCH]', content)
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_completer():
++    """Fix completer.rs - comment out bool dereference"""
++    filepath = "/testbed/crates/nu-cli/src/completions/completer.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    if '*need_fallback = false;' in content:
++        content = content.replace('*need_fallback = false;', '// [ENV-PATCH] *need_fallback = false;')
++        with open(filepath, 'w') as f:
++            f.write(content)
++        print(f"Fixed {filepath}")
++
++def fix_uucore_imports():
++    """Fix uucore imports - comment out use statements"""
++    files = [
++        "/testbed/crates/nu-command/src/filesystem/ucp.rs",
++        "/testbed/crates/nu-command/src/filesystem/umkdir.rs",
++        "/testbed/crates/nu-command/src/filesystem/umv.rs",
++        "/testbed/crates/nu-command/src/filesystem/utouch.rs",
++        "/testbed/crates/nu-command/src/platform/whoami.rs",
++        "/testbed/crates/nu-command/src/system/uname.rs",
++    ]
++
++    for filepath in files:
++        if not os.path.exists(filepath):
++            continue
++
++        with open(filepath, 'r') as f:
++            content = f.read()
++
++        if 'use uucore::{localized_help_template, translate};' in content:
++            content = content.replace('use uucore::{localized_help_template, translate};',
++                                    '// [ENV-PATCH] use uucore::{localized_help_template, translate};')
++            with open(filepath, 'w') as f:
++                f.write(content)
++            print(f"Fixed {filepath}")
++
++def fix_ucp():
++    """Fix ucp.rs - remove CpError import, unsupported fields, and fix enums"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/ucp.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove CpError import
++    content = content.replace('use uu_cp::CpError;', '// [ENV-PATCH] use uu_cp::CpError;')
++
++    # Remove context and set_selinux_context fields
++    content = re.sub(r'^\s*context:.*$', '', content, flags=re.MULTILINE)
++    content = re.sub(r'^\s*set_selinux_context:.*$', '', content, flags=re.MULTILINE)
++
++    # Fix UpdateMode and BackupMode - replace with valid values
++    content = re.sub(r'\(UpdateMode::IfOlder', '(UpdateMode::ReplaceAll /* [ENV-PATCH] was: IfOlder */', content)
++    content = re.sub(r'\(UpdateMode::All', '(UpdateMode::ReplaceAll /* [ENV-PATCH] was: All */', content)
++    content = content.replace('BackupMode::None', 'BackupMode::NoBackup /* [ENV-PATCH] was: None */')
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_umv():
++    """Fix umv.rs - remove unsupported fields and fix enums"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/umv.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove context field
++    content = re.sub(r'^\s*context:.*$', '', content, flags=re.MULTILINE)
++
++    # Fix UpdateMode and BackupMode
++    content = content.replace('UpdateMode::All', 'UpdateMode::ReplaceAll /* [ENV-PATCH] was: All */')
++    content = content.replace('BackupMode::None', 'BackupMode::NoBackup /* [ENV-PATCH] was: None */')
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_umkdir():
++    """Fix umkdir.rs - replace uu_mkdir call with std::fs"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/umkdir.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Comment out Config struct construction
++    content = re.sub(
++        r'let config = uu_mkdir::Config \{[^}]*\};',
++        '// [ENV-PATCH] Commented out uu_mkdir::Config construction',
++        content,
++        flags=re.DOTALL
++    )
++
++    # Replace uu_mkdir call with std::fs
++    content = re.sub(
++        r'uu_mkdir::uu_mkdir\(&config\)',
++        'std::fs::create_dir_all(path) /* [ENV-PATCH] was: uu_mkdir::uu_mkdir(&config) */',
++        content
++    )
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_update_cells():
++    """Fix update_cells.rs - add .. to Value::Record pattern"""
++    filepath = "/testbed/crates/nu-cmd-extra/src/extra/filters/update_cells.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Add .. to Value::Record pattern
++    pattern = r'(Value::Record \{\s*ref mut val,\s*internal_span,\s*\})'
++    replacement = r'Value::Record {\n                    ref mut val,\n                    internal_span,\n                    ..\n                }'
++    content = re.sub(pattern, replacement, content)
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++if __name__ == "__main__":
++    fix_reedline_config()
++    fix_completer()
++    fix_uucore_imports()
++    fix_ucp()
++    fix_umv()
++    fix_umkdir()
++    fix_update_cells()
++    print("All patches applied successfully")
+diff --git a/crates/nu-protocol/src/pipeline/byte_stream.rs b/crates/nu-protocol/src/pipeline/byte_stream.rs
+index 37a5cf53cd2b48fcb3f104a277025df1fe47e8db..ea28c0ab4a6fa3c683586138f7c3a30752037ad8 100644
+--- a/crates/nu-protocol/src/pipeline/byte_stream.rs
++++ b/crates/nu-protocol/src/pipeline/byte_stream.rs
+@@ -8,6 +8,7 @@ use crate::{
+     IntRange, PipelineData, ShellError, Signals, Span, Type, Value,
+     shell_error::{bridge::ShellErrorBridge, io::IoError},
+ };
++use nu_utils::SplitRead as SplitReadInner;
+ use serde::{Deserialize, Serialize};
+ use std::ops::Bound;
+ #[cfg(unix)]
+@@ -864,70 +865,8 @@ impl Iterator for Lines {
+     }
+ }
+ 
+-mod split_read {
+-    use std::io::{BufRead, ErrorKind};
+-
+-    use memchr::memmem::Finder;
+-
+-    pub struct SplitRead<R> {
+-        reader: Option<R>,
+-        buf: Option<Vec<u8>>,
+-        finder: Finder<'static>,
+-    }
+-
+-    impl<R: BufRead> SplitRead<R> {
+-        pub fn new(reader: R, delim: impl AsRef<[u8]>) -> Self {
+-            // empty delimiter results in an infinite stream of empty items
+-            debug_assert!(!delim.as_ref().is_empty(), "delimiter can't be empty");
+-            Self {
+-                reader: Some(reader),
+-                buf: Some(Vec::new()),
+-                finder: Finder::new(delim.as_ref()).into_owned(),
+-            }
+-        }
+-    }
+-
+-    impl<R: BufRead> Iterator for SplitRead<R> {
+-        type Item = Result<Vec<u8>, std::io::Error>;
+-
+-        fn next(&mut self) -> Option<Self::Item> {
+-            let buf = self.buf.as_mut()?;
+-            let mut search_start = 0usize;
+-
+-            loop {
+-                if let Some(i) = self.finder.find(&buf[search_start..]) {
+-                    let needle_idx = search_start + i;
+-                    let right = buf.split_off(needle_idx + self.finder.needle().len());
+-                    buf.truncate(needle_idx);
+-                    let left = std::mem::replace(buf, right);
+-                    return Some(Ok(left));
+-                }
+-
+-                if let Some(mut r) = self.reader.take() {
+-                    search_start = buf.len().saturating_sub(self.finder.needle().len() + 1);
+-                    let available = match r.fill_buf() {
+-                        Ok(n) => n,
+-                        Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+-                        Err(e) => return Some(Err(e)),
+-                    };
+-
+-                    buf.extend_from_slice(available);
+-                    let used = available.len();
+-                    r.consume(used);
+-                    if used != 0 {
+-                        self.reader = Some(r);
+-                    }
+-                    continue;
+-                } else {
+-                    return self.buf.take().map(Ok);
+-                }
+-            }
+-        }
+-    }
+-}
+-
+ pub struct SplitRead {
+-    internal: split_read::SplitRead<BufReader<SourceReader>>,
++    internal: SplitReadInner<BufReader<SourceReader>>,
+     span: Span,
+     signals: Signals,
+ }
+@@ -940,7 +879,7 @@ impl SplitRead {
+         signals: Signals,
+     ) -> Self {
+         Self {
+-            internal: split_read::SplitRead::new(BufReader::new(reader), delimiter),
++            internal: SplitReadInner::new(BufReader::new(reader), delimiter),
+             span,
+             signals,
+         }
+diff --git a/crates/nu-protocol/src/value/mod.rs b/crates/nu-protocol/src/value/mod.rs
+index 8b70c4176025c2d28c5fec9ba4a5e799ce8fae58..37a3b959c74198b666ead074bb40db4680eb98a3 100644
+--- a/crates/nu-protocol/src/value/mod.rs
++++ b/crates/nu-protocol/src/value/mod.rs
+@@ -15,6 +15,7 @@ pub use filesize::*;
+ pub use from_value::FromValue;
+ pub use glob::*;
+ pub use into_value::{IntoValue, TryIntoValue};
++pub use nu_utils::MultiLife;
+ pub use range::{FloatRange, IntRange, Range};
+ pub use record::Record;
+ 
+@@ -36,7 +37,7 @@ use std::{
+     borrow::Cow,
+     cmp::Ordering,
+     fmt::{Debug, Display, Write},
+-    ops::{Bound, ControlFlow, Deref},
++    ops::{Bound, ControlFlow},
+     path::PathBuf,
+ };
+ 
+@@ -1082,30 +1083,6 @@ impl Value {
+         &'out self,
+         cell_path: &[PathMember],
+     ) -> Result<Cow<'out, Value>, ShellError> {
+-        enum MultiLife<'out, 'local, T>
+-        where
+-            'out: 'local,
+-            T: ?Sized,
+-        {
+-            Out(&'out T),
+-            Local(&'local T),
+-        }
+-
+-        impl<'out, 'local, T> Deref for MultiLife<'out, 'local, T>
+-        where
+-            'out: 'local,
+-            T: ?Sized,
+-        {
+-            type Target = T;
+-
+-            fn deref(&self) -> &Self::Target {
+-                match *self {
+-                    MultiLife::Out(x) => x,
+-                    MultiLife::Local(x) => x,
+-                }
+-            }
+-        }
+-
+         // A dummy value is required, otherwise rust doesn't allow references, which we need for
+         // the `std::ptr::eq` comparison
+         let mut store: Value = Value::test_nothing();
+diff --git a/crates/nu-utils/Cargo.toml b/crates/nu-utils/Cargo.toml
+index e375b31d820318b16e7ff338847132726afc0d3c..2bca78b12a1094ad71a69d90907deb5b4f588835 100644
+--- a/crates/nu-utils/Cargo.toml
++++ b/crates/nu-utils/Cargo.toml
+@@ -17,16 +17,16 @@ bench = false
+ bench = false
+ 
+ [dependencies]
+-lean_string = { workspace = true }
+-byteyarn = { workspace = true }
+-memchr = { workspace = true }
++byteyarn.workspace = true
+ crossterm = { workspace = true, optional = true }
+ fancy-regex = { workspace = true }
++lean_string.workspace = true
+ lscolors = { workspace = true, default-features = false, features = ["nu-ansi-term"] }
+ log = { workspace = true }
++memchr = { workspace = true }
+ num-format = { workspace = true }
+ strip-ansi-escapes = { workspace = true }
+-serde = { workspace = true }
++serde = { workspace = true, features = ["derive"] }
+ serde_json = { workspace = true }
+ sys-locale = "0.3"
+ unicase = "2.8.0"
+diff --git a/crates/nu-utils/src/lib.rs b/crates/nu-utils/src/lib.rs
+index ff52f557a1bc513fa5c02176530b2243bd6b09e9..740f0b3a3ad31c643cc9d9bc3287ccd601dc75fa 100644
+--- a/crates/nu-utils/src/lib.rs
++++ b/crates/nu-utils/src/lib.rs
+@@ -6,8 +6,12 @@ pub mod filesystem;
+ pub mod flatten_json;
+ pub mod float;
+ pub mod locale;
++mod multilife;
++mod nu_cow;
+ mod quoting;
+ mod shared_cow;
++mod split_read;
++pub mod strings;
+ pub mod utils;
+ 
+ pub use locale::get_system_locale;
+@@ -24,8 +28,11 @@ pub use deansi::{
+ pub use emoji::contains_emoji;
+ pub use flatten_json::JsonFlattener;
+ pub use float::ObviousFloat;
++pub use multilife::MultiLife;
++pub use nu_cow::NuCow;
+ pub use quoting::{escape_quote_string, needs_quoting};
+ pub use shared_cow::SharedCow;
++pub use split_read::SplitRead;
+ 
+ #[cfg(unix)]
+ pub use filesystem::users;
+diff --git a/crates/nu-utils/src/multilife.rs b/crates/nu-utils/src/multilife.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f5c107f0218ec8eeb5b5021b18502b4925b73548
+--- /dev/null
++++ b/crates/nu-utils/src/multilife.rs
+@@ -0,0 +1,25 @@
++use std::ops::Deref;
++
++pub enum MultiLife<'out, 'local, T>
++where
++    'out: 'local,
++    T: ?Sized,
++{
++    Out(&'out T),
++    Local(&'local T),
++}
++
++impl<'out, 'local, T> Deref for MultiLife<'out, 'local, T>
++where
++    'out: 'local,
++    T: ?Sized,
++{
++    type Target = T;
++
++    fn deref(&self) -> &Self::Target {
++        match *self {
++            MultiLife::Out(x) => x,
++            MultiLife::Local(x) => x,
++        }
++    }
++}
+diff --git a/crates/nu-utils/src/strings/mod.rs b/crates/nu-utils/src/strings/mod.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..450e5eb8bee9ea12818a14511e9adb9b1fb50266
+--- /dev/null
++++ b/crates/nu-utils/src/strings/mod.rs
+@@ -0,0 +1,40 @@
++//! String utility types with specific semantics.
++//!
++//! This module provides additional string types optimized for certain use-cases, offering
++//! alternatives to standard [`String`] or [`&str`](str) when specific performance characteristics
++//! are desired.
++//!
++//! The pipeline-based, functional programming model, we use, leads to frequent string operations
++//! that involve immutability and often copying.
++//! These specialized string types can provide performance and memory benefits for these cases.
++//!
++//! ## Choosing a String Type: `SharedString` vs. `UniqueString`
++//!
++//! ### Use [`SharedString`] when:
++//!
++//! `SharedString` is an owned, immutable string type optimized for **frequent cloning and sharing**.
++//! Cloning it is very inexpensive (a pointer copy and atomic reference count increment), avoiding
++//! deep copies of the string data.
++//! It also benefits from Small String Optimization (SSO) and static string re-use.
++//!
++//! **Ideal for:** Strings that need to be duplicated or passed by value frequently across
++//! pipeline stages or within complex data structures, where many references to the same string
++//! data are expected.
++//!
++//! ### Use [`UniqueString`] when:
++//!
++//! `UniqueString` is an owned, immutable string type optimized for
++//! **strings that are primarily unique** or rarely cloned.
++//! Cloning a `UniqueString` always involves copying the underlying string data.
++//! Its advantage lies in avoiding the overhead of atomic reference counting.
++//! It also benefits from Small String Optimization (SSO) and static string re-use.
++//!
++//! **Ideal for:** Strings that are created and consumed locally, or represent unique identifiers
++//! that are not expected to be duplicated across many ownership boundaries.
++//! When the cost of copying upon infrequent clones is acceptable.
++
++mod shared;
++mod unique;
++
++pub use shared::SharedString;
++pub use unique::UniqueString;
+diff --git a/crates/nu-utils/src/strings/shared.rs b/crates/nu-utils/src/strings/shared.rs
+index cc1fa56b4b2bd27a81cbff19003f9efc82dbfe32..3496dc7e03f58b217275a798c6d0fabb56c2a04b 100644
+--- a/crates/nu-utils/src/strings/shared.rs
++++ b/crates/nu-utils/src/strings/shared.rs
+@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
+ ///   On 64-bit systems, `SharedString` is 16 bytes.
+ ///   This is achieved by disregarding the capacity of a `String` since we only hold the string as
+ ///   immutable.
+-///
++///   
+ /// Internally, `SharedString` is powered by [`lean_string::LeanString`], which provides the
+ /// underlying implementation for these optimizations.
+ pub struct SharedString(lean_string::LeanString);
+diff --git a/fix_custom_completion.py b/fix_custom_completion.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..31c958ecae374f5decd08a036dcd2f67daa61506
+--- /dev/null
++++ b/fix_custom_completion.py
+@@ -0,0 +1,151 @@
++#!/usr/bin/env python3
++"""
++Fix custom_completion field compatibility for Flag and PositionalArg structs.
++
++This script:
++1. Adds DeclId to imports in signature.rs
++2. Adds custom_completion: Option<DeclId> field to Flag and PositionalArg structs
++3. Adds custom_completion: None to all struct instantiations
++"""
++
++import os
++import re
++from pathlib import Path
++
++
++def fix_signature_rs(path: Path):
++    """Fix signature.rs to add the custom_completion field."""
++    content = path.read_text()
++
++    # Skip if already fixed
++    if "custom_completion" in content:
++        print(f"  Skipping {path} - already has custom_completion")
++        return False
++
++    # Add DeclId to imports (only in the use crate::{...} statement)
++    content = re.sub(
++        r'(use crate::\{\s*\n?\s*)BlockId,',
++        r'\1BlockId, DeclId,',
++        content
++    )
++
++    # Add custom_completion field to Flag struct (after default_value line)
++    content = re.sub(
++        r'(pub struct Flag \{[^}]*pub default_value: Option<Value>,)',
++        r'\1\n    pub custom_completion: Option<DeclId>,',
++        content,
++        flags=re.DOTALL
++    )
++
++    # Add custom_completion field to PositionalArg struct (after default_value line)
++    content = re.sub(
++        r'(pub struct PositionalArg \{[^}]*pub default_value: Option<Value>,)',
++        r'\1\n    pub custom_completion: Option<DeclId>,',
++        content,
++        flags=re.DOTALL
++    )
++
++    path.write_text(content)
++    print(f"  Fixed struct definitions in {path}")
++    return True
++
++
++def fix_struct_instantiations(root_dir: Path):
++    """Add custom_completion: None to all Flag and PositionalArg instantiations."""
++    fixed_files = 0
++
++    for rs_file in root_dir.rglob("*.rs"):
++        if "target" in str(rs_file):
++            continue
++
++        try:
++            content = rs_file.read_text()
++        except:
++            continue
++
++        # Skip if already has custom_completion: None, which means the fix was already applied
++        # Note: Don't skip based on just "custom_completion:" since the code may already use this variable name
++        if re.search(r'default_value:.*\n\s*custom_completion: None,', content):
++            continue
++
++        # Skip if file doesn't contain Flag or PositionalArg instantiations
++        if "Flag {" not in content and "PositionalArg {" not in content:
++            continue
++
++        lines = content.split('\n')
++        new_lines = []
++        modified = False
++        i = 0
++
++        while i < len(lines):
++            line = lines[i]
++            new_lines.append(line)
++
++            # Check if this line contains default_value assignment that ends a struct
++            # Pattern: "default_value: None," or "default_value: Some(...),"
++            # But NOT "pub default_value:" which is a struct definition, not instantiation
++            if 'default_value:' in line and line.rstrip().endswith(',') and 'pub default_value' not in line:
++                # Look back to see if we're inside a Flag or PositionalArg instantiation
++                # by checking for opening brace of these structs
++                in_struct = False
++                struct_indent = 0
++                current_indent = len(line) - len(line.lstrip())
++
++                for j in range(i - 1, max(i - 30, -1), -1):
++                    prev_line = lines[j]
++                    prev_stripped = prev_line.strip()
++
++                    # Check for Flag { or PositionalArg { (but not pattern matching with ..)
++                    if ('Flag {' in prev_line or 'PositionalArg {' in prev_line) and '..' not in prev_line:
++                        in_struct = True
++                        # Get the indentation of the struct fields
++                        struct_indent = current_indent
++                        break
++
++                    # If we hit a closing brace that's not part of the same struct, break
++                    # Only break if the closing brace is at same or less indentation than our line
++                    if (prev_stripped == '},' or prev_stripped == '}' or prev_stripped == ');' or prev_stripped == ')'):
++                        prev_indent = len(prev_line) - len(prev_line.lstrip())
++                        if prev_indent <= current_indent:
++                            break
++
++                if in_struct:
++                    # Add custom_completion: None with same indentation
++                    indent = ' ' * struct_indent
++                    new_lines.append(f"{indent}custom_completion: None,")
++                    modified = True
++
++            i += 1
++
++        if modified:
++            new_content = '\n'.join(new_lines)
++            rs_file.write_text(new_content)
++            fixed_files += 1
++            print(f"  Fixed instantiations in {rs_file}")
++
++    return fixed_files
++
++
++def main():
++    # Use /testbed in Docker, or current directory if running locally
++    testbed = Path("/testbed") if Path("/testbed").exists() else Path(".")
++
++    print(f"Fixing custom_completion field... (testbed={testbed})")
++
++    # Fix signature.rs
++    sig_path = testbed / "crates/nu-protocol/src/signature.rs"
++    print(f"  Looking for signature.rs at {sig_path}")
++    if sig_path.exists():
++        fix_signature_rs(sig_path)
++    else:
++        print(f"  ERROR: signature.rs not found at {sig_path}")
++
++    # Fix all struct instantiations
++    fixed = fix_struct_instantiations(testbed)
++    print(f"Fixed {fixed} files with struct instantiations")
++
++    print("Done!")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/fix_reedline_api.py b/fix_reedline_api.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..dacd6000c49396f6713334a4fc2142359003aec5
+--- /dev/null
++++ b/fix_reedline_api.py
+@@ -0,0 +1,95 @@
++#!/usr/bin/env python3
++"""
++Fix reedline API compatibility issues by removing TraversalDirection and with_immediately_accept usage.
++This script properly handles the multi-line code blocks that sed struggles with.
++"""
++
++import re
++import sys
++from pathlib import Path
++
++def fix_reedline_config(file_path):
++    """Remove TraversalDirection import and tab_traversal match expression."""
++    with open(file_path, 'r') as f:
++        content = f.read()
++
++    # Remove TraversalDirection from imports
++    content = re.sub(
++        r',\s*TraversalDirection\s*,',
++        ',',
++        content
++    )
++    content = re.sub(
++        r'TraversalDirection\s*,',
++        '',
++        content
++    )
++
++    # Remove the entire tab_traversal match block (lines 292-306)
++    # Pattern: from "columnar_menu = match extract_value("tab_traversal"..."
++    # to the matching closing brace with Err(_) => columnar_menu,
++    pattern = r'''columnar_menu\s*=\s*match\s+extract_value\("tab_traversal",.*?\{\s*
++\s*Ok\(tab_traversal\)\s*=>\s*match\s+tab_traversal\.coerce_str\(\)\?\.as_ref\(\)\s*\{.*?
++\s*\},\s*
++\s*Err\(_\)\s*=>\s*columnar_menu,\s*
++\s*\};'''
++
++    content = re.sub(pattern, '', content, flags=re.DOTALL)
++
++    with open(file_path, 'w') as f:
++        f.write(content)
++
++    return True
++
++def fix_repl(file_path):
++    """Remove with_immediately_accept method calls."""
++    with open(file_path, 'r') as f:
++        lines = f.readlines()
++
++    new_lines = []
++    i = 0
++
++    while i < len(lines):
++        line = lines[i]
++
++        # Check if this line contains .with_immediately_accept
++        if '.with_immediately_accept(' in line:
++            # Check if the previous non-empty line needs a semicolon
++            if new_lines:
++                # Find the last non-empty, non-comment line
++                for j in range(len(new_lines) - 1, -1, -1):
++                    prev_line = new_lines[j].rstrip()
++                    if prev_line and not prev_line.strip().startswith('//'):
++                        # If it ends with ) but not with ; or }, add a semicolon
++                        if prev_line.endswith(')') and not prev_line.endswith(';') and not prev_line.endswith('}'):
++                            new_lines[j] = prev_line + ';\n'
++                        break
++            i += 1
++            continue
++
++        new_lines.append(line)
++        i += 1
++
++    with open(file_path, 'w') as f:
++        f.writelines(new_lines)
++
++    return True
++
++if __name__ == '__main__':
++    testbed_path = Path('/testbed')
++
++    print("Fixing reedline API compatibility...")
++
++    # Fix reedline_config.rs
++    reedline_config = testbed_path / 'crates/nu-cli/src/reedline_config.rs'
++    if reedline_config.exists():
++        fix_reedline_config(reedline_config)
++        print(f"✓ Fixed {reedline_config}")
++
++    # Fix repl.rs
++    repl_file = testbed_path / 'crates/nu-cli/src/repl.rs'
++    if repl_file.exists():
++        fix_repl(repl_file)
++        print(f"✓ Fixed {repl_file}")
++
++    print("Done!")
+diff --git a/nu_cow_patch.rs b/nu_cow_patch.rs
+new file mode 100755
+index 0000000000000000000000000000000000000000..d2de8ac0fea1c9da0005d94a7887b93889bd4d06
+--- /dev/null
++++ b/nu_cow_patch.rs
+@@ -0,0 +1,12 @@
++use serde::{Deserialize, Serialize};
++
++/// A Cow-like enum for static or owned values, used for completion lists.
++/// This is an ENV-PATCH to provide a type that was expected by some cherry-picked commits.
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++#[serde(untagged)]
++pub enum NuCow<B: 'static, O> {
++    /// Borrowed static reference
++    Borrowed(B),
++    /// Owned value
++    Owned(O),
++}

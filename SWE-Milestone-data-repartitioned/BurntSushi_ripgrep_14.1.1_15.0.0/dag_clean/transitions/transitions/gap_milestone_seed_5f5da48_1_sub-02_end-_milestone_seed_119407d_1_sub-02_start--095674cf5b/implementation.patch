@@ -1,0 +1,790 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index dcc23d021552e6047d76999b5f5a2f72a6ed1814..1bb6e843fff28fcbd04120894c662d8adbd01586 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -25,12 +25,8 @@ Bug fixes:
+   Fix a bug where the "bytes searched" in `--stats` output could be incorrect.
+ * [BUG #2990](https://github.com/BurntSushi/ripgrep/issues/2990):
+   Fix a bug where ripgrep would mishandle globs that ended with a `.`.
+-* [BUG #3076](https://github.com/BurntSushi/ripgrep/issues/3076):
+-  Fix bug with `-m/--max-count` and `-U/--multiline` showing too many matches.
+ * [BUG #3108](https://github.com/BurntSushi/ripgrep/issues/3108):
+   Fix a bug where `-q --files-without-match` inverted the exit code.
+-* [BUG #3140](https://github.com/BurntSushi/ripgrep/issues/3140):
+-  Ensure hyphens in flag names are escaped in the roff text for the man page.
+ 
+ Feature enhancements:
+ 
+diff --git a/Cargo.toml b/Cargo.toml
+index ad58eca02e223c2899c902d64a5fdb16598e7620..16aed2f04d1e2c703a8dd969a96f06613dadc116 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,7 +24,7 @@ exclude = [
+ ]
+ build = "build.rs"
+ autotests = false
+-edition = "2024"
++edition = "2021"
+ rust-version = "1.88"
+ 
+ [[bin]]
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index f7e67b17dde7e1e1464ef5f3c1fe7d9b894673ad..df09dcedae4df7474ec9f00fa3b3ed011c99dcc8 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -788,7 +788,7 @@ impl HiArgs {
+                 attach_timestamps(haystacks, |md| md.created()).collect()
+             }
+         };
+-        with_timestamps.sort_by(|(_, t1), (_, t2)| {
++        with_timestamps.sort_by(|(_, ref t1), (_, ref t2)| {
+             let ordering = match (*t1, *t2) {
+                 // Both have metadata, do the obvious thing.
+                 (Some(t1), Some(t2)) => t1.cmp(&t2),
+@@ -1179,16 +1179,16 @@ fn types(low: &LowArgs) -> anyhow::Result<ignore::types::Types> {
+     builder.add_defaults();
+     for tychange in low.type_changes.iter() {
+         match tychange {
+-            TypeChange::Clear { name } => {
++            TypeChange::Clear { ref name } => {
+                 builder.clear(name);
+             }
+-            TypeChange::Add { def } => {
++            TypeChange::Add { ref def } => {
+                 builder.add_def(def)?;
+             }
+-            TypeChange::Select { name } => {
++            TypeChange::Select { ref name } => {
+                 builder.select(name);
+             }
+-            TypeChange::Negate { name } => {
++            TypeChange::Negate { ref name } => {
+                 builder.negate(name);
+             }
+         }
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index 5f521120b7b17e03e93b381915299578d8e06c02..c25e3f22227d855bc839523c471b30444c6d65f9 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -206,11 +206,6 @@ struct GlobOptions {
+     /// Whether or not an empty case in an alternate will be removed.
+     /// e.g., when enabled, `{,a}` will match "" and "a".
+     empty_alternates: bool,
+-    /// Whether or not an unclosed character class is allowed. When an unclosed
+-    /// character class is found, the opening `[` is treated as a literal `[`.
+-    /// When this isn't enabled, an opening `[` without a corresponding `]` is
+-    /// treated as an error.
+-    allow_unclosed_class: bool,
+ }
+ 
+ impl GlobOptions {
+@@ -220,7 +215,6 @@ impl GlobOptions {
+             literal_separator: false,
+             backslash_escape: !is_separator('\\'),
+             empty_alternates: false,
+-            allow_unclosed_class: false,
+         }
+     }
+ }
+@@ -570,27 +564,25 @@ impl<'a> GlobBuilder<'a> {
+     pub fn build(&self) -> Result<Glob, Error> {
+         let mut p = Parser {
+             glob: &self.glob,
+-            alternates_stack: Vec::new(),
+-            branches: vec![Tokens::default()],
++            stack: vec![Tokens::default()],
+             chars: self.glob.chars().peekable(),
+             prev: None,
+             cur: None,
+-            found_unclosed_class: false,
+             opts: &self.opts,
+         };
+         p.parse()?;
+-        if p.branches.is_empty() {
+-            // OK because of how the the branches/alternate_stack are managed.
+-            // If we end up here, then there *must* be a bug in the parser
+-            // somewhere.
+-            unreachable!()
+-        } else if p.branches.len() > 1 {
++        if p.stack.is_empty() {
++            Err(Error {
++                glob: Some(self.glob.to_string()),
++                kind: ErrorKind::UnopenedAlternates,
++            })
++        } else if p.stack.len() > 1 {
+             Err(Error {
+                 glob: Some(self.glob.to_string()),
+                 kind: ErrorKind::UnclosedAlternates,
+             })
+         } else {
+-            let tokens = p.branches.pop().unwrap();
++            let tokens = p.stack.pop().unwrap();
+             Ok(Glob {
+                 glob: self.glob.to_string(),
+                 re: tokens.to_regex_with(&self.opts),
+@@ -639,22 +631,6 @@ impl<'a> GlobBuilder<'a> {
+         self.opts.empty_alternates = yes;
+         self
+     }
+-
+-    /// Toggle whether unclosed character classes are allowed. When allowed,
+-    /// a `[` without a matching `]` is treated literally instead of resulting
+-    /// in a parse error.
+-    ///
+-    /// For example, if this is set then the glob `[abc` will be treated as the
+-    /// literal string `[abc` instead of returning an error.
+-    ///
+-    /// By default, this is false. Generally speaking, enabling this leads to
+-    /// worse failure modes since the glob parser becomes more permissive. You
+-    /// might want to enable this when compatibility (e.g., with POSIX glob
+-    /// implementations) is more important than good error messages.
+-    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut GlobBuilder<'a> {
+-        self.opts.allow_unclosed_class = yes;
+-        self
+-    }
+ }
+ 
+ impl Tokens {
+@@ -780,29 +756,11 @@ fn bytes_to_escaped_literal(bs: &[u8]) -> String {
+ }
+ 
+ struct Parser<'a> {
+-    /// The glob to parse.
+     glob: &'a str,
+-    /// Marks the index in `stack` where the alternation started.
+-    alternates_stack: Vec<usize>,
+-    /// The set of active alternation branches being parsed.
+-    /// Tokens are added to the end of the last one.
+-    branches: Vec<Tokens>,
+-    /// A character iterator over the glob pattern to parse.
++    stack: Vec<Tokens>,
+     chars: std::iter::Peekable<std::str::Chars<'a>>,
+-    /// The previous character seen.
+     prev: Option<char>,
+-    /// The current character.
+     cur: Option<char>,
+-    /// Whether we failed to find a closing `]` for a character
+-    /// class. This can only be true when `GlobOptions::allow_unclosed_class`
+-    /// is enabled. When enabled, it is impossible to ever parse another
+-    /// character class with this glob. That's because classes cannot be
+-    /// nested *and* the only way this happens is when there is never a `]`.
+-    ///
+-    /// We track this state so that we don't end up spending quadratic time
+-    /// trying to parse something like `[[[[[[[[[[[[[[[[[[[[[[[...`.
+-    found_unclosed_class: bool,
+-    /// Glob options, which may influence parsing.
+     opts: &'a GlobOptions,
+ }
+ 
+@@ -816,7 +774,7 @@ impl<'a> Parser<'a> {
+             match c {
+                 '?' => self.push_token(Token::Any)?,
+                 '*' => self.parse_star()?,
+-                '[' if !self.found_unclosed_class => self.parse_class()?,
++                '[' => self.parse_class()?,
+                 '{' => self.push_alternate()?,
+                 '}' => self.pop_alternate()?,
+                 ',' => self.parse_comma()?,
+@@ -828,37 +786,36 @@ impl<'a> Parser<'a> {
+     }
+ 
+     fn push_alternate(&mut self) -> Result<(), Error> {
+-        self.alternates_stack.push(self.branches.len());
+-        self.branches.push(Tokens::default());
+-        Ok(())
++        if self.stack.len() > 1 {
++            return Err(self.error(ErrorKind::NestedAlternates));
++        }
++        Ok(self.stack.push(Tokens::default()))
+     }
+ 
+     fn pop_alternate(&mut self) -> Result<(), Error> {
+-        let Some(start) = self.alternates_stack.pop() else {
+-            return Err(self.error(ErrorKind::UnopenedAlternates));
+-        };
+-        assert!(start <= self.branches.len());
+-        let alts = Token::Alternates(self.branches.drain(start..).collect());
+-        self.push_token(alts)?;
+-        Ok(())
++        let mut alts = vec![];
++        while self.stack.len() >= 2 {
++            alts.push(self.stack.pop().unwrap());
++        }
++        self.push_token(Token::Alternates(alts))
+     }
+ 
+     fn push_token(&mut self, tok: Token) -> Result<(), Error> {
+-        if let Some(ref mut pat) = self.branches.last_mut() {
++        if let Some(ref mut pat) = self.stack.last_mut() {
+             return Ok(pat.push(tok));
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn pop_token(&mut self) -> Result<Token, Error> {
+-        if let Some(ref mut pat) = self.branches.last_mut() {
++        if let Some(ref mut pat) = self.stack.last_mut() {
+             return Ok(pat.pop().unwrap());
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn have_tokens(&self) -> Result<bool, Error> {
+-        match self.branches.last() {
++        match self.stack.last() {
+             None => Err(self.error(ErrorKind::UnopenedAlternates)),
+             Some(ref pat) => Ok(!pat.is_empty()),
+         }
+@@ -867,11 +824,11 @@ impl<'a> Parser<'a> {
+     fn parse_comma(&mut self) -> Result<(), Error> {
+         // If we aren't inside a group alternation, then don't
+         // treat commas specially. Otherwise, we need to start
+-        // a new alternate branch.
+-        if self.alternates_stack.is_empty() {
++        // a new alternate.
++        if self.stack.len() <= 1 {
+             self.push_token(Token::Literal(','))
+         } else {
+-            Ok(self.branches.push(Tokens::default()))
++            Ok(self.stack.push(Tokens::default()))
+         }
+     }
+ 
+@@ -908,7 +865,7 @@ impl<'a> Parser<'a> {
+         }
+ 
+         if !prev.map(is_separator).unwrap_or(false) {
+-            if self.branches.len() <= 1
++            if self.stack.len() <= 1
+                 || (prev != Some(',') && prev != Some('{'))
+             {
+                 self.push_token(Token::ZeroOrMore)?;
+@@ -921,7 +878,7 @@ impl<'a> Parser<'a> {
+                 assert!(self.bump().is_none());
+                 true
+             }
+-            Some(',') | Some('}') if self.branches.len() >= 2 => true,
++            Some(',') | Some('}') if self.stack.len() >= 2 => true,
+             Some(c) if is_separator(c) => {
+                 assert!(self.bump().map(is_separator).unwrap_or(false));
+                 false
+@@ -951,11 +908,6 @@ impl<'a> Parser<'a> {
+     }
+ 
+     fn parse_class(&mut self) -> Result<(), Error> {
+-        // Save parser state for potential rollback to literal '[' parsing.
+-        let saved_chars = self.chars.clone();
+-        let saved_prev = self.prev;
+-        let saved_cur = self.cur;
+-
+         fn add_to_last_range(
+             glob: &str,
+             r: &mut (char, char),
+@@ -983,17 +935,11 @@ impl<'a> Parser<'a> {
+         let mut first = true;
+         let mut in_range = false;
+         loop {
+-            let Some(c) = self.bump() else {
+-                return if self.opts.allow_unclosed_class == true {
+-                    self.chars = saved_chars;
+-                    self.cur = saved_cur;
+-                    self.prev = saved_prev;
+-                    self.found_unclosed_class = true;
+-
+-                    self.push_token(Token::Literal('['))
+-                } else {
+-                    Err(self.error(ErrorKind::UnclosedClass))
+-                };
++            let c = match self.bump() {
++                Some(c) => c,
++                // The only way to successfully break this loop is to observe
++                // a ']'.
++                None => return Err(self.error(ErrorKind::UnclosedClass)),
+             };
+             match c {
+                 ']' => {
+@@ -1078,7 +1024,6 @@ mod tests {
+         litsep: Option<bool>,
+         bsesc: Option<bool>,
+         ealtre: Option<bool>,
+-        unccls: Option<bool>,
+     }
+ 
+     macro_rules! syntax {
+@@ -1121,10 +1066,6 @@ mod tests {
+                 if let Some(ealtre) = $options.ealtre {
+                     builder.empty_alternates(ealtre);
+                 }
+-                if let Some(unccls) = $options.unccls {
+-                    builder.allow_unclosed_class(unccls);
+-                }
+-
+                 let pat = builder.build().unwrap();
+                 assert_eq!(format!("(?-u){}", $re), pat.regex());
+             }
+@@ -1265,80 +1206,25 @@ mod tests {
+     syntaxerr!(err_unclosed4, "[!]", ErrorKind::UnclosedClass);
+     syntaxerr!(err_range1, "[z-a]", ErrorKind::InvalidRange('z', 'a'));
+     syntaxerr!(err_range2, "[z--]", ErrorKind::InvalidRange('z', '-'));
+-    syntaxerr!(err_alt1, "{a,b", ErrorKind::UnclosedAlternates);
+-    syntaxerr!(err_alt2, "{a,{b,c}", ErrorKind::UnclosedAlternates);
+-    syntaxerr!(err_alt3, "a,b}", ErrorKind::UnopenedAlternates);
+-    syntaxerr!(err_alt4, "{a,b}}", ErrorKind::UnopenedAlternates);
+ 
+-    const CASEI: Options = Options {
+-        casei: Some(true),
+-        litsep: None,
+-        bsesc: None,
+-        ealtre: None,
+-        unccls: None,
+-    };
+-    const SLASHLIT: Options = Options {
+-        casei: None,
+-        litsep: Some(true),
+-        bsesc: None,
+-        ealtre: None,
+-        unccls: None,
+-    };
++    const CASEI: Options =
++        Options { casei: Some(true), litsep: None, bsesc: None, ealtre: None };
++    const SLASHLIT: Options =
++        Options { casei: None, litsep: Some(true), bsesc: None, ealtre: None };
+     const NOBSESC: Options = Options {
+         casei: None,
+         litsep: None,
+         bsesc: Some(false),
+         ealtre: None,
+-        unccls: None,
+-    };
+-    const BSESC: Options = Options {
+-        casei: None,
+-        litsep: None,
+-        bsesc: Some(true),
+-        ealtre: None,
+-        unccls: None,
+     };
++    const BSESC: Options =
++        Options { casei: None, litsep: None, bsesc: Some(true), ealtre: None };
+     const EALTRE: Options = Options {
+         casei: None,
+         litsep: None,
+         bsesc: Some(true),
+         ealtre: Some(true),
+-        unccls: None,
+     };
+-    const UNCCLS: Options = Options {
+-        casei: None,
+-        litsep: None,
+-        bsesc: None,
+-        ealtre: None,
+-        unccls: Some(true),
+-    };
+-
+-    toregex!(allow_unclosed_class_single, r"[", r"^\[$", &UNCCLS);
+-    toregex!(allow_unclosed_class_many, r"[abc", r"^\[abc$", &UNCCLS);
+-    toregex!(allow_unclosed_class_empty1, r"[]", r"^\[\]$", &UNCCLS);
+-    toregex!(allow_unclosed_class_empty2, r"[][", r"^\[\]\[$", &UNCCLS);
+-    toregex!(allow_unclosed_class_negated_unclosed, r"[!", r"^\[!$", &UNCCLS);
+-    toregex!(allow_unclosed_class_negated_empty, r"[!]", r"^\[!\]$", &UNCCLS);
+-    toregex!(
+-        allow_unclosed_class_brace1,
+-        r"{[abc,xyz}",
+-        r"^(?:\[abc|xyz)$",
+-        &UNCCLS
+-    );
+-    toregex!(
+-        allow_unclosed_class_brace2,
+-        r"{[abc,[xyz}",
+-        r"^(?:\[abc|\[xyz)$",
+-        &UNCCLS
+-    );
+-    toregex!(
+-        allow_unclosed_class_brace3,
+-        r"{[abc],[xyz}",
+-        r"^(?:[abc]|\[xyz)$",
+-        &UNCCLS
+-    );
+-
+-    toregex!(re_empty, "", "^$");
+ 
+     toregex!(re_casei, "a", "(?i)^a$", &CASEI);
+ 
+@@ -1379,9 +1265,7 @@ mod tests {
+     toregex!(re32, "/a**", r"^/a.*.*$");
+     toregex!(re33, "/**a", r"^/.*.*a$");
+     toregex!(re34, "/a**b", r"^/a.*.*b$");
+-    toregex!(re35, "{a,b}", r"^(?:a|b)$");
+-    toregex!(re36, "{a,{b,c}}", r"^(?:a|(?:b|c))$");
+-    toregex!(re37, "{{a,b},{c,d}}", r"^(?:(?:a|b)|(?:c|d))$");
++    toregex!(re35, "{a,b}", r"^(?:b|a)$");
+ 
+     matches!(match1, "a", "a");
+     matches!(match2, "a*b", "a_b");
+@@ -1469,9 +1353,6 @@ mod tests {
+     matches!(matchalt14, "foo{,.txt}", "foo.txt");
+     nmatches!(matchalt15, "foo{,.txt}", "foo");
+     matches!(matchalt16, "foo{,.txt}", "foo", EALTRE);
+-    matches!(matchalt17, "{a,b{c,d}}", "bc");
+-    matches!(matchalt18, "{a,b{c,d}}", "bd");
+-    matches!(matchalt19, "{a,b{c,d}}", "a");
+ 
+     matches!(matchslash1, "abc/def", "abc/def", SLASHLIT);
+     #[cfg(unix)]
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index c07076d45167870486fbd7807913a1d95e55189b..b1fc696af2c634ce983254d81eb7712cf06e6db3 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -169,11 +169,8 @@ pub enum ErrorKind {
+     UnopenedAlternates,
+     /// Occurs when a `{` is found without a matching `}`.
+     UnclosedAlternates,
+-    /// **DEPRECATED**.
+-    ///
+-    /// This error used to occur when an alternating group was nested inside
+-    /// another alternating group, e.g., `{{a,b},{c,d}}`. However, this is now
+-    /// supported and as such this error cannot occur.
++    /// Occurs when an alternating group is nested inside another alternating
++    /// group, e.g., `{{a,b},{c,d}}`.
+     NestedAlternates,
+     /// Occurs when an unescaped '\' is found at the end of a glob.
+     DanglingEscape,
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index 716739bdc0a00afa608e00a37b3804f8b87910e1..19a347cdbe2b0680b9e0320631d5ac824f148100 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -308,7 +308,6 @@ pub struct GitignoreBuilder {
+     root: PathBuf,
+     globs: Vec<Glob>,
+     case_insensitive: bool,
+-    allow_unclosed_class: bool,
+ }
+ 
+ impl GitignoreBuilder {
+@@ -325,7 +324,6 @@ impl GitignoreBuilder {
+             root: strip_prefix("./", root).unwrap_or(root).to_path_buf(),
+             globs: vec![],
+             case_insensitive: false,
+-            allow_unclosed_class: true,
+         }
+     }
+ 
+@@ -507,7 +505,6 @@ impl GitignoreBuilder {
+             .literal_separator(true)
+             .case_insensitive(self.case_insensitive)
+             .backslash_escape(true)
+-            .allow_unclosed_class(self.allow_unclosed_class)
+             .build()
+             .map_err(|err| Error::Glob {
+                 glob: Some(glob.original.clone()),
+@@ -533,26 +530,6 @@ impl GitignoreBuilder {
+         self.case_insensitive = yes;
+         Ok(self)
+     }
+-
+-    /// Toggle whether unclosed character classes are allowed. When allowed,
+-    /// a `[` without a matching `]` is treated literally instead of resulting
+-    /// in a parse error.
+-    ///
+-    /// For example, if this is set then the glob `[abc` will be treated as the
+-    /// literal string `[abc` instead of returning an error.
+-    ///
+-    /// By default, this is true in order to match established `gitignore`
+-    /// semantics. Generally speaking, enabling this leads to worse failure
+-    /// modes since the glob parser becomes more permissive. You might want to
+-    /// enable this when compatibility (e.g., with POSIX glob implementations)
+-    /// is more important than good error messages.
+-    pub fn allow_unclosed_class(
+-        &mut self,
+-        yes: bool,
+-    ) -> &mut GitignoreBuilder {
+-        self.allow_unclosed_class = yes;
+-        self
+-    }
+ }
+ 
+ /// Return the file path of the current environment's global gitignore file.
+diff --git a/crates/ignore/src/overrides.rs b/crates/ignore/src/overrides.rs
+index 079b02c4132ee63f1b1b3277c51b8ceb0fcae822..1b02b4d4ee9a1ca3592a517d3d741fdf611292b0 100644
+--- a/crates/ignore/src/overrides.rs
++++ b/crates/ignore/src/overrides.rs
+@@ -1,6 +1,5 @@
+ /*!
+ The overrides module provides a way to specify a set of override globs.
+-
+ This provides functionality similar to `--include` or `--exclude` in command
+ line tools.
+ */
+@@ -121,9 +120,7 @@ impl OverrideBuilder {
+     ///
+     /// Matching is done relative to the directory path provided.
+     pub fn new<P: AsRef<Path>>(path: P) -> OverrideBuilder {
+-        let mut builder = GitignoreBuilder::new(path);
+-        builder.allow_unclosed_class(false);
+-        OverrideBuilder { builder }
++        OverrideBuilder { builder: GitignoreBuilder::new(path) }
+     }
+ 
+     /// Builds a new override matcher from the globs added so far.
+@@ -146,8 +143,7 @@ impl OverrideBuilder {
+ 
+     /// Toggle whether the globs should be matched case insensitively or not.
+     ///
+-    /// When this option is changed, only globs added after the change will be
+-    /// affected.
++    /// When this option is changed, only globs added after the change will be affected.
+     ///
+     /// This is disabled by default.
+     pub fn case_insensitive(
+@@ -159,28 +155,6 @@ impl OverrideBuilder {
+         self.builder.case_insensitive(yes)?;
+         Ok(self)
+     }
+-
+-    /// Toggle whether unclosed character classes are allowed. When allowed,
+-    /// a `[` without a matching `]` is treated literally instead of resulting
+-    /// in a parse error.
+-    ///
+-    /// For example, if this is set then the glob `[abc` will be treated as the
+-    /// literal string `[abc` instead of returning an error.
+-    ///
+-    /// By default, this is false. Generally speaking, enabling this leads to
+-    /// worse failure modes since the glob parser becomes more permissive. You
+-    /// might want to enable this when compatibility (e.g., with POSIX glob
+-    /// implementations) is more important than good error messages.
+-    ///
+-    /// This default is different from the default for [`Gitignore`]. Namely,
+-    /// [`Gitignore`] is intended to match git's behavior as-is. But this
+-    /// abstraction for "override" globs does not necessarily conform to any
+-    /// other known specification and instead prioritizes better error
+-    /// messages.
+-    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut OverrideBuilder {
+-        self.builder.allow_unclosed_class(yes);
+-        self
+-    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/printer/src/hyperlink.rs b/crates/printer/src/hyperlink.rs
+index ec1fd9211fcd0cc8256030625dbf02fe0d6e348c..f6c4faa2fc7be17c4019af8161b6f96461c4d5ac 100644
+--- a/crates/printer/src/hyperlink.rs
++++ b/crates/printer/src/hyperlink.rs
+@@ -702,16 +702,20 @@ impl HyperlinkPath {
+     /// Returns a hyperlink path from an OS path.
+     #[cfg(windows)]
+     pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
+-        // On Windows, Path::canonicalize returns the result of
+-        // GetFinalPathNameByHandleW with VOLUME_NAME_DOS,
+-        // which produces paths such as the following:
++        // On Windows, we use `std::path::absolute` instead of `Path::canonicalize`
++        // as it can be much faster since it does not touch the file system.
++        // It wraps the [`GetFullPathNameW`][1] API, except for verbatim paths
++        // (those which start with `\\?\`, see [the documentation][2] for details).
++        //
++        // Here, we strip any verbatim path prefixes since we cannot use them
++        // in hyperlinks anyway. This can only happen if the user explicitly
++        // supplies a verbatim path as input, which already needs to be absolute:
+         //
+         //   \\?\C:\dir\file.txt           (local path)
+         //   \\?\UNC\server\dir\file.txt   (network share)
+         //
+-        // The \\?\ prefix comes from VOLUME_NAME_DOS and is constant.
+-        // It is followed either by the drive letter, or by UNC\
+-        // (universal naming convention), which denotes a network share.
++        // The `\\?\` prefix is constant for verbatim paths, and can be followed
++        // by `UNC\` (universal naming convention), which denotes a network share.
+         //
+         // Given that the default URL format on Windows is file://{path}
+         // we need to return the following from this function:
+@@ -750,18 +754,19 @@ impl HyperlinkPath {
+         //
+         // It doesn't parse any other number of slashes in "file//server" as a
+         // network path.
++        //
++        // [1]: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfullpathnamew
++        // [2]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+ 
+         const WIN32_NAMESPACE_PREFIX: &str = r"\\?\";
+         const UNC_PREFIX: &str = r"UNC\";
+ 
+-        // As for Unix, we canonicalize the path to make sure we have an
+-        // absolute path.
+-        let path = match original_path.canonicalize() {
++        let path = match std::path::absolute(original_path) {
+             Ok(path) => path,
+             Err(err) => {
+                 log::debug!(
+                     "hyperlink creation for {:?} failed, error occurred \
+-                     during path canonicalization: {}",
++                     during conversion to absolute path: {}",
+                     original_path,
+                     err,
+                 );
+@@ -784,24 +789,20 @@ impl HyperlinkPath {
+                 return None;
+             }
+         };
+-        // As the comment above says, we expect all canonicalized paths to
+-        // begin with a \\?\. If it doesn't, then something weird is happening
+-        // and we should just give up.
+-        if !string.starts_with(WIN32_NAMESPACE_PREFIX) {
+-            log::debug!(
+-                "hyperlink creation for {:?} failed, canonicalization \
+-                 returned {:?}, which does not start with \\\\?\\",
+-                original_path,
+-                path,
+-            );
+-            return None;
+-        }
+-        string = &string[WIN32_NAMESPACE_PREFIX.len()..];
+ 
+-        // And as above, drop the UNC prefix too, but keep the leading slash.
+-        if string.starts_with(UNC_PREFIX) {
+-            string = &string[(UNC_PREFIX.len() - 1)..];
++        // Strip verbatim path prefixes (see the comment above for details).
++        if string.starts_with(WIN32_NAMESPACE_PREFIX) {
++            string = &string[WIN32_NAMESPACE_PREFIX.len()..];
++
++            // Drop the UNC prefix if there is one, but keep the leading slash.
++            if string.starts_with(UNC_PREFIX) {
++                string = &string[(UNC_PREFIX.len() - 1)..];
++            }
++        } else if string.starts_with(r"\\") || string.starts_with(r"//") {
++            // Drop one of the two leading slashes of network paths, it will be added back.
++            string = &string[1..];
+         }
++
+         // Finally, add a leading slash. In the local file case, this turns
+         // C:\foo\bar into /C:\foo\bar (and then percent encoding turns it into
+         // /C:/foo/bar). In the network share case, this turns \share\foo\bar
+@@ -1006,4 +1007,75 @@ mod tests {
+             err(InvalidVariable("bar{{".to_string())),
+         );
+     }
++
++    #[test]
++    #[cfg(windows)]
++    fn convert_to_hyperlink_path() {
++        let convert = |path| {
++            String::from_utf8(
++                HyperlinkPath::from_path(Path::new(path)).unwrap().0,
++            )
++            .unwrap()
++        };
++
++        assert_eq!(convert(r"C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"C:\foo\bar\..\other\baz.txt"),
++            "/C:/foo/other/baz.txt"
++        );
++
++        assert_eq!(convert(r"\\server\dir\file.txt"), "//server/dir/file.txt");
++        assert_eq!(
++            convert(r"\\server\dir\foo\..\other\file.txt"),
++            "//server/dir/other/file.txt"
++        );
++
++        assert_eq!(convert(r"\\?\C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"\\?\UNC\server\dir\file.txt"),
++            "//server/dir/file.txt"
++        );
++    }
++
++    #[test]
++    fn aliases_are_sorted() {
++        let aliases = hyperlink_aliases();
++        let mut prev =
++            aliases.first().expect("aliases should be non-empty").name();
++        for alias in aliases.iter().skip(1) {
++            let name = alias.name();
++            assert!(
++                name > prev,
++                "'{prev}' should come before '{name}' in \
++                 HYPERLINK_PATTERN_ALIASES",
++            );
++            prev = name;
++        }
++    }
++
++    #[test]
++    fn alias_names_are_reasonable() {
++        for alias in hyperlink_aliases() {
++            // There's no hard rule here, but if we want to define an alias
++            // with a name that doesn't pass this assert, then we should
++            // probably flag it as worthy of consideration. For example, we
++            // really do not want to define an alias that contains `{` or `}`,
++            // which might confuse it for a variable.
++            assert!(alias.name().chars().all(|c| c.is_alphanumeric()
++                || c == '+'
++                || c == '-'
++                || c == '.'));
++        }
++    }
++
++    #[test]
++    fn aliases_are_valid_formats() {
++        for alias in hyperlink_aliases() {
++            let (name, format) = (alias.name(), alias.format());
++            assert!(
++                format.parse::<HyperlinkFormat>().is_ok(),
++                "invalid hyperlink alias '{name}': {format}",
++            );
++        }
++    }
+ }
+diff --git a/crates/printer/src/hyperlink_aliases.rs b/crates/printer/src/hyperlink_aliases.rs
+index 9bad1b862d6dbc06dbdcfd65aa06a4e5dea7a8e5..0d39c82bcc6d08ab9ad89c461701fc370ab9a42b 100644
+--- a/crates/printer/src/hyperlink_aliases.rs
++++ b/crates/printer/src/hyperlink_aliases.rs
+@@ -35,51 +35,3 @@ pub(crate) fn find(name: &str) -> Option<&str> {
+ pub(crate) fn iter() -> impl Iterator<Item = (&'static str, &'static str)> {
+     HYPERLINK_PATTERN_ALIASES.iter().copied()
+ }
+-
+-#[cfg(test)]
+-mod tests {
+-    use crate::HyperlinkFormat;
+-
+-    use super::*;
+-
+-    #[test]
+-    fn is_sorted() {
+-        let mut prev = HYPERLINK_PATTERN_ALIASES
+-            .get(0)
+-            .expect("aliases should be non-empty")
+-            .0;
+-        for &(name, _) in HYPERLINK_PATTERN_ALIASES.iter().skip(1) {
+-            assert!(
+-                name > prev,
+-                "'{prev}' should come before '{name}' in \
+-                 HYPERLINK_PATTERN_ALIASES",
+-            );
+-            prev = name;
+-        }
+-    }
+-
+-    #[test]
+-    fn alias_names_are_reasonable() {
+-        for &(name, _) in HYPERLINK_PATTERN_ALIASES.iter() {
+-            // There's no hard rule here, but if we want to define an alias
+-            // with a name that doesn't pass this assert, then we should
+-            // probably flag it as worthy of consideration. For example, we
+-            // really do not want to define an alias that contains `{` or `}`,
+-            // which might confuse it for a variable.
+-            assert!(name.chars().all(|c| c.is_alphanumeric()
+-                || c == '+'
+-                || c == '-'
+-                || c == '.'));
+-        }
+-    }
+-
+-    #[test]
+-    fn aliases_are_valid_formats() {
+-        for (name, definition) in HYPERLINK_PATTERN_ALIASES {
+-            assert!(
+-                definition.parse::<HyperlinkFormat>().is_ok(),
+-                "invalid hyperlink alias '{name}': {definition}",
+-            );
+-        }
+-    }
+-}

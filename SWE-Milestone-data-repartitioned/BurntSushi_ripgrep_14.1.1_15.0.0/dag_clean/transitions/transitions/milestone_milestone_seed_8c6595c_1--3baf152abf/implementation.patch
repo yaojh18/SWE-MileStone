@@ -1,0 +1,59 @@
+diff --git a/crates/searcher/src/line_buffer.rs b/crates/searcher/src/line_buffer.rs
+index e73c650468d965a3cc42f016072c479ab259e4fa..d861e5569064c0d7329eabf3e77dc78b8900a180 100644
+--- a/crates/searcher/src/line_buffer.rs
++++ b/crates/searcher/src/line_buffer.rs
+@@ -415,21 +415,26 @@ impl LineBuffer {
+         assert_eq!(self.pos, 0);
+         loop {
+             self.ensure_capacity()?;
+-            let readlen = rdr.read(self.free_buffer().as_bytes_mut())?;
+-            if readlen == 0 {
+-                // We're only done reading for good once the caller has
+-                // consumed everything.
+-                self.last_lineterm = self.end;
+-                return Ok(!self.buffer().is_empty());
++            let oldend = self.end;
++            while !self.free_buffer().is_empty() {
++                let readlen = rdr.read(self.free_buffer())?;
++                if readlen == 0 {
++                    break;
++                }
++                self.end += readlen;
+             }
+ 
+             // Get a mutable view into the bytes we've just read. These are
+             // the bytes that we do binary detection on, and also the bytes we
+             // search to find the last line terminator. We need a mutable slice
+             // in the case of binary conversion.
+-            let oldend = self.end;
+-            self.end += readlen;
+             let newbytes = &mut self.buf[oldend..self.end];
++            if newbytes.is_empty() {
++                self.last_lineterm = self.end;
++                // We're only done reading for good once the caller has
++                // consumed everything.
++                return Ok(!self.buffer().is_empty());
++            }
+ 
+             // Binary detection.
+             match self.config.binary {
+diff --git a/crates/searcher/src/searcher/core.rs b/crates/searcher/src/searcher/core.rs
+index 87eaf7f499273e155d91b6f54b696a0c7577fa78..e0693c0984d9d25d06394c7d95208fdeeba7eab5 100644
+--- a/crates/searcher/src/searcher/core.rs
++++ b/crates/searcher/src/searcher/core.rs
+@@ -191,10 +191,14 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
+             // separator (when before_context==0 and after_context>0), we
+             // need to know something about the position of the previous
+             // line visited, even if we're at the beginning of the buffer.
++            //
++            // ... however, we only need to find the N preceding lines based
++            // on before context. We can skip this (potentially costly, for
++            // large values of N) step when before_context==0.
+             let context_start = lines::preceding(
+                 buf,
+                 self.config.line_term.as_byte(),
+-                self.config.max_context(),
++                self.config.before_context,
+             );
+             let consumed =
+                 std::cmp::max(context_start, self.last_line_visited);

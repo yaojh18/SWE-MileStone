@@ -1,0 +1,1324 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.github/workflows/build-and-test-pr.yml b/.github/workflows/build-and-test-pr.yml
+index 921791f7666e8cb91496f4da2c3ffe9567406c06..1bd5e2e982472286917886501ffa3820d76e760f 100644
+--- a/.github/workflows/build-and-test-pr.yml
++++ b/.github/workflows/build-and-test-pr.yml
+@@ -207,12 +207,10 @@ jobs:
+ 
+   unit-test:
+     needs: [check-format, unit-test-prepare]
+-    name: "Unit Test On ubuntu-latest Java: ${{ matrix.java }}"
++    name: "Unit Test On ubuntu-latest"
+     runs-on: ubuntu-latest
+     strategy:
+       fail-fast: false
+-      matrix:
+-        java: [ 8, 11, 17, 21 ]
+     env:
+       DISABLE_FILE_SYSTEM_TEST: true
+       CURRENT_ROLE: ${{ matrix.case-role }}
+@@ -222,11 +220,11 @@ jobs:
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+-      - name: "Set up JDK ${{ matrix.java }}"
++      - name: "Set up JDK 21"
+         uses: actions/setup-java@v4
+         with:
+           distribution: 'zulu'
+-          java-version: ${{ matrix.java }}
++          java-version: 21
+       - name: "Set current date as env variable"
+         run: echo "TODAY=$(date +'%Y%m%d')" >> $GITHUB_ENV
+       - name: "Cache local maven repository"
+@@ -245,15 +243,8 @@ jobs:
+           key: zookeeper-${{ runner.os }}-${{ env.ZOOKEEPER_VERSION }}
+           restore-keys: |
+             zookeeper-${{ runner.os }}-
+-      - name: "Test with maven on Java: 8"
+-        timeout-minutes: 90
+-        if: ${{ matrix.java == '8' }}
+-        run: |
+-          set -o pipefail
+-          ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+-      - name: "Test with maven on Java: ${{ matrix.java }}"
++      - name: "Test with maven"
+         timeout-minutes: 90
+-        if: ${{ matrix.java != '8' }}
+         run: |
+           set -o pipefail
+           ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,jdk15ge-simple,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+@@ -265,13 +256,13 @@ jobs:
+         with:
+           token: ${{ secrets.CODECOV_TOKEN }}
+           verbose: true
+-          flags: unit-tests-java${{ matrix.java }}
++          flags: unit-tests
+         env:
+           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+       - name: "Upload surefire reports"
+         uses: actions/upload-artifact@v4
+         with:
+-          name: surefire-reports-java${{ matrix.java }}
++          name: surefire-reports
+           path: "**/target/surefire-reports/**"
+ 
+   samples-test-prepare:
+@@ -302,7 +293,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -343,7 +334,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -374,7 +365,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -417,7 +408,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -458,7 +449,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -489,7 +480,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -510,7 +501,7 @@ jobs:
+     needs: [check-format, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+@@ -560,7 +551,7 @@ jobs:
+     needs: [check-format, integration-test-result, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+diff --git a/.github/workflows/build-and-test-scheduled-3.1.yml b/.github/workflows/build-and-test-scheduled-3.1.yml
+index 29fffd081e69b088dff50e48a1b29fab1ed8a860..d53f36a7db396964f70f629944b981a70fd4c3ae 100644
+--- a/.github/workflows/build-and-test-scheduled-3.1.yml
++++ b/.github/workflows/build-and-test-scheduled-3.1.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.2.yml b/.github/workflows/build-and-test-scheduled-3.2.yml
+index 514097e7796c16c7beaef02b690987a8c4c651e1..72d67ef65a1a9cd00efa8313abd5667b9e0a6ac0 100644
+--- a/.github/workflows/build-and-test-scheduled-3.2.yml
++++ b/.github/workflows/build-and-test-scheduled-3.2.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.3.yml b/.github/workflows/build-and-test-scheduled-3.3.yml
+index 014b120a046aedcd1e5bcaeec0d3af68a3806cdb..944cbfa9247576d1945f173a924a0540f07c6f5a 100644
+--- a/.github/workflows/build-and-test-scheduled-3.3.yml
++++ b/.github/workflows/build-and-test-scheduled-3.3.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/release-test.yml b/.github/workflows/release-test.yml
+index a579ba3727cfea46da6c97ef49c6970e87148b96..e010b7e8335a17b05191bda8d00d9e82faa0e8b8 100644
+--- a/.github/workflows/release-test.yml
++++ b/.github/workflows/release-test.yml
+@@ -283,7 +283,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+@@ -383,7 +383,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+diff --git a/README.md b/README.md
+index 3350b17742d80d8542d524baf57368702d1a0de2..56f43e9a6702c497d95f8df453be8e061373e529 100644
+--- a/README.md
++++ b/README.md
+@@ -73,7 +73,7 @@ Explore more through our hands-on tasks:
+ 
+ | Version  | JDK Support | Dependencies                                                                                          | Highlights                                                                                                     |
+ |----------|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+-| **3.3.5**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.5/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
++| **3.3.2**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.2/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
+ | **3.2.16** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.5/dubbo-dependencies-bom/pom.xml#L94) | ✅ Actively Maintained <br> ✅ Metrics & Tracing <br> ✅ Thread Pool Isolation <br> ✅ +30% Performance <br> ✅ Native Image Support |
+ | **3.1.11** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.11/dubbo-dependencies-bom/pom.xml#L90) | ⚠️ Stable, but Not Actively Maintained                                                                         |
+ 
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/Constants.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/Constants.java
+index eab16e6d0f1f030f51dcf6056ca5a3fd6109a3f2..ac8bfcf00b3f590646a7831642855369ede6c2c6 100644
+--- a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/Constants.java
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/Constants.java
+@@ -46,6 +46,8 @@ public interface Constants {
+ 
+     String CONDITIONS_KEY = "conditions";
+ 
++    String AFFINITY_KEY = "affinityAware";
++
+     String TAGS_KEY = "tags";
+ 
+     /**
+@@ -141,5 +143,10 @@ public interface Constants {
+ 
+     String RULE_VERSION_V31 = "v3.1";
+ 
++    public static final String TRAFFIC_DISABLE_KEY = "trafficDisable";
++    public static final String RATIO_KEY = "ratio";
++    public static final int DefaultRouteRatio = 0;
+     public static final int DefaultRouteConditionSubSetWeight = 100;
++    public static final int DefaultRoutePriority = 0;
++    public static final double DefaultAffinityRatio = 0;
+ }
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouter.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..51b5dbbca62a6e69ba09311b367e22f0c9f15891
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouter.java
+@@ -0,0 +1,198 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
++import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.common.utils.CollectionUtils;
++import org.apache.dubbo.common.utils.Holder;
++import org.apache.dubbo.common.utils.NetUtils;
++import org.apache.dubbo.rpc.Invocation;
++import org.apache.dubbo.rpc.Invoker;
++import org.apache.dubbo.rpc.RpcException;
++import org.apache.dubbo.rpc.cluster.router.RouterSnapshotNode;
++import org.apache.dubbo.rpc.cluster.router.condition.matcher.ConditionMatcher;
++import org.apache.dubbo.rpc.cluster.router.condition.matcher.ConditionMatcherFactory;
++import org.apache.dubbo.rpc.cluster.router.state.AbstractStateRouter;
++import org.apache.dubbo.rpc.cluster.router.state.BitList;
++
++import java.text.ParseException;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import static org.apache.dubbo.common.constants.CommonConstants.ENABLED_KEY;
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_CONDITIONAL_ROUTE_LIST_EMPTY;
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_FAILED_EXEC_CONDITION_ROUTER;
++import static org.apache.dubbo.rpc.cluster.Constants.AFFINITY_KEY;
++import static org.apache.dubbo.rpc.cluster.Constants.DefaultAffinityRatio;
++import static org.apache.dubbo.rpc.cluster.Constants.RATIO_KEY;
++import static org.apache.dubbo.rpc.cluster.Constants.RULE_KEY;
++import static org.apache.dubbo.rpc.cluster.Constants.RUNTIME_KEY;
++
++/**
++ * # dubbo/config/group/{$name}.affinity-router
++ * configVersion: v3.1
++ * scope: service # Or application
++ * key: service.apache.com
++ * enabled: true
++ * runtime: true
++ * affinityAware:
++ *   key: region
++ *   ratio: 20
++ */
++public class AffinityStateRouter<T> extends AbstractStateRouter<T> {
++    public static final String NAME = "affinity";
++
++    private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(AbstractStateRouter.class);
++
++    protected String affinityKey;
++    protected Double ratio;
++    protected ConditionMatcher matchMatcher;
++    protected List<ConditionMatcherFactory> matcherFactories;
++
++    private final boolean enabled;
++
++    public AffinityStateRouter(URL url) {
++        super(url);
++        this.enabled = url.getParameter(ENABLED_KEY, true);
++        this.affinityKey = url.getParameter(AFFINITY_KEY, "");
++        this.ratio = url.getParameter(RATIO_KEY, DefaultAffinityRatio);
++        this.matcherFactories =
++                moduleModel.getExtensionLoader(ConditionMatcherFactory.class).getActivateExtensions();
++        if (this.enabled) {
++            this.init(affinityKey);
++        }
++    }
++
++    public AffinityStateRouter(URL url, String affinityKey, Double ratio, boolean enabled) {
++        super(url);
++        this.enabled = enabled;
++        this.affinityKey = affinityKey;
++        this.ratio = ratio;
++        matcherFactories =
++                moduleModel.getExtensionLoader(ConditionMatcherFactory.class).getActivateExtensions();
++        if (this.enabled) {
++            this.init(affinityKey);
++        }
++    }
++
++    public void init(String rule) {
++        try {
++            if (rule == null || rule.trim().isEmpty()) {
++                throw new IllegalArgumentException("Illegal affinity rule!");
++            }
++            this.matchMatcher = parseRule(affinityKey);
++        } catch (ParseException e) {
++            throw new IllegalStateException(e.getMessage(), e);
++        }
++    }
++
++    private ConditionMatcher parseRule(String rule) throws ParseException {
++        ConditionMatcher matcher = getMatcher(rule);
++        // Multiple values
++        Set<String> values = matcher.getMatches();
++        values.add(getUrl().getParameter(rule));
++        return matcher;
++    }
++
++    @Override
++    protected BitList<Invoker<T>> doRoute(
++            BitList<Invoker<T>> invokers,
++            URL url,
++            Invocation invocation,
++            boolean needToPrintMessage,
++            Holder<RouterSnapshotNode<T>> nodeHolder,
++            Holder<String> messageHolder)
++            throws RpcException {
++        if (!enabled) {
++            if (needToPrintMessage) {
++                messageHolder.set("Directly return. Reason: AffinityRouter disabled.");
++            }
++            return invokers;
++        }
++
++        if (CollectionUtils.isEmpty(invokers)) {
++            if (needToPrintMessage) {
++                messageHolder.set("Directly return. Reason: Invokers from previous router is empty.");
++            }
++            return invokers;
++        }
++        try {
++            BitList<Invoker<T>> result = invokers.clone();
++            result.removeIf(invoker -> !matchInvoker(invoker.getUrl(), url));
++
++            if (result.size() / (double) invokers.size() >= ratio / (double) 100) {
++                if (needToPrintMessage) {
++                    messageHolder.set("Match return.");
++                }
++                return result;
++            } else {
++                logger.warn(
++                        CLUSTER_CONDITIONAL_ROUTE_LIST_EMPTY,
++                        "execute affinity state router result is less than defined" + this.ratio,
++                        "",
++                        "The affinity result is ignored. consumer: " + NetUtils.getLocalHost()
++                                + ", service: " + url.getServiceKey() + ", router: "
++                                + url.getParameterAndDecoded(RULE_KEY));
++                if (needToPrintMessage) {
++                    messageHolder.set("Directly return. Reason: Affinity state router result is less than defined.");
++                }
++                return invokers;
++            }
++        } catch (Throwable t) {
++            logger.error(
++                    CLUSTER_FAILED_EXEC_CONDITION_ROUTER,
++                    "execute affinity state router exception",
++                    "",
++                    "Failed to execute affinity router rule: " + getUrl() + ", invokers: " + invokers + ", cause: "
++                            + t.getMessage(),
++                    t);
++        }
++        if (needToPrintMessage) {
++            messageHolder.set("Directly return. Reason: Error occurred ( or result is empty ).");
++        }
++        return invokers;
++    }
++
++    @Override
++    public boolean isRuntime() {
++        // We always return true for previously defined Router, that is, old Router doesn't support cache anymore.
++        //        return true;
++        return this.getUrl().getParameter(RUNTIME_KEY, false);
++    }
++
++    private ConditionMatcher getMatcher(String key) {
++        return moduleModel
++                .getExtensionLoader(ConditionMatcherFactory.class)
++                .getExtension("param")
++                .createMatcher(key, moduleModel);
++    }
++
++    private boolean matchInvoker(URL url, URL param) {
++        return doMatch(url, param, null, matchMatcher);
++    }
++
++    private boolean doMatch(URL url, URL param, Invocation invocation, ConditionMatcher matcher) {
++        Map<String, String> sample = url.toOriginalMap();
++        if (!matcher.isMatch(sample, param, invocation, false)) {
++            return false;
++        }
++        return true;
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouterFactory.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouterFactory.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..db96b4f8485ad6ba58f648482edb9511fe304bf0
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/AffinityStateRouterFactory.java
+@@ -0,0 +1,34 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.rpc.cluster.router.state.CacheableStateRouterFactory;
++import org.apache.dubbo.rpc.cluster.router.state.StateRouter;
++
++/**
++ * affinity router factory
++ */
++public class AffinityStateRouterFactory extends CacheableStateRouterFactory {
++
++    public static final String NAME = "affinity";
++
++    @Override
++    protected <T> StateRouter<T> createRouter(Class<T> interfaceClass, URL url) {
++        return new AffinityStateRouter<T>(url);
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityListenableStateRouter.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityListenableStateRouter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f5b543d6c617c5ba63ead21938def894bf76d6bc
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityListenableStateRouter.java
+@@ -0,0 +1,163 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.config.configcenter.ConfigChangeType;
++import org.apache.dubbo.common.config.configcenter.ConfigChangedEvent;
++import org.apache.dubbo.common.config.configcenter.ConfigurationListener;
++import org.apache.dubbo.common.config.configcenter.DynamicConfiguration;
++import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
++import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.common.utils.CollectionUtils;
++import org.apache.dubbo.common.utils.Holder;
++import org.apache.dubbo.common.utils.StringUtils;
++import org.apache.dubbo.rpc.Invocation;
++import org.apache.dubbo.rpc.Invoker;
++import org.apache.dubbo.rpc.RpcException;
++import org.apache.dubbo.rpc.cluster.router.AbstractRouterRule;
++import org.apache.dubbo.rpc.cluster.router.RouterSnapshotNode;
++import org.apache.dubbo.rpc.cluster.router.affinity.AffinityStateRouter;
++import org.apache.dubbo.rpc.cluster.router.affinity.config.model.AffinityRouterRule;
++import org.apache.dubbo.rpc.cluster.router.affinity.config.model.AffinityRuleParser;
++import org.apache.dubbo.rpc.cluster.router.state.AbstractStateRouter;
++import org.apache.dubbo.rpc.cluster.router.state.BitList;
++import org.apache.dubbo.rpc.cluster.router.state.TailStateRouter;
++
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_FAILED_RULE_PARSING;
++
++/**
++ * Abstract router which listens to dynamic configuration
++ */
++public abstract class AffinityListenableStateRouter<T> extends AbstractStateRouter<T> implements ConfigurationListener {
++    public static final String NAME = "Affinity_LISTENABLE_ROUTER";
++    public static final String RULE_SUFFIX = ".affinity-router";
++
++    private static final ErrorTypeAwareLogger logger =
++            LoggerFactory.getErrorTypeAwareLogger(AffinityListenableStateRouter.class);
++    private volatile AffinityRouterRule affinityRouterRule;
++    private volatile AffinityStateRouter<T> affinityRouter;
++    private final String ruleKey;
++
++    public AffinityListenableStateRouter(URL url, String ruleKey) {
++        super(url);
++        this.setForce(false);
++        this.init(ruleKey);
++        this.ruleKey = ruleKey;
++    }
++
++    @Override
++    public synchronized void process(ConfigChangedEvent event) {
++        if (logger.isInfoEnabled()) {
++            logger.info("Notification of affinity rule, change type is: " + event.getChangeType() + ", raw rule is:\n "
++                    + event.getContent());
++        }
++
++        if (event.getChangeType().equals(ConfigChangeType.DELETED)) {
++            affinityRouterRule = null;
++            affinityRouter = null;
++        } else {
++            try {
++                affinityRouterRule = AffinityRuleParser.parse(event.getContent());
++                generateConditions(affinityRouterRule);
++            } catch (Exception e) {
++                logger.error(
++                        CLUSTER_FAILED_RULE_PARSING,
++                        "Failed to parse the raw affinity rule",
++                        "",
++                        "Failed to parse the raw affinity rule and it will not take effect, please check "
++                                + "if the affinity rule matches with the template, the raw rule is:\n "
++                                + event.getContent(),
++                        e);
++            }
++        }
++    }
++
++    @Override
++    public BitList<Invoker<T>> doRoute(
++            BitList<Invoker<T>> invokers,
++            URL url,
++            Invocation invocation,
++            boolean needToPrintMessage,
++            Holder<RouterSnapshotNode<T>> nodeHolder,
++            Holder<String> messageHolder)
++            throws RpcException {
++        if (CollectionUtils.isEmpty(invokers) || affinityRouter == null) {
++            if (needToPrintMessage) {
++                messageHolder.set(
++                        "Directly return. Reason: Invokers from previous router is empty or affinityRouter is null.");
++            }
++            return invokers;
++        }
++
++        // We will check enabled status inside each router.
++        StringBuilder resultMessage = null;
++        if (needToPrintMessage) {
++            resultMessage = new StringBuilder();
++        }
++        invokers = affinityRouter.route(invokers, url, invocation, needToPrintMessage, nodeHolder);
++        if (needToPrintMessage) {
++            resultMessage.append(messageHolder.get());
++        }
++
++        if (needToPrintMessage) {
++            messageHolder.set(resultMessage.toString());
++        }
++
++        return invokers;
++    }
++
++    @Override
++    public boolean isForce() {
++        return (affinityRouterRule != null && affinityRouterRule.isForce());
++    }
++
++    private boolean isRuleRuntime() {
++        return affinityRouterRule != null && affinityRouterRule.isValid() && affinityRouterRule.isRuntime();
++    }
++
++    private void generateConditions(AbstractRouterRule rule) {
++        if (rule == null || !rule.isValid()) {
++            return;
++        }
++        AffinityRouterRule affinityRule = (AffinityRouterRule) rule;
++        affinityRouter = new AffinityStateRouter<>(
++                getUrl(), affinityRule.getAffinityKey(), affinityRule.getRatio(), affinityRule.isEnabled());
++        affinityRouter.setNextRouter(TailStateRouter.getInstance());
++    }
++
++    private synchronized void init(String ruleKey) {
++        if (StringUtils.isEmpty(ruleKey)) {
++            return;
++        }
++        String routerKey = ruleKey + RULE_SUFFIX;
++        this.getRuleRepository().addListener(routerKey, this);
++        String rule = this.getRuleRepository().getRule(routerKey, DynamicConfiguration.DEFAULT_GROUP);
++        if (StringUtils.isNotEmpty(rule)) {
++            this.process(new ConfigChangedEvent(routerKey, DynamicConfiguration.DEFAULT_GROUP, rule));
++        }
++    }
++
++    public AffinityStateRouter<T> getAffinityRouter() {
++        return affinityRouter;
++    }
++
++    @Override
++    public void stop() {
++        this.getRuleRepository().removeListener(ruleKey + RULE_SUFFIX, this);
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouter.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8690ab81cf2c461c7f491d8d9ce80a4651ed18bd
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouter.java
+@@ -0,0 +1,86 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.config.configcenter.ConfigChangedEvent;
++import org.apache.dubbo.common.config.configcenter.DynamicConfiguration;
++import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
++import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.common.utils.CollectionUtils;
++import org.apache.dubbo.common.utils.StringUtils;
++import org.apache.dubbo.rpc.Invoker;
++import org.apache.dubbo.rpc.cluster.router.condition.config.ListenableStateRouter;
++import org.apache.dubbo.rpc.cluster.router.state.BitList;
++
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_EMPTY;
++import static org.apache.dubbo.common.utils.StringUtils.isEmpty;
++
++/**
++ * Application level affinity router, "application.affinity-router"
++ */
++public class AffinityProviderAppStateRouter<T> extends ListenableStateRouter<T> {
++    private static final ErrorTypeAwareLogger logger =
++            LoggerFactory.getErrorTypeAwareLogger(ListenableStateRouter.class);
++    public static final String NAME = "AFFINITY_PROVIDER_APP_ROUTER";
++    private String application;
++    private final String currentApplication;
++
++    public AffinityProviderAppStateRouter(URL url) {
++        super(url, url.getApplication());
++        this.currentApplication = url.getApplication();
++    }
++
++    @Override
++    public void notify(BitList<Invoker<T>> invokers) {
++        if (CollectionUtils.isEmpty(invokers)) {
++            return;
++        }
++
++        Invoker<T> invoker = invokers.get(0);
++        URL url = invoker.getUrl();
++        String providerApplication = url.getRemoteApplication();
++
++        // provider application is empty or equals with the current application
++        if (isEmpty(providerApplication)) {
++            logger.warn(
++                    CLUSTER_TAG_ROUTE_EMPTY,
++                    "affinity router get providerApplication is empty, will not subscribe to provider app rules.",
++                    "",
++                    "");
++            return;
++        }
++        if (providerApplication.equals(currentApplication)) {
++            return;
++        }
++
++        synchronized (this) {
++            if (!providerApplication.equals(application)) {
++                if (StringUtils.isNotEmpty(application)) {
++                    this.getRuleRepository().removeListener(application + RULE_SUFFIX, this);
++                }
++                String key = providerApplication + RULE_SUFFIX;
++                this.getRuleRepository().addListener(key, this);
++                application = providerApplication;
++                String rawRule = this.getRuleRepository().getRule(key, DynamicConfiguration.DEFAULT_GROUP);
++                if (StringUtils.isNotEmpty(rawRule)) {
++                    this.process(new ConfigChangedEvent(key, DynamicConfiguration.DEFAULT_GROUP, rawRule));
++                }
++            }
++        }
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouterFactory.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouterFactory.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4a0e829f312f219bd46bf8111744a99db45e96d
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityProviderAppStateRouterFactory.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.extension.Activate;
++import org.apache.dubbo.rpc.cluster.router.state.CacheableStateRouterFactory;
++import org.apache.dubbo.rpc.cluster.router.state.StateRouter;
++
++/**
++ * AffinityProvider router factory
++ */
++@Activate(order = 135)
++public class AffinityProviderAppStateRouterFactory extends CacheableStateRouterFactory {
++
++    public static final String NAME = "affinity-provider-app";
++
++    @Override
++    protected <T> StateRouter<T> createRouter(Class<T> interfaceClass, URL url) {
++        return new AffinityProviderAppStateRouter<>(url);
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouter.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..d15551e2a98eb03f934f1143238ab5a7715e3516
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouter.java
+@@ -0,0 +1,31 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.config.configcenter.DynamicConfiguration;
++
++/**
++ * Service level router, "server-unique-name.affinity-router"
++ */
++public class AffinityServiceStateRouter<T> extends AffinityListenableStateRouter<T> {
++    public static final String NAME = "AFFINITY_SERVICE_ROUTER";
++
++    public AffinityServiceStateRouter(URL url) {
++        super(url, DynamicConfiguration.getRuleKey(url));
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouterFactory.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouterFactory.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e36a41771a586139b155e5a5562a2b1583cfe068
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/AffinityServiceStateRouterFactory.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config;
++
++import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.extension.Activate;
++import org.apache.dubbo.rpc.cluster.router.state.CacheableStateRouterFactory;
++import org.apache.dubbo.rpc.cluster.router.state.StateRouter;
++
++/**
++ * Service level affinity router factory
++ */
++@Activate(order = 130)
++public class AffinityServiceStateRouterFactory extends CacheableStateRouterFactory {
++
++    public static final String NAME = "affinity_service";
++
++    @Override
++    protected <T> StateRouter<T> createRouter(Class<T> interfaceClass, URL url) {
++        return new AffinityServiceStateRouter<T>(url);
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRouterRule.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRouterRule.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a09569241e899b172b139a54745b76883ed07b46
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRouterRule.java
+@@ -0,0 +1,74 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config.model;
++
++import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
++import org.apache.dubbo.common.logger.LoggerFactory;
++import org.apache.dubbo.rpc.cluster.router.AbstractRouterRule;
++
++import java.util.Map;
++
++import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_FAILED_RULE_PARSING;
++import static org.apache.dubbo.rpc.cluster.Constants.AFFINITY_KEY;
++import static org.apache.dubbo.rpc.cluster.Constants.DefaultAffinityRatio;
++
++public class AffinityRouterRule extends AbstractRouterRule {
++
++    private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(AffinityRouterRule.class);
++    private String affinityKey;
++    private Double ratio;
++
++    @SuppressWarnings("unchecked")
++    public static AffinityRouterRule parseFromMap(Map<String, Object> map) {
++        AffinityRouterRule affinityRouterRule = new AffinityRouterRule();
++        affinityRouterRule.parseFromMap0(map);
++        Object conditions = map.get(AFFINITY_KEY);
++
++        Map<String, String> conditionMap = (Map<String, String>) conditions;
++        affinityRouterRule.setAffinityKey(conditionMap.get("key"));
++        Object ratio = conditionMap.getOrDefault("ratio", String.valueOf(DefaultAffinityRatio));
++        affinityRouterRule.setRatio(Double.valueOf(String.valueOf(ratio)));
++
++        if (affinityRouterRule.getRatio() > 100 || affinityRouterRule.getRatio() < 0) {
++            logger.error(
++                    CLUSTER_FAILED_RULE_PARSING,
++                    "Invalid affinity router config.",
++                    "",
++                    "The ratio value must range from 0 to 100");
++            affinityRouterRule.setValid(false);
++        }
++        return affinityRouterRule;
++    }
++
++    public AffinityRouterRule() {}
++
++    public String getAffinityKey() {
++        return affinityKey;
++    }
++
++    public void setAffinityKey(String affinityKey) {
++        this.affinityKey = affinityKey;
++    }
++
++    public Double getRatio() {
++        return ratio;
++    }
++
++    public void setRatio(Double ratio) {
++        this.ratio = ratio;
++    }
++}
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRuleParser.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRuleParser.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..23d86fb6b86d47c019a9bd5fcfcce28a51fadb0a
+--- /dev/null
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/router/affinity/config/model/AffinityRuleParser.java
+@@ -0,0 +1,57 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.rpc.cluster.router.affinity.config.model;
++
++import org.apache.dubbo.common.utils.StringUtils;
++
++import java.util.Map;
++
++import org.yaml.snakeyaml.LoaderOptions;
++import org.yaml.snakeyaml.Yaml;
++import org.yaml.snakeyaml.constructor.SafeConstructor;
++
++import static org.apache.dubbo.rpc.cluster.Constants.CONFIG_VERSION_KEY;
++import static org.apache.dubbo.rpc.cluster.Constants.RULE_VERSION_V31;
++
++/**
++ * # dubbo/config/group/{$name}.affinity-router
++ * configVersion: v3.1
++ * scope: service # Or application
++ * key: service.apache.com
++ * enabled: true
++ * runtime: true
++ * affinityAware:
++ *   key: region
++ *   ratio: 20
++ */
++public class AffinityRuleParser {
++
++    public static AffinityRouterRule parse(String rawRule) {
++        AffinityRouterRule rule;
++        Yaml yaml = new Yaml(new SafeConstructor(new LoaderOptions()));
++        Map<String, Object> map = yaml.load(rawRule);
++        String confVersion = (String) map.get(CONFIG_VERSION_KEY);
++
++        rule = AffinityRouterRule.parseFromMap(map);
++        if (StringUtils.isEmpty(rule.getAffinityKey()) || !confVersion.startsWith(RULE_VERSION_V31)) {
++            rule.setValid(false);
++        }
++        rule.setRawRule(rawRule);
++
++        return rule;
++    }
++}
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index 1075b795dcd02c1e428dac78f53b79fb294c7560..b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -90,7 +90,6 @@
+   <build>
+     <plugins>
+       <plugin>
+-        <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+         <version>${maven_os_plugin_version}</version>
+@@ -113,13 +112,5 @@
+         </configuration>
+       </plugin>
+     </plugins>
+-    <extensions>
+-      <!-- add os-maven-plugin to extensions for `mvn install` -->
+-      <extension>
+-        <groupId>kr.motd.maven</groupId>
+-        <artifactId>os-maven-plugin</artifactId>
+-        <version>${maven_os_plugin_version}</version>
+-      </extension>
+-    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index a1ab6004d0e3fbd9c56ec020f8cd2e5fa7a24cb4..78c1e2325938a0d936e20ca703a1f568e8e3512a 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -96,6 +96,7 @@
+     <byte-buddy_version>1.17.5</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+     <netty4_version>4.2.2.Final</netty4_version>
++    <netty_http3_version>0.0.29.Final</netty_http3_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+@@ -299,6 +300,11 @@
+         <artifactId>netty-all</artifactId>
+         <version>${netty4_version}</version>
+       </dependency>
++      <dependency>
++        <groupId>io.netty.incubator</groupId>
++        <artifactId>netty-incubator-codec-http3</artifactId>
++        <version>${netty_http3_version}</version>
++      </dependency>
+       <dependency>
+         <groupId>org.javassist</groupId>
+         <artifactId>javassist</artifactId>
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3e357d55ea31ae458c0d0e1e74a143bfd751d5ee 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,7 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 28a86e7b62272991e0be5eae2a001d1975b2c2f5..4d511307d427448cec8d3b04c71a67a763f44d6e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -60,6 +60,8 @@ public class WelcomeLogoApplicationListener implements ApplicationListener<Appli
+ 
+         if (logger.isInfoEnabled()) {
+             logger.info(bannerText);
++        } else {
++            System.out.print(bannerText);
+         }
+ 
+         // mark processed to be true
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..f8507cdf785109a93b95677ffc71830ef7a6790c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -157,7 +157,7 @@
+     <build_helper_maven_plugin_version>3.6.0</build_helper_maven_plugin_version>
+     <maven_jacoco_version>0.8.13</maven_jacoco_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+-    <maven_enforce_version>3.6.0</maven_enforce_version>
++    <maven_enforce_version>3.5.0</maven_enforce_version>
+     <maven_antrun_version>3.1.0</maven_antrun_version>
+     <maven_os_plugin_version>1.7.1</maven_os_plugin_version>
+     <maven_protobuf_plugin_version>0.6.1</maven_protobuf_plugin_version>
+@@ -165,12 +165,10 @@
+ 
+     <!-- For unify spring boot 3 version -->
+     <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+-    <!-- grpc_version should be same as grpc.version at dubbo-dependencies-bom -->
+-    <grpc_version>1.73.0</grpc_version>
++    <grpc_version>1.54.0</grpc_version>
+     <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+@@ -497,7 +495,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +644,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

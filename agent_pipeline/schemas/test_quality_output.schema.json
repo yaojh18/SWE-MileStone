@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swe-milestone.local/schemas/test_quality_output.schema.json",
+  "title": "SWE-Milestone test-quality curator output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_kind",
+    "source",
+    "status",
+    "decisions_file",
+    "decisions_sha256",
+    "decision_count",
+    "additions",
+    "summary",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {"enum": [1, 2]},
+    "task_kind": {"const": "test_quality"},
+    "source": {"$ref": "#/$defs/source"},
+    "status": {"const": "reviewed"},
+    "decisions_file": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+\\.jsonl$"
+    },
+    "decisions_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "decision_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of per-test decisions after deterministic expansion."
+    },
+    "record_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of compact JSONL records before expansion (schema v2)."
+    },
+    "expansion_format": {"const": "functional-explicit-p2p-rules-v1"},
+    "additions": {"type": "array", "items": {"$ref": "#/$defs/addition"}},
+    "summary": {"$ref": "#/$defs/summary"},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["schema_version"],
+        "properties": {"schema_version": {"const": 2}}
+      },
+      "then": {"required": ["record_count", "expansion_format"]},
+      "else": {
+        "not": {
+          "anyOf": [
+            {"required": ["record_count"]},
+            {"required": ["expansion_format"]}
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "role": {"enum": ["f2p", "n2p", "p2p"]},
+    "functional_role": {"enum": ["f2p", "n2p"]},
+    "verdict": {
+      "enum": [
+        "keep_direct_target",
+        "keep_regression",
+        "reclassify",
+        "remove_unrelated",
+        "remove_flaky",
+        "needs_human"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace", "milestone_id", "input_hash"],
+      "properties": {
+        "workspace": {"type": "string", "minLength": 1},
+        "milestone_id": {"type": "string", "minLength": 1},
+        "input_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference", "detail"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "reference": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1}
+      }
+    },
+    "decision_fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "related_requirement_ids",
+        "rationale",
+        "confidence",
+        "evidence"
+      ],
+      "properties": {
+        "verdict": {"$ref": "#/$defs/verdict"},
+        "proposed_role": {"$ref": "#/$defs/role"},
+        "related_requirement_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["verdict"],
+            "properties": {"verdict": {"const": "reclassify"}}
+          },
+          "then": {"required": ["proposed_role"]},
+          "else": {"not": {"required": ["proposed_role"]}}
+        }
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test_id",
+        "original_role",
+        "verdict",
+        "related_requirement_ids",
+        "rationale",
+        "confidence",
+        "evidence"
+      ],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1},
+        "original_role": {"$ref": "#/$defs/role"},
+        "verdict": {"$ref": "#/$defs/verdict"},
+        "proposed_role": {"$ref": "#/$defs/role"},
+        "related_requirement_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["verdict"],
+            "properties": {"verdict": {"const": "reclassify"}}
+          },
+          "then": {"required": ["proposed_role"]},
+          "else": {"not": {"required": ["proposed_role"]}}
+        }
+      ]
+    },
+    "functional_decision_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "test_id",
+        "original_role",
+        "verdict",
+        "related_requirement_ids",
+        "rationale",
+        "confidence",
+        "evidence"
+      ],
+      "properties": {
+        "record_type": {"const": "functional_decision"},
+        "test_id": {"type": "string", "minLength": 1},
+        "original_role": {"$ref": "#/$defs/functional_role"},
+        "verdict": {"$ref": "#/$defs/verdict"},
+        "proposed_role": {"$ref": "#/$defs/role"},
+        "related_requirement_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["verdict"],
+            "properties": {"verdict": {"const": "reclassify"}}
+          },
+          "then": {"required": ["proposed_role"]},
+          "else": {"not": {"required": ["proposed_role"]}}
+        }
+      ]
+    },
+    "p2p_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["prefix", "glob"]},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "p2p_default_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_type", "decision"],
+      "properties": {
+        "record_type": {"const": "p2p_default"},
+        "decision": {"$ref": "#/$defs/decision_fields"}
+      }
+    },
+    "p2p_group_rule_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_type", "rule_id", "selector", "decision"],
+      "properties": {
+        "record_type": {"const": "p2p_group_rule"},
+        "rule_id": {"type": "string", "minLength": 1},
+        "selector": {"$ref": "#/$defs/p2p_selector"},
+        "decision": {"$ref": "#/$defs/decision_fields"}
+      }
+    },
+    "p2p_exception_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_type", "test_id", "decision"],
+      "properties": {
+        "record_type": {"const": "p2p_exception"},
+        "test_id": {"type": "string", "minLength": 1},
+        "decision": {"$ref": "#/$defs/decision_fields"}
+      }
+    },
+    "compact_record": {
+      "oneOf": [
+        {"$ref": "#/$defs/functional_decision_record"},
+        {"$ref": "#/$defs/p2p_default_record"},
+        {"$ref": "#/$defs/p2p_group_rule_record"},
+        {"$ref": "#/$defs/p2p_exception_record"}
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "behavior"],
+      "properties": {
+        "kind": {"enum": ["current_commit", "prior_commit", "following_commit", "synthesized"]},
+        "commit": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "test_name": {"type": "string"},
+        "behavior": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": {"kind": {"not": {"const": "synthesized"}}}
+          },
+          "then": {"required": ["commit"]}
+        }
+      ]
+    },
+    "addition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_id", "role", "target_requirement_ids", "rationale", "evidence", "provenance"],
+      "properties": {
+        "test_id": {"type": "string", "minLength": 1},
+        "role": {"$ref": "#/$defs/role"},
+        "target_requirement_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keep_direct_target", "keep_regression", "reclassify", "remove_unrelated", "remove_flaky", "needs_human"],
+      "properties": {
+        "keep_direct_target": {"type": "integer", "minimum": 0},
+        "keep_regression": {"type": "integer", "minimum": 0},
+        "reclassify": {"type": "integer", "minimum": 0},
+        "remove_unrelated": {"type": "integer", "minimum": 0},
+        "remove_flaky": {"type": "integer", "minimum": 0},
+        "needs_human": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

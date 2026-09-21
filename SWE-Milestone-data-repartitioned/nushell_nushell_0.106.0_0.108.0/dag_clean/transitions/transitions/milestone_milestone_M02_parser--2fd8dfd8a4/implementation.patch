@@ -1,0 +1,934 @@
+diff --git a/apply_patches.py b/apply_patches.py
+deleted file mode 100644
+index d05773fe5c969d228454ced50c974253c2adf2cc..0000000000000000000000000000000000000000
+--- a/apply_patches.py
++++ /dev/null
+@@ -1,272 +0,0 @@
+-#!/usr/bin/env python3
+-"""Apply compilation patches for nushell milestone testing."""
+-
+-import re
+-import os
+-
+-def patch_update_cells():
+-    """Fix Value::Record pattern to add .. for non-exhaustive enum."""
+-    filepath = "/testbed/crates/nu-cmd-extra/src/extra/filters/update_cells.rs"
+-    if not os.path.exists(filepath):
+-        return
+-
+-    with open(filepath, "r") as f:
+-        content = f.read()
+-
+-    # Fix Value::Record pattern to add ..
+-    old_pattern = """Value::Record {
+-                    ref mut val,
+-                    internal_span,
+-                },"""
+-    new_pattern = """Value::Record {
+-                    ref mut val,
+-                    internal_span,
+-                    ..
+-                },"""
+-
+-    content = content.replace(old_pattern, new_pattern)
+-
+-    with open(filepath, "w") as f:
+-        f.write(content)
+-
+-def patch_sqlite():
+-    """Fix DatabaseName import and backup/restore functions."""
+-    filepath = "/testbed/crates/nu-command/src/database/values/sqlite.rs"
+-    if not os.path.exists(filepath):
+-        return
+-
+-    with open(filepath, "r") as f:
+-        content = f.read()
+-
+-    # Remove DatabaseName from import
+-    content = content.replace("Connection, DatabaseName, Error", "Connection, Error")
+-
+-    # Replace backup_database_to_file function
+-    old_backup = """pub fn backup_database_to_file(
+-        &self,
+-        conn: &Connection,
+-        filename: String,
+-    ) -> Result<(), SqliteError> {
+-        conn.backup(DatabaseName::Main, Path::new(&filename), None)?;
+-        Ok(())
+-    }"""
+-
+-    new_backup = """pub fn backup_database_to_file(
+-        &self,
+-        _conn: &Connection,
+-        _filename: String,
+-    ) -> Result<(), SqliteError> {
+-        // [ENV-PATCH] Function body removed due to rusqlite API change
+-        Ok(())
+-    }"""
+-
+-    content = content.replace(old_backup, new_backup)
+-
+-    # Replace restore_database_from_file function
+-    # The original function looks like:
+-    # pub fn restore_database_from_file(
+-    #     &self,
+-    #     conn: &mut Connection,
+-    #     filename: String,
+-    # ) -> Result<(), SqliteError> {
+-    #     conn.restore(
+-    #         DatabaseName::Main,
+-    #         Path::new(&filename),
+-    #         Some(|p: rusqlite::backup::Progress| {
+-    #             let percent = if p.pagecount == 0 {
+-    #                 100
+-    #             } else {
+-    #                 (p.pagecount - p.remaining) * 100 / p.pagecount
+-    #             };
+-    #             if percent % 10 == 0 {
+-    #                 log::trace!("Restoring: {percent} %");
+-    #             }
+-    #         }),
+-    #     )?;
+-    #     Ok(())
+-    # }
+-
+-    old_restore = """pub fn restore_database_from_file(
+-        &self,
+-        conn: &mut Connection,
+-        filename: String,
+-    ) -> Result<(), SqliteError> {
+-        conn.restore(
+-            DatabaseName::Main,
+-            Path::new(&filename),
+-            Some(|p: rusqlite::backup::Progress| {
+-                let percent = if p.pagecount == 0 {
+-                    100
+-                } else {
+-                    (p.pagecount - p.remaining) * 100 / p.pagecount
+-                };
+-                if percent % 10 == 0 {
+-                    log::trace!("Restoring: {percent} %");
+-                }
+-            }),
+-        )?;
+-        Ok(())
+-    }"""
+-
+-    new_restore = """pub fn restore_database_from_file(
+-        &self,
+-        _conn: &mut Connection,
+-        _filename: String,
+-    ) -> Result<(), SqliteError> {
+-        // [ENV-PATCH] Function body removed due to rusqlite API change
+-        Ok(())
+-    }"""
+-
+-    content = content.replace(old_restore, new_restore)
+-
+-    with open(filepath, "w") as f:
+-        f.write(content)
+-
+-def patch_test_parser():
+-    """Comment out tests that use ParseError::InvalidBinaryString which doesn't exist in START state."""
+-    filepath = "/testbed/crates/nu-parser/tests/test_parser.rs"
+-    if not os.path.exists(filepath):
+-        return
+-
+-    with open(filepath, "r") as f:
+-        content = f.read()
+-
+-    # Check if InvalidBinaryString is used
+-    if "InvalidBinaryString" not in content:
+-        return
+-
+-    # Comment out the tests that use InvalidBinaryString
+-    tests_to_comment = [
+-        "parse_binary_with_invalid_octal_format",
+-        "parse_binary_with_multi_byte_char",
+-    ]
+-
+-    for test_name in tests_to_comment:
+-        # Find the test function and comment it out
+-        pattern = rf'(#\[test\]\s*pub fn {test_name}\(\).*?)(\n#\[test\]|\nmod\s|\Z)'
+-        match = re.search(pattern, content, re.DOTALL)
+-        if match:
+-            test_body = match.group(1)
+-            # Comment out each line
+-            commented_body = '\n'.join([f'// [ENV-PATCH] {line}' if line.strip() and not line.strip().startswith('//') else line
+-                                        for line in test_body.split('\n')])
+-            content = content.replace(test_body, commented_body)
+-
+-    with open(filepath, "w") as f:
+-        f.write(content)
+-    print(f"Commented out tests using InvalidBinaryString in {filepath}")
+-
+-
+-def patch_config_tests():
+-    """Comment out tests that use ConfigFileKind which doesn't exist in START state."""
+-    test_files = [
+-        "/testbed/crates/nu-command/tests/commands/config_env_default.rs",
+-        "/testbed/crates/nu-command/tests/commands/config_nu_default.rs",
+-    ]
+-
+-    for filepath in test_files:
+-        if not os.path.exists(filepath):
+-            continue
+-
+-        with open(filepath, "r") as f:
+-            content = f.read()
+-
+-        # Check if ConfigFileKind is used
+-        if "ConfigFileKind" not in content:
+-            continue
+-
+-        # Comment out entire file content
+-        commented_content = '\n'.join([f'// [ENV-PATCH] {line}' if line.strip() and not line.strip().startswith('//') else line
+-                                       for line in content.split('\n')])
+-
+-        with open(filepath, "w") as f:
+-            f.write(commented_content)
+-        print(f"Commented out ConfigFileKind tests in {filepath}")
+-
+-
+-def patch_value_patterns():
+-    """Fix non-exhaustive Value patterns across all rust files in relevant crates."""
+-    import glob
+-
+-    # Find all .rs files in relevant directories
+-    patterns_to_fix = [
+-        # Pattern: Value::Range with only two fields
+-        (r'Value::Range\s*\{\s*ref\s+val,\s*internal_span,?\s*\}',
+-         'Value::Range { ref val, internal_span, .. }'),
+-        # Pattern: Value::Int with only two fields
+-        (r'Value::Int\s*\{\s*val,\s*internal_span,?\s*\}',
+-         'Value::Int { val, internal_span, .. }'),
+-        # Pattern: Value::Duration with only two fields
+-        (r'Value::Duration\s*\{\s*val,\s*internal_span,?\s*\}',
+-         'Value::Duration { val, internal_span, .. }'),
+-        # Pattern: Value::Custom with only two fields
+-        (r'Value::Custom\s*\{\s*val,\s*internal_span,?\s*\}',
+-         'Value::Custom { val, internal_span, .. }'),
+-        # Pattern: Value::Record with only two fields (in match arms)
+-        (r'Value::Record\s*\{\s*ref\s+mut\s+val,\s*internal_span,\s*\}',
+-         'Value::Record { ref mut val, internal_span, .. }'),
+-        # Pattern: Value::String with only two fields (various styles)
+-        (r'Value::String\s*\{\s*val,\s*internal_span,?\s*\}',
+-         'Value::String { val, internal_span, .. }'),
+-    ]
+-
+-    # Search in multiple directories - include all crates
+-    for dirpath in ['/testbed/crates']:
+-        for rs_file in glob.glob(f'{dirpath}/**/*.rs', recursive=True):
+-            try:
+-                with open(rs_file, 'r') as f:
+-                    content = f.read()
+-
+-                modified = False
+-                for pattern, replacement in patterns_to_fix:
+-                    new_content = re.sub(pattern, replacement, content)
+-                    if new_content != content:
+-                        content = new_content
+-                        modified = True
+-
+-                if modified:
+-                    with open(rs_file, 'w') as f:
+-                        f.write(content)
+-                    print(f"Fixed patterns in: {rs_file}")
+-            except Exception as e:
+-                print(f"Error processing {rs_file}: {e}")
+-
+-
+-def patch_completions_helpers():
+-    """Fix non-exhaustive Value struct expressions in test helpers by using constructor methods."""
+-    filepath = "/testbed/crates/nu-cli/tests/completions/support/completions_helpers.rs"
+-    if not os.path.exists(filepath):
+-        return
+-
+-    with open(filepath, "r") as f:
+-        content = f.read()
+-
+-    # Replace the multiline struct literal with constructor method calls
+-    old_code = """Value::List {
+-            vals: vec![Value::String {
+-                val: dir_str,
+-                internal_span,
+-            }],
+-            internal_span,
+-        }"""
+-
+-    new_code = """Value::list(
+-            vec![Value::string(dir_str, internal_span)],
+-            internal_span,
+-        )"""
+-
+-    if old_code in content:
+-        content = content.replace(old_code, new_code)
+-        with open(filepath, "w") as f:
+-            f.write(content)
+-        print(f"Fixed non-exhaustive Value struct expression in {filepath}")
+-
+-
+-if __name__ == "__main__":
+-    patch_update_cells()
+-    patch_sqlite()
+-    patch_value_patterns()
+-    patch_test_parser()
+-    patch_config_tests()
+-    patch_completions_helpers()
+-    print("Patches applied successfully")
+diff --git a/crates/nu-parser/src/lex.rs b/crates/nu-parser/src/lex.rs
+index b808f6eacc3f6083f408aec6bfc3680d829130ff..3cce991e8b9e1434623db650a5067290f80fd0b8 100644
+--- a/crates/nu-parser/src/lex.rs
++++ b/crates/nu-parser/src/lex.rs
+@@ -194,9 +194,9 @@ pub fn lex_item(
+             } else {
+                 // We encountered a closing `}` delimiter, but the last opening
+                 // delimiter was not a `{`. This is an error.
++                *curr_offset += 1;
+                 let span = Span::new(span_offset + token_start, span_offset + *curr_offset);
+ 
+-                *curr_offset += 1;
+                 return (
+                     Token {
+                         contents: TokenContents::Item,
+@@ -205,7 +205,7 @@ pub fn lex_item(
+                     Some(ParseError::Unbalanced(
+                         "{".to_string(),
+                         "}".to_string(),
+-                        Span::new(span.end, span.end + 1),
++                        Span::new(span.end - 1, span.end),
+                     )),
+                 );
+             }
+@@ -219,9 +219,9 @@ pub fn lex_item(
+             } else {
+                 // We encountered a closing `)` delimiter, but the last opening
+                 // delimiter was not a `(`. This is an error.
++                *curr_offset += 1;
+                 let span = Span::new(span_offset + token_start, span_offset + *curr_offset);
+ 
+-                *curr_offset += 1;
+                 return (
+                     Token {
+                         contents: TokenContents::Item,
+@@ -230,7 +230,7 @@ pub fn lex_item(
+                     Some(ParseError::Unbalanced(
+                         "(".to_string(),
+                         ")".to_string(),
+-                        Span::new(span.end, span.end + 1),
++                        Span::new(span.end - 1, span.end),
+                     )),
+                 );
+             }
+diff --git a/crates/nu-parser/src/parse_keywords.rs b/crates/nu-parser/src/parse_keywords.rs
+index e79edda06661730152b8cecfa5d9321767facd5a..c75095cc29536ef3bb0a0b2aa994918f9876e2be 100644
+--- a/crates/nu-parser/src/parse_keywords.rs
++++ b/crates/nu-parser/src/parse_keywords.rs
+@@ -4,7 +4,7 @@ use crate::{
+     parser::{compile_block, parse_attribute, parse_redirection, redirecting_builtin_error},
+     type_check::{check_block_input_output, type_compatible},
+ };
+-use itertools::Itertools;
++
+ use log::trace;
+ use nu_path::canonicalize_with;
+ use nu_protocol::{
+@@ -532,7 +532,7 @@ fn parse_def_inner(
+             (spans[0], 1)
+         };
+ 
+-    let def_call = working_set.get_span_contents(name_span).to_vec();
++    let def_call = working_set.get_span_contents(name_span);
+     if def_call != b"def" {
+         working_set.error(ParseError::UnknownState(
+             "internal error: Wrong call name for def function".into(),
+@@ -548,7 +548,11 @@ fn parse_def_inner(
+     // Parsing the spans and checking that they match the register signature
+     // Using a parsed call makes more sense than checking for how many spans are in the call
+     // Also, by creating a call, it can be checked if it matches the declaration signature
+-    let (call, call_span) = match working_set.find_decl(&def_call) {
++    //
++    // NOTE: Here we only search for `def` in the permanent state,
++    // since recursively redefining `def` is dangerous,
++    // see https://github.com/nushell/nushell/issues/16586
++    let (call, call_span) = match working_set.permanent_state.find_decl(def_call, &[]) {
+         None => {
+             working_set.error(ParseError::UnknownState(
+                 "internal error: def declaration not found".into(),
+@@ -572,11 +576,7 @@ fn parse_def_inner(
+ 
+             if let Some(name_span) = decl_name_span {
+                 // Check whether name contains [] or () -- possible missing space error
+-                if let Some(err) = detect_params_in_name(
+-                    working_set,
+-                    name_span,
+-                    String::from_utf8_lossy(&def_call).as_ref(),
+-                ) {
++                if let Some(err) = detect_params_in_name(working_set, name_span, decl_id) {
+                     working_set.error(err);
+                     return (garbage(working_set, Span::concat(spans)), None);
+                 }
+@@ -796,7 +796,7 @@ fn parse_extern_inner(
+             (spans[0], 1)
+         };
+ 
+-    let extern_call = working_set.get_span_contents(name_span).to_vec();
++    let extern_call = working_set.get_span_contents(name_span);
+     if extern_call != b"extern" {
+         working_set.error(ParseError::UnknownState(
+             "internal error: Wrong call name for extern command".into(),
+@@ -812,7 +812,11 @@ fn parse_extern_inner(
+     // Parsing the spans and checking that they match the register signature
+     // Using a parsed call makes more sense than checking for how many spans are in the call
+     // Also, by creating a call, it can be checked if it matches the declaration signature
+-    let (call, call_span) = match working_set.find_decl(&extern_call) {
++    //
++    // NOTE: Here we only search for `extern` in the permanent state,
++    // since recursively redefining `extern` is dangerous,
++    // see https://github.com/nushell/nushell/issues/16586
++    let (call, call_span) = match working_set.permanent().find_decl(extern_call, &[]) {
+         None => {
+             working_set.error(ParseError::UnknownState(
+                 "internal error: def declaration not found".into(),
+@@ -826,11 +830,7 @@ fn parse_extern_inner(
+             let (command_spans, rest_spans) = spans.split_at(split_id);
+ 
+             if let Some(name_span) = rest_spans.first() {
+-                if let Some(err) = detect_params_in_name(
+-                    working_set,
+-                    *name_span,
+-                    String::from_utf8_lossy(&extern_call).as_ref(),
+-                ) {
++                if let Some(err) = detect_params_in_name(working_set, *name_span, decl_id) {
+                     working_set.error(err);
+                     return garbage(working_set, concat_span);
+                 }
+@@ -1025,7 +1025,7 @@ fn check_alias_name<'a>(working_set: &mut StateWorkingSet, spans: &'a [Span]) ->
+         return None;
+     };
+ 
+-    if spans.len() == 1 {
++    if spans.len() == command_len {
+         None
+     } else if spans.len() < command_len + 3 {
+         if working_set.get_span_contents(spans[command_len]) == b"=" {
+@@ -1323,8 +1323,6 @@ pub fn parse_export_in_block(
+     working_set: &mut StateWorkingSet,
+     lite_command: &LiteCommand,
+ ) -> Pipeline {
+-    let call_span = Span::concat(&lite_command.parts);
+-
+     let parts = lite_command.command_parts();
+     let full_name = if parts.len() > 1 {
+         let sub = working_set.get_span_contents(parts[1]);
+@@ -1346,11 +1344,45 @@ pub fn parse_export_in_block(
+         return garbage_pipeline(working_set, &lite_command.parts);
+     }
+ 
+-    // No need to care for this when attributes are present, parse_attribute_block will throw the
+-    // necessary error
+-    if !lite_command.has_attributes() {
++    let pipeline = match full_name {
++        // `parse_def` and `parse_extern` work both with and without attributes
++        "export def" => parse_def(working_set, lite_command, None).0,
++        "export extern" => parse_extern(working_set, lite_command, None),
++        // Other definitions can't have attributes, so we handle attributes here with parse_attribute_block
++        _ if lite_command.has_attributes() => parse_attribute_block(working_set, lite_command),
++        "export alias" => parse_alias(working_set, lite_command, None),
++        "export const" => parse_const(working_set, &lite_command.parts[1..]).0,
++        "export use" => parse_use(working_set, lite_command, None).0,
++        "export module" => parse_module(working_set, lite_command, None).0,
++        _ => garbage_pipeline(working_set, &lite_command.parts),
++    };
++
++    let is_help_call = pipeline
++        .elements
++        .first()
++        .is_some_and(|e| match &e.expr.expr {
++            Expr::Call(call) => has_flag_const(working_set, call, "help").unwrap_or(false),
++            Expr::AttributeBlock(AttributeBlock {
++                attributes: _,
++                item: sub_expr,
++            }) => {
++                if let Expr::Call(call) = &sub_expr.expr {
++                    has_flag_const(working_set, call, "help").unwrap_or(false)
++                } else {
++                    false
++                }
++            }
++            _ => false,
++        });
++
++    // HACK: This is for different messages of e.g. `export def --help` and `def --help`,
++    if is_help_call || full_name == "export" {
++        let call_span = Span::concat(&lite_command.parts);
++
+         if let Some(decl_id) = working_set.find_decl(full_name.as_bytes()) {
+             let starting_error_count = working_set.parse_errors.len();
++            // Wrapped in a new scope to avoid unexpected side effects
++            working_set.enter_scope();
+             let ParsedInternalCall { call, output, .. } = parse_internal_call(
+                 working_set,
+                 if full_name == "export" {
+@@ -1365,14 +1397,19 @@ pub fn parse_export_in_block(
+                 },
+                 decl_id,
+             );
++            working_set.exit_scope();
+             // don't need errors generated by parse_internal_call
+             // further error will be generated by detail `parse_xxx` function.
+             working_set.parse_errors.truncate(starting_error_count);
+ 
+-            let decl = working_set.get_decl(decl_id);
+-            check_call(working_set, call_span, &decl.signature(), &call);
+-            let Ok(is_help) = has_flag_const(working_set, &call, "help") else {
+-                return garbage_pipeline(working_set, &lite_command.parts);
++            let is_help = is_help_call || {
++                let decl = working_set.get_decl(decl_id);
++                check_call(working_set, call_span, &decl.signature(), &call);
++                if let Ok(is_help) = has_flag_const(working_set, &call, "help") {
++                    is_help
++                } else {
++                    return garbage_pipeline(working_set, &lite_command.parts);
++                }
+             };
+ 
+             if starting_error_count != working_set.parse_errors.len() || is_help {
+@@ -1383,6 +1420,10 @@ pub fn parse_export_in_block(
+                     output,
+                 )]);
+             }
++            working_set.error(ParseError::UnexpectedKeyword(
++                full_name.into(),
++                lite_command.parts[0],
++            ));
+         } else {
+             working_set.error(ParseError::UnknownState(
+                 format!("internal error: '{full_name}' declaration not found",),
+@@ -1392,25 +1433,7 @@ pub fn parse_export_in_block(
+         };
+     }
+ 
+-    match full_name {
+-        // `parse_def` and `parse_extern` work both with and without attributes
+-        "export def" => parse_def(working_set, lite_command, None).0,
+-        "export extern" => parse_extern(working_set, lite_command, None),
+-        // Other definitions can't have attributes, so we handle attributes here with parse_attribute_block
+-        _ if lite_command.has_attributes() => parse_attribute_block(working_set, lite_command),
+-        "export alias" => parse_alias(working_set, lite_command, None),
+-        "export const" => parse_const(working_set, &lite_command.parts[1..]).0,
+-        "export use" => parse_use(working_set, lite_command, None).0,
+-        "export module" => parse_module(working_set, lite_command, None).0,
+-        _ => {
+-            working_set.error(ParseError::UnexpectedKeyword(
+-                full_name.into(),
+-                lite_command.parts[0],
+-            ));
+-
+-            garbage_pipeline(working_set, &lite_command.parts)
+-        }
+-    }
++    pipeline
+ }
+ 
+ // This one will trigger only in a module
+@@ -4192,35 +4215,24 @@ pub fn find_in_dirs(
+ fn detect_params_in_name(
+     working_set: &StateWorkingSet,
+     name_span: Span,
+-    decl_name: &str,
++    decl_id: DeclId,
+ ) -> Option<ParseError> {
+     let name = working_set.get_span_contents(name_span);
+-
+-    let extract_span = |delim: u8| {
+-        // it is okay to unwrap because we know the slice contains the byte
+-        let (idx, _) = name
+-            .iter()
+-            .find_position(|c| **c == delim)
+-            .unwrap_or((name.len(), &b' '));
+-        let param_span = Span::new(name_span.start + idx - 1, name_span.start + idx - 1);
+-        let error = ParseError::LabeledErrorWithHelp {
+-            error: "no space between name and parameters".into(),
+-            label: "expected space".into(),
+-            help: format!(
+-                "consider adding a space between the `{decl_name}` command's name and its parameters"
+-            ),
+-            span: param_span,
+-        };
+-        Some(error)
+-    };
+-
+-    if name.contains(&b'[') {
+-        extract_span(b'[')
+-    } else if name.contains(&b'(') {
+-        extract_span(b'(')
+-    } else {
+-        None
++    for (offset, char) in name.iter().enumerate() {
++        if *char == b'[' || *char == b'(' {
++            return Some(ParseError::LabeledErrorWithHelp {
++                error: "no space between name and parameters".into(),
++                label: "expected space".into(),
++                help: format!(
++                    "consider adding a space between the `{}` command's name and its parameters",
++                    working_set.get_decl(decl_id).name()
++                ),
++                span: Span::new(offset + name_span.start - 1, offset + name_span.start - 1),
++            });
++        }
+     }
++
++    None
+ }
+ 
+ /// Run has_flag_const and push possible error to working_set
+diff --git a/crates/nu-parser/src/parser.rs b/crates/nu-parser/src/parser.rs
+index 6eb87aadc2407b819705c68f806a13627a4553d9..33919f8a471a36216ac42e82b46d5ec629fad5a0 100644
+--- a/crates/nu-parser/src/parser.rs
++++ b/crates/nu-parser/src/parser.rs
+@@ -116,6 +116,22 @@ pub fn is_math_expression_like(working_set: &mut StateWorkingSet, span: Span) ->
+     is_range
+ }
+ 
++fn is_env_variable_name(bytes: &[u8]) -> bool {
++    if bytes.is_empty() {
++        return false;
++    }
++
++    let first = bytes[0];
++    if !first.is_ascii_alphabetic() && first != b'_' {
++        return false;
++    }
++
++    bytes
++        .iter()
++        .skip(1)
++        .all(|&b| b.is_ascii_alphanumeric() || b == b'_')
++}
++
+ fn is_identifier(bytes: &[u8]) -> bool {
+     bytes.iter().all(|x| is_identifier_byte(*x))
+ }
+@@ -264,6 +280,10 @@ fn parse_external_string(working_set: &mut StateWorkingSet, span: Span) -> Expre
+                 quote_char: u8,
+                 escaped: bool,
+             },
++            Parenthesized {
++                from: usize,
++                depth: usize,
++            },
+         }
+         // Find the spans of parts of the string that can be parsed as their own strings for
+         // concatenation.
+@@ -315,6 +335,15 @@ fn parse_external_string(working_set: &mut StateWorkingSet, span: Span) -> Expre
+                         }
+                         state = State::BackTickQuote { from: index }
+                     }
++                    b'(' => {
++                        if index != *from {
++                            spans.push(make_span(*from, index))
++                        }
++                        state = State::Parenthesized {
++                            from: index,
++                            depth: 1,
++                        }
++                    }
+                     // Continue to consume
+                     _ => (),
+                 },
+@@ -343,6 +372,18 @@ fn parse_external_string(working_set: &mut StateWorkingSet, span: Span) -> Expre
+                         state = State::Bare { from: index + 1 };
+                     }
+                 }
++                State::Parenthesized { from, depth } => {
++                    if ch == b')' {
++                        if *depth == 1 {
++                            spans.push(make_span(*from, index + 1));
++                            state = State::Bare { from: index + 1 };
++                        } else {
++                            *depth -= 1;
++                        }
++                    } else if ch == b'(' {
++                        *depth += 1;
++                    }
++                }
+             }
+             index += 1;
+         }
+@@ -351,6 +392,7 @@ fn parse_external_string(working_set: &mut StateWorkingSet, span: Span) -> Expre
+         match state {
+             State::Bare { from }
+             | State::Quote { from, .. }
++            | State::Parenthesized { from, .. }
+             | State::BackTickQuote { from, .. } => {
+                 if from < contents.len() {
+                     spans.push(make_span(from, contents.len()));
+@@ -575,6 +617,8 @@ fn parse_long_flag(
+                             arg_shape.to_string(),
+                             arg_span,
+                         ));
++                        // NOTE: still need to cover this incomplete flag in the final expression
++                        // see https://github.com/nushell/nushell/issues/16375
+                         (
+                             Some(Spanned {
+                                 item: long_name,
+@@ -1117,7 +1161,17 @@ pub fn parse_internal_call(
+                             working_set.error(ParseError::MissingFlagParam(
+                                 arg_shape.to_string(),
+                                 arg_span,
+-                            ))
++                            ));
++                            // NOTE: still need to cover this incomplete flag in the final expression
++                            // see https://github.com/nushell/nushell/issues/16375
++                            call.add_named((
++                                Spanned {
++                                    item: String::new(),
++                                    span: spans[spans_idx],
++                                },
++                                None,
++                                None,
++                            ));
+                         }
+                     } else if flag.long.is_empty() {
+                         if let Some(short) = flag.short {
+@@ -3497,7 +3551,7 @@ pub fn parse_var_with_opt_type(
+             let type_bytes = working_set.get_span_contents(full_span).to_vec();
+ 
+             let (tokens, parse_error) =
+-                lex_signature(&type_bytes, full_span.start, &[b','], &[], true);
++                lex_signature(&type_bytes, full_span.start, &[], &[b','], true);
+ 
+             if let Some(parse_error) = parse_error {
+                 working_set.error(parse_error);
+@@ -5653,7 +5707,8 @@ pub fn parse_math_expression(
+             working_set.error(ParseError::IncompleteMathExpression(spans[idx - 1]));
+ 
+             expr_stack.push(Expression::garbage(working_set, spans[idx - 1]));
+-            expr_stack.push(Expression::garbage(working_set, spans[idx - 1]));
++            let missing_span = Span::new(spans[idx - 1].end, spans[idx - 1].end);
++            expr_stack.push(Expression::garbage(working_set, missing_span));
+ 
+             break;
+         }
+@@ -5797,49 +5852,38 @@ pub fn parse_expression(working_set: &mut StateWorkingSet, spans: &[Span]) -> Ex
+         // Check if there is any environment shorthand
+         let name = working_set.get_span_contents(spans[pos]);
+ 
+-        let split = name.splitn(2, |x| *x == b'=');
+-        let split: Vec<_> = split.collect();
+-        if !name.starts_with(b"^")
+-            && split.len() == 2
+-            && !split[0].is_empty()
+-            && !split[0].ends_with(b"..")
+-        // was range op ..=
+-        {
+-            let point = split[0].len() + 1;
++        let split: Vec<_> = name.splitn(2, |x| *x == b'=').collect();
++        if split.len() != 2 || !is_env_variable_name(split[0]) {
++            break;
++        }
+ 
+-            let starting_error_count = working_set.parse_errors.len();
++        let point = split[0].len() + 1;
++        let starting_error_count = working_set.parse_errors.len();
+ 
+-            let lhs_span = Span::new(spans[pos].start, spans[pos].start + point - 1);
+-            if !is_identifier(working_set.get_span_contents(lhs_span)) {
+-                break;
++        let rhs = if spans[pos].start + point < spans[pos].end {
++            let rhs_span = Span::new(spans[pos].start + point, spans[pos].end);
++            if split[1].starts_with(b"$") {
++                parse_dollar_expr(working_set, rhs_span)
++            } else {
++                parse_string_strict(working_set, rhs_span)
+             }
++        } else {
++            Expression::new(
++                working_set,
++                Expr::String(String::new()),
++                Span::unknown(),
++                Type::Nothing,
++            )
++        };
+ 
+-            let lhs = parse_string_strict(working_set, lhs_span);
+-            let rhs = if spans[pos].start + point < spans[pos].end {
+-                let rhs_span = Span::new(spans[pos].start + point, spans[pos].end);
+-
+-                if working_set.get_span_contents(rhs_span).starts_with(b"$") {
+-                    parse_dollar_expr(working_set, rhs_span)
+-                } else {
+-                    parse_string_strict(working_set, rhs_span)
+-                }
+-            } else {
+-                Expression::new(
+-                    working_set,
+-                    Expr::String(String::new()),
+-                    Span::unknown(),
+-                    Type::Nothing,
+-                )
+-            };
++        let lhs_span = Span::new(spans[pos].start, spans[pos].start + point - 1);
++        let lhs = parse_string_strict(working_set, lhs_span);
+ 
+-            if starting_error_count == working_set.parse_errors.len() {
+-                shorthand.push((lhs, rhs));
+-                pos += 1;
+-            } else {
+-                working_set.parse_errors.truncate(starting_error_count);
+-                break;
+-            }
++        if starting_error_count == working_set.parse_errors.len() {
++            shorthand.push((lhs, rhs));
++            pos += 1;
+         } else {
++            working_set.parse_errors.truncate(starting_error_count);
+             break;
+         }
+     }
+@@ -6170,10 +6214,12 @@ pub fn parse_record(working_set: &mut StateWorkingSet, span: Span) -> Expression
+         span_offset: start,
+     };
+     while !lex_state.input.is_empty() {
+-        if lex_state.input[0] == b'}' {
+-            extra_tokens = true;
+-            unclosed = false;
+-            break;
++        if let Some(ParseError::Unbalanced(left, right, _)) = lex_state.error.as_ref() {
++            if left == "{" && right == "}" {
++                extra_tokens = true;
++                unclosed = false;
++                break;
++            }
+         }
+         let additional_whitespace = &[b'\n', b'\r', b','];
+         if lex_n_tokens(&mut lex_state, additional_whitespace, &[b':'], true, 1) < 1 {
+@@ -6207,7 +6253,7 @@ pub fn parse_record(working_set: &mut StateWorkingSet, span: Span) -> Expression
+         working_set.error(ParseError::Unclosed("}".into(), Span::new(end, end)));
+     } else if extra_tokens {
+         working_set.error(ParseError::ExtraTokensAfterClosingDelimiter(Span::new(
+-            lex_state.span_offset + 1,
++            lex_state.span_offset,
+             end,
+         )));
+     }
+diff --git a/fix_reedline_api.py b/fix_reedline_api.py
+deleted file mode 100644
+index dacd6000c49396f6713334a4fc2142359003aec5..0000000000000000000000000000000000000000
+--- a/fix_reedline_api.py
++++ /dev/null
+@@ -1,95 +0,0 @@
+-#!/usr/bin/env python3
+-"""
+-Fix reedline API compatibility issues by removing TraversalDirection and with_immediately_accept usage.
+-This script properly handles the multi-line code blocks that sed struggles with.
+-"""
+-
+-import re
+-import sys
+-from pathlib import Path
+-
+-def fix_reedline_config(file_path):
+-    """Remove TraversalDirection import and tab_traversal match expression."""
+-    with open(file_path, 'r') as f:
+-        content = f.read()
+-
+-    # Remove TraversalDirection from imports
+-    content = re.sub(
+-        r',\s*TraversalDirection\s*,',
+-        ',',
+-        content
+-    )
+-    content = re.sub(
+-        r'TraversalDirection\s*,',
+-        '',
+-        content
+-    )
+-
+-    # Remove the entire tab_traversal match block (lines 292-306)
+-    # Pattern: from "columnar_menu = match extract_value("tab_traversal"..."
+-    # to the matching closing brace with Err(_) => columnar_menu,
+-    pattern = r'''columnar_menu\s*=\s*match\s+extract_value\("tab_traversal",.*?\{\s*
+-\s*Ok\(tab_traversal\)\s*=>\s*match\s+tab_traversal\.coerce_str\(\)\?\.as_ref\(\)\s*\{.*?
+-\s*\},\s*
+-\s*Err\(_\)\s*=>\s*columnar_menu,\s*
+-\s*\};'''
+-
+-    content = re.sub(pattern, '', content, flags=re.DOTALL)
+-
+-    with open(file_path, 'w') as f:
+-        f.write(content)
+-
+-    return True
+-
+-def fix_repl(file_path):
+-    """Remove with_immediately_accept method calls."""
+-    with open(file_path, 'r') as f:
+-        lines = f.readlines()
+-
+-    new_lines = []
+-    i = 0
+-
+-    while i < len(lines):
+-        line = lines[i]
+-
+-        # Check if this line contains .with_immediately_accept
+-        if '.with_immediately_accept(' in line:
+-            # Check if the previous non-empty line needs a semicolon
+-            if new_lines:
+-                # Find the last non-empty, non-comment line
+-                for j in range(len(new_lines) - 1, -1, -1):
+-                    prev_line = new_lines[j].rstrip()
+-                    if prev_line and not prev_line.strip().startswith('//'):
+-                        # If it ends with ) but not with ; or }, add a semicolon
+-                        if prev_line.endswith(')') and not prev_line.endswith(';') and not prev_line.endswith('}'):
+-                            new_lines[j] = prev_line + ';\n'
+-                        break
+-            i += 1
+-            continue
+-
+-        new_lines.append(line)
+-        i += 1
+-
+-    with open(file_path, 'w') as f:
+-        f.writelines(new_lines)
+-
+-    return True
+-
+-if __name__ == '__main__':
+-    testbed_path = Path('/testbed')
+-
+-    print("Fixing reedline API compatibility...")
+-
+-    # Fix reedline_config.rs
+-    reedline_config = testbed_path / 'crates/nu-cli/src/reedline_config.rs'
+-    if reedline_config.exists():
+-        fix_reedline_config(reedline_config)
+-        print(f"✓ Fixed {reedline_config}")
+-
+-    # Fix repl.rs
+-    repl_file = testbed_path / 'crates/nu-cli/src/repl.rs'
+-    if repl_file.exists():
+-        fix_repl(repl_file)
+-        print(f"✓ Fixed {repl_file}")
+-
+-    print("Done!")
+diff --git a/nu_cow_patch.rs b/nu_cow_patch.rs
+deleted file mode 100644
+index d2de8ac0fea1c9da0005d94a7887b93889bd4d06..0000000000000000000000000000000000000000
+--- a/nu_cow_patch.rs
++++ /dev/null
+@@ -1,12 +0,0 @@
+-use serde::{Deserialize, Serialize};
+-
+-/// A Cow-like enum for static or owned values, used for completion lists.
+-/// This is an ENV-PATCH to provide a type that was expected by some cherry-picked commits.
+-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+-#[serde(untagged)]
+-pub enum NuCow<B: 'static, O> {
+-    /// Borrowed static reference
+-    Borrowed(B),
+-    /// Owned value
+-    Owned(O),
+-}

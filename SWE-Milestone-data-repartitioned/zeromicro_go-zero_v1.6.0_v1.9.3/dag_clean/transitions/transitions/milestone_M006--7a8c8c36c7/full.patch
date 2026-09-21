@@ -1,0 +1,825 @@
+diff --git a/core/logx/fields.go b/core/logx/fields.go
+index 80d5d261964b237b3523a0b24e5f1c7542451675..20b458818db4b035a4a3f0db521b1b4592adc727 100644
+--- a/core/logx/fields.go
++++ b/core/logx/fields.go
+@@ -7,12 +7,11 @@ import (
+ )
+ 
+ var (
+-	fieldsContextKey contextKey
+ 	globalFields     atomic.Value
+ 	globalFieldsLock sync.Mutex
+ )
+ 
+-type contextKey struct{}
++type fieldsKey struct{}
+ 
+ // AddGlobalFields adds global fields.
+ func AddGlobalFields(fields ...LogField) {
+@@ -29,16 +28,16 @@ func AddGlobalFields(fields ...LogField) {
+ 
+ // ContextWithFields returns a new context with the given fields.
+ func ContextWithFields(ctx context.Context, fields ...LogField) context.Context {
+-	if val := ctx.Value(fieldsContextKey); val != nil {
++	if val := ctx.Value(fieldsKey{}); val != nil {
+ 		if arr, ok := val.([]LogField); ok {
+ 			allFields := make([]LogField, 0, len(arr)+len(fields))
+ 			allFields = append(allFields, arr...)
+ 			allFields = append(allFields, fields...)
+-			return context.WithValue(ctx, fieldsContextKey, allFields)
++			return context.WithValue(ctx, fieldsKey{}, allFields)
+ 		}
+ 	}
+ 
+-	return context.WithValue(ctx, fieldsContextKey, fields)
++	return context.WithValue(ctx, fieldsKey{}, fields)
+ }
+ 
+ // WithFields returns a new logger with the given fields.
+diff --git a/core/logx/fields_test.go b/core/logx/fields_test.go
+index c0727eb5a14a47880b5e47ef2afa980dcca2f26f..f06cb26cffe4b5d8e3ff066371d197e70d325b80 100644
+--- a/core/logx/fields_test.go
++++ b/core/logx/fields_test.go
+@@ -34,7 +34,7 @@ func TestAddGlobalFields(t *testing.T) {
+ 
+ func TestContextWithFields(t *testing.T) {
+ 	ctx := ContextWithFields(context.Background(), Field("a", 1), Field("b", 2))
+-	vals := ctx.Value(fieldsContextKey)
++	vals := ctx.Value(fieldsKey{})
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -43,7 +43,7 @@ func TestContextWithFields(t *testing.T) {
+ 
+ func TestWithFields(t *testing.T) {
+ 	ctx := WithFields(context.Background(), Field("a", 1), Field("b", 2))
+-	vals := ctx.Value(fieldsContextKey)
++	vals := ctx.Value(fieldsKey{})
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -55,7 +55,7 @@ func TestWithFieldsAppend(t *testing.T) {
+ 	ctx := context.WithValue(context.Background(), dummyKey, "dummy")
+ 	ctx = ContextWithFields(ctx, Field("a", 1), Field("b", 2))
+ 	ctx = ContextWithFields(ctx, Field("c", 3), Field("d", 4))
+-	vals := ctx.Value(fieldsContextKey)
++	vals := ctx.Value(fieldsKey{})
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -80,8 +80,8 @@ func TestWithFieldsAppendCopy(t *testing.T) {
+ 	ctxa := ContextWithFields(ctx, af)
+ 	ctxb := ContextWithFields(ctx, bf)
+ 
+-	assert.EqualValues(t, af, ctxa.Value(fieldsContextKey).([]LogField)[count])
+-	assert.EqualValues(t, bf, ctxb.Value(fieldsContextKey).([]LogField)[count])
++	assert.EqualValues(t, af, ctxa.Value(fieldsKey{}).([]LogField)[count])
++	assert.EqualValues(t, bf, ctxb.Value(fieldsKey{}).([]LogField)[count])
+ }
+ 
+ func BenchmarkAtomicValue(b *testing.B) {
+diff --git a/core/logx/richlogger.go b/core/logx/richlogger.go
+index dc80ead228596df057eca05f5bbae6cec69599e9..95ae70c1433f874b15ea053fcb2066c170601d45 100644
+--- a/core/logx/richlogger.go
++++ b/core/logx/richlogger.go
+@@ -224,7 +224,7 @@ func (l *richLogger) buildFields(fields ...LogField) []LogField {
+ 		fields = append(fields, Field(spanKey, spanID))
+ 	}
+ 
+-	val := l.ctx.Value(fieldsContextKey)
++	val := l.ctx.Value(fieldsKey{})
+ 	if val != nil {
+ 		if arr, ok := val.([]LogField); ok {
+ 			fields = append(fields, arr...)
+diff --git a/core/stores/sqlx/config.go b/core/stores/sqlx/config.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..700e6d00d0b9d1eb832d86414976828ac5338691
+--- /dev/null
++++ b/core/stores/sqlx/config.go
+@@ -0,0 +1,29 @@
++package sqlx
++
++import "errors"
++
++var (
++	errEmptyDatasource = errors.New("empty datasource")
++	errEmptyDriverName = errors.New("empty driver name")
++)
++
++// SqlConf defines the configuration for sqlx.
++type SqlConf struct {
++	DataSource string
++	DriverName string   `json:",default=mysql"`
++	Replicas   []string `json:",optional"`
++	Policy     string   `json:",default=round-robin,options=round-robin|random"`
++}
++
++// Validate validates the SqlxConf.
++func (sc SqlConf) Validate() error {
++	if len(sc.DataSource) == 0 {
++		return errEmptyDatasource
++	}
++
++	if len(sc.DriverName) == 0 {
++		return errEmptyDriverName
++	}
++
++	return nil
++}
+diff --git a/core/stores/sqlx/config_test.go b/core/stores/sqlx/config_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b350ba0f1aa8863595a99743a1605ecfec00bce
+--- /dev/null
++++ b/core/stores/sqlx/config_test.go
+@@ -0,0 +1,29 @@
++package sqlx
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/conf"
++)
++
++func TestValidate(t *testing.T) {
++	text := []byte(`DataSource: primary:password@tcp(127.0.0.1:3306)/primary_db
++`)
++
++	var sc SqlConf
++	err := conf.LoadFromYamlBytes(text, &sc)
++	assert.Nil(t, err)
++	assert.Equal(t, "mysql", sc.DriverName)
++	assert.Equal(t, policyRoundRobin, sc.Policy)
++	assert.Nil(t, sc.Validate())
++
++	sc = SqlConf{}
++	assert.Equal(t, errEmptyDatasource, sc.Validate())
++
++	sc.DataSource = "primary:password@tcp(127.0.0.1:3306)/primary_db"
++	assert.Equal(t, errEmptyDriverName, sc.Validate())
++
++	sc.DriverName = "mysql"
++	assert.Nil(t, sc.Validate())
++}
+diff --git a/core/stores/sqlx/rwstrategy.go b/core/stores/sqlx/rwstrategy.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..31fe3a03579df9a5febb1a94f718126b89731f14
+--- /dev/null
++++ b/core/stores/sqlx/rwstrategy.go
+@@ -0,0 +1,65 @@
++package sqlx
++
++import "context"
++
++const (
++	// policyRoundRobin round-robin policy for selecting replicas.
++	policyRoundRobin = "round-robin"
++	// policyRandom random policy for selecting replicas.
++	policyRandom = "random"
++
++	// readPrimaryMode indicates that the operation is a read,
++	// but should be performed on the primary database instance.
++	//
++	// This mode is used in scenarios where data freshness and consistency are critical,
++	// such as immediately after writes or where replication lag may cause stale reads.
++	readPrimaryMode readWriteMode = "read-primary"
++
++	// readReplicaMode indicates that the operation is a read from replicas.
++	// This is suitable for scenarios where eventual consistency is acceptable,
++	// and the goal is to offload traffic from the primary and improve read scalability.
++	readReplicaMode readWriteMode = "read-replica"
++
++	// writeMode indicates that the operation is a write operation (to primary).
++	writeMode readWriteMode = "write"
++
++	// notSpecifiedMode indicates that the read/write mode is not specified.
++	notSpecifiedMode readWriteMode = ""
++)
++
++type readWriteModeKey struct{}
++
++// WithReadPrimary sets the context to read-primary mode.
++func WithReadPrimary(ctx context.Context) context.Context {
++	return context.WithValue(ctx, readWriteModeKey{}, readPrimaryMode)
++}
++
++// WithReadReplica sets the context to read-replica mode.
++func WithReadReplica(ctx context.Context) context.Context {
++	return context.WithValue(ctx, readWriteModeKey{}, readReplicaMode)
++}
++
++// WithWrite sets the context to write mode, indicating that the operation is a write operation.
++func WithWrite(ctx context.Context) context.Context {
++	return context.WithValue(ctx, readWriteModeKey{}, writeMode)
++}
++
++type readWriteMode string
++
++func (m readWriteMode) isValid() bool {
++	return m == readPrimaryMode || m == readReplicaMode || m == writeMode
++}
++
++func getReadWriteMode(ctx context.Context) readWriteMode {
++	if mode := ctx.Value(readWriteModeKey{}); mode != nil {
++		if v, ok := mode.(readWriteMode); ok && v.isValid() {
++			return v
++		}
++	}
++
++	return notSpecifiedMode
++}
++
++func usePrimary(ctx context.Context) bool {
++	return getReadWriteMode(ctx) != readReplicaMode
++}
+diff --git a/core/stores/sqlx/rwstrategy_test.go b/core/stores/sqlx/rwstrategy_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..b368c7cb458edbf080ad08f76875525081757b64
+--- /dev/null
++++ b/core/stores/sqlx/rwstrategy_test.go
+@@ -0,0 +1,142 @@
++package sqlx
++
++import (
++	"context"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestIsValid(t *testing.T) {
++	testCases := []struct {
++		name     string
++		mode     readWriteMode
++		expected bool
++	}{
++		{
++			name:     "valid read-primary mode",
++			mode:     readPrimaryMode,
++			expected: true,
++		},
++		{
++			name:     "valid read-replica mode",
++			mode:     readReplicaMode,
++			expected: true,
++		},
++		{
++			name:     "valid write mode",
++			mode:     writeMode,
++			expected: true,
++		},
++		{
++			name:     "not specified mode (empty)",
++			mode:     notSpecifiedMode,
++			expected: false,
++		},
++		{
++			name:     "invalid custom string",
++			mode:     readWriteMode("delete"),
++			expected: false,
++		},
++		{
++			name:     "case sensitive check",
++			mode:     readWriteMode("READ"),
++			expected: false,
++		},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			actual := tc.mode.isValid()
++			assert.Equal(t, tc.expected, actual)
++		})
++	}
++}
++
++func TestWithReadMode(t *testing.T) {
++	ctx := context.Background()
++	readPrimaryCtx := WithReadPrimary(ctx)
++
++	val := readPrimaryCtx.Value(readWriteModeKey{})
++	assert.Equal(t, readPrimaryMode, val)
++
++	readReplicaCtx := WithReadReplica(ctx)
++	val = readReplicaCtx.Value(readWriteModeKey{})
++	assert.Equal(t, readReplicaMode, val)
++}
++
++func TestWithWriteMode(t *testing.T) {
++	ctx := context.Background()
++	writeCtx := WithWrite(ctx)
++
++	val := writeCtx.Value(readWriteModeKey{})
++	assert.Equal(t, writeMode, val)
++}
++
++func TestGetReadWriteMode(t *testing.T) {
++	t.Run("valid read-primary mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readPrimaryMode)
++		assert.Equal(t, readPrimaryMode, getReadWriteMode(ctx))
++	})
++
++	t.Run("valid read-replica mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readReplicaMode)
++		assert.Equal(t, readReplicaMode, getReadWriteMode(ctx))
++	})
++
++	t.Run("valid write mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, writeMode)
++		assert.Equal(t, writeMode, getReadWriteMode(ctx))
++	})
++
++	t.Run("invalid mode value (wrong type)", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, "not-a-mode")
++		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
++	})
++
++	t.Run("invalid mode value (wrong value)", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readWriteMode("delete"))
++		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
++	})
++
++	t.Run("no mode set", func(t *testing.T) {
++		ctx := context.Background()
++		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
++	})
++}
++
++func TestUsePrimary(t *testing.T) {
++	t.Run("context with read-replica mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readReplicaMode)
++		assert.False(t, usePrimary(ctx))
++	})
++
++	t.Run("context with read-primary mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readPrimaryMode)
++		assert.True(t, usePrimary(ctx))
++	})
++
++	t.Run("context with write mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, writeMode)
++		assert.True(t, usePrimary(ctx))
++	})
++
++	t.Run("context with invalid mode", func(t *testing.T) {
++		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readWriteMode("invalid"))
++		assert.True(t, usePrimary(ctx))
++	})
++
++	t.Run("context with no mode set", func(t *testing.T) {
++		ctx := context.Background()
++		assert.True(t, usePrimary(ctx))
++	})
++}
++
++func TestWithModeTwice(t *testing.T) {
++	ctx := context.Background()
++	ctx = WithReadPrimary(ctx)
++	writeCtx := WithWrite(ctx)
++
++	val := writeCtx.Value(readWriteModeKey{})
++	assert.Equal(t, writeMode, val)
++}
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 34a4f386a4480b1f7270cb00f7c27bdb1971bca7..81fe9c9bf58a7c439a3f6016e4aded6ede72d624 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -4,6 +4,9 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
++	"fmt"
++	"math/rand"
++	"sync/atomic"
+ 
+ 	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/errorx"
+@@ -52,9 +55,10 @@ type (
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+ 		accept   breaker.Acceptable
++		index    uint32
+ 	}
+ 
+-	connProvider func() (*sql.DB, error)
++	connProvider func(ctx context.Context) (*sql.DB, error)
+ 
+ 	sessionConn interface {
+ 		Exec(query string, args ...any) (sql.Result, error)
+@@ -64,10 +68,41 @@ type (
+ 	}
+ )
+ 
++// MustNewConn returns a SqlConn with the given SqlConf.
++func MustNewConn(c SqlConf, opts ...SqlOption) SqlConn {
++	conn, err := NewConn(c, opts...)
++	if err != nil {
++		logx.Must(err)
++	}
++
++	return conn
++}
++
++// NewConn returns a SqlConn with the given SqlConf.
++func NewConn(c SqlConf, opts ...SqlOption) (SqlConn, error) {
++	if err := c.Validate(); err != nil {
++		return nil, err
++	}
++
++	conn := &commonSqlConn{
++		onError: func(ctx context.Context, err error) {
++			logInstanceError(ctx, c.DataSource, err)
++		},
++		beginTx: begin,
++		brk:     breaker.NewBreaker(),
++	}
++	for _, opt := range opts {
++		opt(conn)
++	}
++	conn.connProv = getConnProvider(conn, c.DriverName, c.DataSource, c.Policy, c.Replicas)
++
++	return conn, nil
++}
++
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+ func NewSqlConn(driverName, datasource string, opts ...SqlOption) SqlConn {
+ 	conn := &commonSqlConn{
+-		connProv: func() (*sql.DB, error) {
++		connProv: func(context.Context) (*sql.DB, error) {
+ 			return getSqlConn(driverName, datasource)
+ 		},
+ 		onError: func(ctx context.Context, err error) {
+@@ -87,7 +122,7 @@ func NewSqlConn(driverName, datasource string, opts ...SqlOption) SqlConn {
+ // Use it with caution; it's provided for other ORM to interact with.
+ func NewSqlConnFromDB(db *sql.DB, opts ...SqlOption) SqlConn {
+ 	conn := &commonSqlConn{
+-		connProv: func() (*sql.DB, error) {
++		connProv: func(ctx context.Context) (*sql.DB, error) {
+ 			return db, nil
+ 		},
+ 		onError: func(ctx context.Context, err error) {
+@@ -123,7 +158,7 @@ func (db *commonSqlConn) ExecCtx(ctx context.Context, q string, args ...any) (
+ 
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+ 		var conn *sql.DB
+-		conn, err = db.connProv()
++		conn, err = db.connProv(ctx)
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -151,7 +186,7 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+ 		var conn *sql.DB
+-		conn, err = db.connProv()
++		conn, err = db.connProv(ctx)
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -242,7 +277,7 @@ func (db *commonSqlConn) QueryRowsPartialCtx(ctx context.Context, v any,
+ }
+ 
+ func (db *commonSqlConn) RawDB() (*sql.DB, error) {
+-	return db.connProv()
++	return db.connProv(context.Background())
+ }
+ 
+ func (db *commonSqlConn) Transact(fn func(Session) error) error {
+@@ -288,7 +323,7 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	q string, args ...any) (err error) {
+ 	var scanFailed bool
+ 	err = db.brk.DoWithAcceptableCtx(ctx, func() error {
+-		conn, err := db.connProv()
++		conn, err := db.connProv(ctx)
+ 		if err != nil {
+ 			db.onError(ctx, err)
+ 			return err
+@@ -311,6 +346,38 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
++func getConnProvider(sc *commonSqlConn, driverName, datasource, policy string, replicas []string) connProvider {
++	return func(ctx context.Context) (*sql.DB, error) {
++		replicaCount := len(replicas)
++
++		if replicaCount == 0 || usePrimary(ctx) {
++			return getSqlConn(driverName, datasource)
++		}
++
++		var dsn string
++
++		if replicaCount == 1 {
++			dsn = replicas[0]
++		} else {
++			if len(policy) == 0 {
++				policy = policyRoundRobin
++			}
++
++			switch policy {
++			case policyRandom:
++				dsn = replicas[rand.Intn(replicaCount)]
++			case policyRoundRobin:
++				index := atomic.AddUint32(&sc.index, 1) - 1
++				dsn = replicas[index%uint32(replicaCount)]
++			default:
++				return nil, fmt.Errorf("unknown policy: %s", policy)
++			}
++		}
++
++		return getSqlConn(driverName, dsn)
++	}
++}
++
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+diff --git a/core/stores/sqlx/sqlconn_test.go b/core/stores/sqlx/sqlconn_test.go
+index 53ea0d5ace98b0e4498718bbfe19fa9be99d2b83..95e383ce14660f94f1042ff63b05ab3e3e46a10b 100644
+--- a/core/stores/sqlx/sqlconn_test.go
++++ b/core/stores/sqlx/sqlconn_test.go
+@@ -1,6 +1,7 @@
+ package sqlx
+ 
+ import (
++	"context"
+ 	"database/sql"
+ 	"errors"
+ 	"io"
+@@ -98,7 +99,7 @@ func TestSqlConn_RawDB(t *testing.T) {
+ func TestSqlConn_Errors(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		conn := NewSqlConnFromDB(db)
+-		conn.(*commonSqlConn).connProv = func() (*sql.DB, error) {
++		conn.(*commonSqlConn).connProv = func(ctx context.Context) (*sql.DB, error) {
+ 			return nil, errors.New("error")
+ 		}
+ 		_, err := conn.Prepare("any")
+@@ -138,6 +139,148 @@ func TestSqlConn_Errors(t *testing.T) {
+ 	})
+ }
+ 
++func TestConfigSqlConn(t *testing.T) {
++	db, mock, err := sqlmock.New()
++	assert.NotNil(t, db)
++	assert.NotNil(t, mock)
++	assert.Nil(t, err)
++	connManager.Inject(mockedDatasource, db)
++	mock.ExpectExec("any")
++	mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}))
++
++	conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++	conn := MustNewConn(conf, withMysqlAcceptable())
++
++	_, err = conn.Exec("any", "value")
++	assert.NotNil(t, err)
++	_, err = conn.Prepare("any")
++	assert.NotNil(t, err)
++
++	var val string
++	assert.NotNil(t, conn.QueryRow(&val, "any"))
++	assert.NotNil(t, conn.QueryRowPartial(&val, "any"))
++	assert.NotNil(t, conn.QueryRows(&val, "any"))
++	assert.NotNil(t, conn.QueryRowsPartial(&val, "any"))
++}
++
++func TestConfigSqlConnStatement(t *testing.T) {
++	db, mock, err := sqlmock.New()
++	assert.NotNil(t, db)
++	assert.NotNil(t, mock)
++	assert.Nil(t, err)
++	connManager.Inject(mockedDatasource, db)
++
++	mock.ExpectPrepare("any")
++	mock.ExpectExec("any").WillReturnResult(sqlmock.NewResult(2, 3))
++	mock.ExpectPrepare("any")
++	row := sqlmock.NewRows([]string{"foo"}).AddRow("bar")
++	mock.ExpectQuery("any").WillReturnRows(row)
++
++	conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++	conn := MustNewConn(conf, withMysqlAcceptable())
++	stmt, err := conn.Prepare("any")
++	assert.NoError(t, err)
++
++	res, err := stmt.Exec()
++	assert.NoError(t, err)
++	lastInsertID, err := res.LastInsertId()
++	assert.NoError(t, err)
++	assert.Equal(t, int64(2), lastInsertID)
++	rowsAffected, err := res.RowsAffected()
++	assert.NoError(t, err)
++	assert.Equal(t, int64(3), rowsAffected)
++
++	stmt, err = conn.Prepare("any")
++	assert.NoError(t, err)
++
++	var val string
++	err = stmt.QueryRow(&val)
++	assert.NoError(t, err)
++	assert.Equal(t, "bar", val)
++
++	mock.ExpectPrepare("any")
++	rows := sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar")
++	mock.ExpectQuery("any").WillReturnRows(rows)
++
++	stmt, err = conn.Prepare("any")
++	assert.NoError(t, err)
++
++	var vals []string
++	assert.NoError(t, stmt.QueryRowsPartial(&vals))
++	assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
++}
++
++func TestConfigSqlConnQuery(t *testing.T) {
++	db, mock, err := sqlmock.New()
++	assert.NotNil(t, db)
++	assert.NotNil(t, mock)
++	assert.Nil(t, err)
++	connManager.Inject(mockedDatasource, db)
++
++	t.Run("QueryRow", func(t *testing.T) {
++		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}).AddRow("bar"))
++		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++		conn := MustNewConn(conf)
++		var val string
++		assert.NoError(t, conn.QueryRow(&val, "any"))
++		assert.Equal(t, "bar", val)
++	})
++
++	t.Run("QueryRowPartial", func(t *testing.T) {
++		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}).AddRow("bar"))
++		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++		conn := MustNewConn(conf)
++		var val string
++		assert.NoError(t, conn.QueryRowPartial(&val, "any"))
++		assert.Equal(t, "bar", val)
++	})
++
++	t.Run("QueryRows", func(t *testing.T) {
++		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar"))
++		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++		conn := MustNewConn(conf)
++		var vals []string
++		assert.NoError(t, conn.QueryRows(&vals, "any"))
++		assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
++	})
++
++	t.Run("QueryRowsPartial", func(t *testing.T) {
++		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar"))
++		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++		conn := MustNewConn(conf)
++		var vals []string
++		assert.NoError(t, conn.QueryRowsPartial(&vals, "any"))
++		assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
++	})
++}
++
++func TestConfigSqlConnErr(t *testing.T) {
++	t.Run("panic on empty config", func(t *testing.T) {
++		original := logx.ExitOnFatal.True()
++		logx.ExitOnFatal.Set(false)
++		defer logx.ExitOnFatal.Set(original)
++
++		assert.Panics(t, func() {
++			MustNewConn(SqlConf{})
++		})
++	})
++	t.Run("on error", func(t *testing.T) {
++		db, mock, err := sqlmock.New()
++		assert.NotNil(t, db)
++		assert.NotNil(t, mock)
++		assert.Nil(t, err)
++		connManager.Inject(mockedDatasource, db)
++
++		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
++		conn := MustNewConn(conf)
++		conn.(*commonSqlConn).connProv = func(ctx context.Context) (*sql.DB, error) {
++			return nil, errors.New("error")
++		}
++		_, err = conn.Prepare("any")
++		assert.Error(t, err)
++	})
++}
++
+ func TestStatement(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		mock.ExpectPrepare("any").WillBeClosed()
+@@ -303,6 +446,93 @@ func TestWithAcceptable(t *testing.T) {
+ 	assert.True(t, conn.accept(acceptableErr3))
+ }
+ 
++func TestProvider(t *testing.T) {
++	defer func() {
++		_ = connManager.Close()
++	}()
++
++	primaryDSN := "primary:password@tcp(127.0.0.1:3306)/primary_db"
++	replicasDSN := []string{
++		"replica_one:pwd@tcp(localhost:3306)/replica_one",
++		"replica_two:pwd@tcp(localhost:3306)/replica_two",
++		"replica_three:pwd@tcp(localhost:3306)/replica_three",
++	}
++
++	primaryDB, err := connManager.GetResource(primaryDSN, func() (io.Closer, error) { return sql.Open(mysqlDriverName, primaryDSN) })
++	assert.Nil(t, err)
++	assert.NotNil(t, primaryDB)
++	replicaOneDB, err := connManager.GetResource(replicasDSN[0], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[0]) })
++	assert.Nil(t, err)
++	assert.NotNil(t, replicaOneDB)
++	replicaTwoDB, err := connManager.GetResource(replicasDSN[1], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[1]) })
++	assert.Nil(t, err)
++	assert.NotNil(t, replicaTwoDB)
++	replicaThreeDB, err := connManager.GetResource(replicasDSN[2], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[2]) })
++	assert.Nil(t, err)
++	assert.NotNil(t, replicaThreeDB)
++
++	sc := &commonSqlConn{}
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, nil)
++
++	ctx := context.Background()
++	db, err := sc.connProv(ctx)
++	assert.Nil(t, err)
++	assert.Equal(t, primaryDB, db)
++
++	ctx = WithWrite(ctx)
++	db, err = sc.connProv(ctx)
++	assert.Nil(t, err)
++	assert.Equal(t, primaryDB, db)
++
++	ctx = WithReadPrimary(ctx)
++	db, err = sc.connProv(ctx)
++	assert.Nil(t, err)
++	assert.Equal(t, primaryDB, db)
++
++	// no mode set, should return primary
++	ctx = context.Background()
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, replicasDSN)
++	db, err = sc.connProv(ctx)
++	assert.Nil(t, err)
++	assert.Equal(t, primaryDB, db)
++
++	ctx = WithReadReplica(ctx)
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, []string{replicasDSN[0]})
++	db, err = sc.connProv(ctx)
++	assert.Nil(t, err)
++	assert.Equal(t, replicaOneDB, db)
++
++	// default policy is round-robin
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, replicasDSN)
++	replicas := []io.Closer{replicaOneDB, replicaTwoDB, replicaThreeDB}
++	for i := 0; i < len(replicasDSN); i++ {
++		db, err = sc.connProv(ctx)
++		assert.Nil(t, err)
++		assert.Equal(t, replicas[i], db)
++	}
++
++	// random policy
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRandom, replicasDSN)
++	for i := 0; i < len(replicasDSN); i++ {
++		db, err = sc.connProv(ctx)
++		assert.Nil(t, err)
++		assert.Contains(t, replicas, db)
++	}
++
++	// unknown policy
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, "unknown", replicasDSN)
++	_, err = sc.connProv(ctx)
++	assert.NotNil(t, err)
++
++	// empty policy transforms to round-robin
++	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, "", replicasDSN)
++	for i := 0; i < len(replicasDSN); i++ {
++		db, err = sc.connProv(ctx)
++		assert.Nil(t, err)
++		assert.Equal(t, replicas[i], db)
++	}
++}
++
+ func buildConn() (mock sqlmock.Sqlmock, err error) {
+ 	_, err = connManager.GetResource(mockedDatasource, func() (io.Closer, error) {
+ 		var db *sql.DB
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index ea2fd2bee68b6ad588c250637c5dc06f8588302b..02370ca07dcde5f2315d3e41a6cde0af7aa4d581 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -156,7 +156,7 @@ func begin(db *sql.DB) (trans, error) {
+ 
+ func transact(ctx context.Context, db *commonSqlConn, b beginnable,
+ 	fn func(context.Context, Session) error) (err error) {
+-	conn, err := db.connProv()
++	conn, err := db.connProv(ctx)
+ 	if err != nil {
+ 		db.onError(ctx, err)
+ 		return err
+diff --git a/core/stores/sqlx/tx_test.go b/core/stores/sqlx/tx_test.go
+index a7c87f1a4bcaf39c5163ee744ba183837e03af9c..3a2de138be4f2294ea3593241596524f7ca74b9c 100644
+--- a/core/stores/sqlx/tx_test.go
++++ b/core/stores/sqlx/tx_test.go
+@@ -117,7 +117,7 @@ func TestTxExceptions(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		conn := &commonSqlConn{
+-			connProv: func() (*sql.DB, error) {
++			connProv: func(ctx context.Context) (*sql.DB, error) {
+ 				return nil, errors.New("foo")
+ 			},
+ 			beginTx: begin,

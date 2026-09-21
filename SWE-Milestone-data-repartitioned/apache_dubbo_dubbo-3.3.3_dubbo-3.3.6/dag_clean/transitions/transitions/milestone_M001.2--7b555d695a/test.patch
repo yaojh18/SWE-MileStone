@@ -1,0 +1,273 @@
+diff --git a/dubbo-plugin/dubbo-spring-security/src/test/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodecTest.java b/dubbo-plugin/dubbo-spring-security/src/test/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodecTest.java
+index ea2d613ec6b714623c5f40189299c98ad0c332de..bae9af97f957bfac89ed762780fe42e1b67809b7 100644
+--- a/dubbo-plugin/dubbo-spring-security/src/test/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodecTest.java
++++ b/dubbo-plugin/dubbo-spring-security/src/test/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodecTest.java
+@@ -29,7 +29,7 @@ import org.springframework.security.oauth2.core.OAuth2AccessToken;
+ 
+ public class ObjectMapperCodecTest {
+ 
+-    private ObjectMapperCodec mapper = new ObjectMapperCodec();
++    private final ObjectMapperCodec mapper = new ObjectMapperCodec();
+ 
+     @Test
+     public void testOAuth2AuthorizedClientCodec() {
+diff --git a/dubbo-plugin/dubbo-spring6-security/src/test/java/org/apache/dubbo/spring/security/oauth2/DeserializationTest.java b/dubbo-plugin/dubbo-spring6-security/src/test/java/org/apache/dubbo/spring/security/oauth2/DeserializationTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e1b59881b23d11f90c8a4eb1ed923eaf506a358c
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring6-security/src/test/java/org/apache/dubbo/spring/security/oauth2/DeserializationTest.java
+@@ -0,0 +1,126 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import org.apache.dubbo.config.bootstrap.DubboBootstrap;
++import org.apache.dubbo.rpc.model.ApplicationModel;
++import org.apache.dubbo.spring.security.jackson.ObjectMapperCodec;
++
++import java.time.Duration;
++import java.time.Instant;
++import java.util.Collections;
++
++import org.junit.jupiter.api.AfterAll;
++import org.junit.jupiter.api.Assertions;
++import org.junit.jupiter.api.BeforeAll;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.context.annotation.ImportResource;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.security.oauth2.core.AuthorizationGrantType;
++import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
++import org.springframework.security.oauth2.core.DefaultOAuth2AuthenticatedPrincipal;
++import org.springframework.security.oauth2.core.OAuth2AccessToken;
++import org.springframework.security.oauth2.core.OAuth2AccessToken.TokenType;
++import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken;
++import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
++import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
++import org.springframework.security.oauth2.server.authorization.settings.OAuth2TokenFormat;
++import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
++import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthentication;
++
++@SpringBootTest(
++        properties = {"dubbo.registry.address=N/A"},
++        classes = {DeserializationTest.class})
++@Configuration
++public class DeserializationTest {
++
++    private static ObjectMapperCodec mapper;
++
++    @BeforeAll
++    public static void beforeAll() {
++        DubboBootstrap.reset();
++        mapper = ApplicationModel.defaultModel().getDefaultModule().getBean(ObjectMapperCodec.class);
++    }
++
++    @AfterAll
++    public static void afterAll() {
++        DubboBootstrap.reset();
++    }
++
++    @Test
++    public void bearerTokenAuthenticationTest() {
++        BearerTokenAuthentication bearerTokenAuthentication = new BearerTokenAuthentication(
++                new DefaultOAuth2AuthenticatedPrincipal(
++                        "principal-name",
++                        Collections.singletonMap("name", "kali"),
++                        Collections.singleton(new SimpleGrantedAuthority("1"))),
++                new OAuth2AccessToken(TokenType.BEARER, "111", Instant.MIN, Instant.MAX),
++                Collections.emptyList());
++        String content = mapper.serialize(bearerTokenAuthentication);
++
++        BearerTokenAuthentication deserialize = mapper.deserialize(content.getBytes(), BearerTokenAuthentication.class);
++
++        Assertions.assertNotNull(deserialize);
++    }
++
++    @Test
++    public void oauth2ClientAuthenticationTokenTest() {
++        OAuth2ClientAuthenticationToken oAuth2ClientAuthenticationToken = new OAuth2ClientAuthenticationToken(
++                "client-id", ClientAuthenticationMethod.CLIENT_SECRET_POST, "111", Collections.emptyMap());
++
++        String content = mapper.serialize(oAuth2ClientAuthenticationToken);
++
++        OAuth2ClientAuthenticationToken deserialize =
++                mapper.deserialize(content.getBytes(), OAuth2ClientAuthenticationToken.class);
++
++        Assertions.assertNotNull(deserialize);
++    }
++
++    @Test
++    public void registeredClientTest() {
++        RegisteredClient registeredClient = RegisteredClient.withId("id")
++                .clientId("client-id")
++                .clientName("client-name")
++                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
++                .redirectUri("https://example.com")
++                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_JWT)
++                .clientSecret("client-secret")
++                .clientIdIssuedAt(Instant.MIN)
++                .clientSecretExpiresAt(Instant.MAX)
++                .tokenSettings(TokenSettings.builder()
++                        .accessTokenFormat(OAuth2TokenFormat.REFERENCE)
++                        .accessTokenTimeToLive(Duration.ofSeconds(1000))
++                        .build())
++                .clientSettings(ClientSettings.builder()
++                        .setting("name", "value")
++                        .requireProofKey(true)
++                        .build())
++                .build();
++
++        String content = mapper.serialize(registeredClient);
++
++        RegisteredClient deserialize = mapper.deserialize(content.getBytes(), RegisteredClient.class);
++
++        Assertions.assertEquals(registeredClient, deserialize);
++    }
++
++    @Configuration
++    @ImportResource("classpath:/dubbo-test.xml")
++    public static class OAuth2SecurityTestConfiguration {}
++}
+diff --git a/dubbo-plugin/dubbo-spring6-security/src/test/resources/dubbo-test.xml b/dubbo-plugin/dubbo-spring6-security/src/test/resources/dubbo-test.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c39a7b92a41d95c8d81fe099833bad5a6e59748
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring6-security/src/test/resources/dubbo-test.xml
+@@ -0,0 +1,33 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  ~
++  ~   Licensed to the Apache Software Foundation (ASF) under one or more
++  ~   contributor license agreements.  See the NOTICE file distributed with
++  ~   this work for additional information regarding copyright ownership.
++  ~   The ASF licenses this file to You under the Apache License, Version 2.0
++  ~   (the "License"); you may not use this file except in compliance with
++  ~   the License.  You may obtain a copy of the License at
++  ~
++  ~       http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~   Unless required by applicable law or agreed to in writing, software
++  ~   distributed under the License is distributed on an "AS IS" BASIS,
++  ~   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~   See the License for the specific language governing permissions and
++  ~   limitations under the License.
++  ~
++  -->
++<beans xmlns="http://www.springframework.org/schema/beans"
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xmlns:dubbo="http://code.alibabatech.com/schema/dubbo"
++	xsi:schemaLocation="http://www.springframework.org/schema/beans
++		http://www.springframework.org/schema/beans/spring-beans.xsd
++		http://code.alibabatech.com/schema/dubbo
++		http://code.alibabatech.com/schema/dubbo/dubbo.xsd" default-lazy-init ="false">
++
++	<dubbo:application name="oauth2-security-test-app"/>
++
++	<dubbo:registry client="curator" address="${dubbo.registry.address}"/>
++
++	<dubbo:protocol name="dubbo" port="20880"/>
++</beans>
+diff --git a/dubbo-plugin/dubbo-spring6-security/src/test/resources/log4j2-test.xml b/dubbo-plugin/dubbo-spring6-security/src/test/resources/log4j2-test.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba99f52cc2d20b8b8714a774df80b744a74034dc
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring6-security/src/test/resources/log4j2-test.xml
+@@ -0,0 +1,29 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  ~ Licensed to the Apache Software Foundation (ASF) under one or more
++  ~ contributor license agreements.  See the NOTICE file distributed with
++  ~ this work for additional information regarding copyright ownership.
++  ~ The ASF licenses this file to You under the Apache License, Version 2.0
++  ~ (the "License"); you may not use this file except in compliance with
++  ~ the License.  You may obtain a copy of the License at
++  ~
++  ~     http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<Configuration status="WARN">
++    <Appenders>
++        <Console name="Console" target="SYSTEM_OUT" follow="true">
++            <PatternLayout pattern="%d{HH:mm:ss.SSS} |-%highlight{%-5p} [%t] %40.40c:%-3L -| %m%n%rEx{filters(jdk.internal.reflect,java.lang.reflect,sun.reflect,org.junit,org.mockito)}" charset="UTF-8"/>
++        </Console>
++    </Appenders>
++    <Loggers>
++        <Root level="info">
++            <AppenderRef ref="Console"/>
++        </Root>
++    </Loggers>
++</Configuration>
+diff --git a/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/ZKTools.java b/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/ZKTools.java
+index 5fdc619039d210d20e0bb67944d7a29887d7164b..8cdc554849c3c4ab5397a8d0a271e41ca9880457 100644
+--- a/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/ZKTools.java
++++ b/dubbo-registry/dubbo-registry-api/src/test/java/org/apache/dubbo/registry/ZKTools.java
+@@ -227,7 +227,7 @@ public class ZKTools {
+     }
+ 
+     public static void setData(String path, String data) throws Exception {
+-        client.setData().inBackground().forPath(path, data.getBytes());
++        client.setData().inBackground().forPath(path, data.getBytes(StandardCharsets.UTF_8));
+     }
+ 
+     public static void testPathCache() throws Exception {
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/test/java/org/apache/dubbo/remoting/codec/DeprecatedTelnetCodec.java b/dubbo-remoting/dubbo-remoting-api/src/test/java/org/apache/dubbo/remoting/codec/DeprecatedTelnetCodec.java
+index 2f9180277ceb03836b8442d6a4d473e323dd4e23..e7df0bb5868a31c350bad9b31bee19d67c033bf9 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/test/java/org/apache/dubbo/remoting/codec/DeprecatedTelnetCodec.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/test/java/org/apache/dubbo/remoting/codec/DeprecatedTelnetCodec.java
+@@ -34,6 +34,7 @@ import java.io.OutputStream;
+ import java.io.UnsupportedEncodingException;
+ import java.net.InetSocketAddress;
+ import java.nio.charset.Charset;
++import java.nio.charset.StandardCharsets;
+ import java.util.Arrays;
+ import java.util.LinkedList;
+ import java.util.List;
+@@ -310,7 +311,7 @@ public class DeprecatedTelnetCodec implements Codec {
+         if (history != null && history.size() > 0 && index != null && index >= 0 && index < history.size()) {
+             String value = history.get(index);
+             if (value != null) {
+-                byte[] b1 = value.getBytes();
++                byte[] b1 = value.getBytes(StandardCharsets.UTF_8);
+                 if (message != null && message.length > 0) {
+                     byte[] b2 = new byte[b1.length + message.length];
+                     System.arraycopy(b1, 0, b2, 0, b1.length);
+diff --git a/dubbo-test/dubbo-test-modules/src/test/java/org/apache/dubbo/dependency/FileTest.java b/dubbo-test/dubbo-test-modules/src/test/java/org/apache/dubbo/dependency/FileTest.java
+index 3e0d55e0ed6906bc16c3355d54edc15a4ff25521..74c9e75b1b6e6414a93c4248784d83ee53dd1ce4 100644
+--- a/dubbo-test/dubbo-test-modules/src/test/java/org/apache/dubbo/dependency/FileTest.java
++++ b/dubbo-test/dubbo-test-modules/src/test/java/org/apache/dubbo/dependency/FileTest.java
+@@ -55,6 +55,7 @@ class FileTest {
+         ignoredModules.add(Pattern.compile("dubbo-demo.*"));
+         ignoredModules.add(Pattern.compile("dubbo-annotation-processor"));
+         ignoredModules.add(Pattern.compile("dubbo-config-spring6"));
++        ignoredModules.add(Pattern.compile("dubbo-spring6-security"));
+         ignoredModules.add(Pattern.compile("dubbo-spring-boot-3-autoconfigure"));
+         ignoredModules.add(Pattern.compile("dubbo-plugin-loom.*"));
+         ignoredModules.add(Pattern.compile("dubbo-mutiny.*"));
+@@ -75,6 +76,7 @@ class FileTest {
+         ignoredModulesInDubboAll.add(Pattern.compile(".*spring-boot.*"));
+         ignoredModulesInDubboAll.add(Pattern.compile("dubbo-maven-plugin"));
+ 
++        ignoredModulesInDubboAllShade.add(Pattern.compile("dubbo-spring6-security"));
+         ignoredModulesInDubboAllShade.add(Pattern.compile("dubbo-plugin-loom"));
+         ignoredModulesInDubboAllShade.add(Pattern.compile("dubbo-mutiny"));
+     }

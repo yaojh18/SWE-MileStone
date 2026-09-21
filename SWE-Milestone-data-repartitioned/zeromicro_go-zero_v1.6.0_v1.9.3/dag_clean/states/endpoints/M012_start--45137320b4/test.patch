@@ -1,0 +1,444 @@
+diff --git a/core/logx/logs_test.go b/core/logx/logs_test.go
+index 3780bc2f120c418b1ccd11755f5a8bab308bd26a..818f459ea60f60825802d0af2747c177afef68e1 100644
+--- a/core/logx/logs_test.go
++++ b/core/logx/logs_test.go
+@@ -570,7 +570,7 @@ func TestErrorfWithWrappedError(t *testing.T) {
+ 	old := writer.Swap(w)
+ 	defer writer.Store(old)
+ 
+-	Errorf("hello %s", errors.New(message))
++	Errorf("hello %w", errors.New(message))
+ 	assert.True(t, strings.Contains(w.String(), "hello there"))
+ }
+ 
+diff --git a/core/mapping/unmarshaler_test.go b/core/mapping/unmarshaler_test.go
+index ac5a30c0fb94b9fe5c2250ffd1e41c5561129351..08a804951205e2194215dabb3bbca061eed43bab 100644
+--- a/core/mapping/unmarshaler_test.go
++++ b/core/mapping/unmarshaler_test.go
+@@ -5866,7 +5866,7 @@ type mockValuerWithParent struct {
+ 	ok     bool
+ }
+ 
+-func (m mockValuerWithParent) Value(_ string) (any, bool) {
++func (m mockValuerWithParent) Value(key string) (any, bool) {
+ 	return m.value, m.ok
+ }
+ 
+diff --git a/core/proc/goroutines_test.go b/core/proc/goroutines_test.go
+index 4d5154623cf1d779dfa48453b3aab07f8a2fd248..827d0233d2c41428f3930999b1e68a398836e77c 100644
+--- a/core/proc/goroutines_test.go
++++ b/core/proc/goroutines_test.go
+@@ -36,6 +36,6 @@ type fakeCreator struct {
+ 	err  error
+ }
+ 
+-func (fc fakeCreator) Create(_ string) (file *os.File, err error) {
++func (fc fakeCreator) Create(name string) (file *os.File, err error) {
+ 	return fc.file, fc.err
+ }
+diff --git a/core/queue/util_test.go b/core/queue/util_test.go
+index eca6b797ab2cbadb40818d8bd26360fe9f5773ce..f578c364fc7f82af365b81f9676e260d951fb662 100644
+--- a/core/queue/util_test.go
++++ b/core/queue/util_test.go
+@@ -67,7 +67,7 @@ func (p *mockedPusher) Name() string {
+ 	return p.name
+ }
+ 
+-func (p *mockedPusher) Push(_ string) error {
++func (p *mockedPusher) Push(s string) error {
+ 	if proba.TrueOnProba(failProba) {
+ 		return errors.New("dummy")
+ 	}
+diff --git a/core/stat/metrics_test.go b/core/stat/metrics_test.go
+index ea686560ba0f3390b5a60813cf2f27d96c139d31..30f8d316c5062a3d3daac4873ed4db674b8023ad 100644
+--- a/core/stat/metrics_test.go
++++ b/core/stat/metrics_test.go
+@@ -71,6 +71,6 @@ func (m *mockedWriter) Write(report *StatReport) error {
+ 
+ type badWriter struct{}
+ 
+-func (b *badWriter) Write(_ *StatReport) error {
++func (b *badWriter) Write(report *StatReport) error {
+ 	return errors.New("bad")
+ }
+diff --git a/core/stores/mon/options_test.go b/core/stores/mon/options_test.go
+index 48024dbd9fc460be4984057044b36662f9e97538..ee944f94578cdcd3434700a15354ce06be93c265 100644
+--- a/core/stores/mon/options_test.go
++++ b/core/stores/mon/options_test.go
+@@ -1,14 +1,10 @@
+ package mon
+ 
+ import (
+-	"fmt"
+-	"reflect"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"go.mongodb.org/mongo-driver/bson/bsoncodec"
+-	"go.mongodb.org/mongo-driver/bson/bsonrw"
+ 	mopt "go.mongodb.org/mongo-driver/mongo/options"
+ )
+ 
+@@ -55,56 +51,3 @@ func TestDisableInfoLog(t *testing.T) {
+ 	assert.False(t, logMon.True())
+ 	assert.True(t, logSlowMon.True())
+ }
+-
+-func TestWithRegistryForTimestampRegisterType(t *testing.T) {
+-	opts := mopt.Client()
+-
+-	// mongoDateTimeEncoder allow user convert time.Time to primitive.DateTime.
+-	var mongoDateTimeEncoder bsoncodec.ValueEncoderFunc = func(ect bsoncodec.EncodeContext, w bsonrw.ValueWriter, value reflect.Value) error {
+-		// Use reflect, determine if it can be converted to time.Time.
+-		dec, ok := value.Interface().(time.Time)
+-		if !ok {
+-			return fmt.Errorf("value %v to encode is not of type time.Time", value)
+-		}
+-		return w.WriteDateTime(dec.Unix())
+-	}
+-
+-	// mongoDateTimeEncoder allow user convert primitive.DateTime to time.Time.
+-	var mongoDateTimeDecoder bsoncodec.ValueDecoderFunc = func(ect bsoncodec.DecodeContext, r bsonrw.ValueReader, value reflect.Value) error {
+-		primTime, err := r.ReadDateTime()
+-		if err != nil {
+-			return fmt.Errorf("error reading primitive.DateTime from ValueReader: %v", err)
+-		}
+-		value.Set(reflect.ValueOf(time.Unix(primTime, 0)))
+-		return nil
+-	}
+-
+-	codecs := []TypeCodec{
+-		{
+-			ValueType: reflect.TypeOf(time.Time{}),
+-			Encoder:   mongoDateTimeEncoder,
+-			Decoder:   mongoDateTimeDecoder,
+-		},
+-	}
+-	WithTypeCodec(codecs...)(opts)
+-
+-	for _, v := range codecs {
+-		// Validate Encoder
+-		enc, err := opts.Registry.LookupEncoder(v.ValueType)
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		if assert.ObjectsAreEqual(v.Encoder, enc) {
+-			t.Errorf("Encoder got from Registry: %v, but want: %v", enc, v.Encoder)
+-		}
+-
+-		// Validate Decoder
+-		dec, err := opts.Registry.LookupDecoder(v.ValueType)
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		if assert.ObjectsAreEqual(v.Decoder, dec) {
+-			t.Errorf("Decoder got from Registry: %v, but want: %v", dec, v.Decoder)
+-		}
+-	}
+-}
+diff --git a/core/stores/sqlx/mysql_test.go b/core/stores/sqlx/mysql_test.go
+index 1bf33630f6005393ed5a8b8e7de28d4ce5a0b3f0..68698e4b44f1c6601f9fdb18b7abd4da1332193c 100644
+--- a/core/stores/sqlx/mysql_test.go
++++ b/core/stores/sqlx/mysql_test.go
+@@ -2,6 +2,7 @@ package sqlx
+ 
+ import (
+ 	"errors"
++	"reflect"
+ 	"testing"
+ 
+ 	"github.com/go-sql-driver/mysql"
+@@ -37,6 +38,7 @@ func TestBreakerOnNotHandlingDuplicateEntry(t *testing.T) {
+ func TestMysqlAcceptable(t *testing.T) {
+ 	conn := NewMysql("nomysql").(*commonSqlConn)
+ 	withMysqlAcceptable()(conn)
++	assert.EqualValues(t, reflect.ValueOf(mysqlAcceptable).Pointer(), reflect.ValueOf(conn.accept).Pointer())
+ 	assert.True(t, mysqlAcceptable(nil))
+ 	assert.False(t, mysqlAcceptable(errors.New("any")))
+ 	assert.False(t, mysqlAcceptable(new(mysql.MySQLError)))
+diff --git a/core/stores/sqlx/sqlconn_test.go b/core/stores/sqlx/sqlconn_test.go
+index 53ea0d5ace98b0e4498718bbfe19fa9be99d2b83..ab83e2c6fda9717e6fb1bca2b665c3c6f75fb58b 100644
+--- a/core/stores/sqlx/sqlconn_test.go
++++ b/core/stores/sqlx/sqlconn_test.go
+@@ -264,45 +264,6 @@ func TestBreakerWithScanError(t *testing.T) {
+ 	})
+ }
+ 
+-func TestWithAcceptable(t *testing.T) {
+-	var (
+-		acceptableErr  = errors.New("acceptable")
+-		acceptableErr2 = errors.New("acceptable2")
+-		acceptableErr3 = errors.New("acceptable3")
+-	)
+-	opts := []SqlOption{
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr)
+-		}),
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr2)
+-		}),
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr3)
+-		}),
+-	}
+-
+-	var conn = &commonSqlConn{}
+-	for _, opt := range opts {
+-		opt(conn)
+-	}
+-
+-	assert.True(t, conn.accept(nil))
+-	assert.False(t, conn.accept(assert.AnError))
+-	assert.True(t, conn.accept(acceptableErr))
+-	assert.True(t, conn.accept(acceptableErr2))
+-	assert.True(t, conn.accept(acceptableErr3))
+-}
+-
+ func buildConn() (mock sqlmock.Sqlmock, err error) {
+ 	_, err = connManager.GetResource(mockedDatasource, func() (io.Closer, error) {
+ 		var db *sql.DB
+diff --git a/core/trace/message_test.go b/core/trace/message_test.go
+index 290158f81e3a1cab377524473e59c60d1c760f06..039a5e760d8c0870f9824751ac1aded7c518e641 100644
+--- a/core/trace/message_test.go
++++ b/core/trace/message_test.go
+@@ -34,7 +34,7 @@ type mockSpan struct {
+ 	options []trace.EventOption
+ }
+ 
+-func (m *mockSpan) End(_ ...trace.SpanEndOption) {
++func (m *mockSpan) End(options ...trace.SpanEndOption) {
+ }
+ 
+ func (m *mockSpan) AddEvent(name string, options ...trace.EventOption) {
+@@ -46,20 +46,20 @@ func (m *mockSpan) IsRecording() bool {
+ 	return false
+ }
+ 
+-func (m *mockSpan) RecordError(_ error, _ ...trace.EventOption) {
++func (m *mockSpan) RecordError(err error, options ...trace.EventOption) {
+ }
+ 
+ func (m *mockSpan) SpanContext() trace.SpanContext {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockSpan) SetStatus(_ codes.Code, _ string) {
++func (m *mockSpan) SetStatus(code codes.Code, description string) {
+ }
+ 
+-func (m *mockSpan) SetName(_ string) {
++func (m *mockSpan) SetName(name string) {
+ }
+ 
+-func (m *mockSpan) SetAttributes(_ ...attribute.KeyValue) {
++func (m *mockSpan) SetAttributes(kv ...attribute.KeyValue) {
+ }
+ 
+ func (m *mockSpan) TracerProvider() trace.TracerProvider {
+diff --git a/rest/engine_test.go b/rest/engine_test.go
+index 4f86d2173efdd421c87b8ba5e772832c56d1390c..fe5358f1bebb76c8308f74306465ccfc7fd33299 100644
+--- a/rest/engine_test.go
++++ b/rest/engine_test.go
+@@ -435,7 +435,7 @@ type mockedRouter struct {
+ func (m mockedRouter) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {
+ }
+ 
+-func (m mockedRouter) Handle(_, _ string, _ http.Handler) error {
++func (m mockedRouter) Handle(_, _ string, handler http.Handler) error {
+ 	return errors.New("foo")
+ }
+ 
+diff --git a/rest/handler/contentsecurityhandler_test.go b/rest/handler/contentsecurityhandler_test.go
+index 6da9820c52dcbe26a5f01ca858beca3c0bd32174..dfbcc9db192ffb9f6a4eafde8a797794a00a1246 100644
+--- a/rest/handler/contentsecurityhandler_test.go
++++ b/rest/handler/contentsecurityhandler_test.go
+@@ -327,7 +327,7 @@ func buildRequest(rs requestSettings) (*http.Request, error) {
+ 			query,
+ 			bodySign,
+ 		}, "\n")
+-		rs.signature = codec.HmacBase64(key, contentOfSign)
++		rs.signature = codec.HmacBase64([]byte(key), contentOfSign)
+ 	}
+ 
+ 	var mode string
+diff --git a/rest/handler/cryptionhandler_test.go b/rest/handler/cryptionhandler_test.go
+index f993cac581510e5847f8039f3757c5e8a26e850b..b76384d6a03e573d6f7cbeb9e9d5c577783b1394 100644
+--- a/rest/handler/cryptionhandler_test.go
++++ b/rest/handler/cryptionhandler_test.go
+@@ -224,7 +224,7 @@ func (m flushableResponseWriter) Write(p []byte) (int, error) {
+ 	return m.writer.Write(p)
+ }
+ 
+-func (m flushableResponseWriter) WriteHeader(_ int) {
++func (m flushableResponseWriter) WriteHeader(statusCode int) {
+ 	panic("implement me")
+ }
+ 
+@@ -240,6 +240,6 @@ func (t *halfWriter) Write(p []byte) (n int, err error) {
+ type badWriter struct {
+ }
+ 
+-func (b *badWriter) Write(_ []byte) (n int, err error) {
++func (b *badWriter) Write(p []byte) (n int, err error) {
+ 	return 0, io.ErrClosedPipe
+ }
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index b6f81e1d993e22000ba26065d85849e1821379c2..c57633796b8aff447bd2edd2412339908d4f1e39 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -164,7 +164,7 @@ type mockedReadCloser struct {
+ 	errMsg string
+ }
+ 
+-func (m mockedReadCloser) Read(_ []byte) (n int, err error) {
++func (m mockedReadCloser) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New(m.errMsg)
+ }
+ 
+diff --git a/rest/httpc/responses_test.go b/rest/httpc/responses_test.go
+index c6c7dd3ef7e9056964b2d46369a69f2804a397ac..31369ee1b6d008afe7146b6eaf0325ea88263571 100644
+--- a/rest/httpc/responses_test.go
++++ b/rest/httpc/responses_test.go
+@@ -175,6 +175,6 @@ func (m mockedReader) Close() error {
+ 	return nil
+ }
+ 
+-func (m mockedReader) Read(_ []byte) (n int, err error) {
++func (m mockedReader) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New("dummy")
+ }
+diff --git a/zrpc/internal/balancer/p2c/p2c_test.go b/zrpc/internal/balancer/p2c/p2c_test.go
+index 8e1ec4b22bf1f570ba6626d5a70d018946fe3723..8d42362269ce09edd843fac6512366d242bac31e 100644
+--- a/zrpc/internal/balancer/p2c/p2c_test.go
++++ b/zrpc/internal/balancer/p2c/p2c_test.go
+@@ -142,7 +142,7 @@ func (m mockClientConn) GetOrBuildProducer(builder balancer.ProducerBuilder) (
+ 	return builder.Build(m)
+ }
+ 
+-func (m mockClientConn) UpdateAddresses(_ []resolver.Address) {
++func (m mockClientConn) UpdateAddresses(addresses []resolver.Address) {
+ }
+ 
+ func (m mockClientConn) Connect() {
+diff --git a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+index 3c25d50c7a8a9cd795435e3777171c715ab3f0d0..91952ef4d6d063a7e4b6aec32480eb65e5a38cb3 100644
+--- a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+@@ -420,10 +420,10 @@ func (m *mockedClientStream) Context() context.Context {
+ 	return context.Background()
+ }
+ 
+-func (m *mockedClientStream) SendMsg(_ any) error {
++func (m *mockedClientStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientStream) RecvMsg(_ any) error {
++func (m *mockedClientStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/internal/serverinterceptors/authinterceptor_test.go b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+index 3b09b7cb37011c36ec36c0db4bb3d5fde7e997f5..12d83a096a4b70d10645da38bb8ee2ce38a1a1df 100644
+--- a/zrpc/internal/serverinterceptors/authinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+@@ -169,25 +169,25 @@ type mockedStream struct {
+ 	ctx context.Context
+ }
+ 
+-func (m mockedStream) SetHeader(_ metadata.MD) error {
++func (m mockedStream) SetHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SendHeader(_ metadata.MD) error {
++func (m mockedStream) SendHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SetTrailer(_ metadata.MD) {
++func (m mockedStream) SetTrailer(md metadata.MD) {
+ }
+ 
+ func (m mockedStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m mockedStream) SendMsg(_ any) error {
++func (m mockedStream) SendMsg(v any) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) RecvMsg(_ any) error {
++func (m mockedStream) RecvMsg(v any) error {
+ 	return nil
+ }
+diff --git a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+index 2b3fee86bd04d3753f26d8feb5b863db5adaf29a..9fb85a9bc50729c52dd5f0dbd72d32f0cc88b430 100644
+--- a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+@@ -309,15 +309,15 @@ type mockedServerStream struct {
+ 	err error
+ }
+ 
+-func (m *mockedServerStream) SetHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SetHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SendHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SendHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SetTrailer(_ metadata.MD) {
++func (m *mockedServerStream) SetTrailer(md metadata.MD) {
+ 	panic("implement me")
+ }
+ 
+@@ -329,10 +329,10 @@ func (m *mockedServerStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m *mockedServerStream) SendMsg(_ any) error {
++func (m *mockedServerStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedServerStream) RecvMsg(_ any) error {
++func (m *mockedServerStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/resolver/internal/resolver_test.go b/zrpc/resolver/internal/resolver_test.go
+index 7dd10ee79d10123ff7a236885f684ffdbd6d71c1..62c8238707bccb97e0840b925d81c82348373af5 100644
+--- a/zrpc/resolver/internal/resolver_test.go
++++ b/zrpc/resolver/internal/resolver_test.go
+@@ -28,15 +28,15 @@ func (m *mockedClientConn) UpdateState(state resolver.State) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientConn) ReportError(_ error) {
++func (m *mockedClientConn) ReportError(err error) {
+ }
+ 
+-func (m *mockedClientConn) NewAddress(_ []resolver.Address) {
++func (m *mockedClientConn) NewAddress(addresses []resolver.Address) {
+ }
+ 
+-func (m *mockedClientConn) NewServiceConfig(_ string) {
++func (m *mockedClientConn) NewServiceConfig(serviceConfig string) {
+ }
+ 
+-func (m *mockedClientConn) ParseServiceConfig(_ string) *serviceconfig.ParseResult {
++func (m *mockedClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
+ 	return nil
+ }

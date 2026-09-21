@@ -1,0 +1,427 @@
+diff --git a/res/css/_components.pcss b/res/css/_components.pcss
+index 90129601958795ec20b1dfb2d131429feba9ca76..14ea8b80e965dcb8767edddab0028fe393fb19c8 100644
+--- a/res/css/_components.pcss
++++ b/res/css/_components.pcss
+@@ -154,0 +155 @@
++@import "./views/dialogs/_ReportRoomDialog.pcss";
+@@ -364,0 +366 @@
++@import "./views/settings/encryption/_ResetIdentityPanel.pcss";
+diff --git a/res/css/views/dialogs/_ReportRoomDialog.pcss b/res/css/views/dialogs/_ReportRoomDialog.pcss
+new file mode 100644
+index 0000000000000000000000000000000000000000..7323ac65c9928edf716a6ffb35cb22179c924587
+--- /dev/null
++++ b/res/css/views/dialogs/_ReportRoomDialog.pcss
+@@ -0,0 +1,16 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++.mx_ReportRoomDialog {
++    textarea {
++        font: var(--cpd-font-body-md-regular);
++        border: 1px solid var(--cpd-color-border-interactive-primary);
++        background: var(--cpd-color-bg-canvas-default);
++        border-radius: 0.5rem;
++        padding: var(--cpd-space-3x) var(--cpd-space-4x);
++    }
++}
+diff --git a/res/css/views/right_panel/_RoomSummaryCard.pcss b/res/css/views/right_panel/_RoomSummaryCard.pcss
+index fb1d6f7d9cdc643a0a97d0ed74702912225ebc2e..3c1c07677c7919772b6e1ab198d82b1922278c51 100644
+--- a/res/css/views/right_panel/_RoomSummaryCard.pcss
++++ b/res/css/views/right_panel/_RoomSummaryCard.pcss
+@@ -2 +2 @@
+-Copyright 2024 New Vector Ltd.
++Copyright 2024, 2025 New Vector Ltd.
+@@ -102,0 +103,4 @@ Please see LICENSE files in the repository root for full details.
++
++.mx_RoomSummaryCard_bottomOptions {
++    margin: 0 0 var(--cpd-space-8x);
++}
+diff --git a/res/css/views/settings/encryption/_ResetIdentityPanel.pcss b/res/css/views/settings/encryption/_ResetIdentityPanel.pcss
+new file mode 100644
+index 0000000000000000000000000000000000000000..8318d6d91cd3a9db1e28378e6134e8af55ffe4c6
+--- /dev/null
++++ b/res/css/views/settings/encryption/_ResetIdentityPanel.pcss
+@@ -0,0 +1,11 @@
++/*
++ * Copyright 2024 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++// Red text for the "Do not close this window" warning
++.mx_ResetIdentityPanel_warning {
++    color: var(--cpd-color-text-critical-primary);
++}
+diff --git a/src/RoomNotifs.ts b/src/RoomNotifs.ts
+index e6064d2691486c70a9605d3b2734f613b0b256f8..d5254d523d06057a7ece83c1ebd168ef68904989 100644
+--- a/src/RoomNotifs.ts
++++ b/src/RoomNotifs.ts
+@@ -241 +241 @@ export function determineUnreadState(
+-): { level: NotificationLevel; symbol: string | null; count: number } {
++): { level: NotificationLevel; symbol: string | null; count: number; invited: boolean } {
+@@ -243 +243 @@ export function determineUnreadState(
+-        return { symbol: null, count: 0, level: NotificationLevel.None };
++        return { symbol: null, count: 0, level: NotificationLevel.None, invited: false };
+@@ -247 +247 @@ export function determineUnreadState(
+-        return { symbol: "!", count: 1, level: NotificationLevel.Unsent };
++        return { symbol: "!", count: 1, level: NotificationLevel.Unsent, invited: false };
+@@ -251 +251 @@ export function determineUnreadState(
+-        return { symbol: "!", count: 1, level: NotificationLevel.Highlight };
++        return { symbol: "!", count: 1, level: NotificationLevel.Highlight, invited: true };
+@@ -255 +255 @@ export function determineUnreadState(
+-        return { symbol: "!", count: 1, level: NotificationLevel.Highlight };
++        return { symbol: "!", count: 1, level: NotificationLevel.Highlight, invited: false };
+@@ -259 +259 @@ export function determineUnreadState(
+-        return { symbol: null, count: 0, level: NotificationLevel.None };
++        return { symbol: null, count: 0, level: NotificationLevel.None, invited: false };
+@@ -272 +272 @@ export function determineUnreadState(
+-        return { symbol: null, count: trueCount, level: NotificationLevel.Highlight };
++        return { symbol: null, count: trueCount, level: NotificationLevel.Highlight, invited: false };
+@@ -277 +277 @@ export function determineUnreadState(
+-        return { symbol: null, count: trueCount, level: NotificationLevel.Notification };
++        return { symbol: null, count: trueCount, level: NotificationLevel.Notification, invited: false };
+@@ -295,0 +296 @@ export function determineUnreadState(
++        invited: false,
+diff --git a/src/components/structures/MatrixChat.tsx b/src/components/structures/MatrixChat.tsx
+index 3d802d34ad9b25eefbed7a6af65c46b1125afa3e..bc0cd3676222fbaa30af8b51f7c098aa0e524e8d 100644
+--- a/src/components/structures/MatrixChat.tsx
++++ b/src/components/structures/MatrixChat.tsx
+@@ -1391 +1391 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+-        } else {
++        } else if (!(await this.shouldForceVerification())) {
+@@ -2006,3 +2006,11 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+-    private onCompleteSecurityE2eSetupFinished = (): void => {
+-        // This is async but we making this function async to wait for it isn't useful
+-        this.onShowPostLoginScreen().catch((e) => {
++    private onCompleteSecurityE2eSetupFinished = async (): Promise<void> => {
++        const forceVerify = await this.shouldForceVerification();
++        if (forceVerify) {
++            const isVerified = await MatrixClientPeg.safeGet().getCrypto()?.isCrossSigningReady();
++            if (!isVerified) {
++                // We must verify but we haven't yet verified - don't continue logging in
++                return;
++            }
++        }
++
++        await this.onShowPostLoginScreen().catch((e) => {
+diff --git a/src/components/views/dialogs/ReportRoomDialog.tsx b/src/components/views/dialogs/ReportRoomDialog.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff4e96ea979d8ff7b819433a40064e0ab922ac69
+--- /dev/null
++++ b/src/components/views/dialogs/ReportRoomDialog.tsx
+@@ -0,0 +1,95 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React, { type ChangeEventHandler, useCallback, useState } from "react";
++import { Root, Field, Label, InlineSpinner, ErrorMessage } from "@vector-im/compound-web";
++
++import { _t } from "../../../languageHandler";
++import SdkConfig from "../../../SdkConfig";
++import Markdown from "../../../Markdown";
++import BaseDialog from "./BaseDialog";
++import DialogButtons from "../elements/DialogButtons";
++import { MatrixClientPeg } from "../../../MatrixClientPeg";
++
++interface IProps {
++    roomId: string;
++    onFinished(complete: boolean): void;
++}
++
++/*
++ * A dialog for reporting a room.
++ */
++
++export const ReportRoomDialog: React.FC<IProps> = function ({ roomId, onFinished }) {
++    const [error, setErr] = useState<string>();
++    const [busy, setBusy] = useState(false);
++    const [sent, setSent] = useState(false);
++    const [reason, setReason] = useState("");
++    const client = MatrixClientPeg.safeGet();
++
++    const onReasonChange = useCallback<ChangeEventHandler<HTMLTextAreaElement>>((e) => setReason(e.target.value), []);
++    const onCancel = useCallback(() => onFinished(sent), [sent, onFinished]);
++    const onSubmit = useCallback(async () => {
++        setBusy(true);
++        try {
++            await client.reportRoom(roomId, reason);
++            setSent(true);
++        } catch (ex) {
++            if (ex instanceof Error) {
++                setErr(ex.message);
++            } else {
++                setErr("Unknown error");
++            }
++        } finally {
++            setBusy(false);
++        }
++    }, [roomId, reason, client]);
++
++    const adminMessageMD = SdkConfig.getObject("report_event")?.get("admin_message_md", "adminMessageMD");
++    let adminMessage: JSX.Element | undefined;
++    if (adminMessageMD) {
++        const html = new Markdown(adminMessageMD).toHTML({ externalLinks: true });
++        adminMessage = <p dangerouslySetInnerHTML={{ __html: html }} />;
++    }
++
++    return (
++        <BaseDialog
++            className="mx_ReportRoomDialog"
++            onFinished={() => onFinished(sent)}
++            title={_t("report_room|title")}
++            contentId="mx_ReportEventDialog"
++        >
++            {sent && <p>{_t("report_room|sent")}</p>}
++            {!sent && (
++                <Root id="mx_ReportEventDialog" onSubmit={onSubmit}>
++                    <p>{_t("report_room|description")}</p>
++                    {adminMessage}
++                    <Field name="reason">
++                        <Label htmlFor="mx_ReportRoomDialog_reason">{_t("room_settings|permissions|ban_reason")}</Label>
++                        <textarea
++                            id="mx_ReportRoomDialog_reason"
++                            placeholder={_t("report_room|reason_placeholder")}
++                            rows={5}
++                            onChange={onReasonChange}
++                            value={reason}
++                            disabled={busy}
++                        />
++                        {error ? <ErrorMessage>{error}</ErrorMessage> : null}
++                    </Field>
++                    {busy ? <InlineSpinner /> : null}
++                    <DialogButtons
++                        primaryButton={_t("action|send_report")}
++                        onPrimaryButtonClick={onSubmit}
++                        focus={true}
++                        onCancel={onCancel}
++                        disabled={busy}
++                    />
++                </Root>
++            )}
++        </BaseDialog>
++    );
++};
+diff --git a/src/components/views/right_panel/RoomSummaryCard.tsx b/src/components/views/right_panel/RoomSummaryCard.tsx
+index 2d3453febaf244de3a1017b5c60a25940fffc351..e3c3cedcef5e38e02eff18ac5954565427038dce 100644
+--- a/src/components/views/right_panel/RoomSummaryCard.tsx
++++ b/src/components/views/right_panel/RoomSummaryCard.tsx
+@@ -2 +2 @@
+-Copyright 2024 New Vector Ltd.
++Copyright 2024, 2025 New Vector Ltd.
+@@ -38 +38,2 @@ import PublicIcon from "@vector-im/compound-design-tokens/assets/web/icons/publi
+-import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
++import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error";
++import ErrorSolidIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
+@@ -79,0 +81 @@ import { useScopedRoomContext } from "../../../contexts/ScopedRoomContext.tsx";
++import { ReportRoomDialog } from "../dialogs/ReportRoomDialog.tsx";
+@@ -233,0 +236,5 @@ const RoomSummaryCard: React.FC<IProps> = ({
++    const onReportRoomClick = (): void => {
++        Modal.createDialog(ReportRoomDialog, {
++            roomId: room.roomId,
++        });
++    };
+@@ -323 +330 @@ const RoomSummaryCard: React.FC<IProps> = ({
+-                        <ErrorIcon width="1em" />
++                        <ErrorSolidIcon width="1em" />
+@@ -442,7 +449,15 @@ const RoomSummaryCard: React.FC<IProps> = ({
+-
+-                <MenuItem
+-                    Icon={LeaveIcon}
+-                    kind="critical"
+-                    label={_t("action|leave_room")}
+-                    onSelect={onLeaveRoomClick}
+-                />
++                <div className="mx_RoomSummaryCard_bottomOptions">
++                    <MenuItem
++                        className="mx_RoomSummaryCard_leave"
++                        Icon={LeaveIcon}
++                        kind="critical"
++                        label={_t("action|leave_room")}
++                        onSelect={onLeaveRoomClick}
++                    />
++                    <MenuItem
++                        Icon={ErrorIcon}
++                        kind="critical"
++                        label={_t("action|report_room")}
++                        onSelect={onReportRoomClick}
++                    />
++                </div>
+diff --git a/src/components/views/rooms/SendMessageComposer.tsx b/src/components/views/rooms/SendMessageComposer.tsx
+index 374a14a3aa973645bf4a3bbcfd503b07cf78922e..aae9cfd0d03562485fdd06067bc318cb2965d266 100644
+--- a/src/components/views/rooms/SendMessageComposer.tsx
++++ b/src/components/views/rooms/SendMessageComposer.tsx
+@@ -98,2 +98 @@ export function attachMentions(
+-    // If there's a reply, initialize the mentioned users as the sender of that
+-    // event + any mentioned users in that event.
++    // If there's a reply, initialize the mentioned users as the sender of that event.
+@@ -102,6 +100,0 @@ export function attachMentions(
+-        // TODO What do we do if the reply event *doeesn't* have this property?
+-        // Try to fish out replies from the contents?
+-        const userIds = replyToEvent.getContent()["m.mentions"]?.user_ids;
+-        if (Array.isArray(userIds)) {
+-            userIds.forEach((userId) => userMentions.add(userId));
+-        }
+diff --git a/src/components/views/rooms/UserIdentityWarning.tsx b/src/components/views/rooms/UserIdentityWarning.tsx
+index f880b5a0da12096aa832cf2a4e95e5d73b111be0..f8a8b8bb9ec74f5fd30f4a0e41b9d31ba6c5129e 100644
+--- a/src/components/views/rooms/UserIdentityWarning.tsx
++++ b/src/components/views/rooms/UserIdentityWarning.tsx
+@@ -107 +107 @@ function getTitleAndAction(prompt: ViolationPrompt): [title: React.ReactNode, ac
+-        action = _t("action|ok");
++        action = _t("action|dismiss");
+diff --git a/src/components/views/settings/encryption/ResetIdentityPanel.tsx b/src/components/views/settings/encryption/ResetIdentityPanel.tsx
+index 747b22fd59dfff285219eaeb63d2148ebfce8d8e..9507e52872f7bd066cf5f9829beae94df992c6af 100644
+--- a/src/components/views/settings/encryption/ResetIdentityPanel.tsx
++++ b/src/components/views/settings/encryption/ResetIdentityPanel.tsx
+@@ -8 +8 @@
+-import { Breadcrumb, Button, VisualList, VisualListItem } from "@vector-im/compound-web";
++import { Breadcrumb, Button, InlineSpinner, VisualList, VisualListItem } from "@vector-im/compound-web";
+@@ -12 +12 @@ import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-
+-import React, { type MouseEventHandler } from "react";
++import React, { useState, type MouseEventHandler } from "react";
+@@ -33,0 +34 @@ interface ResetIdentityPanelProps {
++     *
+@@ -35,0 +37 @@ interface ResetIdentityPanelProps {
++     *
+@@ -46,0 +49,4 @@ export function ResetIdentityPanel({ onCancelClick, onFinish, variant }: ResetId
++    // After the user clicks "Continue", we disable the button so it can't be
++    // clicked again, and warn the user not to close the window.
++    const [inProgress, setInProgress] = useState(false);
++
+@@ -80,0 +87 @@ export function ResetIdentityPanel({ onCancelClick, onFinish, variant }: ResetId
++                        disabled={inProgress}
+@@ -81,0 +89 @@ export function ResetIdentityPanel({ onCancelClick, onFinish, variant }: ResetId
++                            setInProgress(true);
+@@ -88,4 +96,7 @@ export function ResetIdentityPanel({ onCancelClick, onFinish, variant }: ResetId
+-                        {_t("action|continue")}
+-                    </Button>
+-                    <Button kind="tertiary" onClick={onCancelClick}>
+-                        {_t("action|cancel")}
++                        {inProgress ? (
++                            <>
++                                <InlineSpinner /> {_t("settings|encryption|advanced|reset_in_progress")}
++                            </>
++                        ) : (
++                            _t("action|continue")
++                        )}
+@@ -92,0 +104,11 @@ export function ResetIdentityPanel({ onCancelClick, onFinish, variant }: ResetId
++                    {inProgress ? (
++                        <EncryptionCardEmphasisedContent>
++                            <span className="mx_ResetIdentityPanel_warning">
++                                {_t("settings|encryption|advanced|do_not_close_warning")}
++                            </span>
++                        </EncryptionCardEmphasisedContent>
++                    ) : (
++                        <Button kind="tertiary" onClick={onCancelClick}>
++                            {_t("action|cancel")}
++                        </Button>
++                    )}
+diff --git a/src/stores/notifications/NotificationState.ts b/src/stores/notifications/NotificationState.ts
+index a453d7ca42da1d9fb20f13403d7e614ac5cbd96e..b3f30229a2e807778e0b083030a14f6bb6615635 100644
+--- a/src/stores/notifications/NotificationState.ts
++++ b/src/stores/notifications/NotificationState.ts
+@@ -20,0 +21 @@ export interface INotificationStateSnapshotParams {
++    invited: boolean;
+@@ -40,0 +42 @@ export abstract class NotificationState
++    protected _invited = false;
+@@ -72,0 +75,8 @@ export abstract class NotificationState
++    /**
++     * True if the notification is an invitation notification.
++     * Invite notifications are a special case of highlight notifications
++     */
++    public get invited(): boolean {
++        return this._invited;
++    }
++
+@@ -76,0 +87,4 @@ export abstract class NotificationState
++    /**
++     * True if the notification is higher than an activity notification or if the feature_hidebold is disabled with an activity notification.
++     * The "unread" term used here is different from the "Unread" in the UI. Unread in the UI doesn't include activity notifications even with feature_hidebold disabled.
++     */
+@@ -85,0 +100,3 @@ export abstract class NotificationState
++    /**
++     * True if the notification has a count or a symbol and is equal or greater than an NotificationLevel.Notification.
++     */
+@@ -89,0 +107,6 @@ export abstract class NotificationState
++    /**
++     * True if the notification is a mention, an invitation, a knock or a unset message.
++     *
++     * @deprecated because the name is confusing. A mention is not an invitation, a knock or an unsent message.
++     * In case of a {@link RoomNotificationState}, use {@link RoomNotificationState.isMention} instead.
++     */
+@@ -118,0 +142 @@ export class NotificationStateSnapshot {
++    private readonly isInvitation: boolean;
+@@ -125,0 +150 @@ export class NotificationStateSnapshot {
++        this.isInvitation = state.invited;
+@@ -134,0 +160 @@ export class NotificationStateSnapshot {
++            is: this.isInvitation,
+diff --git a/src/stores/notifications/RoomNotificationState.ts b/src/stores/notifications/RoomNotificationState.ts
+index c4f677130d2a3c99dea7cfe7b5e4703e1f90d99c..3447257e96a2aa83bd9c4db3b7051d56b7b75ad8 100644
+--- a/src/stores/notifications/RoomNotificationState.ts
++++ b/src/stores/notifications/RoomNotificationState.ts
+@@ -19,0 +20 @@ import { MARKED_UNREAD_TYPE_STABLE, MARKED_UNREAD_TYPE_UNSTABLE } from "../../ut
++import { NotificationLevel } from "./NotificationLevel";
+@@ -53,0 +55,46 @@ export class RoomNotificationState extends NotificationState implements IDestroy
++    /**
++     * True if the notification is a mention.
++     */
++    public get isMention(): boolean {
++        if (this.invited || this.knocked) return false;
++
++        return this.level === NotificationLevel.Highlight;
++    }
++
++    /**
++     * True if the notification is an unset message.
++     */
++    public get isUnsetMessage(): boolean {
++        return this.level === NotificationLevel.Unsent;
++    }
++
++    /**
++     * Activity notifications are the lowest level of notification (except none and muted)
++     */
++    public get isActivityNotification(): boolean {
++        return this.level === NotificationLevel.Activity;
++    }
++
++    /**
++     * This is the case for notifications with a level:
++     * - is a knock
++     * - greater Activity
++     * - equal Activity and feature_hidebold is disabled.
++     */
++    public get hasAnyNotificationOrActivity(): boolean {
++        if (this.knocked) return true;
++
++        // If the feature_hidebold is enabled, we don't want to show activity notifications
++        const hideBold = SettingsStore.getValue("feature_hidebold");
++        if (!hideBold && this.level === NotificationLevel.Activity) return true;
++
++        return this.level >= NotificationLevel.Notification;
++    }
++
++    /**
++     * True if the notification is a NotificationLevel.Notification.
++     */
++    public get isNotification(): boolean {
++        return this.level === NotificationLevel.Notification;
++    }
++
+@@ -98 +145,5 @@ export class RoomNotificationState extends NotificationState implements IDestroy
+-        const { level, symbol, count } = RoomNotifs.determineUnreadState(this.room, undefined, this.includeThreads);
++        const { level, symbol, count, invited } = RoomNotifs.determineUnreadState(
++            this.room,
++            undefined,
++            this.includeThreads,
++        );
+@@ -107,0 +159 @@ export class RoomNotificationState extends NotificationState implements IDestroy
++        this._invited = invited;

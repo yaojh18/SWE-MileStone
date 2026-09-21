@@ -1,0 +1,5011 @@
+diff --git a/.github/copilot-instructions.md b/.github/copilot-instructions.md
+deleted file mode 100644
+index cb763a244b49e3df6d156c71d448758483c11e8e..0000000000000000000000000000000000000000
+--- a/.github/copilot-instructions.md
++++ /dev/null
+@@ -1,197 +0,0 @@
+-# GitHub Copilot Instructions for go-zero
+-
+-This document provides guidelines for GitHub Copilot when assisting with development in the go-zero project.
+-
+-## Project Overview
+-
+-go-zero is a web and RPC framework with lots of built-in engineering practices designed to ensure the stability of busy services with resilience design. It has been serving sites with tens of millions of users for years.
+-
+-### Key Architecture Components
+-
+-- **REST API framework** (`rest/`) - HTTP service framework with middleware support
+-- **RPC framework** (`zrpc/`) - gRPC-based RPC framework with service discovery
+-- **Core utilities** (`core/`) - Foundational components including:
+-  - Circuit breakers, rate limiters, load shedding
+-  - Caching, stores (Redis, MongoDB, SQL)
+-  - Concurrency control, metrics, tracing
+-  - Configuration management
+-- **Code generation tool** (`tools/goctl/`) - CLI tool for generating code from API files
+-
+-## Coding Standards and Conventions
+-
+-### Code Style
+-
+-1. **Follow Go conventions**: Use `gofmt` for formatting, follow effective Go practices
+-2. **Package naming**: Use lowercase, single-word package names when possible
+-3. **Error handling**: Always handle errors explicitly, use `errorx.BatchError` for multiple errors
+-4. **Context propagation**: Always pass `context.Context` as the first parameter for functions that may block
+-5. **Configuration structures**: Use struct tags with JSON annotations and default values
+-
+-Example configuration pattern:
+-```go
+-type Config struct {
+-    Host     string `json:",default=0.0.0.0"`
+-    Port     int    `json:",default=8080"`
+-    Timeout  int    `json:",default=3000"`
+-    Optional string `json:",optional"`
+-}
+-```
+-
+-### Interface Design
+-
+-1. **Small interfaces**: Follow Go's preference for small, focused interfaces
+-2. **Context methods**: Provide both context and non-context versions of methods
+-3. **Options pattern**: Use functional options for complex configuration
+-
+-Example:
+-```go
+-func (c *Client) Get(key string, val any) error {
+-    return c.GetCtx(context.Background(), key, val)
+-}
+-
+-func (c *Client) GetCtx(ctx context.Context, key string, val any) error {
+-    // implementation
+-}
+-```
+-
+-### Testing Patterns
+-
+-1. **Test file naming**: Use `*_test.go` suffix
+-2. **Test function naming**: Use `TestFunctionName` pattern
+-3. **Use testify/assert**: Prefer `assert` package for assertions
+-4. **Table-driven tests**: Use table-driven tests for multiple scenarios
+-5. **Mock interfaces**: Use `go.uber.org/mock` for mocking
+-6. **Test helpers**: Use `redistest`, `mongtest` helpers for database testing
+-
+-Example test pattern:
+-```go
+-func TestSomething(t *testing.T) {
+-    tests := []struct {
+-        name     string
+-        input    string
+-        expected string
+-        wantErr  bool
+-    }{
+-        {"valid case", "input", "output", false},
+-        {"error case", "bad", "", true},
+-    }
+-
+-    for _, tt := range tests {
+-        t.Run(tt.name, func(t *testing.T) {
+-            result, err := SomeFunction(tt.input)
+-            if tt.wantErr {
+-                assert.Error(t, err)
+-                return
+-            }
+-            assert.NoError(t, err)
+-            assert.Equal(t, tt.expected, result)
+-        })
+-    }
+-}
+-```
+-
+-## Framework-Specific Guidelines
+-
+-### REST API Development
+-
+-1. **API Definition**: Use `.api` files to define REST APIs
+-2. **Handler pattern**: Separate business logic into logic packages
+-3. **Middleware**: Use built-in middlewares (tracing, logging, metrics, recovery)
+-4. **Response handling**: Use `httpx.WriteJson` for JSON responses
+-5. **Error handling**: Use `httpx.Error` for HTTP error responses
+-
+-### RPC Development
+-
+-1. **Protocol Buffers**: Use protobuf for service definitions
+-2. **Service discovery**: Integrate with etcd for service registration
+-3. **Load balancing**: Use built-in load balancing strategies
+-4. **Interceptors**: Implement interceptors for cross-cutting concerns
+-
+-### Database Operations
+-
+-1. **SQL operations**: Use `sqlx` package for database operations
+-2. **Caching**: Implement caching patterns with `cache` package
+-3. **Transactions**: Use proper transaction handling
+-4. **Connection pooling**: Configure appropriate connection pools
+-
+-Example cache pattern:
+-```go
+-err := c.QueryRowCtx(ctx, &dest, key, func(ctx context.Context, conn sqlx.SqlConn) error {
+-    return conn.QueryRowCtx(ctx, &dest, query, args...)
+-})
+-```
+-
+-### Configuration Management
+-
+-1. **YAML configuration**: Use YAML for configuration files
+-2. **Environment variables**: Support environment variable overrides
+-3. **Validation**: Include proper validation for configuration parameters
+-4. **Sensible defaults**: Provide reasonable default values
+-
+-## Error Handling Best Practices
+-
+-1. **Wrap errors**: Use `fmt.Errorf` with `%w` verb to wrap errors
+-2. **Custom errors**: Define custom error types when needed
+-3. **Error logging**: Log errors appropriately with context
+-4. **Graceful degradation**: Implement fallback mechanisms
+-
+-## Performance Considerations
+-
+-1. **Resource pools**: Use connection pools and worker pools
+-2. **Circuit breakers**: Implement circuit breaker patterns for external calls
+-3. **Rate limiting**: Apply rate limiting to protect services
+-4. **Load shedding**: Implement adaptive load shedding
+-5. **Metrics**: Add appropriate metrics and monitoring
+-
+-## Security Guidelines
+-
+-1. **Input validation**: Validate all input parameters
+-2. **SQL injection prevention**: Use parameterized queries
+-3. **Authentication**: Implement proper JWT token handling
+-4. **HTTPS**: Support TLS/HTTPS configurations
+-5. **CORS**: Configure CORS appropriately for web APIs
+-
+-## Documentation Standards
+-
+-1. **Package documentation**: Include package-level documentation
+-2. **Function documentation**: Document exported functions with examples
+-3. **API documentation**: Maintain API documentation in sync
+-4. **README updates**: Update README for significant changes
+-
+-## Common Patterns to Follow
+-
+-### Service Configuration
+-```go
+-type ServiceConf struct {
+-    Name string
+-    Log  logx.LogConf
+-    Mode string `json:",default=pro,options=[dev,test,pre,pro]"`
+-    // ... other common fields
+-}
+-```
+-
+-### Middleware Implementation
+-```go
+-func SomeMiddleware() rest.Middleware {
+-    return func(next http.HandlerFunc) http.HandlerFunc {
+-        return func(w http.ResponseWriter, r *http.Request) {
+-            // Pre-processing
+-            next.ServeHTTP(w, r)
+-            // Post-processing
+-        }
+-    }
+-}
+-```
+-
+-### Resource Management
+-Always implement proper resource cleanup using defer and context cancellation.
+-
+-## Build and Test Commands
+-
+-- Build: `go build ./...`
+-- Test: `go test ./...`  
+-- Test with race detection: `go test -race ./...`
+-- Format: `gofmt -w .`
+-- Generate code: `goctl api go -api *.api -dir .`
+-
+-Remember to run tests and ensure all checks pass before submitting changes. The project emphasizes high quality, performance, and reliability, so these should be primary considerations in all development work.
+\ No newline at end of file
+diff --git a/.github/workflows/codeql-analysis.yml b/.github/workflows/codeql-analysis.yml
+index 568fbe13a1c0c27c398712b6a47fed2bc87d98eb..582e67ab31fe108fc0933d1ec0a7e822e34dbc57 100644
+--- a/.github/workflows/codeql-analysis.yml
++++ b/.github/workflows/codeql-analysis.yml
+@@ -39,7 +39,7 @@ jobs:
+ 
+     # Initializes the CodeQL tools for scanning.
+     - name: Initialize CodeQL
+-      uses: github/codeql-action/init@v4
++      uses: github/codeql-action/init@v3
+       with:
+         languages: ${{ matrix.language }}
+         # If you wish to specify custom queries, you can do so here or in a config file.
+@@ -50,7 +50,7 @@ jobs:
+     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
+     # If this step fails, then you should remove it and run the build manually (see below)
+     - name: Autobuild
+-      uses: github/codeql-action/autobuild@v4
++      uses: github/codeql-action/autobuild@v3
+ 
+     # ℹ️ Command-line programs to run using the OS shell.
+     # 📚 https://git.io/JvXDl
+@@ -64,4 +64,4 @@ jobs:
+     #   make release
+ 
+     - name: Perform CodeQL Analysis
+-      uses: github/codeql-action/analyze@v4
++      uses: github/codeql-action/analyze@v3
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index be55d55a2b2cc619c4bd7f997f4d30f49f96c4b1..d32f8c5fed2697ea621f1adc3015270ae1a8c14c 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -59,7 +59,7 @@ func GetBreaker(name string) Breaker {
+ // NoBreakerFor disables the circuit breaker for the given name.
+ func NoBreakerFor(name string) {
+ 	lock.Lock()
+-	breakers[name] = newNopBreaker()
++	breakers[name] = NopBreaker()
+ 	lock.Unlock()
+ }
+ 
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index a1b2e7ccb95b985dadb765c0e038f521b99c6023..f72dc358229c22417767218e68dfee401ef73bd7 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -4,7 +4,8 @@ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+ 
+-func newNopBreaker() Breaker {
++// NopBreaker returns a breaker that never trigger breaker circuit.
++func NopBreaker() Breaker {
+ 	return nopBreaker{}
+ }
+ 
+diff --git a/core/collection/cache.go b/core/collection/cache.go
+index ace21ece60d33dcd4ca4e0fcab026a1599e311ae..77ca505588ce2b7b22fa98c6fd152eaa05e56c6a 100644
+--- a/core/collection/cache.go
++++ b/core/collection/cache.go
+@@ -81,6 +81,10 @@ func (c *Cache) Del(key string) {
+ 	delete(c.data, key)
+ 	c.lruCache.remove(key)
+ 	c.lock.Unlock()
++
++	// RemoveTimer is called outside the lock to avoid performance impact from this
++	// potentially time-consuming operation. Data integrity is maintained by lruCache,
++	// which will eventually evict any remaining entries when capacity is exceeded.
+ 	c.timingWheel.RemoveTimer(key)
+ }
+ 
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 64796ef78b16ddd2224a9ea3aedb776368b9605e..0a5c37203d61d707daa5f889cfaffb55909e5212 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -62,7 +62,11 @@ func Load(file string, v any, opts ...Option) error {
+ 		return loader([]byte(os.ExpandEnv(string(content))), v)
+ 	}
+ 
+-	return loader(content, v)
++	if err = loader(content, v); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfig loads config into v from file, .json, .yaml and .yml are acceptable.
+@@ -85,7 +89,12 @@ func LoadFromJsonBytes(content []byte, v any) error {
+ 
+ 	lowerCaseKeyMap := toLowerCaseKeyMap(m, info)
+ 
+-	return mapping.UnmarshalJsonMap(lowerCaseKeyMap, v, mapping.WithCanonicalKeyFunc(toLowerCase))
++	if err = mapping.UnmarshalJsonMap(lowerCaseKeyMap, v,
++		mapping.WithCanonicalKeyFunc(toLowerCase)); err != nil {
++		return err
++	}
++
++	return validate(v)
+ }
+ 
+ // LoadConfigFromJsonBytes loads config into v from content json bytes.
+@@ -189,10 +198,10 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
+ 	switch tp.Kind() {
+ 	case reflect.Struct:
+ 		return buildStructFieldsInfo(tp, fullName)
+-	case reflect.Array, reflect.Slice:
++	case reflect.Array, reflect.Slice, reflect.Map:
+ 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
+ 	case reflect.Chan, reflect.Func:
+-		return nil, fmt.Errorf("unsupported type: %s", tp.Kind())
++		return nil, fmt.Errorf("unsupported type: %s,fullName: %s", tp.Kind(), fullName)
+ 	default:
+ 		return &fieldInfo{
+ 			children: make(map[string]*fieldInfo),
+@@ -332,6 +341,8 @@ func toLowerCaseKeyMap(m map[string]any, info *fieldInfo) map[string]any {
+ 			res[lk] = toLowerCaseInterface(v, ti)
+ 		} else if info.mapField != nil {
+ 			res[k] = toLowerCaseInterface(v, info.mapField)
++		} else if vv, ok := v.(map[string]any); ok {
++			res[k] = toLowerCaseKeyMap(vv, info)
+ 		} else {
+ 			res[k] = v
+ 		}
+diff --git a/core/conf/validate.go b/core/conf/validate.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2724aa6a2bd907650ad599d582a57f06702c61c8
+--- /dev/null
++++ b/core/conf/validate.go
+@@ -0,0 +1,12 @@
++package conf
++
++import "github.com/zeromicro/go-zero/core/validation"
++
++// validate validates the value if it implements the Validator interface.
++func validate(v any) error {
++	if val, ok := v.(validation.Validator); ok {
++		return val.Validate()
++	}
++
++	return nil
++}
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index c54ae7476c90c3d1fc3b32e5a8142717cfb84935..5501190c24d7677ad7eb33d585c41a1e581f0447 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -118,7 +118,7 @@ func validateOptional(field reflect.StructField, value reflect.Value) error {
+ 		if value.IsNil() {
+ 			return fmt.Errorf("field %q is nil", field.Name)
+ 		}
+-	case reflect.Array, reflect.Slice, reflect.Map:
++	case reflect.Slice, reflect.Map:
+ 		if value.IsNil() || value.Len() == 0 {
+ 			return fmt.Errorf("field %q is empty", field.Name)
+ 		}
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 15215693b62a24f7fb0c659dd50c2a4f806f3128..bf2bc912172eb7f5b5a4db82eacd7dd24c9be304 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -2,10 +2,10 @@ package mapping
+ 
+ import (
+ 	"encoding"
++	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"math"
+ 	"reflect"
+ 	"strconv"
+ 	"strings"
+@@ -114,7 +114,8 @@ func (u *Unmarshaler) unmarshalValuer(m Valuer, v any, fullName string) error {
+ 	return u.unmarshalWithFullName(simpleValuer{current: m}, v, fullName)
+ }
+ 
+-func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -155,7 +156,8 @@ func (u *Unmarshaler) fillMapFromString(value reflect.Value, mapValue any) error
+ 	return nil
+ }
+ 
+-func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -224,11 +226,11 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 	switch v := mapValue.(type) {
+ 	case fmt.Stringer:
+ 		if err := jsonx.UnmarshalFromString(v.String(), &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	case string:
+ 		if err := jsonx.UnmarshalFromString(v, &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	default:
+ 		return errUnsupportedType
+@@ -250,6 +252,10 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 
+ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int,
+ 	baseKind reflect.Kind, value any, fullName string) error {
++	if value == nil {
++		return errNilSliceElement
++	}
++
+ 	ithVal := slice.Index(index)
+ 	switch v := value.(type) {
+ 	case fmt.Stringer:
+@@ -304,7 +310,34 @@ func (u *Unmarshaler) fillSliceWithDefault(derefedType reflect.Type, value refle
+ 	return u.fillSlice(derefedType, value, slice, fullName)
+ }
+ 
+-func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any, fullName string) (reflect.Value, error) {
++func (u *Unmarshaler) fillUnmarshalerStruct(fieldType reflect.Type,
++	value reflect.Value, targetValue string) error {
++	if !value.CanSet() {
++		return errValueNotSettable
++	}
++
++	baseType := Deref(fieldType)
++	target := reflect.New(baseType)
++	switch u.key {
++	case jsonTagKey:
++		unmarshaler, ok := target.Interface().(json.Unmarshaler)
++		if !ok {
++			return errUnsupportedType
++		}
++
++		if err := unmarshaler.UnmarshalJSON([]byte(targetValue)); err != nil {
++			return err
++		}
++	default:
++		return errUnsupportedType
++	}
++
++	value.Set(target)
++	return nil
++}
++
++func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
++	fullName string) (reflect.Value, error) {
+ 	mapType := reflect.MapOf(keyType, elemType)
+ 	valueType := reflect.TypeOf(mapValue)
+ 	if mapType == valueType {
+@@ -396,6 +429,15 @@ func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
+ 	return targetValue, nil
+ }
+ 
++func (u *Unmarshaler) implementsUnmarshaler(t reflect.Type) bool {
++	switch u.key {
++	case jsonTagKey:
++		return t.Implements(reflect.TypeOf((*json.Unmarshaler)(nil)).Elem())
++	default:
++		return false
++	}
++}
++
+ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Valuer, fullName string) (
+ 	string, *fieldOptionsWithContext, error) {
+ 	key, options, err := parseKeyAndOptions(u.key, field)
+@@ -425,6 +467,10 @@ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Value
+ 		}
+ 	}
+ 
++	if u.opts.fillDefault {
++		return key, &options.fieldOptionsWithContext, nil
++	}
++
+ 	optsWithContext, err := options.toOptionsWithContext(key, m, fullName)
+ 	if err != nil {
+ 		return "", nil, err
+@@ -566,9 +612,28 @@ func (u *Unmarshaler) processFieldNotFromString(fieldType reflect.Type, value re
+ 	case valueKind == reflect.String && typeKind == reflect.Map:
+ 		return u.fillMapFromString(value, mapValue)
+ 	case valueKind == reflect.String && typeKind == reflect.Slice:
++		// try to find out if it's a byte slice, golang use []byte Marshal to base64 but there only SliceOf uint8/bytes can convert to []byte
++		// more details https://pkg.go.dev/encoding/json#Marshal
++		//> Array and slice values encode as JSON arrays, except that []byte encodes as a base64-encoded string, and a nil slice encodes as the null JSON value.
++		//and also u can find this https://stackoverflow.com/questions/34089750/marshal-byte-to-json-giving-a-strange-string
++		if fieldType.Elem().Kind() == reflect.Uint8 {
++			strVal := mapValue.(string)
++			decodedBytes, err := base64.StdEncoding.DecodeString(strVal)
++			// if err !=nil do next
++			if err == nil {
++				value.Set(reflect.ValueOf(decodedBytes))
++				return nil
++			}
++		}
+ 		return u.fillSliceFromString(fieldType, value, mapValue, fullName)
+ 	case valueKind == reflect.String && derefedFieldType == durationType:
+-		return fillDurationValue(fieldType, value, mapValue.(string))
++		v, ok := mapValue.(string)
++		if !ok {
++			return fmt.Errorf("unexpected type %T, expected a string value for field %s", mapValue, fullName)
++		}
++		return fillDurationValue(fieldType, value, v)
++	case valueKind == reflect.String && typeKind == reflect.Struct && u.implementsUnmarshaler(fieldType):
++		return u.fillUnmarshalerStruct(fieldType, value, mapValue.(string))
+ 	default:
+ 		return u.processFieldPrimitive(fieldType, value, mapValue, opts, fullName)
+ 	}
+@@ -622,7 +687,12 @@ func (u *Unmarshaler) processFieldPrimitiveWithJSONNumber(fieldType reflect.Type
+ 			return err
+ 		}
+ 
+-		if fValue > math.MaxFloat32 {
++		// if value is a pointer, we need to check overflow with the pointer's value.
++		derefedValue := value
++		for derefedValue.Type().Kind() == reflect.Ptr {
++			derefedValue = derefedValue.Elem()
++		}
++		if derefedValue.CanFloat() && derefedValue.OverflowFloat(fValue) {
+ 			return fmt.Errorf("parsing %q as float32: value out of range", v.String())
+ 		}
+ 
+@@ -684,7 +754,15 @@ func (u *Unmarshaler) processFieldTextUnmarshaler(fieldType reflect.Type, value
+ 			return true, tval.UnmarshalText(mv)
+ 		}
+ 	}
+-
++	//[]byte
++	if fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.Uint8 {
++		b, err := base64.StdEncoding.DecodeString(mapValue.(string))
++		if err != nil {
++			return false, err
++		}
++		value.SetBytes(b)
++		return true, nil
++	}
+ 	return false, nil
+ }
+ 
+@@ -694,24 +772,26 @@ func (u *Unmarshaler) processFieldWithEnvValue(fieldType reflect.Type, value ref
+ 		return err
+ 	}
+ 
+-	fieldKind := fieldType.Kind()
+-	switch fieldKind {
+-	case reflect.Bool:
++	derefType := Deref(fieldType)
++	derefKind := derefType.Kind()
++	switch {
++	case derefKind == reflect.String:
++		SetValue(fieldType, value, toReflectValue(derefType, envVal))
++		return nil
++	case derefKind == reflect.Bool:
+ 		val, err := strconv.ParseBool(envVal)
+ 		if err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		value.SetBool(val)
++		SetValue(fieldType, value, toReflectValue(derefType, val))
+ 		return nil
+-	case durationType.Kind():
++	case derefType == durationType:
++		// time.Duration is a special case, its derefKind is reflect.Int64.
+ 		if err := fillDurationValue(fieldType, value, envVal); err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		return nil
+-	case reflect.String:
+-		value.SetString(envVal)
+ 		return nil
+ 	default:
+ 		return u.processFieldPrimitiveWithJSONNumber(fieldType, value, json.Number(envVal), opts, fullName)
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index 67ea0ae3393ef4e14c812949937de928504a72a0..e74900c25b2d2f5222ca4158b88dfc1c4edd592e 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -36,6 +36,7 @@ const (
+ var (
+ 	errUnsupportedType  = errors.New("unsupported type on setting field value")
+ 	errNumberRange      = errors.New("wrong number range setting")
++	errNilSliceElement  = errors.New("null element for slice")
+ 	optionsCache        = make(map[string]optionsCacheValue)
+ 	cacheLock           sync.RWMutex
+ 	structRequiredCache = make(map[reflect.Type]requiredCacheValue)
+@@ -572,6 +573,10 @@ func toFloat64(v any) (float64, bool) {
+ 	}
+ }
+ 
++func toReflectValue(tp reflect.Type, v any) reflect.Value {
++	return reflect.ValueOf(v).Convert(Deref(tp))
++}
++
+ func usingDifferentKeys(key string, field reflect.StructField) bool {
+ 	if len(field.Tag) > 0 {
+ 		if _, ok := field.Tag.Lookup(key); !ok {
+diff --git a/core/prof/runtime.go b/core/prof/runtime.go
+index af41d0517f683b5b905236cc31a9a2c90cbced39..10554e56d41c6599947c032a389d53c21d8b4c56 100644
+--- a/core/prof/runtime.go
++++ b/core/prof/runtime.go
+@@ -5,6 +5,8 @@ import (
+ 	"io"
+ 	"os"
+ 	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"time"
+ )
+ 
+@@ -28,10 +30,29 @@ func displayStatsWithWriter(writer io.Writer, interval ...time.Duration) {
+ 		ticker := time.NewTicker(duration)
+ 		defer ticker.Stop()
+ 		for range ticker.C {
+-			var m runtime.MemStats
+-			runtime.ReadMemStats(&m)
++			var (
++				alloc, totalAlloc, sys uint64
++				samples                = []metrics.Sample{
++					{Name: "/memory/classes/heap/objects:bytes"},
++					{Name: "/gc/heap/allocs:bytes"},
++					{Name: "/memory/classes/total:bytes"},
++				}
++			)
++			metrics.Read(samples)
++
++			if samples[0].Value.Kind() == metrics.KindUint64 {
++				alloc = samples[0].Value.Uint64()
++			}
++			if samples[1].Value.Kind() == metrics.KindUint64 {
++				totalAlloc = samples[1].Value.Uint64()
++			}
++			if samples[2].Value.Kind() == metrics.KindUint64 {
++				sys = samples[2].Value.Uint64()
++			}
++			var stats debug.GCStats
++			debug.ReadGCStats(&stats)
+ 			fmt.Fprintf(writer, "Goroutines: %d, Alloc: %vm, TotalAlloc: %vm, Sys: %vm, NumGC: %v\n",
+-				runtime.NumGoroutine(), m.Alloc/mega, m.TotalAlloc/mega, m.Sys/mega, m.NumGC)
++				runtime.NumGoroutine(), alloc/mega, totalAlloc/mega, sys/mega, stats.NumGC)
+ 		}
+ 	}()
+ }
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 27ec45ad0fa29cbd3edf1d7b01674f0ca7094564..c8b0715aa054a2aeaefef52985472fa546412eb6 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -1,8 +1,7 @@
+ package service
+ 
+ import (
+-	"log"
+-
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+@@ -51,7 +50,7 @@ func (sg *ServiceGroup) Add(service Service) {
+ // Also, quitting this method will close the logx output.
+ func (sg *ServiceGroup) Start() {
+ 	proc.AddShutdownListener(func() {
+-		log.Println("Shutting down...")
++		logx.Info("Shutting down service in group")
+ 		sg.stopOnce()
+ 	})
+ 
+diff --git a/core/stat/usage.go b/core/stat/usage.go
+index 40936604841f4b8447cb2dfcba4857bd2bb25a43..9bdecab76a35b63d430d48e2c4e42d98679b5f95 100644
+--- a/core/stat/usage.go
++++ b/core/stat/usage.go
+@@ -1,7 +1,8 @@
+ package stat
+ 
+ import (
+-	"runtime"
++	"runtime/debug"
++	"runtime/metrics"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -56,8 +57,28 @@ func bToMb(b uint64) float32 {
+ }
+ 
+ func printUsage() {
+-	var m runtime.MemStats
+-	runtime.ReadMemStats(&m)
++	var (
++		alloc, totalAlloc, sys uint64
++		samples                = []metrics.Sample{
++			{Name: "/memory/classes/heap/objects:bytes"},
++			{Name: "/gc/heap/allocs:bytes"},
++			{Name: "/memory/classes/total:bytes"},
++		}
++		stats debug.GCStats
++	)
++	metrics.Read(samples)
++
++	if samples[0].Value.Kind() == metrics.KindUint64 {
++		alloc = samples[0].Value.Uint64()
++	}
++	if samples[1].Value.Kind() == metrics.KindUint64 {
++		totalAlloc = samples[1].Value.Uint64()
++	}
++	if samples[2].Value.Kind() == metrics.KindUint64 {
++		sys = samples[2].Value.Uint64()
++	}
++	debug.ReadGCStats(&stats)
++
+ 	logx.Statf("CPU: %dm, MEMORY: Alloc=%.1fMi, TotalAlloc=%.1fMi, Sys=%.1fMi, NumGC=%d",
+-		CpuUsage(), bToMb(m.Alloc), bToMb(m.TotalAlloc), bToMb(m.Sys), m.NumGC)
++		CpuUsage(), bToMb(alloc), bToMb(totalAlloc), bToMb(sys), stats.NumGC)
+ }
+diff --git a/core/stores/monc/cachedmodel_test.go b/core/stores/monc/cachedmodel_test.go
+index 4f8fe8fbce37a04cb0f98539e5e036d693487333..de35ce0710610f156f460ce3cc80ee778f92d4f9 100644
+--- a/core/stores/monc/cachedmodel_test.go
++++ b/core/stores/monc/cachedmodel_test.go
+@@ -532,7 +532,7 @@ func createModel(t *testing.T, coll mon.Collection) *Model {
+ 	}
+ }
+ 
+-// mustNewTestModel returns a test Model with the given cache.
++// mustNewTestModel  returns a test Model with the given cache.
+ func mustNewTestModel(collection mon.Collection, c cache.CacheConf, opts ...cache.Option) *Model {
+ 	return &Model{
+ 		Model: &mon.Model{
+diff --git a/core/stores/sqlx/orm.go b/core/stores/sqlx/orm.go
+index 1cc7271ad6cc47cf7e9fad546910d9bf08a0de3d..b395f3c525ecb324989671b851dcba71a9454f0e 100644
+--- a/core/stores/sqlx/orm.go
++++ b/core/stores/sqlx/orm.go
+@@ -1,6 +1,7 @@
+ package sqlx
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"reflect"
+ 	"strings"
+@@ -69,25 +70,20 @@ func getTaggedFieldValueMap(v reflect.Value) (map[string]any, error) {
+ }
+ 
+ func getValueInterface(value reflect.Value) (any, error) {
+-	switch value.Kind() {
+-	case reflect.Ptr:
+-		if !value.CanAddr() || !value.Addr().CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	if !value.CanAddr() || !value.Addr().CanInterface() {
++		return nil, ErrNotReadableValue
++	}
+ 
+-		if value.IsNil() {
+-			baseValueType := mapping.Deref(value.Type())
+-			value.Set(reflect.New(baseValueType))
+-		}
++	if value.Kind() == reflect.Pointer && value.IsNil() {
++		baseValueType := mapping.Deref(value.Type())
++		value.Set(reflect.New(baseValueType))
++	}
+ 
+-		return value.Addr().Interface(), nil
+-	default:
+-		if !value.CanAddr() || !value.Addr().CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	return value.Addr().Interface(), nil
++}
+ 
+-		return value.Addr().Interface(), nil
+-	}
++func isScanFailed(err error) bool {
++	return err != nil && !errors.Is(err, context.DeadlineExceeded)
+ }
+ 
+ func mapStructFieldsIntoSlice(v reflect.Value, columns []string, strict bool) ([]any, error) {
+@@ -251,7 +247,7 @@ func unmarshalRows(v any, scanner rowsScanner, strict bool) error {
+ 			return ErrUnsupportedValueType
+ 		}
+ 
+-		return nil
++		return scanner.Err()
+ 	default:
+ 		return ErrUnsupportedValueType
+ 	}
+diff --git a/core/stores/sqlx/orm_test.go b/core/stores/sqlx/orm_test.go
+index c3e9e46eaf6bfd241370cf8132652eeb62ffa982..c354654739eeb57042db2732580057a853561b86 100644
+--- a/core/stores/sqlx/orm_test.go
++++ b/core/stores/sqlx/orm_test.go
+@@ -5,7 +5,6 @@ import (
+ 	"database/sql"
+ 	"errors"
+ 	"testing"
+-	"time"
+ 
+ 	"github.com/DATA-DOG/go-sqlmock"
+ 	"github.com/stretchr/testify/assert"
+@@ -1576,643 +1575,6 @@ func TestAnonymousStructPrError(t *testing.T) {
+ 	})
+ }
+ 
+-func TestUnmarshalRowsZeroValueStructPtr(t *testing.T) {
+-	secondNamePtr := "second_ptr"
+-	secondAgePtr := int64(30)
+-	thirdNamePtr := "third_ptr"
+-	thirdAgePtr := int64(0)
+-
+-	expect := []struct {
+-		Name    string
+-		NamePtr *string
+-		Age     int64
+-		AgePtr  *int64
+-	}{
+-		{
+-			Name:    "first",
+-			NamePtr: nil,
+-			Age:     2,
+-			AgePtr:  nil,
+-		},
+-		{
+-			Name:    "second",
+-			NamePtr: &secondNamePtr,
+-			Age:     3,
+-			AgePtr:  &secondAgePtr,
+-		},
+-		{
+-			Name:    "",
+-			NamePtr: &thirdNamePtr,
+-			Age:     0,
+-			AgePtr:  &thirdAgePtr,
+-		},
+-	}
+-
+-	var value []struct {
+-		Age     int64   `db:"age"`
+-		AgePtr  *int64  `db:"age_ptr"`
+-		Name    string  `db:"name"`
+-		NamePtr *string `db:"name_ptr"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "name_ptr", "age", "age_ptr"}).
+-			AddRow("first", nil, 2, nil).
+-			AddRow("second", "second_ptr", 3, 30).
+-			AddRow("", "third_ptr", 0, 0)
+-
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, name_ptr, age, age_ptr from users where user=?", "anyone"))
+-
+-		assert.Equal(t, 3, len(value), "应该返回3行数据")
+-
+-		for i, each := range expect {
+-
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-
+-			if each.NamePtr == nil {
+-				assert.Nil(t, value[i].NamePtr)
+-			} else {
+-				assert.NotNil(t, value[i].NamePtr)
+-				assert.Equal(t, *each.NamePtr, *value[i].NamePtr)
+-			}
+-
+-			if each.AgePtr == nil {
+-				assert.Nil(t, value[i].AgePtr)
+-			} else {
+-				assert.NotNil(t, value[i].AgePtr)
+-				assert.Equal(t, *each.AgePtr, *value[i].AgePtr)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsAllNullStructPtrFields(t *testing.T) {
+-	expect := []struct {
+-		NamePtr *string
+-		AgePtr  *int64
+-	}{
+-		{
+-			NamePtr: nil,
+-			AgePtr:  nil,
+-		},
+-		{
+-			NamePtr: stringPtr("second"),
+-			AgePtr:  int64Ptr(30),
+-		},
+-		{
+-			NamePtr: nil,
+-			AgePtr:  nil,
+-		},
+-	}
+-
+-	var value []struct {
+-		AgePtr  *int64  `db:"age_ptr"`
+-		NamePtr *string `db:"name_ptr"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name_ptr", "age_ptr"}).
+-			AddRow(nil, nil).
+-			AddRow("second", 30).
+-			AddRow(nil, nil)
+-
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name_ptr, age_ptr from users where user=?", "anyone"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-			if each.NamePtr == nil {
+-				assert.Nil(t, value[i].NamePtr)
+-			} else {
+-				assert.NotNil(t, value[i].NamePtr)
+-				assert.Equal(t, *each.NamePtr, *value[i].NamePtr)
+-			}
+-
+-			if each.AgePtr == nil {
+-				assert.Nil(t, value[i].AgePtr)
+-			} else {
+-				assert.NotNil(t, value[i].AgePtr)
+-				assert.Equal(t, *each.AgePtr, *value[i].AgePtr)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsWithSqlNullTypes(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullName   sql.NullString
+-		Age        int64
+-		NullAge    sql.NullInt64
+-		Score      float64
+-		NullScore  sql.NullFloat64
+-		Active     bool
+-		NullActive sql.NullBool
+-	}{
+-		{
+-			Name: "first",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 20,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			Score: 85.5,
+-			NullScore: sql.NullFloat64{
+-				Float64: 0,
+-				Valid:   false,
+-			},
+-			Active: true,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "second",
+-			NullName: sql.NullString{
+-				String: "not_null_name",
+-				Valid:  true,
+-			},
+-			Age: 25,
+-			NullAge: sql.NullInt64{
+-				Int64: 30,
+-				Valid: true,
+-			},
+-			Score: 90.0,
+-			NullScore: sql.NullFloat64{
+-				Float64: 95.5,
+-				Valid:   true,
+-			},
+-			Active: false,
+-			NullActive: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "third",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 0,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			Score: 0,
+-			NullScore: sql.NullFloat64{
+-				Float64: 0,
+-				Valid:   false,
+-			},
+-			Active: false,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string          `db:"name"`
+-		NullName   sql.NullString  `db:"null_name"`
+-		Age        int64           `db:"age"`
+-		NullAge    sql.NullInt64   `db:"null_age"`
+-		Score      float64         `db:"score"`
+-		NullScore  sql.NullFloat64 `db:"null_score"`
+-		Active     bool            `db:"active"`
+-		NullActive sql.NullBool    `db:"null_active"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{
+-			"name", "null_name", "age", "null_age", "score", "null_score", "active", "null_active",
+-		}).
+-			AddRow("first", nil, 20, nil, 85.5, nil, true, nil).
+-			AddRow("second", "not_null_name", 25, 30, 90.0, 95.5, false, true).
+-			AddRow("third", nil, 0, nil, 0, nil, false, nil)
+-
+-		mock.ExpectQuery("select (.+) from users where type=?").
+-			WithArgs("test").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_name, age, null_age, score, null_score, active, null_active from users where type=?", "test"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-			assert.Equal(t, each.Score, value[i].Score)
+-			assert.Equal(t, each.Active, value[i].Active)
+-
+-			assert.Equal(t, each.NullName.Valid, value[i].NullName.Valid)
+-			if each.NullName.Valid {
+-				assert.Equal(t, each.NullName.String, value[i].NullName.String)
+-			}
+-
+-			assert.Equal(t, each.NullAge.Valid, value[i].NullAge.Valid)
+-			if each.NullAge.Valid {
+-				assert.Equal(t, each.NullAge.Int64, value[i].NullAge.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullScore.Valid, value[i].NullScore.Valid)
+-			if each.NullScore.Valid {
+-				assert.Equal(t, each.NullScore.Float64, value[i].NullScore.Float64)
+-			}
+-
+-			assert.Equal(t, each.NullActive.Valid, value[i].NullActive.Valid)
+-			if each.NullActive.Valid {
+-				assert.Equal(t, each.NullActive.Bool, value[i].NullActive.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullWithMixedData(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullName   sql.NullString
+-		Age        int64
+-		NullAge    sql.NullInt64
+-		IsStudent  bool
+-		NullActive sql.NullBool
+-	}{
+-		{
+-			Name: "student1",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 18,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			IsStudent: true,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "student2",
+-			NullName: sql.NullString{
+-				String: "has_nickname",
+-				Valid:  true,
+-			},
+-			Age: 20,
+-			NullAge: sql.NullInt64{
+-				Int64: 22,
+-				Valid: true,
+-			},
+-			IsStudent: false,
+-			NullActive: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string         `db:"name"`
+-		NullName   sql.NullString `db:"null_name"`
+-		Age        int64          `db:"age"`
+-		NullAge    sql.NullInt64  `db:"null_age"`
+-		IsStudent  bool           `db:"is_student"`
+-		NullActive sql.NullBool   `db:"null_active"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "null_name", "age", "null_age", "is_student", "null_active"}).
+-			AddRow("student1", nil, 18, nil, true, nil).
+-			AddRow("student2", "has_nickname", 20, 22, false, true)
+-
+-		mock.ExpectQuery("select (.+) from students where class=?").
+-			WithArgs("A").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_name, age, null_age, is_student, null_active from students where class=?", "A"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-			assert.Equal(t, each.IsStudent, value[i].IsStudent)
+-
+-			assert.Equal(t, each.NullName.Valid, value[i].NullName.Valid)
+-			if each.NullName.Valid {
+-				assert.Equal(t, each.NullName.String, value[i].NullName.String)
+-			}
+-
+-			assert.Equal(t, each.NullAge.Valid, value[i].NullAge.Valid)
+-			if each.NullAge.Valid {
+-				assert.Equal(t, each.NullAge.Int64, value[i].NullAge.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullActive.Valid, value[i].NullActive.Valid)
+-			if each.NullActive.Valid {
+-				assert.Equal(t, each.NullActive.Bool, value[i].NullActive.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullTime(t *testing.T) {
+-	now := time.Now()
+-	futureTime := now.AddDate(1, 0, 0)
+-
+-	expect := []struct {
+-		Name      string
+-		BirthDate sql.NullTime
+-		LastLogin sql.NullTime
+-	}{
+-		{
+-			Name: "user1",
+-			BirthDate: sql.NullTime{
+-				Time:  time.Time{},
+-				Valid: false,
+-			},
+-			LastLogin: sql.NullTime{
+-				Time:  now,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "user2",
+-			BirthDate: sql.NullTime{
+-				Time:  futureTime,
+-				Valid: true,
+-			},
+-			LastLogin: sql.NullTime{
+-				Time:  time.Time{},
+-				Valid: false,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name      string       `db:"name"`
+-		BirthDate sql.NullTime `db:"birth_date"`
+-		LastLogin sql.NullTime `db:"last_login"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "birth_date", "last_login"}).
+-			AddRow("user1", nil, now).
+-			AddRow("user2", futureTime, nil)
+-
+-		mock.ExpectQuery("select (.+) from users").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, birth_date, last_login from users"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-
+-			assert.Equal(t, each.BirthDate.Valid, value[i].BirthDate.Valid)
+-			if each.BirthDate.Valid {
+-				assert.WithinDuration(t, each.BirthDate.Time, value[i].BirthDate.Time, time.Second)
+-			}
+-
+-			assert.Equal(t, each.LastLogin.Valid, value[i].LastLogin.Valid)
+-			if each.LastLogin.Valid {
+-				assert.WithinDuration(t, each.LastLogin.Time, value[i].LastLogin.Time, time.Second)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullWithEmptyValues(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullString sql.NullString
+-		NullInt    sql.NullInt64
+-		NullFloat  sql.NullFloat64
+-		NullBool   sql.NullBool
+-	}{
+-		{
+-			Name: "empty_values",
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: true,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   true,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  false,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "null_values",
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   false,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "mixed_values",
+-			NullString: sql.NullString{
+-				String: "actual_value",
+-				Valid:  true,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: true,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   false,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string          `db:"name"`
+-		NullString sql.NullString  `db:"null_string"`
+-		NullInt    sql.NullInt64   `db:"null_int"`
+-		NullFloat  sql.NullFloat64 `db:"null_float"`
+-		NullBool   sql.NullBool    `db:"null_bool"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "null_string", "null_int", "null_float", "null_bool"}).
+-			AddRow("empty_values", "", 0, 0.0, false).
+-			AddRow("null_values", nil, nil, nil, nil).
+-			AddRow("mixed_values", "actual_value", 0, nil, true)
+-
+-		mock.ExpectQuery("select (.+) from test_table").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_string, null_int, null_float, null_bool from test_table"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-
+-			assert.Equal(t, each.Name, value[i].Name)
+-
+-			assert.Equal(t, each.NullString.Valid, value[i].NullString.Valid)
+-			if each.NullString.Valid {
+-				assert.Equal(t, each.NullString.String, value[i].NullString.String)
+-			} else {
+-				assert.Equal(t, "", value[i].NullString.String)
+-			}
+-
+-			assert.Equal(t, each.NullInt.Valid, value[i].NullInt.Valid)
+-			if each.NullInt.Valid {
+-				assert.Equal(t, each.NullInt.Int64, value[i].NullInt.Int64)
+-			} else {
+-				assert.Equal(t, int64(0), value[i].NullInt.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullFloat.Valid, value[i].NullFloat.Valid)
+-			if each.NullFloat.Valid {
+-				assert.Equal(t, each.NullFloat.Float64, value[i].NullFloat.Float64)
+-			} else {
+-				assert.Equal(t, 0.0, value[i].NullFloat.Float64)
+-			}
+-
+-			assert.Equal(t, each.NullBool.Valid, value[i].NullBool.Valid)
+-			if each.NullBool.Valid {
+-				assert.Equal(t, each.NullBool.Bool, value[i].NullBool.Bool)
+-			} else {
+-				assert.Equal(t, false, value[i].NullBool.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullStringEmptyVsNull(t *testing.T) {
+-	expect := []struct {
+-		Name         string
+-		EmptyString  sql.NullString
+-		NullString   sql.NullString
+-		NormalString sql.NullString
+-	}{
+-		{
+-			Name: "row1",
+-			EmptyString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NormalString: sql.NullString{
+-				String: "hello",
+-				Valid:  true,
+-			},
+-		},
+-		{
+-			Name: "row2",
+-			EmptyString: sql.NullString{
+-				String: "   ",
+-				Valid:  true,
+-			},
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NormalString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name         string         `db:"name"`
+-		EmptyString  sql.NullString `db:"empty_string"`
+-		NullString   sql.NullString `db:"null_string"`
+-		NormalString sql.NullString `db:"normal_string"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "empty_string", "null_string", "normal_string"}).
+-			AddRow("row1", "", nil, "hello").
+-			AddRow("row2", "   ", nil, "")
+-
+-		mock.ExpectQuery("select (.+) from string_test").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, empty_string, null_string, normal_string from string_test"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.True(t, value[i].EmptyString.Valid)
+-			assert.Equal(t, each.EmptyString.String, value[i].EmptyString.String)
+-
+-			assert.False(t, value[i].NullString.Valid)
+-			assert.Equal(t, "", value[i].NullString.String)
+-
+-			assert.Equal(t, each.NormalString.Valid, value[i].NormalString.Valid)
+-			if each.NormalString.Valid {
+-				assert.Equal(t, each.NormalString.String, value[i].NormalString.String)
+-			}
+-		}
+-	})
+-}
+-
+-func stringPtr(s string) *string {
+-	return &s
+-}
+-
+-func int64Ptr(i int64) *int64 {
+-	return &i
+-}
+-
+ func BenchmarkIgnore(b *testing.B) {
+ 	db, mock, err := sqlmock.New()
+ 	if err != nil {
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 87b944d5a916ef2ec469426f6bfeabb560e0c655..4dde5d43f034b896c420caf119b067754cbaac48 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -42,21 +42,6 @@ type (
+ 	// SqlOption defines the method to customize a sql connection.
+ 	SqlOption func(*commonSqlConn)
+ 
+-	// StmtSession interface represents a session that can be used to execute statements.
+-	StmtSession interface {
+-		Close() error
+-		Exec(args ...any) (sql.Result, error)
+-		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
+-		QueryRow(v any, args ...any) error
+-		QueryRowCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowPartial(v any, args ...any) error
+-		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
+-		QueryRows(v any, args ...any) error
+-		QueryRowsCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowsPartial(v any, args ...any) error
+-		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
+-	}
+-
+ 	// thread-safe
+ 	// Because CORBA doesn't support PREPARE, so we need to combine the
+ 	// query arguments into one string and do underlying query without arguments
+@@ -65,7 +50,7 @@ type (
+ 		onError  func(context.Context, error)
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+-		accept   func(error) bool
++		accept   breaker.Acceptable
+ 	}
+ 
+ 	connProvider func() (*sql.DB, error)
+@@ -76,18 +61,6 @@ type (
+ 		Query(query string, args ...any) (*sql.Rows, error)
+ 		QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+ 	}
+-
+-	statement struct {
+-		query string
+-		stmt  *sql.Stmt
+-	}
+-
+-	stmtConn interface {
+-		Exec(args ...any) (sql.Result, error)
+-		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
+-		Query(args ...any) (*sql.Rows, error)
+-		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
+-	}
+ )
+ 
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+@@ -189,8 +162,10 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 		}
+ 
+ 		stmt = statement{
+-			query: query,
+-			stmt:  st,
++			query:  query,
++			stmt:   st,
++			brk:    db.brk,
++			accept: db.acceptable,
+ 		}
+ 		return nil
+ 	}, db.acceptable)
+@@ -311,7 +286,7 @@ func (db *commonSqlConn) acceptable(err error) bool {
+ 
+ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows) error,
+ 	q string, args ...any) (err error) {
+-	var qerr error
++	var scanFailed bool
+ 	err = db.brk.DoWithAcceptable(func() error {
+ 		conn, err := db.connProv()
+ 		if err != nil {
+@@ -320,11 +295,14 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 		}
+ 
+ 		return query(ctx, conn, func(rows *sql.Rows) error {
+-			qerr = scanner(rows)
+-			return qerr
++			e := scanner(rows)
++			if isScanFailed(e) {
++				scanFailed = true
++			}
++			return e
+ 		}, q, args...)
+ 	}, func(err error) bool {
+-		return errors.Is(err, qerr) || db.acceptable(err)
++		return scanFailed || db.acceptable(err)
+ 	})
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+ 		metricReqErr.Inc("queryRows", "breaker")
+@@ -333,83 +311,6 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func (s statement) Close() error {
+-	return s.stmt.Close()
+-}
+-
+-func (s statement) Exec(args ...any) (sql.Result, error) {
+-	return s.ExecCtx(context.Background(), args...)
+-}
+-
+-func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
+-	ctx, span := startSpan(ctx, "Exec")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return execStmt(ctx, s.stmt, s.query, args...)
+-}
+-
+-func (s statement) QueryRow(v any, args ...any) error {
+-	return s.QueryRowCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRow")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowPartial(v any, args ...any) error {
+-	return s.QueryRowPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRows(v any, args ...any) error {
+-	return s.QueryRowsCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRows")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowsPartial(v any, args ...any) error {
+-	return s.QueryRowsPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowsPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+diff --git a/core/stores/sqlx/stmt.go b/core/stores/sqlx/stmt.go
+index ab688abbd586575e29adab5e81e25fac50e3eaa9..5813b9d65face5730d17171d03599830680854fc 100644
+--- a/core/stores/sqlx/stmt.go
++++ b/core/stores/sqlx/stmt.go
+@@ -3,8 +3,10 @@ package sqlx
+ import (
+ 	"context"
+ 	"database/sql"
++	"errors"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -18,6 +20,146 @@ var (
+ 	logSlowSql    = syncx.ForAtomicBool(true)
+ )
+ 
++type (
++	// StmtSession interface represents a session that can be used to execute statements.
++	StmtSession interface {
++		Close() error
++		Exec(args ...any) (sql.Result, error)
++		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
++		QueryRow(v any, args ...any) error
++		QueryRowCtx(ctx context.Context, v any, args ...any) error
++		QueryRowPartial(v any, args ...any) error
++		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
++		QueryRows(v any, args ...any) error
++		QueryRowsCtx(ctx context.Context, v any, args ...any) error
++		QueryRowsPartial(v any, args ...any) error
++		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
++	}
++
++	statement struct {
++		query  string
++		stmt   *sql.Stmt
++		brk    breaker.Breaker
++		accept breaker.Acceptable
++	}
++
++	stmtConn interface {
++		Exec(args ...any) (sql.Result, error)
++		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
++		Query(args ...any) (*sql.Rows, error)
++		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
++	}
++)
++
++func (s statement) Close() error {
++	return s.stmt.Close()
++}
++
++func (s statement) Exec(args ...any) (sql.Result, error) {
++	return s.ExecCtx(context.Background(), args...)
++}
++
++func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
++	ctx, span := startSpan(ctx, "Exec")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	err = s.brk.DoWithAcceptable(func() error {
++		result, err = execStmt(ctx, s.stmt, s.query, args...)
++		return err
++	}, func(err error) bool {
++		return s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_exec", "breaker")
++	}
++
++	return
++}
++
++func (s statement) QueryRow(v any, args ...any) error {
++	return s.QueryRowCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRow")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowPartial(v any, args ...any) error {
++	return s.QueryRowPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) QueryRows(v any, args ...any) error {
++	return s.QueryRowsCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRows")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowsPartial(v any, args ...any) error {
++	return s.QueryRowsPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowsPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) queryRows(ctx context.Context, scanFn func(any, rowsScanner) error,
++	v any, args ...any) error {
++	var scanFailed bool
++
++	err := s.brk.DoWithAcceptable(func() error {
++		return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
++			err := scanFn(v, rows)
++			if isScanFailed(err) {
++				scanFailed = true
++			}
++			return err
++		}, s.query, args...)
++	}, func(err error) bool {
++		return scanFailed || s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_queryRows", "breaker")
++	}
++
++	return err
++}
++
+ // DisableLog disables logging of sql statements, includes info and slow logs.
+ func DisableLog() {
+ 	logSql.Set(false)
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index d983077ce4994064a1d4d4862a83360b2449479d..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"fmt"
++
++	"github.com/zeromicro/go-zero/core/breaker"
+ )
+ 
+ type (
+@@ -75,6 +77,7 @@ func (t txSession) PrepareCtx(ctx context.Context, q string) (stmtSession StmtSe
+ 	return statement{
+ 		query: q,
+ 		stmt:  stmt,
++		brk:   breaker.NopBreaker(),
+ 	}, nil
+ }
+ 
+diff --git a/core/syncx/immutableresource.go b/core/syncx/immutableresource.go
+index dd9e4733aa00e5c662236b2eb0fc4d7ce1a72bd8..8b79a6ce5cbc96bfb499e72cdf5c1309c0f68609 100644
+--- a/core/syncx/immutableresource.go
++++ b/core/syncx/immutableresource.go
+@@ -47,30 +47,32 @@ func (ir *ImmutableResource) Get() (any, error) {
+ 		return resource, nil
+ 	}
+ 
+-	ir.maybeRefresh(func() {
+-		res, err := ir.fetch()
+-		ir.lock.Lock()
+-		if err != nil {
+-			ir.err = err
+-		} else {
+-			ir.resource, ir.err = res, nil
+-		}
+-		ir.lock.Unlock()
+-	})
++	ir.lock.Lock()
++	defer ir.lock.Unlock()
+ 
+-	ir.lock.RLock()
+-	resource, err := ir.resource, ir.err
+-	ir.lock.RUnlock()
+-	return resource, err
++	// double check
++	if ir.resource != nil {
++		return ir.resource, nil
++	}
++	if ir.err != nil && !ir.shouldRefresh() {
++		return ir.resource, ir.err
++	}
++
++	res, err := ir.fetch()
++	ir.lastTime.Set(timex.Now())
++	if err != nil {
++		ir.err = err
++		return nil, err
++	}
++
++	ir.resource, ir.err = res, nil
++	return res, nil
+ }
+ 
+-func (ir *ImmutableResource) maybeRefresh(execute func()) {
++func (ir *ImmutableResource) shouldRefresh() bool {
+ 	now := timex.Now()
+ 	lastTime := ir.lastTime.Load()
+-	if lastTime == 0 || lastTime+ir.refreshInterval < now {
+-		ir.lastTime.Set(now)
+-		execute()
+-	}
++	return lastTime == 0 || lastTime+ir.refreshInterval < now
+ }
+ 
+ // WithRefreshIntervalOnFailure sets refresh interval on failure.
+diff --git a/core/trace/agent_test.go b/core/trace/agent_test.go
+index 8afd36def053be5956bbb6a3ba1f9531e9043989..e3056f4d252e7dcd5eeadae5d0cda5aeb240a446 100644
+--- a/core/trace/agent_test.go
++++ b/core/trace/agent_test.go
+@@ -1,13 +1,10 @@
+ package trace
+ 
+ import (
+-	"context"
+-	"errors"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/logx"
+-	"go.opentelemetry.io/otel"
+ )
+ 
+ func TestStartAgent(t *testing.T) {
+@@ -92,305 +89,23 @@ func TestStartAgent(t *testing.T) {
+ 	StartAgent(c10)
+ 	defer StopAgent()
+ 
+-	// With sync.Once, only the first non-disabled config (c1) takes effect.
+-	// Subsequent calls are ignored, which is the desired behavior to prevent
+-	// multiple servers (REST + RPC) from reinitializing the global tracer.
+-	assert.NotNil(t, tp)
+-}
+-
+-func TestCreateExporter_InvalidFilePath(t *testing.T) {
+-	logx.Disable()
+-
+-	c := Config{
+-		Name:     "test-invalid-file",
+-		Endpoint: "/non-existent-directory/trace.log",
+-		Batcher:  kindFile,
+-	}
+-
+-	_, err := createExporter(c)
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "file exporter endpoint error")
+-}
+-
+-func TestCreateExporter_UnknownBatcher(t *testing.T) {
+-	logx.Disable()
+-
+-	c := Config{
+-		Name:     "test-unknown",
+-		Endpoint: "localhost:1234",
+-		Batcher:  "unknown-batcher-type",
+-	}
+-
+-	_, err := createExporter(c)
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "unknown exporter")
+-}
+-
+-func TestCreateExporter_ValidExporters(t *testing.T) {
+-	logx.Disable()
+-
+-	tests := []struct {
+-		name    string
+-		config  Config
+-		wantErr bool
+-		errMsg  string
+-	}{
+-		{
+-			name: "valid file exporter",
+-			config: Config{
+-				Name:     "file-test",
+-				Endpoint: "/tmp/trace-test.log",
+-				Batcher:  kindFile,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "invalid file path",
+-			config: Config{
+-				Name:     "file-test-invalid",
+-				Endpoint: "/invalid-path/that/does/not/exist/trace.log",
+-				Batcher:  kindFile,
+-			},
+-			wantErr: true,
+-			errMsg:  "file exporter endpoint error",
+-		},
+-		{
+-			name: "unknown batcher",
+-			config: Config{
+-				Name:     "unknown-test",
+-				Endpoint: "localhost:1234",
+-				Batcher:  "invalid-batcher",
+-			},
+-			wantErr: true,
+-			errMsg:  "unknown exporter",
+-		},
+-		{
+-			name: "jaeger http",
+-			config: Config{
+-				Name:     "jaeger-http",
+-				Endpoint: "http://localhost:14268/api/traces",
+-				Batcher:  kindJaeger,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "jaeger udp",
+-			config: Config{
+-				Name:     "jaeger-udp",
+-				Endpoint: "udp://localhost:6831",
+-				Batcher:  kindJaeger,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "zipkin",
+-			config: Config{
+-				Name:     "zipkin",
+-				Endpoint: "http://localhost:9411/api/v2/spans",
+-				Batcher:  kindZipkin,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlpgrpc",
+-			config: Config{
+-				Name:     "otlpgrpc",
+-				Endpoint: "localhost:4317",
+-				Batcher:  kindOtlpGrpc,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlpgrpc with headers",
+-			config: Config{
+-				Name:     "otlpgrpc-headers",
+-				Endpoint: "localhost:4317",
+-				Batcher:  kindOtlpGrpc,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer token123",
+-					"x-custom-key":  "custom-value",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp",
+-			config: Config{
+-				Name:     "otlphttp",
+-				Endpoint: "localhost:4318",
+-				Batcher:  kindOtlpHttp,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with headers",
+-			config: Config{
+-				Name:     "otlphttp-headers",
+-				Endpoint: "localhost:4318",
+-				Batcher:  kindOtlpHttp,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer token456",
+-					"x-api-key":     "api-key-value",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with headers and path",
+-			config: Config{
+-				Name:         "otlphttp-headers-path",
+-				Endpoint:     "localhost:4318",
+-				Batcher:      kindOtlpHttp,
+-				OtlpHttpPath: "/v1/traces",
+-				OtlpHeaders: map[string]string{
+-					"authorization":  "Bearer token789",
+-					"x-custom-trace": "trace-id",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with secure connection",
+-			config: Config{
+-				Name:           "otlphttp-secure",
+-				Endpoint:       "localhost:4318",
+-				Batcher:        kindOtlpHttp,
+-				OtlpHttpSecure: true,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer secure-token",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			exporter, err := createExporter(tt.config)
+-			if tt.wantErr {
+-				assert.Error(t, err)
+-				if tt.errMsg != "" {
+-					assert.Contains(t, err.Error(), tt.errMsg)
+-				}
+-				assert.Nil(t, exporter)
+-			} else {
+-				assert.NoError(t, err)
+-				assert.NotNil(t, exporter)
+-				// Clean up the exporter
+-				if exporter != nil {
+-					_ = exporter.Shutdown(context.Background())
+-				}
+-			}
+-		})
+-	}
+-}
+-
+-func TestStopAgent(t *testing.T) {
+-	logx.Disable()
+-
+-	// StopAgent should be idempotent and safe to call multiple times
+-	assert.NotPanics(t, func() {
+-		StopAgent()
+-		StopAgent()
+-		StopAgent()
+-	})
+-}
+-
+-func TestStartAgent_WithEndpoint(t *testing.T) {
+-	logx.Disable()
+-
+-	tests := []struct {
+-		name    string
+-		config  Config
+-		wantErr bool
+-	}{
+-		{
+-			name: "empty endpoint - no exporter created",
+-			config: Config{
+-				Name:    "test-no-endpoint",
+-				Sampler: 1.0,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "valid endpoint with file exporter",
+-			config: Config{
+-				Name:     "test-with-endpoint",
+-				Endpoint: "/tmp/test-trace.log",
+-				Batcher:  kindFile,
+-				Sampler:  1.0,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "endpoint with invalid exporter type",
+-			config: Config{
+-				Name:     "test-invalid-batcher",
+-				Endpoint: "localhost:1234",
+-				Batcher:  "invalid-type",
+-				Sampler:  1.0,
+-			},
+-			wantErr: true,
+-		},
+-		{
+-			name: "endpoint with invalid file path",
+-			config: Config{
+-				Name:     "test-invalid-path",
+-				Endpoint: "/non/existent/path/trace.log",
+-				Batcher:  kindFile,
+-				Sampler:  1.0,
+-			},
+-			wantErr: true,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			// Reset tp for each test
+-			originalTp := tp
+-			tp = nil
+-			defer func() {
+-				if tp != nil {
+-					_ = tp.Shutdown(context.Background())
+-				}
+-				tp = originalTp
+-			}()
+-
+-			err := startAgent(tt.config)
+-			if tt.wantErr {
+-				assert.Error(t, err)
+-			} else {
+-				assert.NoError(t, err)
+-				assert.NotNil(t, tp, "TracerProvider should be created")
+-			}
+-		})
+-	}
+-}
+-
+-func TestStartAgent_ErrorHandler(t *testing.T) {
+-	// Setup a tracer provider to test error handler
+-	originalTp := tp
+-	tp = nil
+-	defer func() {
+-		if tp != nil {
+-			_ = tp.Shutdown(context.Background())
+-		}
+-		tp = originalTp
+-	}()
+-
+-	// Call startAgent to set up the error handler
+-	config := Config{
+-		Name:    "test-error-handler",
+-		Sampler: 1.0,
+-	}
+-	err := startAgent(config)
+-	assert.NoError(t, err)
+-	assert.NotNil(t, tp)
+-
+-	// Verify the error handler was set and can be called without panicking
+-	// We test this by calling otel.Handle which will invoke the registered error handler
+-	testErr := errors.New("test otel error")
+-	assert.NotPanics(t, func() {
+-		otel.Handle(testErr)
+-	}, "Error handler should handle errors without panicking")
++	lock.Lock()
++	defer lock.Unlock()
++
++	// because remotehost cannot be resolved
++	assert.Equal(t, 6, len(agents))
++	_, ok := agents[""]
++	assert.True(t, ok)
++	_, ok = agents[endpoint1]
++	assert.True(t, ok)
++	_, ok = agents[endpoint2]
++	assert.False(t, ok)
++	_, ok = agents[endpoint5]
++	assert.True(t, ok)
++	_, ok = agents[endpoint6]
++	assert.False(t, ok)
++	_, ok = agents[endpoint71]
++	assert.True(t, ok)
++	_, ok = agents[endpoint72]
++	assert.False(t, ok)
+ }
+diff --git a/gateway/internal/headerprocessor_test.go b/gateway/internal/headerprocessor_test.go
+index 9c24fa19afaae1b9ec31677bf6121925b7d192e1..cba6a2c2f2376346c52a8038df4fb1ea5c684e48 100644
+--- a/gateway/internal/headerprocessor_test.go
++++ b/gateway/internal/headerprocessor_test.go
+@@ -18,93 +18,5 @@ func TestBuildHeadersWithValues(t *testing.T) {
+ 	req := httptest.NewRequest("GET", "/", http.NoBody)
+ 	req.Header.Add("grpc-metadata-a", "b")
+ 	req.Header.Add("grpc-metadata-b", "b")
+-	assert.ElementsMatch(t, []string{"gateway-a:b", "gateway-b:b"}, ProcessHeaders(req.Header))
+-}
+-
+-func TestProcessHeadersWithTraceContext(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	req.Header.Set("tracestate", "key1=value1,key2=value2")
+-	req.Header.Set("baggage", "userId=alice,serverNode=DF:28")
+-
+-	headers := ProcessHeaders(req.Header)
+-
+-	assert.Len(t, headers, 3)
+-	assert.Contains(t, headers, "traceparent:00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	assert.Contains(t, headers, "tracestate:key1=value1,key2=value2")
+-	assert.Contains(t, headers, "baggage:userId=alice,serverNode=DF:28")
+-}
+-
+-func TestProcessHeadersWithMixedHeaders(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	req.Header.Set("grpc-metadata-custom", "value1")
+-	req.Header.Set("content-type", "application/json")
+-	req.Header.Set("tracestate", "key1=value1")
+-
+-	headers := ProcessHeaders(req.Header)
+-
+-	// Should include trace headers and grpc-metadata headers, but not regular headers
+-	assert.Len(t, headers, 3)
+-	assert.Contains(t, headers, "traceparent:00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	assert.Contains(t, headers, "tracestate:key1=value1")
+-	assert.Contains(t, headers, "gateway-custom:value1")
+-}
+-
+-func TestProcessHeadersTraceparentCaseInsensitive(t *testing.T) {
+-	tests := []struct {
+-		name        string
+-		headerKey   string
+-		headerVal   string
+-		expectedKey string
+-	}{
+-		{
+-			name:        "lowercase traceparent",
+-			headerKey:   "traceparent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "uppercase Traceparent",
+-			headerKey:   "Traceparent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "mixed case TraceParent",
+-			headerKey:   "TraceParent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "lowercase tracestate",
+-			headerKey:   "tracestate",
+-			headerVal:   "key=value",
+-			expectedKey: "tracestate",
+-		},
+-		{
+-			name:        "mixed case TraceState",
+-			headerKey:   "TraceState",
+-			headerVal:   "key=value",
+-			expectedKey: "tracestate",
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			req := httptest.NewRequest("GET", "/", http.NoBody)
+-			req.Header.Set(tt.headerKey, tt.headerVal)
+-
+-			headers := ProcessHeaders(req.Header)
+-
+-			assert.Len(t, headers, 1)
+-			assert.Contains(t, headers, tt.expectedKey+":"+tt.headerVal)
+-		})
+-	}
+-}
+-
+-func TestProcessHeadersEmptyHeaders(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	headers := ProcessHeaders(req.Header)
+-	assert.Empty(t, headers)
++	assert.ElementsMatch(t, []string{"gateway-A:b", "gateway-B:b"}, ProcessHeaders(req.Header))
+ }
+diff --git a/go.mod b/go.mod
+index 431ded21dae960d1c67914c0e1de96fbacb8c4a8..0efb990033c3692cf050f33c5fd14eb21ce433cc 100644
+--- a/go.mod
++++ b/go.mod
+@@ -16,12 +16,12 @@ require (
+ 	github.com/jhump/protoreflect v1.17.0
+ 	github.com/pelletier/go-toml/v2 v2.2.2
+ 	github.com/prometheus/client_golang v1.21.1
+-	github.com/redis/go-redis/v9 v9.16.0
++	github.com/redis/go-redis/v9 v9.14.0
+ 	github.com/spaolacci/murmur3 v1.1.0
+ 	github.com/stretchr/testify v1.11.1
+ 	go.etcd.io/etcd/api/v3 v3.5.15
+ 	go.etcd.io/etcd/client/v3 v3.5.15
+-	go.mongodb.org/mongo-driver/v2 v2.4.0
++	go.mongodb.org/mongo-driver/v2 v2.3.0
+ 	go.opentelemetry.io/otel v1.24.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.24.0
+diff --git a/go.sum b/go.sum
+index fe55e1bba741dc13b03ec718c9f79d8053d2017f..86e61ffe48b710101ab4bb4515365f67a552e2bf 100644
+--- a/go.sum
++++ b/go.sum
+@@ -154,8 +154,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.16.0 h1:OotgqgLSRCmzfqChbQyG1PHC3tLNR89DG4jdOERSEP4=
+-github.com/redis/go-redis/v9 v9.16.0/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
++github.com/redis/go-redis/v9 v9.14.0 h1:u4tNCjXOyzfgeLN+vAZaW1xUooqWDqVEsZN0U01jfAE=
++github.com/redis/go-redis/v9 v9.14.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rivo/uniseg v0.2.0 h1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=
+ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
+ github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
+@@ -197,8 +197,8 @@ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15/go.mod h1:mXDI4NAOwEiszrHCb0aqfAYNCrZP4e9hRca3d1YK8EU=
+ go.etcd.io/etcd/client/v3 v3.5.15 h1:23M0eY4Fd/inNv1ZfU3AxrbbOdW79r9V9Rl62Nm6ip4=
+ go.etcd.io/etcd/client/v3 v3.5.15/go.mod h1:CLSJxrYjvLtHsrPKsy7LmZEE+DK2ktfd2bN4RhBMwlU=
+-go.mongodb.org/mongo-driver/v2 v2.4.0 h1:Oq6BmUAAFTzMeh6AonuDlgZMuAuEiUxoAD1koK5MuFo=
+-go.mongodb.org/mongo-driver/v2 v2.4.0/go.mod h1:jHeEDJHJq7tm6ZF45Issun9dbogjfnPySb1vXA7EeAI=
++go.mongodb.org/mongo-driver/v2 v2.3.0 h1:sh55yOXA2vUjW1QYw/2tRlHSQViwDyPnW61AwpZ4rtU=
++go.mongodb.org/mongo-driver/v2 v2.3.0/go.mod h1:jHeEDJHJq7tm6ZF45Issun9dbogjfnPySb1vXA7EeAI=
+ go.opentelemetry.io/otel v1.24.0 h1:0LAOdjNmQeSTzGBzduGe/rU4tZhMwL5rWgtp9Ku5Jfo=
+ go.opentelemetry.io/otel v1.24.0/go.mod h1:W7b9Ozg4nkF5tWI5zsXkaKKDjdVjpD4oAt9Qi/MArHo=
+ go.opentelemetry.io/otel/exporters/jaeger v1.17.0 h1:D7UpUy2Xc2wsi1Ras6V40q806WM07rqoCWzXu7Sqy+4=
+diff --git a/internal/devserver/config.go b/internal/devserver/config.go
+index aa11b2fd6d0258a8e6be143d3e5ff585349e0e9a..1f94e4755691d1c7c0f391969928561e5c694b3f 100644
+--- a/internal/devserver/config.go
++++ b/internal/devserver/config.go
+@@ -9,5 +9,5 @@ type Config struct {
+ 	HealthPath     string `json:",default=/healthz"`
+ 	EnableMetrics  bool   `json:",default=true"`
+ 	EnablePprof    bool   `json:",default=true"`
+-	HealthRespInfo string `json:",default=OK"`
++	HealthResponse string `json:",default=OK"`
+ }
+diff --git a/internal/devserver/server.go b/internal/devserver/server.go
+index 57293adc88e9a59aa2dbb55720bee41682168419..069612b1f358c0ad28894d8ca4401f5897323b4d 100644
+--- a/internal/devserver/server.go
++++ b/internal/devserver/server.go
+@@ -16,8 +16,8 @@ import (
+ 
+ var once sync.Once
+ 
+-// Server is inner http server, expose some useful observability information of app.
+-// For example health check, metrics and pprof.
++// Server is an inner http server, expose some useful observability information of app.
++// For example, health check, metrics and pprof.
+ type Server struct {
+ 	config Config
+ 	server *http.ServeMux
+@@ -37,8 +37,9 @@ func (s *Server) addRoutes(c Config) {
+ 	s.handleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+ 		_ = json.NewEncoder(w).Encode(s.routes)
+ 	})
++
+ 	// health
+-	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthRespInfo))
++	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthResponse))
+ 
+ 	// metrics
+ 	if s.config.EnableMetrics {
+@@ -46,6 +47,7 @@ func (s *Server) addRoutes(c Config) {
+ 		prometheus.Enable()
+ 		s.handleFunc(s.config.MetricsPath, promhttp.Handler().ServeHTTP)
+ 	}
++
+ 	// pprof
+ 	if s.config.EnablePprof {
+ 		s.handleFunc("/debug/pprof/", pprof.Index)
+@@ -75,10 +77,11 @@ func (s *Server) StartAsync(c Config) {
+ 
+ // StartAgent start inner http server by config.
+ func StartAgent(c Config) {
++	if !c.Enabled {
++		return
++	}
+ 	once.Do(func() {
+-		if c.Enabled {
+-			s := NewServer(c)
+-			s.StartAsync(c)
+-		}
++		s := NewServer(c)
++		s.StartAsync(c)
+ 	})
+ }
+diff --git a/internal/health/health.go b/internal/health/health.go
+index 4711ee5067d6812b970d38e4deafb010346b52e6..afa299d6358486b44992fbcc8ff90c631b49c04a 100644
+--- a/internal/health/health.go
++++ b/internal/health/health.go
+@@ -13,7 +13,7 @@ import (
+ var defaultHealthManager = newComboHealthManager()
+ 
+ type (
+-	// Probe represents readiness status of given component.
++	// Probe represents readiness status of a given component.
+ 	Probe interface {
+ 		// MarkReady sets a ready state for the endpoint handlers.
+ 		MarkReady()
+@@ -44,10 +44,10 @@ func AddProbe(probe Probe) {
+ }
+ 
+ // CreateHttpHandler create health http handler base on given probe.
+-func CreateHttpHandler(healthRespInfo string) http.HandlerFunc {
++func CreateHttpHandler(healthResponse string) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, _ *http.Request) {
+ 		if defaultHealthManager.IsReady() {
+-			_, _ = w.Write([]byte(healthRespInfo))
++			_, _ = w.Write([]byte(healthResponse))
+ 		} else {
+ 			http.Error(w, "Service Unavailable\n"+defaultHealthManager.verboseInfo(),
+ 				http.StatusServiceUnavailable)
+diff --git a/readme-cn.md b/readme-cn.md
+index 9a814a6a0f30269177148e1ec5ce39fa28f60b58..2c3ba1876e32ca39eaa7120bd0291e285a5727ed 100644
+--- a/readme-cn.md
++++ b/readme-cn.md
+@@ -175,7 +175,7 @@ GO111MODULE=on GOPROXY=https://goproxy.cn/,direct go get -u github.com/zeromicro
+ 
+ * API 文档
+ 
+-  [https://go-zero.dev](https://go-zero.dev)
++  [https://go-zero.dev/cn/](https://go-zero.dev/cn/)
+ 
+ * awesome 系列（更多文章见『微服务实践』公众号）
+ 
+@@ -305,9 +305,6 @@ go-zero 已被许多公司用于生产部署，接入场景如在线教育、电
+ >107. 深圳市聚货通信息科技有限公司
+ >108. 浙江银盾云科技有限公司
+ >109. 南京造世网络科技有限公司
+->110. 温州飞儿云信息技术有限公司
+->111. 统信软件
+->112. 深圳坐标软件集团有限公司
+ 
+ 如果贵公司也已使用 go-zero，欢迎在 [登记地址](https://github.com/zeromicro/go-zero/issues/602) 登记，仅仅为了推广，不做其它用途。
+ 
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index 0629e221fe879f79c1be27e114d308d45a58eda1..85afcfe84053a621afe8badf34d3e8f2a840d9cd 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -88,96 +88,6 @@ func TestLogHandlerSlow(t *testing.T) {
+ 	}
+ }
+ 
+-func TestLogHandlerSSE(t *testing.T) {
+-	handlers := []func(handler http.Handler) http.Handler{
+-		LogHandler,
+-		DetailedLogHandler,
+-	}
+-
+-	for _, logHandler := range handlers {
+-		t.Run("SSE request with normal duration", func(t *testing.T) {
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			req.Header.Set(headerAccept, valueSSE)
+-
+-			handler := logHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(defaultSlowThreshold + time.Second)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-
+-		t.Run("SSE request exceeding SSE threshold", func(t *testing.T) {
+-			originalThreshold := sseSlowThreshold.Load()
+-			SetSSESlowThreshold(time.Millisecond * 100)
+-			defer SetSSESlowThreshold(originalThreshold)
+-
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			req.Header.Set(headerAccept, valueSSE)
+-
+-			handler := logHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(time.Millisecond * 150)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-	}
+-}
+-
+-func TestLogHandlerThresholdSelection(t *testing.T) {
+-	tests := []struct {
+-		name          string
+-		acceptHeader  string
+-		expectedIsSSE bool
+-	}{
+-		{
+-			name:          "Regular HTTP request",
+-			acceptHeader:  "text/html",
+-			expectedIsSSE: false,
+-		},
+-		{
+-			name:          "SSE request",
+-			acceptHeader:  valueSSE,
+-			expectedIsSSE: true,
+-		},
+-		{
+-			name:          "No Accept header",
+-			acceptHeader:  "",
+-			expectedIsSSE: false,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			if tt.acceptHeader != "" {
+-				req.Header.Set(headerAccept, tt.acceptHeader)
+-			}
+-
+-			SetSlowThreshold(time.Millisecond * 100)
+-			SetSSESlowThreshold(time.Millisecond * 200)
+-			defer func() {
+-				SetSlowThreshold(defaultSlowThreshold)
+-				SetSSESlowThreshold(defaultSSESlowThreshold)
+-			}()
+-
+-			handler := LogHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(time.Millisecond * 150)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-	}
+-}
+-
+ func TestDetailedLogHandler_LargeBody(t *testing.T) {
+ 	lbuf := logtest.NewCollector(t)
+ 
+@@ -229,12 +139,6 @@ func TestSetSlowThreshold(t *testing.T) {
+ 	assert.Equal(t, time.Second, slowThreshold.Load())
+ }
+ 
+-func TestSetSSESlowThreshold(t *testing.T) {
+-	assert.Equal(t, defaultSSESlowThreshold, sseSlowThreshold.Load())
+-	SetSSESlowThreshold(time.Minute * 10)
+-	assert.Equal(t, time.Minute*10, sseSlowThreshold.Load())
+-}
+-
+ func TestWrapMethodWithColor(t *testing.T) {
+ 	// no tty
+ 	assert.Equal(t, http.MethodGet, wrapMethod(http.MethodGet))
+diff --git a/rest/server_test.go b/rest/server_test.go
+index e090294fc881b984049869f894434c361360961b..a0b0fbe1f765a917797bdb760de452a0c110deaa 100644
+--- a/rest/server_test.go
++++ b/rest/server_test.go
+@@ -92,7 +92,7 @@ Port: 0
+ 			Path:    "/",
+ 			Handler: nil,
+ 		}, WithJwt("thesecret"), WithSignature(SignatureConf{}),
+-			WithJwtTransition("previous", "thenewone"))
++			WithJwtTransition("preivous", "thenewone"))
+ 
+ 		func() {
+ 			defer func() {
+diff --git a/tools/goctl/api/dartgen/vars.go b/tools/goctl/api/dartgen/vars.go
+index 2488c5153a6f975a352b34dcdab1d1c0b2549a63..c34d364a4d3f2d763c5e9c00b085283d701800de 100644
+--- a/tools/goctl/api/dartgen/vars.go
++++ b/tools/goctl/api/dartgen/vars.go
+@@ -32,7 +32,7 @@ import '../vars/vars.dart';
+ /// Send GET request.
+ ///
+ /// ok: the function that will be called on success.
+-/// fail：the function that will be called on failure.
++/// fail：the fuction that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiGet(String path,
+     {Map<String, String> header,
+@@ -47,7 +47,7 @@ Future apiGet(String path,
+ ///
+ /// data: the data to post, it will be marshaled to json automatically.
+ /// ok: the function that will be called on success.
+-/// fail：the function that will be called on failure.
++/// fail：the fuction that will be called on failure.
+ /// eventually：the function that will be called regardless of success or failure.
+ Future apiPost(String path, dynamic data,
+     {Map<String, String> header,
+diff --git a/tools/goctl/api/docgen/gen.go b/tools/goctl/api/docgen/gen.go
+index c463fdfb518a47b5a484d804d9c20b90a96bc7bc..03179b921e3114d2b2487f5a670ffa079a11c7b2 100644
+--- a/tools/goctl/api/docgen/gen.go
++++ b/tools/goctl/api/docgen/gen.go
+@@ -36,7 +36,7 @@ func DocCommand(_ *cobra.Command, _ []string) error {
+ 	}
+ 
+ 	if !pathx.FileExists(dir) {
+-		return fmt.Errorf("dir %s not exist", dir)
++		return fmt.Errorf("dir %s not exsit", dir)
+ 	}
+ 
+ 	dir, err := filepath.Abs(dir)
+diff --git a/tools/goctl/api/gogen/gen.go b/tools/goctl/api/gogen/gen.go
+index b3d12642a3d31d2ca8ba98752a856af8d3cff62a..f8fec6a17c56bc25c136ae6a0c9bd37bd7e0b555 100644
+--- a/tools/goctl/api/gogen/gen.go
++++ b/tools/goctl/api/gogen/gen.go
+@@ -118,8 +118,6 @@ func DoGenProjectWithModule(apiFile, dir, moduleName, style string, withTest boo
+ 	if withTest {
+ 		logx.Must(genHandlersTest(dir, rootPkg, projectPkg, cfg, api))
+ 		logx.Must(genLogicTest(dir, rootPkg, projectPkg, cfg, api))
+-		logx.Must(genServiceContextTest(dir, rootPkg, projectPkg, cfg, api))
+-		logx.Must(genIntegrationTest(dir, rootPkg, projectPkg, cfg, api))
+ 	}
+ 
+ 	if err := backupAndSweep(apiFile); err != nil {
+diff --git a/tools/goctl/api/gogen/genhandlers.go b/tools/goctl/api/gogen/genhandlers.go
+index a8008c3df49618f3ae900ee092f296a9ed5dad63..54d918b72af90973eee44fc816fa5b0d3aea19b0 100644
+--- a/tools/goctl/api/gogen/genhandlers.go
++++ b/tools/goctl/api/gogen/genhandlers.go
+@@ -38,11 +38,9 @@ func genHandler(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.
+ 	}
+ 
+ 	var builtinTemplate = handlerTemplate
+-	var templateFile = handlerTemplateFile
+ 	sse := group.GetAnnotation("sse")
+ 	if sse == "true" {
+ 		builtinTemplate = sseHandlerTemplate
+-		templateFile = sseHandlerTemplateFile
+ 	}
+ 
+ 	return genFile(fileGenConfig{
+@@ -51,7 +49,7 @@ func genHandler(dir, rootPkg, projectPkg string, cfg *config.Config, group spec.
+ 		filename:        filename + ".go",
+ 		templateName:    "handlerTemplate",
+ 		category:        category,
+-		templateFile:    templateFile,
++		templateFile:    handlerTemplateFile,
+ 		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"PkgName":        pkgName,
+diff --git a/tools/goctl/api/gogen/genintegrationtest.go b/tools/goctl/api/gogen/genintegrationtest.go
+deleted file mode 100644
+index 48c920ca101ecbf18df809b7ab53b736296eae6b..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/genintegrationtest.go
++++ /dev/null
+@@ -1,42 +0,0 @@
+-package gogen
+-
+-import (
+-	_ "embed"
+-
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+-	"github.com/zeromicro/go-zero/tools/goctl/config"
+-	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+-	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+-)
+-
+-//go:embed integration_test.tpl
+-var integrationTestTemplate string
+-
+-func genIntegrationTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+-	serviceName := api.Service.Name
+-	if len(serviceName) == 0 {
+-		serviceName = "server"
+-	}
+-
+-	filename, err := format.FileNamingFormat(cfg.NamingFormat, serviceName)
+-	if err != nil {
+-		return err
+-	}
+-
+-	return genFile(fileGenConfig{
+-		dir:             dir,
+-		subdir:          "",
+-		filename:        filename + "_test.go",
+-		templateName:    "integrationTestTemplate",
+-		category:        category,
+-		templateFile:    integrationTestTemplateFile,
+-		builtinTemplate: integrationTestTemplate,
+-		data: map[string]any{
+-			"projectPkg":  projectPkg,
+-			"serviceName": serviceName,
+-			"version":     version.BuildVersion,
+-			"hasRoutes":   len(api.Service.Routes()) > 0,
+-			"routes":      api.Service.Routes(),
+-		},
+-	})
+-}
+diff --git a/tools/goctl/api/gogen/genlogic.go b/tools/goctl/api/gogen/genlogic.go
+index 99d652b826a593c3de07229ed1dc4313b0e88d7e..39aeef75f12845b60da908285fa9e846b49899a9 100644
+--- a/tools/goctl/api/gogen/genlogic.go
++++ b/tools/goctl/api/gogen/genlogic.go
+@@ -61,11 +61,9 @@ func genLogicByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group
+ 
+ 	subDir := getLogicFolderPath(group, route)
+ 	builtinTemplate := logicTemplate
+-	templateFile := logicTemplateFile
+ 	sse := group.GetAnnotation("sse")
+ 	if sse == "true" {
+ 		builtinTemplate = sseLogicTemplate
+-		templateFile = sseLogicTemplateFile
+ 		responseString = "error"
+ 		returnString = "return nil"
+ 		resp := responseGoTypeName(route, typesPacket)
+@@ -82,7 +80,7 @@ func genLogicByRoute(dir, rootPkg, projectPkg string, cfg *config.Config, group
+ 		filename:        goFile + ".go",
+ 		templateName:    "logicTemplate",
+ 		category:        category,
+-		templateFile:    templateFile,
++		templateFile:    logicTemplateFile,
+ 		builtinTemplate: builtinTemplate,
+ 		data: map[string]any{
+ 			"pkgName":      subDir[strings.LastIndex(subDir, "/")+1:],
+diff --git a/tools/goctl/api/gogen/gensse_test.go b/tools/goctl/api/gogen/gensse_test.go
+deleted file mode 100644
+index df961a03567b57ea5edce646e6badb0c519ab905..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/gensse_test.go
++++ /dev/null
+@@ -1,153 +0,0 @@
+-package gogen
+-
+-import (
+-	"os"
+-	"path/filepath"
+-	"strings"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestSSEGeneration(t *testing.T) {
+-	// Create a temporary directory for test
+-	dir := t.TempDir()
+-
+-	// Create a test API file with SSE annotation
+-	apiContent := `syntax = "v1"
+-
+-type SseReq {
+-    Message string ` + "`json:\"message\"`" + `
+-}
+-
+-type SseResp {
+-    Data string ` + "`json:\"data\"`" + `
+-}
+-
+-@server (
+-    sse: true
+-)
+-service Test {
+-    @handler Sse
+-    get /sse (SseReq) returns (SseResp)
+-}
+-`
+-	apiFile := filepath.Join(dir, "test.api")
+-	err := os.WriteFile(apiFile, []byte(apiContent), 0644)
+-	assert.NoError(t, err)
+-
+-	// Generate code
+-	err = DoGenProject(apiFile, dir, "gozero", false)
+-	assert.NoError(t, err)
+-
+-	// Read generated handler file
+-	handlerPath := filepath.Join(dir, "internal/handler/ssehandler.go")
+-	handlerContent, err := os.ReadFile(handlerPath)
+-	assert.NoError(t, err)
+-
+-	// Read generated logic file
+-	logicPath := filepath.Join(dir, "internal/logic/sselogic.go")
+-	logicContent, err := os.ReadFile(logicPath)
+-	assert.NoError(t, err)
+-
+-	handlerStr := string(handlerContent)
+-	logicStr := string(logicContent)
+-
+-	// Verify SSE-specific patterns in handler
+-	// Handler should call: err := l.Sse(&req, client)
+-	assert.Contains(t, handlerStr, "err := l.Sse(&req, client)",
+-		"Handler should call logic with client channel parameter")
+-
+-	// Handler should NOT have the regular pattern: resp, err := l.Sse(&req)
+-	assert.NotContains(t, handlerStr, "resp, err := l.Sse(&req)",
+-		"Handler should not use regular pattern with resp return")
+-
+-	// Handler should use threading.GoSafeCtx
+-	assert.Contains(t, handlerStr, "threading.GoSafeCtx",
+-		"Handler should use threading.GoSafeCtx for SSE")
+-
+-	// Handler should create client channel
+-	assert.Contains(t, handlerStr, "client := make(chan",
+-		"Handler should create client channel")
+-
+-	// Verify SSE-specific patterns in logic
+-	// Logic should have signature: Sse(req *types.SseReq, client chan<- *types.SseResp) error
+-	assert.Contains(t, logicStr, "func (l *SseLogic) Sse(req *types.SseReq, client chan<- *types.SseResp) error",
+-		"Logic should have SSE signature with client channel parameter")
+-
+-	// Logic should NOT have regular signature: Sse(req *types.SseReq) (resp *types.SseResp, err error)
+-	assert.NotContains(t, logicStr, "(resp *types.SseResp, err error)",
+-		"Logic should not have regular signature with resp return")
+-}
+-
+-func TestNonSSEGeneration(t *testing.T) {
+-	// Create a temporary directory for test
+-	dir := t.TempDir()
+-
+-	// Create a test API file WITHOUT SSE annotation
+-	apiContent := `syntax = "v1"
+-
+-type SseReq {
+-    Message string ` + "`json:\"message\"`" + `
+-}
+-
+-type SseResp {
+-    Data string ` + "`json:\"data\"`" + `
+-}
+-
+-service Test {
+-    @handler Sse
+-    get /sse (SseReq) returns (SseResp)
+-}
+-`
+-	apiFile := filepath.Join(dir, "test.api")
+-	err := os.WriteFile(apiFile, []byte(apiContent), 0644)
+-	assert.NoError(t, err)
+-
+-	// Generate code
+-	err = DoGenProject(apiFile, dir, "gozero", false)
+-	assert.NoError(t, err)
+-
+-	// Read generated handler file
+-	handlerPath := filepath.Join(dir, "internal/handler/ssehandler.go")
+-	handlerContent, err := os.ReadFile(handlerPath)
+-	assert.NoError(t, err)
+-
+-	// Read generated logic file
+-	logicPath := filepath.Join(dir, "internal/logic/sselogic.go")
+-	logicContent, err := os.ReadFile(logicPath)
+-	assert.NoError(t, err)
+-
+-	handlerStr := string(handlerContent)
+-	logicStr := string(logicContent)
+-
+-	// Verify regular (non-SSE) patterns in handler
+-	// Handler should call: resp, err := l.Sse(&req)
+-	assert.Contains(t, handlerStr, "resp, err := l.Sse(&req)",
+-		"Handler should use regular pattern with resp return")
+-
+-	// Handler should NOT have SSE pattern: err := l.Sse(&req, client)
+-	assert.NotContains(t, handlerStr, "err := l.Sse(&req, client)",
+-		"Handler should not use SSE pattern")
+-
+-	// Handler should NOT use threading.GoSafeCtx
+-	assert.NotContains(t, handlerStr, "threading.GoSafeCtx",
+-		"Handler should not use threading.GoSafeCtx for regular routes")
+-
+-	// Verify regular (non-SSE) patterns in logic
+-	// Logic should have signature: Sse(req *types.SseReq) (resp *types.SseResp, err error)
+-	assert.Contains(t, logicStr, "(resp *types.SseResp, err error)",
+-		"Logic should have regular signature with resp return")
+-
+-	// Logic should NOT have SSE signature with client parameter
+-	linesToCheck := strings.Split(logicStr, "\n")
+-	hasSSESignature := false
+-	for _, line := range linesToCheck {
+-		if strings.Contains(line, "func (l *SseLogic) Sse") && strings.Contains(line, "client chan<-") {
+-			hasSSESignature = true
+-			break
+-		}
+-	}
+-	assert.False(t, hasSSESignature,
+-		"Logic should not have SSE signature with client channel parameter")
+-}
+diff --git a/tools/goctl/api/gogen/gensvctest.go b/tools/goctl/api/gogen/gensvctest.go
+deleted file mode 100644
+index 3699ecf3ee2d0a04ce41f0d2dd09c921a9200abd..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/gensvctest.go
++++ /dev/null
+@@ -1,34 +0,0 @@
+-package gogen
+-
+-import (
+-	_ "embed"
+-
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+-	"github.com/zeromicro/go-zero/tools/goctl/config"
+-	"github.com/zeromicro/go-zero/tools/goctl/internal/version"
+-	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+-)
+-
+-//go:embed svc_test.tpl
+-var svcTestTemplate string
+-
+-func genServiceContextTest(dir, rootPkg, projectPkg string, cfg *config.Config, api *spec.ApiSpec) error {
+-	filename, err := format.FileNamingFormat(cfg.NamingFormat, contextFilename)
+-	if err != nil {
+-		return err
+-	}
+-
+-	return genFile(fileGenConfig{
+-		dir:             dir,
+-		subdir:          contextDir,
+-		filename:        filename + "_test.go",
+-		templateName:    "svcTestTemplate",
+-		category:        category,
+-		templateFile:    svcTestTemplateFile,
+-		builtinTemplate: svcTestTemplate,
+-		data: map[string]any{
+-			"projectPkg": projectPkg,
+-			"version":    version.BuildVersion,
+-		},
+-	})
+-}
+diff --git a/tools/goctl/api/gogen/integration_test.tpl b/tools/goctl/api/gogen/integration_test.tpl
+deleted file mode 100644
+index 42bb3fe218b99d693eab6d81a016c3ead65be53a..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/integration_test.tpl
++++ /dev/null
+@@ -1,116 +0,0 @@
+-// Code scaffolded by goctl. Safe to edit.
+-// goctl {{.version}}
+-
+-package main
+-
+-import (
+-	"net/http"
+-	"net/http/httptest"
+-	"testing"
+-	"time"
+-
+-	"{{.projectPkg}}/internal/config"
+-	"{{.projectPkg}}/internal/handler"
+-	"{{.projectPkg}}/internal/svc"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/stretchr/testify/require"
+-	"github.com/zeromicro/go-zero/rest"
+-)
+-
+-func TestMain(m *testing.M) {
+-	// TODO: Add setup/teardown logic here if needed
+-	m.Run()
+-}
+-
+-func TestServerIntegration(t *testing.T) {
+-	// Create test server
+-	c := config.Config{
+-		RestConf: rest.RestConf{
+-			Host: "127.0.0.1",
+-			Port: 0, // Use random available port
+-		},
+-	}
+-
+-	server := rest.MustNewServer(c.RestConf)
+-	defer server.Stop()
+-
+-	ctx := svc.NewServiceContext(c)
+-	handler.RegisterHandlers(server, ctx)
+-
+-	// Create serverless wrapper for testing
+-	serverless, err := rest.NewServerless(server)
+-	require.NoError(t, err)
+-
+-	tests := []struct {
+-		name           string
+-		method         string
+-		path           string
+-		body           string
+-		expectedStatus int
+-		setup          func()
+-	}{
+-		{
+-			name:           "health check",
+-			method:         http.MethodGet,
+-			path:           "/health",
+-			expectedStatus: http.StatusNotFound, // Adjust based on actual routes
+-			setup:          func() {},
+-		},
+-		{{if .hasRoutes}}{{range .routes}}{
+-			name:           "{{.Method}} {{.Path}}",
+-			method:         "{{.Method}}",
+-			path:           "{{.Path}}",
+-			expectedStatus: http.StatusOK, // TODO: Adjust expected status
+-			setup:          func() {
+-				// TODO: Add setup logic for this endpoint
+-			},
+-		},
+-		{{end}}{{end}}{
+-			name:           "not found route",
+-			method:         http.MethodGet,
+-			path:           "/nonexistent",
+-			expectedStatus: http.StatusNotFound,
+-			setup:          func() {},
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			tt.setup()
+-
+-			req, err := http.NewRequest(tt.method, tt.path, nil)
+-			require.NoError(t, err)
+-
+-			rr := httptest.NewRecorder()
+-			serverless.Serve(rr, req)
+-
+-			assert.Equal(t, tt.expectedStatus, rr.Code)
+-
+-			// TODO: Add response body assertions
+-			t.Logf("Response: %s", rr.Body.String())
+-		})
+-	}
+-}
+-
+-func TestServerLifecycle(t *testing.T) {
+-	c := config.Config{
+-		RestConf: rest.RestConf{
+-			Host: "127.0.0.1",
+-			Port: 0,
+-		},
+-	}
+-
+-	server := rest.MustNewServer(c.RestConf)
+-
+-	// Test server can start and stop without errors
+-	ctx := svc.NewServiceContext(c)
+-	handler.RegisterHandlers(server, ctx)
+-
+-	// In a real integration test, you might start the server in a goroutine
+-	// and test actual HTTP requests, but for scaffolding we keep it simple
+-	server.Stop()
+-
+-	// TODO: Add more lifecycle tests as needed
+-	assert.True(t, true, "Server lifecycle test passed")
+-}
+diff --git a/tools/goctl/api/gogen/jwt.api b/tools/goctl/api/gogen/jwt.api
+deleted file mode 100755
+index a8763c0d4293141611f4dab44eec787c8db7cfc9..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/jwt.api
++++ /dev/null
+@@ -1,17 +0,0 @@
+-type Request {
+-	Name string `path:"name,options=you|me"`
+-}
+-
+-type Response {
+-	Message string `json:"message"`
+-}
+-
+-@server(
+-	jwt: Auth
+-	jwtTransition: Trans
+-	middleware: TokenValidate
+-)
+-service A-api {
+-	@handler GreetHandler
+-	get /greet/from/:name(Request) returns (Response)
+-}
+diff --git a/tools/goctl/api/gogen/sse_handler.tpl b/tools/goctl/api/gogen/sse_handler.tpl
+index 84aea28b8f8d0e04faa7cb3385cc460dd64c2dca..7221670952b1924a06490a91c6e1a3b3e217e859 100644
+--- a/tools/goctl/api/gogen/sse_handler.tpl
++++ b/tools/goctl/api/gogen/sse_handler.tpl
+@@ -30,10 +30,11 @@ func {{.HandlerName}}(svcCtx *svc.ServiceContext) http.HandlerFunc {
+         // w.Header().Set("Cache-Control", "no-cache")
+         // w.Header().Set("Connection", "keep-alive")
+ 		client := make(chan {{.ResponseType}}, 16)
+-
++        defer func() {
++            close(client)
++        }()
+         l := {{.LogicName}}.New{{.LogicType}}(r.Context(), svcCtx)
+         threading.GoSafeCtx(r.Context(), func() {
+-            defer close(client)
+             err := l.{{.Call}}({{if .HasRequest}}&req, {{end}}client)
+             if err != nil {
+                 logc.Errorw(r.Context(), "{{.HandlerName}}", logc.Field("error", err))
+@@ -43,10 +44,7 @@ func {{.HandlerName}}(svcCtx *svc.ServiceContext) http.HandlerFunc {
+ 
+         for {
+             select {
+-            case data, ok := <-client:
+-                if !ok {
+-                    return
+-                }
++            case data := <-client:
+                 output, err := json.Marshal(data)
+                 if err != nil {
+                     logc.Errorw(r.Context(), "{{.HandlerName}}", logc.Field("error", err))
+diff --git a/tools/goctl/api/gogen/svc_test.tpl b/tools/goctl/api/gogen/svc_test.tpl
+deleted file mode 100644
+index 10009d9a4900f9a4ca1b176f7cbe7d77279b5ad0..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/svc_test.tpl
++++ /dev/null
+@@ -1,60 +0,0 @@
+-// Code scaffolded by goctl. Safe to edit.
+-// goctl {{.version}}
+-
+-package svc
+-
+-import (
+-	"testing"
+-
+-	"{{.projectPkg}}/internal/config"
+-	"github.com/stretchr/testify/assert"
+-	"github.com/stretchr/testify/require"
+-)
+-
+-func TestNewServiceContext(t *testing.T) {
+-	tests := []struct {
+-		name   string
+-		config config.Config
+-		setup  func() config.Config
+-	}{
+-		{
+-			name: "default config",
+-			setup: func() config.Config {
+-				return config.Config{}
+-			},
+-		},
+-		{
+-			name: "valid config", 
+-			setup: func() config.Config {
+-				return config.Config{
+-					// TODO: Add valid config values here
+-				}
+-			},
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			c := tt.setup()
+-			svcCtx := NewServiceContext(c)
+-
+-			// Basic assertions
+-			require.NotNil(t, svcCtx)
+-			assert.Equal(t, c, svcCtx.Config)
+-
+-			// TODO: Add additional assertions for middleware and dependencies
+-		})
+-	}
+-}
+-
+-func TestServiceContext_Initialization(t *testing.T) {
+-	c := config.Config{}
+-	svcCtx := NewServiceContext(c)
+-
+-	// Verify service context is properly initialized
+-	assert.NotNil(t, svcCtx)
+-	assert.Equal(t, c, svcCtx.Config)
+-
+-	// TODO: Add tests for middleware initialization if any
+-	// TODO: Add tests for external dependencies if any
+-}
+diff --git a/tools/goctl/api/gogen/template.go b/tools/goctl/api/gogen/template.go
+index 27adc711b1b090c267000719339f8739cfb686bc..a00f3741cadd1a3d665f01b7c4b24ae91c68f796 100644
+--- a/tools/goctl/api/gogen/template.go
++++ b/tools/goctl/api/gogen/template.go
+@@ -22,8 +22,6 @@ const (
+ 	routesTemplateFile          = "routes.tpl"
+ 	routesAdditionTemplateFile  = "route-addition.tpl"
+ 	typesTemplateFile           = "types.tpl"
+-	svcTestTemplateFile         = "svc_test.tpl"
+-	integrationTestTemplateFile = "integration_test.tpl"
+ )
+ 
+ var templates = map[string]string{
+@@ -41,8 +39,6 @@ var templates = map[string]string{
+ 	routesTemplateFile:          routesTemplate,
+ 	routesAdditionTemplateFile:  routesAdditionTemplate,
+ 	typesTemplateFile:           typesTemplate,
+-	svcTestTemplateFile:         svcTestTemplate,
+-	integrationTestTemplateFile: integrationTestTemplate,
+ }
+ 
+ // Category returns the category of the api files.
+diff --git a/tools/goctl/api/parser/g4/ast/service.go b/tools/goctl/api/parser/g4/ast/service.go
+index 70b48373c0a81a547c64fbc07c9e91a50f6975a9..fb760ec2de559d7f24ac1c698a818d722106c7f4 100644
+--- a/tools/goctl/api/parser/g4/ast/service.go
++++ b/tools/goctl/api/parser/g4/ast/service.go
+@@ -268,7 +268,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 				v.panic(lit.Expr(), fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit.Expr().Text()))
+ 			}
+ 		default:
+-			v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
++			v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
+ 		}
+ 	case *Literal:
+ 		lit := dataType.Literal.Text()
+@@ -276,7 +276,7 @@ func (v *ApiVisitor) VisitReplybody(ctx *api.ReplybodyContext) any {
+ 			v.panic(dataType.Literal, fmt.Sprintf("expecting 'ID', but found golang keyword '%s'", lit))
+ 		}
+ 	default:
+-		v.panic(dt.Expr(), fmt.Sprintf("unsupported %s", dt.Expr().Text()))
++		v.panic(dt.Expr(), fmt.Sprintf("unsupport %s", dt.Expr().Text()))
+ 	}
+ 
+ 	return &Body{
+diff --git a/tools/goctl/api/parser/g4/ast/type.go b/tools/goctl/api/parser/g4/ast/type.go
+index f0cadf9b229d9e50f55e513db52ca588bdf60072..7fe1202ae82acc0b00941cf9cb659e18aa4ce997 100644
+--- a/tools/goctl/api/parser/g4/ast/type.go
++++ b/tools/goctl/api/parser/g4/ast/type.go
+@@ -190,7 +190,7 @@ func (v *ApiVisitor) VisitTypeBlockStruct(ctx *api.TypeBlockStructContext) any {
+ 		structExpr := v.newExprWithToken(ctx.GetStructToken())
+ 		structTokenText := ctx.GetStructToken().GetText()
+ 		if structTokenText != "struct" {
+-			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found input '%s'", structTokenText))
++			v.panic(structExpr, fmt.Sprintf("expecting 'struct', found imput '%s'", structTokenText))
+ 		}
+ 
+ 		if api.IsGolangKeyWord(structTokenText, "struct") {
+diff --git a/tools/goctl/api/parser/parser.go b/tools/goctl/api/parser/parser.go
+index a41c0044b51a0023e8f8e2eb2ad51f38800414a5..7c3642325a20404781e4587f86577ee094929afa 100644
+--- a/tools/goctl/api/parser/parser.go
++++ b/tools/goctl/api/parser/parser.go
+@@ -18,7 +18,7 @@ type parser struct {
+ }
+ 
+ // Parse parses the api file.
+-// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ func Parse(filename string) (*spec.ApiSpec, error) {
+ 	if env.UseExperimental() {
+@@ -63,14 +63,14 @@ func parseContent(content string, skipCheckTypeDeclaration bool, filename ...str
+ 	return apiSpec, nil
+ }
+ 
+-// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContent parses the api content
+ func ParseContent(content string, filename ...string) (*spec.ApiSpec, error) {
+ 	return parseContent(content, false, filename...)
+ }
+ 
+-// Deprecated: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
++// Depreacted: use tools/goctl/pkg/parser/api/parser/parser.go:18 instead,
+ // it will be removed in the future.
+ // ParseContentWithParserSkipCheckTypeDeclaration parses the api content with skip check type declaration
+ func ParseContentWithParserSkipCheckTypeDeclaration(content string, filename ...string) (*spec.ApiSpec, error) {
+@@ -227,7 +227,7 @@ func (p parser) astTypeToSpec(in ast.DataType) spec.Type {
+ 		return spec.PointerType{RawName: v.PointerExpr.Text(), Type: spec.DefineStruct{RawName: raw}}
+ 	}
+ 
+-	panic(fmt.Sprintf("unsupported type %+v", in))
++	panic(fmt.Sprintf("unspported type %+v", in))
+ }
+ 
+ func (p parser) stringExprs(docs []ast.Expr) []string {
+diff --git a/tools/goctl/api/swagger/annotation.go b/tools/goctl/api/swagger/annotation.go
+index cd6736ea9ce34fb3be5aa62f6b4befcef871c952..c019ba163cc5fd1dbfbd119571765b44662b933d 100644
+--- a/tools/goctl/api/swagger/annotation.go
++++ b/tools/goctl/api/swagger/annotation.go
+@@ -8,71 +8,70 @@ import (
+ )
+ 
+ func getBoolFromKVOrDefault(properties map[string]string, key string, def bool) bool {
+-	return getOrDefault(properties, key, def, func(str string, def bool) bool {
+-		res, err := strconv.ParseBool(str)
+-		if err != nil {
+-			return def
+-		}
+-
+-		return res
+-	})
++	if len(properties) == 0 {
++		return def
++	}
++	md := metadata.New(properties)
++	val := md.Get(key)
++	if len(val) == 0 {
++		return def
++	}
++	//I think this function and those below should handle error, but they didn't.
++	//Since a default value (def) is provided, any parsing errors will result in the default being returned.
++	str, err := strconv.Unquote(val[0])
++	if err != nil || len(str) == 0 {
++		return def
++	}
++	res, _ := strconv.ParseBool(str)
++	return res
+ }
+ 
+-func getFirstUsableString(def ...string) string {
+-	if len(def) == 0 {
+-		return ""
++func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
++	if len(properties) == 0 {
++		return def
+ 	}
+-
+-	for _, val := range def {
+-		// Try to unquote if it's a quoted string
+-		if str, err := strconv.Unquote(val); err == nil && len(str) != 0 {
+-			return str
+-		}
+-
+-		// Otherwise, use the value as-is if it's not empty
+-		if len(val) != 0 {
+-			return val
+-		}
++	md := metadata.New(properties)
++	val := md.Get(key)
++	if len(val) == 0 {
++		return def
+ 	}
+-
+-	return ""
++	str, err := strconv.Unquote(val[0])
++	if err != nil || len(str) == 0 {
++		return def
++	}
++	return str
+ }
+ 
+ func getListFromInfoOrDefault(properties map[string]string, key string, def []string) []string {
+-	return getOrDefault(properties, key, def, func(str string, def []string) []string {
+-		resp := util.FieldsAndTrimSpace(str, commaRune)
+-		if len(resp) == 0 {
+-			return def
+-		}
+-		return resp
+-	})
+-}
+-
+-// getOrDefault abstracts the common logic for fetching, unquoting, and defaulting.
+-func getOrDefault[T any](properties map[string]string, key string, def T, convert func(string, T) T) T {
+ 	if len(properties) == 0 {
+ 		return def
+ 	}
+-
+ 	md := metadata.New(properties)
+ 	val := md.Get(key)
+ 	if len(val) == 0 {
+ 		return def
+ 	}
+ 
+-	str := val[0]
+-	if unquoted, err := strconv.Unquote(str); err == nil {
+-		str = unquoted
++	str, err := strconv.Unquote(val[0])
++	if err != nil || len(str) == 0 {
++		return def
+ 	}
+-	if len(str) == 0 {
++	resp := util.FieldsAndTrimSpace(str, commaRune)
++	if len(resp) == 0 {
+ 		return def
+ 	}
+-
+-	return convert(str, def)
++	return resp
+ }
+ 
+-func getStringFromKVOrDefault(properties map[string]string, key string, def string) string {
+-	return getOrDefault(properties, key, def, func(str string, def string) string {
+-		return str
+-	})
++func getFirstUsableString(def ...string) string {
++	if len(def) == 0 {
++		return ""
++	}
++	for _, val := range def {
++		str, err := strconv.Unquote(val)
++		if err == nil && len(str) != 0 {
++			return str
++		}
++	}
++	return ""
+ }
+diff --git a/tools/goctl/api/swagger/annotation_test.go b/tools/goctl/api/swagger/annotation_test.go
+index 9f94d88959960571149aa436fc59566458dcd78e..872d656400049e9da72cbabcf0b2ff3752d23d92 100644
+--- a/tools/goctl/api/swagger/annotation_test.go
++++ b/tools/goctl/api/swagger/annotation_test.go
+@@ -21,19 +21,6 @@ func Test_getBoolFromKVOrDefault(t *testing.T) {
+ 	assert.False(t, getBoolFromKVOrDefault(properties, "empty_value", false))
+ 	assert.False(t, getBoolFromKVOrDefault(nil, "nil", false))
+ 	assert.False(t, getBoolFromKVOrDefault(map[string]string{}, "empty", false))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"enabled":     "true",
+-		"disabled":    "false",
+-		"invalid":     "notabool",
+-		"empty_value": "",
+-	}
+-
+-	assert.True(t, getBoolFromKVOrDefault(unquotedProperties, "enabled", false))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "disabled", true))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "invalid", false))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "empty_value", false))
+ }
+ 
+ func Test_getStringFromKVOrDefault(t *testing.T) {
+@@ -47,17 +34,6 @@ func Test_getStringFromKVOrDefault(t *testing.T) {
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(properties, "missing", "default"))
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(nil, "nil", "default"))
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(map[string]string{}, "empty", "default"))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"name":  "example",
+-		"title": "Demo API",
+-		"empty": "",
+-	}
+-
+-	assert.Equal(t, "example", getStringFromKVOrDefault(unquotedProperties, "name", "default"))
+-	assert.Equal(t, "Demo API", getStringFromKVOrDefault(unquotedProperties, "title", "default"))
+-	assert.Equal(t, "default", getStringFromKVOrDefault(unquotedProperties, "empty", "default"))
+ }
+ 
+ func Test_getListFromInfoOrDefault(t *testing.T) {
+@@ -74,123 +50,4 @@ func Test_getListFromInfoOrDefault(t *testing.T) {
+ 	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(map[string]string{
+ 		"foo": ",,",
+ 	}, "foo", []string{"default"}))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"list":    "a, b, c",
+-		"schemes": "http,https",
+-		"tags":    "query",
+-		"empty":   "",
+-	}
+-
+-	// Note: FieldsAndTrimSpace doesn't actually trim the spaces from returned values
+-	assert.Equal(t, []string{"a", " b", " c"}, getListFromInfoOrDefault(unquotedProperties, "list", []string{"default"}))
+-	assert.Equal(t, []string{"http", "https"}, getListFromInfoOrDefault(unquotedProperties, "schemes", []string{"default"}))
+-	assert.Equal(t, []string{"query"}, getListFromInfoOrDefault(unquotedProperties, "tags", []string{"default"}))
+-	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(unquotedProperties, "empty", []string{"default"}))
+-}
+-
+-func Test_getFirstUsableString(t *testing.T) {
+-	t.Run("empty input", func(t *testing.T) {
+-		result := getFirstUsableString()
+-		assert.Equal(t, "", result, "should return empty string for no arguments")
+-	})
+-
+-	t.Run("single plain string", func(t *testing.T) {
+-		result := getFirstUsableString("Check server health status.")
+-		assert.Equal(t, "Check server health status.", result)
+-	})
+-
+-	t.Run("single quoted string", func(t *testing.T) {
+-		// This is how Go would represent a quoted string literal
+-		result := getFirstUsableString(`"Check server health status."`)
+-		assert.Equal(t, "Check server health status.", result, "should unquote quoted strings")
+-	})
+-
+-	t.Run("multiple plain strings", func(t *testing.T) {
+-		result := getFirstUsableString("", "second", "third")
+-		assert.Equal(t, "second", result, "should return first non-empty string")
+-	})
+-
+-	t.Run("handler name fallback", func(t *testing.T) {
+-		// Simulates the real use case: @doc text, handler name
+-		result := getFirstUsableString("", "HealthCheck")
+-		assert.Equal(t, "HealthCheck", result, "should fallback to handler name")
+-	})
+-
+-	t.Run("doc text over handler name", func(t *testing.T) {
+-		// Simulates the real use case with @doc text
+-		result := getFirstUsableString("Check server health status.", "HealthCheck")
+-		assert.Equal(t, "Check server health status.", result, "should use doc text over handler name")
+-	})
+-
+-	t.Run("empty strings before valid", func(t *testing.T) {
+-		result := getFirstUsableString("", "", "valid")
+-		assert.Equal(t, "valid", result, "should skip empty strings")
+-	})
+-
+-	t.Run("all empty strings", func(t *testing.T) {
+-		result := getFirstUsableString("", "", "")
+-		assert.Equal(t, "", result, "should return empty if all are empty")
+-	})
+-
+-	t.Run("quoted then plain", func(t *testing.T) {
+-		result := getFirstUsableString(`"quoted"`, "plain")
+-		assert.Equal(t, "quoted", result, "should unquote first quoted string")
+-	})
+-
+-	t.Run("plain then quoted", func(t *testing.T) {
+-		result := getFirstUsableString("plain", `"quoted"`)
+-		assert.Equal(t, "plain", result, "should use first plain string")
+-	})
+-
+-	t.Run("invalid quoted string", func(t *testing.T) {
+-		// String that looks quoted but isn't valid Go syntax
+-		result := getFirstUsableString(`"incomplete`, "fallback")
+-		assert.Equal(t, `"incomplete`, result, "should use as-is if unquote fails but not empty")
+-	})
+-
+-	t.Run("whitespace only", func(t *testing.T) {
+-		result := getFirstUsableString("   ", "fallback")
+-		assert.Equal(t, "   ", result, "should not trim whitespace, return as-is")
+-	})
+-
+-	t.Run("real world API doc scenario", func(t *testing.T) {
+-		// This is the actual bug scenario from issue #5229
+-		atDocText := "Check server health status."
+-		handlerName := "HealthCheck"
+-		
+-		result := getFirstUsableString(atDocText, handlerName)
+-		assert.Equal(t, "Check server health status.", result, 
+-			"should use @doc text for API summary")
+-	})
+-
+-	t.Run("real world with empty doc", func(t *testing.T) {
+-		// When @doc is empty, should fall back to handler name
+-		atDocText := ""
+-		handlerName := "HealthCheck"
+-		
+-		result := getFirstUsableString(atDocText, handlerName)
+-		assert.Equal(t, "HealthCheck", result, 
+-			"should fallback to handler name when @doc is empty")
+-	})
+-
+-	t.Run("complex summary with special characters", func(t *testing.T) {
+-		result := getFirstUsableString("Get user by ID: /users/{id}")
+-		assert.Equal(t, "Get user by ID: /users/{id}", result, 
+-			"should handle special characters in plain strings")
+-	})
+-
+-	t.Run("multiline string", func(t *testing.T) {
+-		result := getFirstUsableString("Line 1\nLine 2")
+-		assert.Equal(t, "Line 1\nLine 2", result, 
+-			"should handle multiline strings")
+-	})
+-
+-	t.Run("unicode characters", func(t *testing.T) {
+-		result := getFirstUsableString("健康检查", "HealthCheck")
+-		assert.Equal(t, "健康检查", result, 
+-			"should handle unicode characters")
+-	})
+ }
+-
+diff --git a/tools/goctl/api/swagger/parameter.go b/tools/goctl/api/swagger/parameter.go
+index 0530bbcf75507768c2f54fb43016cba8b9804316..1683161acd003c853f9c00f45c8d664cda6cc734 100644
+--- a/tools/goctl/api/swagger/parameter.go
++++ b/tools/goctl/api/swagger/parameter.go
+@@ -8,37 +8,28 @@ import (
+ 	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ )
+ 
+-func isRequestBodyJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
+-	// Support HTTP methods that commonly use request bodies with JSON
+-	// POST, PUT, PATCH are standard methods with bodies
+-	// DELETE can also have a body (though less common)
+-	method = strings.ToUpper(method)
+-	if method != http.MethodPost && method != http.MethodPut &&
+-		method != http.MethodPatch && method != http.MethodDelete {
++func isPostJson(ctx Context, method string, tp apiSpec.Type) (string, bool) {
++	if !strings.EqualFold(method, http.MethodPost) {
+ 		return "", false
+ 	}
+-
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return "", false
+ 	}
+-
+-	var hasJsonField bool
++	var isPostJson bool
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		jsonTag, _ := tag.Get(tagJson)
+-		if !hasJsonField {
+-			hasJsonField = jsonTag != nil
++		if !isPostJson {
++			isPostJson = jsonTag != nil
+ 		}
+ 	})
+-
+-	return structType.RawName, hasJsonField
++	return structType.RawName, isPostJson
+ }
+ 
+ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Parameter {
+ 	if tp == nil {
+ 		return []spec.Parameter{}
+ 	}
+-
+ 	structType, ok := tp.(apiSpec.DefineStruct)
+ 	if !ok {
+ 		return []spec.Parameter{}
+@@ -52,13 +43,15 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 	rangeMemberAndDo(ctx, structType, func(tag *apiSpec.Tags, required bool, member apiSpec.Member) {
+ 		headerTag, _ := tag.Get(tagHeader)
+ 		hasHeader := headerTag != nil
++
+ 		pathParameterTag, _ := tag.Get(tagPath)
+ 		hasPathParameter := pathParameterTag != nil
++
+ 		formTag, _ := tag.Get(tagForm)
+ 		hasForm := formTag != nil
++
+ 		jsonTag, _ := tag.Get(tagJson)
+ 		hasJson := jsonTag != nil
+-
+ 		if hasHeader {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(headerTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -82,7 +75,6 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
+-
+ 		if hasPathParameter {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(pathParameterTag.Options)
+ 			resp = append(resp, spec.Parameter{
+@@ -106,7 +98,6 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 				},
+ 			})
+ 		}
+-
+ 		if hasForm {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(formTag.Options)
+ 			if strings.EqualFold(method, http.MethodGet) {
+@@ -154,8 +145,8 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 					},
+ 				})
+ 			}
+-		}
+ 
++		}
+ 		if hasJson {
+ 			minimum, maximum, exclusiveMinimum, exclusiveMaximum := rangeValueFromOptions(jsonTag.Options)
+ 			if required {
+@@ -188,10 +179,9 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			properties[jsonTag.Name] = schema
+ 		}
+ 	})
+-
+ 	if len(properties) > 0 {
+ 		if ctx.UseDefinitions {
+-			structName, ok := isRequestBodyJson(ctx, method, tp)
++			structName, ok := isPostJson(ctx, method, tp)
+ 			if ok {
+ 				resp = append(resp, spec.Parameter{
+ 					ParamProps: spec.ParamProps{
+@@ -223,6 +213,5 @@ func parametersFromType(ctx Context, method string, tp apiSpec.Type) []spec.Para
+ 			})
+ 		}
+ 	}
+-
+ 	return resp
+ }
+diff --git a/tools/goctl/api/swagger/parameter_test.go b/tools/goctl/api/swagger/parameter_test.go
+index 92939dd334c02d11b63113efbe264d4d6cb95bf5..6c8785508ba81c0a2b90bccd7dda2232c09202b9 100644
+--- a/tools/goctl/api/swagger/parameter_test.go
++++ b/tools/goctl/api/swagger/parameter_test.go
+@@ -8,7 +8,7 @@ import (
+ 	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ )
+ 
+-func TestIsRequestBodyJson(t *testing.T) {
++func TestIsPostJson(t *testing.T) {
+ 	tests := []struct {
+ 		name     string
+ 		method   string
+@@ -18,18 +18,13 @@ func TestIsRequestBodyJson(t *testing.T) {
+ 		{"POST with JSON", http.MethodPost, true, true},
+ 		{"POST without JSON", http.MethodPost, false, false},
+ 		{"GET with JSON", http.MethodGet, true, false},
+-		{"PUT with JSON", http.MethodPut, true, true},
+-		{"PUT without JSON", http.MethodPut, false, false},
+-		{"PATCH with JSON", http.MethodPatch, true, true},
+-		{"PATCH without JSON", http.MethodPatch, false, false},
+-		{"DELETE with JSON", http.MethodDelete, true, true},
+-		{"DELETE without JSON", http.MethodDelete, false, false},
++		{"PUT with JSON", http.MethodPut, true, false},
+ 	}
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			testStruct := createTestStruct("TestStruct", tt.hasJson)
+-			_, result := isRequestBodyJson(testingContext(t), tt.method, testStruct)
++			_, result := isPostJson(testingContext(t), tt.method, testStruct)
+ 			assert.Equal(t, tt.expected, result)
+ 		})
+ 	}
+@@ -46,12 +41,6 @@ func TestParametersFromType(t *testing.T) {
+ 	}{
+ 		{"POST JSON with definitions", http.MethodPost, true, true, 1, true},
+ 		{"POST JSON without definitions", http.MethodPost, false, true, 1, true},
+-		{"PUT JSON with definitions", http.MethodPut, true, true, 1, true},
+-		{"PUT JSON without definitions", http.MethodPut, false, true, 1, true},
+-		{"PATCH JSON with definitions", http.MethodPatch, true, true, 1, true},
+-		{"PATCH JSON without definitions", http.MethodPatch, false, true, 1, true},
+-		{"DELETE JSON with definitions", http.MethodDelete, true, true, 1, true},
+-		{"DELETE JSON without definitions", http.MethodDelete, false, true, 1, true},
+ 		{"GET with form", http.MethodGet, false, false, 1, false},
+ 		{"POST with form", http.MethodPost, false, false, 1, false},
+ 	}
+diff --git a/tools/goctl/api/swagger/path.go b/tools/goctl/api/swagger/path.go
+index 19dfe4ad22aae29d6aeaa549444ab9b536cfd55c..f76134c0d53d1b97b3b3a97b0d522b26a8457d9f 100644
+--- a/tools/goctl/api/swagger/path.go
++++ b/tools/goctl/api/swagger/path.go
+@@ -19,11 +19,7 @@ func spec2Paths(ctx Context, srv apiSpec.Service) *spec.Paths {
+ 		for _, route := range group.Routes {
+ 			routPath := pathVariable2SwaggerVariable(ctx, route.Path)
+ 			if len(prefix) > 0 && prefix != "." {
+-				if routPath == "/" {
+-					routPath = "/" + path.Clean(prefix)
+-				} else {
+-					routPath = "/" + path.Clean(prefix) + routPath
+-				}
++				routPath = "/" + path.Clean(prefix) + routPath
+ 			}
+ 			pathItem := spec2Path(ctx, group, route)
+ 			existPathItem, ok := paths.Paths[routPath]
+diff --git a/tools/goctl/api/swagger/path_test.go b/tools/goctl/api/swagger/path_test.go
+deleted file mode 100644
+index 7d3dfbe618ef11a660423de329eee5f7916d1a02..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/swagger/path_test.go
++++ /dev/null
+@@ -1,90 +0,0 @@
+-package swagger
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+-)
+-
+-func TestSpec2PathsWithRootRoute(t *testing.T) {
+-	tests := []struct {
+-		name         string
+-		prefix       string
+-		routePath    string
+-		expectedPath string
+-	}{
+-		{
+-			name:         "prefix with root route",
+-			prefix:       "/api/v1/shoppings",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "prefix with sub route",
+-			prefix:       "/api/v1/shoppings",
+-			routePath:    "/list",
+-			expectedPath: "/api/v1/shoppings/list",
+-		},
+-		{
+-			name:         "empty prefix with root route",
+-			prefix:       "",
+-			routePath:    "/",
+-			expectedPath: "/",
+-		},
+-		{
+-			name:         "empty prefix with sub route",
+-			prefix:       "",
+-			routePath:    "/list",
+-			expectedPath: "/list",
+-		},
+-		{
+-			name:         "prefix with trailing slash and root route",
+-			prefix:       "/api/v1/shoppings/",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "prefix without leading slash and root route",
+-			prefix:       "api/v1/shoppings",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "single level prefix with root route",
+-			prefix:       "/api",
+-			routePath:    "/",
+-			expectedPath: "/api",
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			srv := spec.Service{
+-				Groups: []spec.Group{
+-					{
+-						Annotation: spec.Annotation{
+-							Properties: map[string]string{
+-								propertyKeyPrefix: tt.prefix,
+-							},
+-						},
+-						Routes: []spec.Route{
+-							{
+-								Method:  "get",
+-								Path:    tt.routePath,
+-								Handler: "TestHandler",
+-							},
+-						},
+-					},
+-				},
+-			}
+-
+-			ctx := testingContext(t)
+-			paths := spec2Paths(ctx, srv)
+-
+-			assert.Contains(t, paths.Paths, tt.expectedPath,
+-				"Expected path %s not found in generated paths. Got: %v",
+-				tt.expectedPath, paths.Paths)
+-		})
+-	}
+-}
+diff --git a/tools/goctl/api/swagger/properties.go b/tools/goctl/api/swagger/properties.go
+index bf263fb5a101501c2dd0272b5860b221ef939c36..e5bf6d204af8901aa6e07e721efd43affca93eec 100644
+--- a/tools/goctl/api/swagger/properties.go
++++ b/tools/goctl/api/swagger/properties.go
+@@ -70,40 +70,15 @@ func propertiesFromType(ctx Context, tp apiSpec.Type) (spec.SchemaProperties, []
+ 			switch sampleTypeFromGoType(ctx, member.Type) {
+ 			case swaggerTypeArray:
+ 				schema.Items = itemsFromGoType(ctx, member.Type)
+-				// Special handling for arrays with useDefinitions
+-				if ctx.UseDefinitions {
+-					// For arrays, check if the array element (not the array itself) contains a struct
+-					if arrayType, ok := member.Type.(apiSpec.ArrayType); ok {
+-						if structName, containsStruct := containsStruct(arrayType.Value); containsStruct {
+-							// Set the $ref inside the items, not at the schema level
+-							schema.Items = &spec.SchemaOrArray{
+-								Schema: &spec.Schema{
+-									SchemaProps: spec.SchemaProps{
+-										Ref: spec.MustCreateRef(getRefName(structName)),
+-									},
+-								},
+-							}
+-						}
+-					}
+-				}
+ 			case swaggerTypeObject:
+ 				p, r := propertiesFromType(ctx, member.Type)
+ 				schema.Properties = p
+ 				schema.Required = r
+-				// For objects with useDefinitions, set $ref at schema level
+-				if ctx.UseDefinitions {
+-					structName, containsStruct := containsStruct(member.Type)
+-					if containsStruct {
+-						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
+-					}
+-				}
+-			default:
+-				// For non-array, non-object types, apply useDefinitions logic
+-				if ctx.UseDefinitions {
+-					structName, containsStruct := containsStruct(member.Type)
+-					if containsStruct {
+-						schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
+-					}
++			}
++			if ctx.UseDefinitions {
++				structName, containsStruct := containsStruct(member.Type)
++				if containsStruct {
++					schema.SchemaProps.Ref = spec.MustCreateRef(getRefName(structName))
+ 				}
+ 			}
+ 
+diff --git a/tools/goctl/api/swagger/swagger_test.go b/tools/goctl/api/swagger/swagger_test.go
+index 2493f175d1bd820c5ca4518df743d771d0223725..d9fa47a956a5490032f41a56ad11358670a7cb0a 100644
+--- a/tools/goctl/api/swagger/swagger_test.go
++++ b/tools/goctl/api/swagger/swagger_test.go
+@@ -3,7 +3,6 @@ package swagger
+ import (
+ 	"testing"
+ 
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -24,117 +23,3 @@ func Test_pathVariable2SwaggerVariable(t *testing.T) {
+ 		assert.Equal(t, tc.expected, result)
+ 	}
+ }
+-
+-func TestArrayDefinitionsBug(t *testing.T) {
+-	// Test case for the bug where array of structs with useDefinitions
+-	// generates incorrect swagger JSON structure
+-
+-	// Context with useDefinitions enabled
+-	ctx := Context{
+-		UseDefinitions: true,
+-	}
+-
+-	// Create a test struct containing an array of structs
+-	testStruct := spec.DefineStruct{
+-		RawName: "TestStruct",
+-		Members: []spec.Member{
+-			{
+-				Name: "ArrayField",
+-				Type: spec.ArrayType{
+-					Value: spec.DefineStruct{
+-						RawName: "ItemStruct",
+-						Members: []spec.Member{
+-							{
+-								Name: "ItemName",
+-								Type: spec.PrimitiveType{RawName: "string"},
+-								Tag:  `json:"itemName"`,
+-							},
+-						},
+-					},
+-				},
+-				Tag: `json:"arrayField"`,
+-			},
+-		},
+-	}
+-
+-	// Get properties from the struct
+-	properties, _ := propertiesFromType(ctx, testStruct)
+-
+-	// Check that we have the array field
+-	assert.Contains(t, properties, "arrayField")
+-	arrayField := properties["arrayField"]
+-
+-	// Verify the array field has correct structure
+-	assert.Equal(t, "array", arrayField.Type[0])
+-	
+-	// Check that we have items
+-	assert.NotNil(t, arrayField.Items, "Array should have items defined")
+-	assert.NotNil(t, arrayField.Items.Schema, "Array items should have schema")
+-
+-	// The FIX: $ref should be inside items, not at schema level
+-	hasRef := arrayField.Ref.String() != ""
+-	assert.False(t, hasRef, "Schema level should NOT have $ref")
+-	
+-	// The $ref should be in the items
+-	hasItemsRef := arrayField.Items.Schema.Ref.String() != ""
+-	assert.True(t, hasItemsRef, "Items should have $ref")
+-	assert.Equal(t, "#/definitions/ItemStruct", arrayField.Items.Schema.Ref.String())
+-
+-	// Verify there are no other properties in the items when using $ref
+-	assert.Nil(t, arrayField.Items.Schema.Properties, "Items with $ref should not have properties")
+-	assert.Empty(t, arrayField.Items.Schema.Required, "Items with $ref should not have required")
+-	assert.Empty(t, arrayField.Items.Schema.Type, "Items with $ref should not have type")
+-}
+-
+-func TestArrayWithoutDefinitions(t *testing.T) {
+-	// Test that arrays work correctly when useDefinitions is false
+-	ctx := Context{
+-		UseDefinitions: false, // This is the default
+-	}
+-
+-	// Create the same test struct
+-	testStruct := spec.DefineStruct{
+-		RawName: "TestStruct",
+-		Members: []spec.Member{
+-			{
+-				Name: "ArrayField",
+-				Type: spec.ArrayType{
+-					Value: spec.DefineStruct{
+-						RawName: "ItemStruct",
+-						Members: []spec.Member{
+-							{
+-								Name: "ItemName",
+-								Type: spec.PrimitiveType{RawName: "string"},
+-								Tag:  `json:"itemName"`,
+-							},
+-						},
+-					},
+-				},
+-				Tag: `json:"arrayField"`,
+-			},
+-		},
+-	}
+-
+-	properties, _ := propertiesFromType(ctx, testStruct)
+-
+-	assert.Contains(t, properties, "arrayField")
+-	arrayField := properties["arrayField"]
+-
+-	// Should be array type
+-	assert.Equal(t, "array", arrayField.Type[0])
+-
+-	// Should have items with full schema, no $ref
+-	assert.NotNil(t, arrayField.Items)
+-	assert.NotNil(t, arrayField.Items.Schema)
+-
+-	// Should NOT have $ref at schema level
+-	assert.Empty(t, arrayField.Ref.String(), "Schema should not have $ref when useDefinitions is false")
+-
+-	// Should NOT have $ref in items either
+-	assert.Empty(t, arrayField.Items.Schema.Ref.String(), "Items should not have $ref when useDefinitions is false")
+-
+-	// Should have full schema properties in items
+-	assert.Equal(t, "object", arrayField.Items.Schema.Type[0])
+-	assert.Contains(t, arrayField.Items.Schema.Properties, "itemName")
+-	assert.Equal(t, []string{"itemName"}, arrayField.Items.Schema.Required)
+-}
+diff --git a/tools/goctl/change.md b/tools/goctl/change.md
+index 86abd0a2d6a21ff2be9de97d7eb7d9758532fe07..a9de4e4f937cec9627d73711d2d1665ddc0399de 100644
+--- a/tools/goctl/change.md
++++ b/tools/goctl/change.md
+@@ -11,7 +11,7 @@
+ ## swagger
+ 1. [bug fix] remove example generation when request body are `query`, `path` and `header`
+ - it not supported in api spec 2.0
+-- it will generate example when request body is json format.
++- it's will generate example when request body is json format.
+ 2. [features] swagger generation supported definitions
+ - supported response definitions
+ - supported json request body definitions
+diff --git a/tools/goctl/docker/docker.go b/tools/goctl/docker/docker.go
+index 807329f9ccf4e941f27b75fd2963787a3364bb5f..3859697a6b0f3a97c55104d5a7639106ef3cbd30 100644
+--- a/tools/goctl/docker/docker.go
++++ b/tools/goctl/docker/docker.go
+@@ -73,7 +73,6 @@ func dockerCommand(_ *cobra.Command, _ []string) (err error) {
+ 
+ 	base := varStringBase
+ 	port := varIntPort
+-	etcDir := filepath.Join(filepath.Dir(goFile), etcDir)
+ 	if _, err := os.Stat(etcDir); os.IsNotExist(err) {
+ 		return generateDockerfile(goFile, base, port, version, timezone)
+ 	}
+@@ -171,7 +170,7 @@ func generateDockerfile(goFile, base string, port int, version, timezone string,
+ 	t := template.Must(template.New("dockerfile").Parse(text))
+ 	return t.Execute(out, Docker{
+ 		Chinese:     env.InChina(),
+-		GoMainFrom:  path.Join(projPath, filepath.Base(goFile)),
++		GoMainFrom:  path.Join(projPath, goFile),
+ 		GoRelPath:   projPath,
+ 		GoFile:      goFile,
+ 		ExeFile:     exeName,
+diff --git a/tools/goctl/docker/docker_test.go b/tools/goctl/docker/docker_test.go
+deleted file mode 100644
+index e12a33f9ad85ec6aa3c7555aa3af1ac06ca17a7c..0000000000000000000000000000000000000000
+--- a/tools/goctl/docker/docker_test.go
++++ /dev/null
+@@ -1,376 +0,0 @@
+-package docker
+-
+-import (
+-	"os"
+-	"path/filepath"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/stretchr/testify/require"
+-)
+-
+-func TestDockerCommand_EtcDirResolution(t *testing.T) {
+-	// Create a temporary project structure
+-	tempDir := t.TempDir()
+-	
+-	// Create project structure: project/service/api/
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	etcDir := filepath.Join(serviceDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	// Create a Go file
+-	goFile := filepath.Join(serviceDir, "api.go")
+-	require.NoError(t, os.WriteFile(goFile, []byte("package main\n\nfunc main() {}"), 0644))
+-	
+-	// Create a config file
+-	configFile := filepath.Join(etcDir, "config.yaml")
+-	require.NoError(t, os.WriteFile(configFile, []byte("Name: test\n"), 0644))
+-	
+-	// Create go.mod at the root
+-	goModFile := filepath.Join(tempDir, "go.mod")
+-	require.NoError(t, os.WriteFile(goModFile, []byte("module test\n\ngo 1.21\n"), 0644))
+-	
+-	// Test: etc directory should be found relative to Go file, not CWD
+-	t.Run("etc directory resolved relative to go file", func(t *testing.T) {
+-		// Save and restore original working directory
+-		originalWd, err := os.Getwd()
+-		require.NoError(t, err)
+-		defer func() {
+-			require.NoError(t, os.Chdir(originalWd))
+-		}()
+-		
+-		// Change to temp directory (not service/api directory)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		// The relative path from tempDir to the go file
+-		relGoFile := filepath.Join("service", "api", "api.go")
+-		
+-		// Test the etc directory resolution logic
+-		resolvedEtcDir := filepath.Join(filepath.Dir(relGoFile), "etc")
+-		
+-		// Verify the resolved path exists
+-		_, err = os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err, "etc directory should be found at service/api/etc")
+-		
+-		// Verify it's the correct path (use EvalSymlinks to handle /private on macOS)
+-		absResolvedEtc, err := filepath.Abs(resolvedEtcDir)
+-		require.NoError(t, err)
+-		absResolvedEtc, err = filepath.EvalSymlinks(absResolvedEtc)
+-		require.NoError(t, err)
+-		expectedEtc, err := filepath.EvalSymlinks(etcDir)
+-		require.NoError(t, err)
+-		assert.Equal(t, expectedEtc, absResolvedEtc)
+-	})
+-	
+-	t.Run("etc directory with empty goFile", func(t *testing.T) {
+-		// When goFile is empty, should default to "./etc"
+-		goFile := ""
+-		resolvedEtcDir := filepath.Join(filepath.Dir(goFile), "etc")
+-		
+-		// Should resolve to just "etc"
+-		assert.Equal(t, "etc", resolvedEtcDir)
+-	})
+-	
+-	t.Run("etc directory with absolute path", func(t *testing.T) {
+-		// When goFile is absolute path
+-		absGoFile := filepath.Join(tempDir, "service", "api", "api.go")
+-		resolvedEtcDir := filepath.Join(filepath.Dir(absGoFile), "etc")
+-		
+-		// Should resolve correctly
+-		_, err := os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err)
+-	})
+-}
+-
+-func TestGenerateDockerfile_GoMainFromPath(t *testing.T) {
+-	tests := []struct {
+-		name         string
+-		goFile       string
+-		projPath     string
+-		expectedPath string
+-	}{
+-		{
+-			name:         "relative path with subdirectory",
+-			goFile:       "service/api/api.go",
+-			projPath:     "service/api",
+-			expectedPath: "service/api/api.go",
+-		},
+-		{
+-			name:         "simple filename",
+-			goFile:       "main.go",
+-			projPath:     ".",
+-			expectedPath: "main.go",
+-		},
+-		{
+-			name:         "nested service path",
+-			goFile:       "internal/service/user/user.go",
+-			projPath:     "internal/service/user",
+-			expectedPath: "internal/service/user/user.go",
+-		},
+-		{
+-			name:         "deep nested path",
+-			goFile:       "cmd/api/internal/handler/handler.go",
+-			projPath:     "cmd/api/internal/handler",
+-			expectedPath: "cmd/api/internal/handler/handler.go",
+-		},
+-	}
+-	
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			// Simulate the fix: using filepath.Base instead of full path
+-			goMainFrom := filepath.Join(tt.projPath, filepath.Base(tt.goFile))
+-			
+-			assert.Equal(t, tt.expectedPath, goMainFrom,
+-				"GoMainFrom should not duplicate path segments")
+-			
+-			// Verify the old buggy behavior would have been wrong
+-			if tt.goFile != filepath.Base(tt.goFile) {
+-				buggyPath := filepath.Join(tt.projPath, tt.goFile)
+-				assert.NotEqual(t, tt.expectedPath, buggyPath,
+-					"Old implementation would have created incorrect path")
+-			}
+-		})
+-	}
+-}
+-
+-func TestGenerateDockerfile_PathJoinBehavior(t *testing.T) {
+-	t.Run("demonstrates the bug and fix", func(t *testing.T) {
+-		projPath := "service/api"
+-		goFile := "service/api/api.go"
+-		
+-		// OLD (buggy) behavior: path duplication
+-		buggyPath := filepath.Join(projPath, goFile)
+-		assert.Equal(t, "service/api/service/api/api.go", buggyPath,
+-			"Bug: path segments are duplicated")
+-		
+-		// NEW (fixed) behavior: correct path
+-		fixedPath := filepath.Join(projPath, filepath.Base(goFile))
+-		assert.Equal(t, "service/api/api.go", fixedPath,
+-			"Fix: using filepath.Base prevents duplication")
+-	})
+-}
+-
+-func TestFindConfig(t *testing.T) {
+-	tempDir := t.TempDir()
+-	etcDir := filepath.Join(tempDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	t.Run("finds config matching go file name", func(t *testing.T) {
+-		// Create config files
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "api.yaml"), []byte("test"), 0644))
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "other.yaml"), []byte("test"), 0644))
+-		
+-		cfg, err := findConfig("api.go", etcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-	
+-	t.Run("returns first config when no match", func(t *testing.T) {
+-		etcDir2 := filepath.Join(tempDir, "etc2")
+-		require.NoError(t, os.MkdirAll(etcDir2, 0755))
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir2, "config.yaml"), []byte("test"), 0644))
+-		
+-		cfg, err := findConfig("main.go", etcDir2)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "config.yaml", cfg)
+-	})
+-	
+-	t.Run("returns error when no yaml files", func(t *testing.T) {
+-		emptyDir := filepath.Join(tempDir, "empty")
+-		require.NoError(t, os.MkdirAll(emptyDir, 0755))
+-		
+-		_, err := findConfig("api.go", emptyDir)
+-		assert.Error(t, err)
+-		assert.Contains(t, err.Error(), "no yaml file")
+-	})
+-	
+-	t.Run("handles path in go file name", func(t *testing.T) {
+-		// Test with service/api/api.go - should extract just "api"
+-		cfg, err := findConfig("service/api/api.go", etcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-}
+-
+-func TestGetFilePath(t *testing.T) {
+-	// Create a temporary directory with go.mod
+-	tempDir := t.TempDir()
+-	require.NoError(t, os.WriteFile(
+-		filepath.Join(tempDir, "go.mod"),
+-		[]byte("module testproject\n\ngo 1.21\n"),
+-		0644,
+-	))
+-	
+-	// Create subdirectories
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	require.NoError(t, os.MkdirAll(serviceDir, 0755))
+-	
+-	originalWd, err := os.Getwd()
+-	require.NoError(t, err)
+-	defer func() {
+-		require.NoError(t, os.Chdir(originalWd))
+-	}()
+-	
+-	t.Run("returns relative path from go.mod", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		path, err := getFilePath("service/api")
+-		assert.NoError(t, err)
+-		assert.Equal(t, "service/api", path)
+-	})
+-	
+-	t.Run("handles current directory", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		path, err := getFilePath(".")
+-		assert.NoError(t, err)
+-		// Current directory returns empty string when at go.mod root
+-		assert.True(t, path == "." || path == "")
+-	})
+-}
+-
+-// Integration test to verify the complete fix
+-func TestDockerCommandIntegration(t *testing.T) {
+-	// Create a complete project structure
+-	tempDir := t.TempDir()
+-	
+-	// Setup: project/service/api/
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	etcDir := filepath.Join(serviceDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	// Create files
+-	goFile := filepath.Join(serviceDir, "api.go")
+-	require.NoError(t, os.WriteFile(goFile, []byte("package main\n\nfunc main() {}"), 0644))
+-	configFile := filepath.Join(etcDir, "api.yaml")
+-	require.NoError(t, os.WriteFile(configFile, []byte("Name: test-api\n"), 0644))
+-	goModFile := filepath.Join(tempDir, "go.mod")
+-	require.NoError(t, os.WriteFile(goModFile, []byte("module testproject\n\ngo 1.21\n"), 0644))
+-	goSumFile := filepath.Join(tempDir, "go.sum")
+-	require.NoError(t, os.WriteFile(goSumFile, []byte(""), 0644))
+-	
+-	originalWd, err := os.Getwd()
+-	require.NoError(t, err)
+-	defer func() {
+-		require.NoError(t, os.Chdir(originalWd))
+-	}()
+-	
+-	t.Run("etc directory detected from different working directory", func(t *testing.T) {
+-		// Change to project root (not service/api)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		// Relative path to Go file
+-		relGoFile := filepath.Join("service", "api", "api.go")
+-		
+-		// Apply the fix: resolve etc directory relative to go file
+-		resolvedEtcDir := filepath.Join(filepath.Dir(relGoFile), "etc")
+-		
+-		// Verify etc directory is found
+-		stat, err := os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err)
+-		assert.True(t, stat.IsDir())
+-		
+-		// Verify config can be found
+-		cfg, err := findConfig(relGoFile, resolvedEtcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-	
+-	t.Run("GoMainFrom path is correct", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		goFileRel := filepath.Join("service", "api", "api.go")
+-		
+-		// Simulate getFilePath return value
+-		projPath := "service/api"
+-		
+-		// Apply the fix: use filepath.Base
+-		goMainFrom := filepath.Join(projPath, filepath.Base(goFileRel))
+-		
+-		assert.Equal(t, "service/api/api.go", goMainFrom)
+-		
+-		// Verify no path duplication
+-		assert.NotContains(t, goMainFrom, "service/api/service/api")
+-	})
+-}
+-
+-// Test that specifically validates the bug described in PR #4343
+-func TestPR4343_BugFixes(t *testing.T) {
+-	t.Run("Bug 1: etc directory check uses correct base path", func(t *testing.T) {
+-		// Setup: Create a project structure where etc is NOT in CWD but IS relative to Go file
+-		tempDir := t.TempDir()
+-		serviceDir := filepath.Join(tempDir, "service", "api")
+-		etcDir := filepath.Join(serviceDir, "etc")
+-		require.NoError(t, os.MkdirAll(etcDir, 0755))
+-		
+-		// Create a config file
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "config.yaml"),
+-			[]byte("Name: test\n"),
+-			0644,
+-		))
+-		
+-		originalWd, err := os.Getwd()
+-		require.NoError(t, err)
+-		defer func() {
+-			require.NoError(t, os.Chdir(originalWd))
+-		}()
+-		
+-		// Change to project root (CWD = tempDir)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		goFile := filepath.Join("service", "api", "api.go")
+-		
+-		// OLD (buggy) behavior: checks for "etc" in CWD
+-		_, errOld := os.Stat("etc")
+-		assert.Error(t, errOld, "Bug: etc not found in CWD")
+-		
+-		// NEW (fixed) behavior: checks for "etc" relative to go file
+-		etcDirResolved := filepath.Join(filepath.Dir(goFile), "etc")
+-		stat, errNew := os.Stat(etcDirResolved)
+-		assert.NoError(t, errNew, "Fix: etc found relative to go file")
+-		assert.True(t, stat.IsDir())
+-		
+-		// Verify config is accessible
+-		cfg, err := findConfig(goFile, etcDirResolved)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "config.yaml", cfg)
+-	})
+-	
+-	t.Run("Bug 2: GoMainFrom path not duplicated", func(t *testing.T) {
+-		// Test case from PR description
+-		projPath := "service/api"
+-		goFile := "service/api/api.go"
+-		
+-		// OLD (buggy) behavior: duplicates path
+-		buggyPath := filepath.Join(projPath, goFile)
+-		assert.Equal(t, "service/api/service/api/api.go", buggyPath,
+-			"Bug: path duplication occurs with old implementation")
+-		
+-		// NEW (fixed) behavior: correct path using filepath.Base
+-		fixedPath := filepath.Join(projPath, filepath.Base(goFile))
+-		assert.Equal(t, "service/api/api.go", fixedPath,
+-			"Fix: using filepath.Base() prevents path duplication")
+-		
+-		// Verify the fix works for various scenarios
+-		testCases := []struct {
+-			projPath string
+-			goFile   string
+-			expected string
+-		}{
+-			{"service/api", "service/api/api.go", "service/api/api.go"},
+-			{"cmd/server", "cmd/server/main.go", "cmd/server/main.go"},
+-			{"internal/handler", "internal/handler/handler.go", "internal/handler/handler.go"},
+-			{".", "main.go", "main.go"},
+-		}
+-		
+-		for _, tc := range testCases {
+-			result := filepath.Join(tc.projPath, filepath.Base(tc.goFile))
+-			assert.Equal(t, tc.expected, result,
+-				"Fix should work for projPath=%s, goFile=%s", tc.projPath, tc.goFile)
+-		}
+-	})
+-}
+diff --git a/tools/goctl/go.mod b/tools/goctl/go.mod
+index 20b546f652c2fae968468c73af63dc8d214913b7..41e24613e0e87e6d8c27b2a3e34a1c78419147f6 100644
+--- a/tools/goctl/go.mod
++++ b/tools/goctl/go.mod
+@@ -16,7 +16,7 @@ require (
+ 	github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1
+ 	github.com/zeromicro/antlr v0.0.1
+ 	github.com/zeromicro/ddl-parser v1.0.5
+-	github.com/zeromicro/go-zero v1.9.2
++	github.com/zeromicro/go-zero v1.9.0
+ 	golang.org/x/text v0.22.0
+ 	google.golang.org/grpc v1.65.0
+ 	google.golang.org/protobuf v1.36.5
+@@ -47,8 +47,8 @@ require (
+ 	github.com/google/go-cmp v0.6.0 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+-	github.com/grafana/pyroscope-go v1.2.7 // indirect
+-	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
++	github.com/grafana/pyroscope-go v1.2.4 // indirect
++	github.com/grafana/pyroscope-go/godeltaprof v0.1.8 // indirect
+ 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+ 	github.com/jackc/pgpassfile v1.0.0 // indirect
+@@ -72,7 +72,7 @@ require (
+ 	github.com/prometheus/client_model v0.6.1 // indirect
+ 	github.com/prometheus/common v0.62.0 // indirect
+ 	github.com/prometheus/procfs v0.15.1 // indirect
+-	github.com/redis/go-redis/v9 v9.15.0 // indirect
++	github.com/redis/go-redis/v9 v9.12.1 // indirect
+ 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+ 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+ 	github.com/yuin/gopher-lua v1.1.1 // indirect
+diff --git a/tools/goctl/go.sum b/tools/goctl/go.sum
+index 1fde4d973296c8abe9f2609a9902d898b8fb7060..bbdf86633d020dedf9cb68663874b9a6ae2d1b0c 100644
+--- a/tools/goctl/go.sum
++++ b/tools/goctl/go.sum
+@@ -75,10 +75,10 @@ github.com/gookit/assert v0.1.1 h1:lh3GcawXe/p+cU7ESTZ5Ui3Sm/x8JWpIis4/1aF0mY0=
+ github.com/gookit/assert v0.1.1/go.mod h1:jS5bmIVQZTIwk42uXl4lyj4iaaxx32tqH16CFj0VX2E=
+ github.com/gookit/color v1.6.0 h1:JjJXBTk1ETNyqyilJhkTXJYYigHG24TM9Xa2M1xAhRA=
+ github.com/gookit/color v1.6.0/go.mod h1:9ACFc7/1IpHGBW8RwuDm/0YEnhg3dwwXpoMsmtyHfjs=
+-github.com/grafana/pyroscope-go v1.2.7 h1:VWBBlqxjyR0Cwk2W6UrE8CdcdD80GOFNutj0Kb1T8ac=
+-github.com/grafana/pyroscope-go v1.2.7/go.mod h1:o/bpSLiJYYP6HQtvcoVKiE9s5RiNgjYTj1DhiddP2Pc=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.9 h1:c1Us8i6eSmkW+Ez05d3co8kasnuOY813tbMN8i/a3Og=
+-github.com/grafana/pyroscope-go/godeltaprof v0.1.9/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
++github.com/grafana/pyroscope-go v1.2.4 h1:B22GMXz+O0nWLatxLuaP7o7L9dvP0clLvIpmeEQQM0Q=
++github.com/grafana/pyroscope-go v1.2.4/go.mod h1:zzT9QXQAp2Iz2ZdS216UiV8y9uXJYQiGE1q8v1FyhqU=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.8 h1:iwOtYXeeVSAeYefJNaxDytgjKtUuKQbJqgAIjlnicKg=
++github.com/grafana/pyroscope-go/godeltaprof v0.1.8/go.mod h1:2+l7K7twW49Ct4wFluZD3tZ6e0SjanjcUUBPVD/UuGU=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+ github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0/go.mod h1:P+Lt/0by1T8bfcF3z737NnSbmxQAppXMRziHUxPOC8k=
+ github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 h1:2VTzZjLZBgl62/EtslCrtky5vbi9dd7HrQPQIx6wqiw=
+@@ -148,8 +148,8 @@ github.com/prometheus/common v0.62.0 h1:xasJaQlnWAeyHdUBeGjXmutelfJHWMRr+Fg4QszZ
+ github.com/prometheus/common v0.62.0/go.mod h1:vyBcEuLSvWos9B1+CyL7JZ2up+uFzXhkqml0W5zIY1I=
+ github.com/prometheus/procfs v0.15.1 h1:YagwOFzUgYfKKHX6Dr+sHT7km/hxC76UB0learggepc=
+ github.com/prometheus/procfs v0.15.1/go.mod h1:fB45yRUv8NstnjriLhBQLuOUt+WW4BsoGhij/e3PBqk=
+-github.com/redis/go-redis/v9 v9.15.0 h1:2jdes0xJxer4h3NUZrZ4OGSntGlXp4WbXju2nOTRXto=
+-github.com/redis/go-redis/v9 v9.15.0/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
++github.com/redis/go-redis/v9 v9.12.1 h1:k5iquqv27aBtnTm2tIkROUDp8JBXhXZIVu1InSgvovg=
++github.com/redis/go-redis/v9 v9.12.1/go.mod h1:huWgSWd8mW6+m0VPhJjSSQ+d6Nh1VICQ6Q5lHuCH/Iw=
+ github.com/rogpeppe/go-internal v1.11.0 h1:cWPaGQEPrBb5/AsnsZesgZZ9yb1OQ+GOISoDNXVBh4M=
+ github.com/rogpeppe/go-internal v1.11.0/go.mod h1:ddIwULY96R17DhadqLgMfk9H9tvdUzkipdSkR5nkCZA=
+ github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+@@ -185,8 +185,8 @@ github.com/zeromicro/antlr v0.0.1 h1:CQpIn/dc0pUjgGQ81y98s/NGOm2Hfru2NNio2I9mQgk
+ github.com/zeromicro/antlr v0.0.1/go.mod h1:nfpjEwFR6Q4xGDJMcZnCL9tEfQRgszMwu3rDz2Z+p5M=
+ github.com/zeromicro/ddl-parser v1.0.5 h1:LaVqHdzMTjasua1yYpIYaksxKqRzFrEukj2Wi2EbWaQ=
+ github.com/zeromicro/ddl-parser v1.0.5/go.mod h1:ISU/8NuPyEpl9pa17Py9TBPetMjtsiHrb9f5XGiYbo8=
+-github.com/zeromicro/go-zero v1.9.2 h1:ZXOXBIcazZ1pWAMiHyVnDQ3Sxwy7DYPzjE89Qtj9vqM=
+-github.com/zeromicro/go-zero v1.9.2/go.mod h1:k8YBMEFZKjTd4q/qO5RCW+zDgUlNyAs5vue3P4/Kmn0=
++github.com/zeromicro/go-zero v1.9.0 h1:hlVtQCSHPszQdcwZTawzGwTej1G2mhHybYzMRLuwCt4=
++github.com/zeromicro/go-zero v1.9.0/go.mod h1:TMyCxiaOjLQ3YxyYlJrejaQZF40RlzQ3FVvFu5EbcV4=
+ go.etcd.io/etcd/api/v3 v3.5.15 h1:3KpLJir1ZEBrYuV2v+Twaa/e2MdDCEZ/70H+lzEiwsk=
+ go.etcd.io/etcd/api/v3 v3.5.15/go.mod h1:N9EhGzXq58WuMllgH9ZvnEr7SI9pS0k0+DHZezGp7jM=
+ go.etcd.io/etcd/client/pkg/v3 v3.5.15 h1:fo0HpWz/KlHGMCC+YejpiCmyWDEuIpnTDzpJLB5fWlA=
+diff --git a/tools/goctl/internal/version/version.go b/tools/goctl/internal/version/version.go
+index dda268ecd4116b486e8000c795ee6c6f1316468a..ade8716fce811f19fb9deb39dd5420d8aca6f3b5 100644
+--- a/tools/goctl/internal/version/version.go
++++ b/tools/goctl/internal/version/version.go
+@@ -6,7 +6,7 @@ import (
+ )
+ 
+ // BuildVersion is the version of goctl.
+-const BuildVersion = "1.9.2"
++const BuildVersion = "1.9.1-alpha"
+ 
+ var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-beta": 2, "beta": 3, "released": 4, "": 5}
+ 
+diff --git a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+index c04c36ed51fdfdd496d4b63dfc00fa0564f6f718..8de49a5900ed36440fe1a53dd6413b2208a586f2 100644
+--- a/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
++++ b/tools/goctl/model/sql/command/migrationnotes/migrationnotes.go
+@@ -5,7 +5,7 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ )
+ 
+-// BeforeCommands run before command run to show some migration notes
++// BeforeCommands run before comamnd run to show some migration notes
+ func BeforeCommands(dir, style string) error {
+ 	if err := migrateBefore1_3_4(dir, style); err != nil {
+ 		return err
+diff --git a/tools/goctl/model/sql/test/sqlconn.go b/tools/goctl/model/sql/test/sqlconn.go
+index 748f3b10873ab24296031032b344503b34a4e0ec..da90d9ff4343a6f790dff8d5b0cd160a6f4d0fa1 100644
+--- a/tools/goctl/model/sql/test/sqlconn.go
++++ b/tools/goctl/model/sql/test/sqlconn.go
+@@ -99,12 +99,12 @@ func (conn *MockConn) RawDB() (*sql.DB, error) {
+ 	return conn.db, nil
+ }
+ 
+-// Transact is the implementation of sqlx.SqlConn, nothing to do
++// Transact is the implemention of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) Transact(func(session sqlx.Session) error) error {
+ 	return nil
+ }
+ 
+-// TransactCtx is the implementation of sqlx.SqlConn, nothing to do
++// TransactCtx is the implemention of sqlx.SqlConn, nothing to do
+ func (conn *MockConn) TransactCtx(ctx context.Context, fn func(context.Context, sqlx.Session) error) error {
+ 	return nil
+ }
+diff --git a/tools/goctl/pkg/protoc/protoc.go b/tools/goctl/pkg/protoc/protoc.go
+index 089e357bc3dc147f49491a37f9d11fb14115937b..0db64de9f241d0dd8143d2325148d7a90f2c593f 100644
+--- a/tools/goctl/pkg/protoc/protoc.go
++++ b/tools/goctl/pkg/protoc/protoc.go
+@@ -43,7 +43,7 @@ func Install(cacheDir string) (string, error) {
+ 		case vars.OsLinux:
+ 			downloadUrl = url[fmt.Sprintf("%s_%d", vars.OsLinux, bit)]
+ 		default:
+-			return "", fmt.Errorf("unsupported OS: %q", goos)
++			return "", fmt.Errorf("unsupport OS: %q", goos)
+ 		}
+ 
+ 		err := downloader.Download(downloadUrl, tempFile)
+diff --git a/tools/goctl/util/string.go b/tools/goctl/util/string.go
+index 05c76916e8c94d33b44563c784db500fa8819daf..707f2c75c88d77ef90661236970ddf6da78e2f44 100644
+--- a/tools/goctl/util/string.go
++++ b/tools/goctl/util/string.go
+@@ -2,6 +2,7 @@ package util
+ 
+ import (
+ 	"slices"
++	"strconv"
+ 	"strings"
+ 
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/console"
+@@ -129,3 +130,14 @@ func FieldsAndTrimSpace(s string, f func(r rune) bool) []string {
+ 	}
+ 	return resp
+ }
++
++//Deprecated: This function implementation is incomplete and does not properly handle exceptional input cases.
++//We strongly recommend using the standard library's strconv.Unquote function instead,
++//which provides robust error handling and comprehensive support for various input formats.
++func Unquote(s string) string {
++	ns, err := strconv.Unquote(s)
++	if err != nil {
++		return ""
++	}
++	return ns
++}
+diff --git a/tools/goctl/util/string_test.go b/tools/goctl/util/string_test.go
+index 18bb8fa497435878efc685ae4e0bac9e2585af0e..548fee67e3f046ab22681c01d7c5f3f9c8e8d414 100644
+--- a/tools/goctl/util/string_test.go
++++ b/tools/goctl/util/string_test.go
+@@ -76,40 +76,40 @@ func TestEscapeGoKeyword(t *testing.T) {
+ 
+ func TestFieldsAndTrimSpace(t *testing.T) {
+ 	testCases := []struct {
+-		name      string
+-		input     string
++		name     string
++		input    string
+ 		delimiter func(r rune) bool
+-		expected  []string
++		expected []string
+ 	}{
+ 		{
+-			name:      "Comma-separated values",
+-			input:     "a, b, c",
++			name:     "Comma-separated values",
++			input:    "a, b, c",
+ 			delimiter: func(r rune) bool { return r == ',' },
+-			expected:  []string{"a", " b", " c"},
++			expected: []string{"a", " b", " c"},
+ 		},
+ 		{
+-			name:      "Space-separated values",
+-			input:     "a b c",
++			name:     "Space-separated values",
++			input:    "a b c",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string{"a", "b", "c"},
++			expected: []string{"a", "b", "c"},
+ 		},
+ 		{
+-			name:      "Mixed whitespace",
+-			input:     "a\tb\nc",
++			name:     "Mixed whitespace",
++			input:    "a\tb\nc",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string{"a", "b", "c"},
++			expected: []string{"a", "b", "c"},
+ 		},
+ 		{
+-			name:      "Empty input",
+-			input:     "",
++			name:     "Empty input",
++			input:    "",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string(nil),
++			expected: []string(nil),
+ 		},
+ 		{
+-			name:      "Trailing and leading spaces",
+-			input:     "  a , b , c  ",
++			name:     "Trailing and leading spaces",
++			input:    "  a , b , c  ",
+ 			delimiter: func(r rune) bool { return r == ',' },
+-			expected:  []string{"  a ", " b ", " c  "},
++			expected: []string{"  a ", " b ", " c  "},
+ 		},
+ 	}
+ 
+@@ -120,3 +120,20 @@ func TestFieldsAndTrimSpace(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestUnquote(t *testing.T) {
++	testCases := []struct {
++		input    string
++		expected string
++	}{
++		{input: `"hello"`, expected: `hello`},
++		{input: "`world`", expected: `world`},
++		{input: `"foo'bar"`, expected: `foo'bar`},
++		{input: "", expected: ""},
++	}
++
++	for _, tc := range testCases {
++		result := Unquote(tc.input)
++		assert.Equal(t, tc.expected, result)
++	}
++}
+diff --git a/zrpc/client_test.go b/zrpc/client_test.go
+index 3526cad1eefab7dc9bee2b7a37ed1fae58c738c2..09a06cbb1947822ca7b9febb16d5401471781e98 100644
+--- a/zrpc/client_test.go
++++ b/zrpc/client_test.go
+@@ -12,8 +12,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/discov"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/internal/mock"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/consistenthash"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/p2c"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/credentials/insecure"
+@@ -247,42 +245,3 @@ func TestNewClientWithTarget(t *testing.T) {
+ 
+ 	assert.NotNil(t, err)
+ }
+-
+-func TestMakeLBServiceConfig(t *testing.T) {
+-	tests := []struct {
+-		name     string
+-		input    string
+-		expected string
+-	}{
+-		{
+-			name:     "empty name uses default p2c",
+-			input:    "",
+-			expected: fmt.Sprintf(`{"loadBalancingPolicy":"%s"}`, p2c.Name),
+-		},
+-		{
+-			name:     "custom balancer name",
+-			input:    "consistent_hash",
+-			expected: `{"loadBalancingPolicy":"consistent_hash"}`,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			got := makeLBServiceConfig(tt.input)
+-			if got != tt.expected {
+-				t.Errorf("expected %q, got %q", tt.expected, got)
+-			}
+-		})
+-	}
+-}
+-
+-func TestSetHashKey(t *testing.T) {
+-	ctx := context.Background()
+-	key := "abc123"
+-
+-	ctx = SetHashKey(ctx, key)
+-	got := consistenthash.GetHashKey(ctx)
+-	assert.Equal(t, key, got)
+-
+-	assert.Empty(t, consistenthash.GetHashKey(context.Background()))
+-}
+diff --git a/zrpc/config_test.go b/zrpc/config_test.go
+index d3aaa12e9a1c3cd90b16d0f81dbe98824ce995a0..0f7a637e1cb9dbaf3e3330f691b335bc88d358ba 100644
+--- a/zrpc/config_test.go
++++ b/zrpc/config_test.go
+@@ -4,11 +4,9 @@ import (
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	zconf "github.com/zeromicro/go-zero/core/conf"
+ 	"github.com/zeromicro/go-zero/core/discov"
+ 	"github.com/zeromicro/go-zero/core/service"
+ 	"github.com/zeromicro/go-zero/core/stores/redis"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/p2c"
+ )
+ 
+ func TestRpcClientConf(t *testing.T) {
+@@ -41,13 +39,6 @@ func TestRpcClientConf(t *testing.T) {
+ 		_, err := conf.BuildTarget()
+ 		assert.Error(t, err)
+ 	})
+-
+-	t.Run("default balancer name", func(t *testing.T) {
+-		var conf RpcClientConf
+-		err := zconf.FillDefault(&conf)
+-		assert.NoError(t, err)
+-		assert.Equal(t, p2c.Name, conf.BalancerName)
+-	})
+ }
+ 
+ func TestRpcServerConf(t *testing.T) {
+diff --git a/zrpc/internal/balancer/consistenthash/consistenthash_test.go b/zrpc/internal/balancer/consistenthash/consistenthash_test.go
+deleted file mode 100644
+index 2f3524d462ae263bfc2c84c3abfe208d52ea7385..0000000000000000000000000000000000000000
+--- a/zrpc/internal/balancer/consistenthash/consistenthash_test.go
++++ /dev/null
+@@ -1,175 +0,0 @@
+-package consistenthash
+-
+-import (
+-	"context"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/hash"
+-	"google.golang.org/grpc/balancer"
+-	"google.golang.org/grpc/balancer/base"
+-	"google.golang.org/grpc/resolver"
+-)
+-
+-type fakeSubConn struct{ id int }
+-
+-func (f *fakeSubConn) Connect()                             {}
+-func (f *fakeSubConn) UpdateAddresses(_ []resolver.Address) {}
+-func (f *fakeSubConn) Shutdown()                            {}
+-func (f *fakeSubConn) GetOrBuildProducer(b balancer.ProducerBuilder) (balancer.Producer, func()) {
+-	return nil, func() {}
+-}
+-
+-func TestPickerBuilder_EmptyReadySCs(t *testing.T) {
+-	b := &pickerBuilder{}
+-	p := b.Build(base.PickerBuildInfo{ReadySCs: map[balancer.SubConn]base.SubConnInfo{}})
+-
+-	_, err := p.Pick(balancer.PickInfo{})
+-	assert.Equal(t, balancer.ErrNoSubConnAvailable, err)
+-}
+-
+-func TestPickerBuilder_BuildAndRing(t *testing.T) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-	addr1 := "127.0.0.1:8080"
+-	addr2 := "127.0.0.1:8081"
+-
+-	b := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: addr1}},
+-			subConn2: {Address: resolver.Address{Addr: addr2}},
+-		},
+-	}
+-
+-	p := b.Build(info).(*picker)
+-	assert.NotNil(t, p.hashRing)
+-	assert.Len(t, p.conns, 2)
+-}
+-
+-func TestPicker_HashConsistency(t *testing.T) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-			subConn2: {Address: resolver.Address{Addr: "127.0.0.1:8081"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-	ctx := SetHashKey(context.Background(), "user_123")
+-	res1, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-	assert.NoError(t, err)
+-	assert.NotNil(t, res1.SubConn)
+-
+-	// Multiple requests with the same key remain consistent
+-	for i := 0; i < 5; i++ {
+-		resN, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-		assert.NoError(t, err)
+-		assert.Equal(t, res1.SubConn, resN.SubConn)
+-	}
+-}
+-
+-func TestPicker_MissingKey(t *testing.T) {
+-	subConn := &fakeSubConn{id: 1}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-
+-	// No hash key in context
+-	_, err := p.Pick(balancer.PickInfo{Ctx: context.Background()})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] missing hash key in context")
+-}
+-
+-func TestPicker_NoMatchingConn(t *testing.T) {
+-	emptyRing := newCustomRingForTest()
+-	p := &picker{
+-		hashRing: emptyRing,
+-		conns:    map[string]balancer.SubConn{},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "someone")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] no matching conn for hashKey: someone")
+-}
+-
+-func TestPicker_InvalidAddrType(t *testing.T) {
+-	ring := newCustomRingForTest()
+-	ring.Add(12345)
+-
+-	subConn := &fakeSubConn{id: 1}
+-	p := &picker{
+-		hashRing: ring,
+-		conns: map[string]balancer.SubConn{
+-			"12345": subConn,
+-		},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "anykey")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] invalid addr type in consistent hash")
+-}
+-
+-func TestPicker_NoSubConnForAddr(t *testing.T) {
+-	ring := newCustomRingForTest()
+-	ring.Add("ghost:9999")
+-
+-	exist := &fakeSubConn{id: 1}
+-	p := &picker{
+-		hashRing: ring,
+-		conns: map[string]balancer.SubConn{
+-			"real:8080": exist,
+-		},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "anykey")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] no subConn for addr: ghost:9999")
+-}
+-
+-func TestSetAndGetHashKey(t *testing.T) {
+-	ctx := context.Background()
+-	key := "abc123"
+-
+-	ctx = SetHashKey(ctx, key)
+-	got := GetHashKey(ctx)
+-	assert.Equal(t, key, got)
+-
+-	assert.Empty(t, GetHashKey(context.Background()))
+-}
+-
+-func BenchmarkPicker_HashConsistency(b *testing.B) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-			subConn2: {Address: resolver.Address{Addr: "127.0.0.1:8081"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-
+-	ctx := SetHashKey(context.Background(), "hot_user_123")
+-
+-	b.ResetTimer()
+-	for i := 0; i < b.N; i++ {
+-		res, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-		if err != nil || res.SubConn == nil {
+-			b.Fatalf("unexpected result: res=%v err=%v", res.SubConn, err)
+-		}
+-	}
+-}
+-
+-func newCustomRingForTest() *hash.ConsistentHash {
+-	return hash.NewCustomConsistentHash(defaultReplicaCount, hash.Hash)
+-}
+diff --git a/zrpc/internal/client_test.go b/zrpc/internal/client_test.go
+index 65b5577af48016889b596c97fc3b6292d57ebf40..6c45e2f2ecbeb5dc29f105a282bc2c2beeac9838 100644
+--- a/zrpc/internal/client_test.go
++++ b/zrpc/internal/client_test.go
+@@ -34,13 +34,6 @@ func TestWithNonBlock(t *testing.T) {
+ 	assert.True(t, options.NonBlock)
+ }
+ 
+-func TestWithBlock(t *testing.T) {
+-	var options ClientOptions
+-	opt := WithBlock()
+-	opt(&options)
+-	assert.False(t, options.NonBlock)
+-}
+-
+ func TestWithStreamClientInterceptor(t *testing.T) {
+ 	var options ClientOptions
+ 	opt := WithStreamClientInterceptor(func(ctx context.Context, desc *grpc.StreamDesc,
+diff --git a/zrpc/resolver/internal/kubebuilder.go b/zrpc/resolver/internal/kubebuilder.go
+index 2392cc67a24412f1f8427571529934a9af2a46d1..152f60af334806bd34e34a4025817b0742d86696 100644
+--- a/zrpc/resolver/internal/kubebuilder.go
++++ b/zrpc/resolver/internal/kubebuilder.go
+@@ -1,3 +1,5 @@
++//go:build !no_k8s
++
+ package internal
+ 
+ import (
+diff --git a/zrpc/resolver/internal/register.go b/zrpc/resolver/internal/register.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..364b2c9adaf6a193ca493e842909fe8c96a3f5db
+--- /dev/null
++++ b/zrpc/resolver/internal/register.go
+@@ -0,0 +1,8 @@
++//go:build no_k8s
++
++package internal
++
++// RegisterResolver registers the direct, etcd and discov schemes to the resolver.
++func RegisterResolver() {
++	register()
++}
+diff --git a/zrpc/resolver/internal/register_k8s.go b/zrpc/resolver/internal/register_k8s.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cac14691976abc8e71f40942491d5702746053d
+--- /dev/null
++++ b/zrpc/resolver/internal/register_k8s.go
+@@ -0,0 +1,13 @@
++//go:build !no_k8s
++
++package internal
++
++import "google.golang.org/grpc/resolver"
++
++var k8sResolverBuilder kubeBuilder
++
++// RegisterResolver registers the direct, etcd, discov and k8s schemes to the resolver.
++func RegisterResolver() {
++	register()
++	resolver.Register(&k8sResolverBuilder)
++}
+diff --git a/zrpc/resolver/internal/resolver.go b/zrpc/resolver/internal/resolver.go
+index 37362a07bb52f3e96ed64fcfdf39a9cd694415dc..b82ae44f57fb5d2a52dc7623dba2a62db3d651a1 100644
+--- a/zrpc/resolver/internal/resolver.go
++++ b/zrpc/resolver/internal/resolver.go
+@@ -28,15 +28,12 @@ var (
+ 	directResolverBuilder directBuilder
+ 	discovResolverBuilder discovBuilder
+ 	etcdResolverBuilder   etcdBuilder
+-	k8sResolverBuilder    kubeBuilder
+ )
+ 
+-// RegisterResolver registers the direct and discov schemes to the resolver.
+-func RegisterResolver() {
++func register() {
+ 	resolver.Register(&directResolverBuilder)
+ 	resolver.Register(&discovResolverBuilder)
+ 	resolver.Register(&etcdResolverBuilder)
+-	resolver.Register(&k8sResolverBuilder)
+ }
+ 
+ type nopResolver struct {

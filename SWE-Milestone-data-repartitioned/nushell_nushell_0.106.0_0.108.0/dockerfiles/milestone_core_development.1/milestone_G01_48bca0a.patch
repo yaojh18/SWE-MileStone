@@ -1,0 +1,777 @@
+diff --git a/crates/nu-cli/src/completions/completer.rs b/crates/nu-cli/src/completions/completer.rs
+index fef01df010..2589047a16 100644
+--- a/crates/nu-cli/src/completions/completer.rs
++++ b/crates/nu-cli/src/completions/completer.rs
+@@ -348,8 +348,43 @@ impl NuCompleter {
+                 for (arg_idx, arg) in call.arguments.iter().enumerate() {
+                     let span = arg.span();
+                     if span.contains(pos) {
+-                        // if customized completion specified, it has highest priority
+-                        if let Some(decl_id) = arg.expr().and_then(|e| e.custom_completion) {
++                        // Get custom completion from PositionalArg or Flag
++                        let custom_completion_decl_id = {
++                            // Check PositionalArg or Flag from Signature
++                            let signature = working_set.get_decl(call.decl_id).signature();
++
++                            match arg {
++                                // For named arguments, check Flag
++                                Argument::Named((name, short, value)) => {
++                                    if value.as_ref().is_none_or(|e| !e.span.contains(pos)) {
++                                        None
++                                    } else {
++                                        // If we're completing the value of the flag,
++                                        // search for the matching custom completion decl_id (long or short)
++                                        let flag =
++                                            signature.get_long_flag(&name.item).or_else(|| {
++                                                short.as_ref().and_then(|s| {
++                                                    signature.get_short_flag(
++                                                        s.item.chars().next().unwrap_or('_'),
++                                                    )
++                                                })
++                                            });
++                                        flag.and_then(|f| f.custom_completion)
++                                    }
++                                }
++                                // For positional arguments, check PositionalArg
++                                Argument::Positional(_) => {
++                                    // Find the right positional argument by index
++                                    let arg_pos = positional_arg_indices.len();
++                                    signature
++                                        .get_positional(arg_pos)
++                                        .and_then(|pos_arg| pos_arg.custom_completion)
++                                }
++                                _ => None,
++                            }
++                        };
++
++                        if let Some(decl_id) = custom_completion_decl_id {
+                             // for `--foo <tab>` and `--foo=<tab>`, the arg span should be trimmed
+                             let (new_span, prefix) = if matches!(arg, Argument::Named(_)) {
+                                 strip_placeholder_with_rsplit(
+diff --git a/crates/nu-engine/src/documentation.rs b/crates/nu-engine/src/documentation.rs
+index a1cd3942b9..78f89e9eb8 100644
+--- a/crates/nu-engine/src/documentation.rs
++++ b/crates/nu-engine/src/documentation.rs
+@@ -648,14 +648,6 @@ impl HelpStyle {
+     }
+ }
+ 
+-/// Make syntax shape presentable by stripping custom completer info
+-fn document_shape(shape: &SyntaxShape) -> &SyntaxShape {
+-    match shape {
+-        SyntaxShape::CompleterWrapper(inner_shape, _) => inner_shape,
+-        _ => shape,
+-    }
+-}
+-
+ #[derive(PartialEq)]
+ enum PositionalKind {
+     Required,
+@@ -686,15 +678,14 @@ fn write_positional(
+                 long_desc,
+                 "{help_subcolor_one}\"{}\" + {RESET}<{help_subcolor_two}{}{RESET}>",
+                 String::from_utf8_lossy(kw),
+-                document_shape(shape),
++                shape,
+             );
+         }
+         _ => {
+             let _ = write!(
+                 long_desc,
+                 "{help_subcolor_one}{}{RESET} <{help_subcolor_two}{}{RESET}>",
+-                positional.name,
+-                document_shape(&positional.shape),
++                positional.name, &positional.shape,
+             );
+         }
+     };
+@@ -767,11 +758,7 @@ where
+         }
+         // Type/Syntax shape info
+         if let Some(arg) = &flag.arg {
+-            let _ = write!(
+-                long_desc,
+-                " <{help_subcolor_two}{}{RESET}>",
+-                document_shape(arg)
+-            );
++            let _ = write!(long_desc, " <{help_subcolor_two}{arg}{RESET}>");
+         }
+         if !flag.desc.is_empty() {
+             let _ = write!(
+diff --git a/crates/nu-engine/src/scope.rs b/crates/nu-engine/src/scope.rs
+index 576a1a4ea0..ba8f427035 100644
+--- a/crates/nu-engine/src/scope.rs
++++ b/crates/nu-engine/src/scope.rs
+@@ -1,5 +1,5 @@
+ use nu_protocol::{
+-    DeclId, ModuleId, Signature, Span, SyntaxShape, Type, Value, VarId,
++    DeclId, ModuleId, Signature, Span, Type, Value, VarId,
+     ast::Expr,
+     engine::{Command, EngineState, Stack, Visibility},
+     record,
+@@ -214,7 +214,8 @@ impl<'e, 's> ScopeData<'e, 's> {
+ 
+         // required_positional
+         for req in &signature.required_positional {
+-            let custom = extract_custom_completion_from_arg(self.engine_state, &req.shape);
++            let custom =
++                extract_custom_completion_from_arg(self.engine_state, &req.custom_completion);
+ 
+             sig_records.push(Value::record(
+                 record! {
+@@ -233,7 +234,8 @@ impl<'e, 's> ScopeData<'e, 's> {
+ 
+         // optional_positional
+         for opt in &signature.optional_positional {
+-            let custom = extract_custom_completion_from_arg(self.engine_state, &opt.shape);
++            let custom =
++                extract_custom_completion_from_arg(self.engine_state, &opt.custom_completion);
+             let default = if let Some(val) = &opt.default_value {
+                 val.clone()
+             } else {
+@@ -258,7 +260,8 @@ impl<'e, 's> ScopeData<'e, 's> {
+         // rest_positional
+         if let Some(rest) = &signature.rest_positional {
+             let name = if rest.name == "rest" { "" } else { &rest.name };
+-            let custom = extract_custom_completion_from_arg(self.engine_state, &rest.shape);
++            let custom =
++                extract_custom_completion_from_arg(self.engine_state, &rest.custom_completion);
+ 
+             sig_records.push(Value::record(
+                 record! {
+@@ -285,11 +288,10 @@ impl<'e, 's> ScopeData<'e, 's> {
+                 continue;
+             }
+ 
+-            let mut custom_completion_command_name: String = "".to_string();
++            let custom_completion_command_name: String =
++                extract_custom_completion_from_arg(self.engine_state, &named.custom_completion);
+             let shape = if let Some(arg) = &named.arg {
+                 flag_type = Value::string("named", span);
+-                custom_completion_command_name =
+-                    extract_custom_completion_from_arg(self.engine_state, arg);
+                 Value::string(arg.to_string(), span)
+             } else {
+                 flag_type = Value::string("switch", span);
+@@ -544,14 +546,16 @@ impl<'e, 's> ScopeData<'e, 's> {
+     }
+ }
+ 
+-fn extract_custom_completion_from_arg(engine_state: &EngineState, shape: &SyntaxShape) -> String {
+-    match shape {
+-        SyntaxShape::CompleterWrapper(_, custom_completion_decl_id) => {
+-            let custom_completion_command = engine_state.get_decl(*custom_completion_decl_id);
+-            let custom_completion_command_name: &str = custom_completion_command.name();
+-            custom_completion_command_name.to_string()
+-        }
+-        _ => "".to_string(),
++fn extract_custom_completion_from_arg(
++    engine_state: &EngineState,
++    decl_id: &Option<DeclId>,
++) -> String {
++    if let Some(decl_id) = decl_id {
++        let custom_completion_command = engine_state.get_decl(*decl_id);
++        let custom_completion_command_name: &str = custom_completion_command.name();
++        custom_completion_command_name.to_string()
++    } else {
++        "".to_string()
+     }
+ }
+ 
+diff --git a/crates/nu-parser/src/flatten.rs b/crates/nu-parser/src/flatten.rs
+index 660d75b722..b5d26ed9f6 100644
+--- a/crates/nu-parser/src/flatten.rs
++++ b/crates/nu-parser/src/flatten.rs
+@@ -183,11 +183,6 @@ fn flatten_expression_into(
+     expr: &Expression,
+     output: &mut Vec<(Span, FlatShape)>,
+ ) {
+-    if let Some(custom_completion) = &expr.custom_completion {
+-        output.push((expr.span, FlatShape::Custom(*custom_completion)));
+-        return;
+-    }
+-
+     match &expr.expr {
+         Expr::AttributeBlock(ab) => {
+             for attr in &ab.attributes {
+diff --git a/crates/nu-parser/src/parse_keywords.rs b/crates/nu-parser/src/parse_keywords.rs
+index e79edda066..3cfb936bf7 100644
+--- a/crates/nu-parser/src/parse_keywords.rs
++++ b/crates/nu-parser/src/parse_keywords.rs
+@@ -350,6 +350,7 @@ pub fn parse_for(working_set: &mut StateWorkingSet, lite_command: &LiteCommand)
+                 shape: var_type.to_shape(),
+                 var_id: Some(*var_id),
+                 default_value: None,
++                custom_completion: None,
+             },
+         );
+     }
+diff --git a/crates/nu-parser/src/parse_shape_specs.rs b/crates/nu-parser/src/parse_shape_specs.rs
+index 6a86747e64..7e58a07394 100644
+--- a/crates/nu-parser/src/parse_shape_specs.rs
++++ b/crates/nu-parser/src/parse_shape_specs.rs
+@@ -2,40 +2,21 @@
+ 
+ use crate::{TokenContents, lex::lex_signature, parser::parse_value, trim_quotes};
+ use nu_protocol::{
+-    IntoSpanned, ParseError, Span, Spanned, SyntaxShape, Type, engine::StateWorkingSet,
++    DeclId, IntoSpanned, ParseError, Span, Spanned, SyntaxShape, Type, engine::StateWorkingSet,
+ };
+ 
+-#[derive(Debug, Clone, Copy, PartialEq)]
+-pub enum ShapeDescriptorUse {
+-    /// Used in an argument position allowing the addition of custom completion
+-    Argument,
+-    /// Used to define the type of a variable or input/output types
+-    Type,
+-}
+-
+-/// equivalent to [`parse_shape_name`] with [`ShapeDescriptorUse::Type`] converting the
+-/// [`SyntaxShape`] to its [`Type`]
++/// [`parse_shape_name`] then convert to Type
+ pub fn parse_type(working_set: &mut StateWorkingSet, bytes: &[u8], span: Span) -> Type {
+-    parse_shape_name(working_set, bytes, span, ShapeDescriptorUse::Type).to_type()
++    parse_shape_name(working_set, bytes, span).to_type()
+ }
+ 
+ /// Parse the literals of [`Type`]-like [`SyntaxShape`]s including inner types.
+-/// Also handles the specification of custom completions with `type@completer`.
+-///
+-/// Restrict the parsing with `use_loc`
+-/// Used in:
+-/// - [`ShapeDescriptorUse::Argument`]
+-///   - `: ` argument type (+completer) positions in signatures
+-/// - [`ShapeDescriptorUse::Type`]
+-///   - `type->type` input/output type pairs
+-///   - `let name: type` variable type infos
+ ///
+ /// NOTE: Does not provide a mapping to every [`SyntaxShape`]
+ pub fn parse_shape_name(
+     working_set: &mut StateWorkingSet,
+     bytes: &[u8],
+     span: Span,
+-    use_loc: ShapeDescriptorUse,
+ ) -> SyntaxShape {
+     match bytes {
+         b"any" => SyntaxShape::Any,
+@@ -70,71 +51,54 @@ pub fn parse_shape_name(
+             || bytes.starts_with(b"record")
+             || bytes.starts_with(b"table") =>
+         {
+-            parse_generic_shape(working_set, bytes, span, use_loc)
++            parse_generic_shape(working_set, bytes, span)
+         }
+         _ => {
+             if bytes.contains(&b'@') {
+-                let mut split = bytes.splitn(2, |b| b == &b'@');
+-
+-                let shape_name = split
+-                    .next()
+-                    .expect("If `bytes` contains `@` splitn returns 2 slices");
+-                let shape_span = Span::new(span.start, span.start + shape_name.len());
+-                let shape = parse_shape_name(working_set, shape_name, shape_span, use_loc);
+-                if use_loc != ShapeDescriptorUse::Argument {
+-                    let illegal_span = Span::new(span.start + shape_name.len(), span.end);
+-                    working_set.error(ParseError::LabeledError(
+-                        "Unexpected custom completer in type spec".into(),
+-                        "Type specifications do not support custom completers".into(),
+-                        illegal_span,
+-                    ));
+-                    return shape;
+-                }
+-
+-                let cmd_span = Span::new(span.start + shape_name.len() + 1, span.end);
+-                let cmd_name = split
+-                    .next()
+-                    .expect("If `bytes` contains `@` splitn returns 2 slices");
+-
+-                let cmd_name = trim_quotes(cmd_name);
+-                if cmd_name.is_empty() {
+-                    working_set.error(ParseError::Expected(
+-                        "the command name of a completion function",
+-                        cmd_span,
+-                    ));
+-                    return shape;
+-                }
+-
+-                if let Some(decl_id) = working_set.find_decl(cmd_name) {
+-                    SyntaxShape::CompleterWrapper(Box::new(shape), decl_id)
+-                } else {
+-                    working_set.error(ParseError::UnknownCommand(cmd_span));
+-                    shape
+-                }
+-            } else {
+-                //TODO: Handle error case for unknown shapes
+-                working_set.error(ParseError::UnknownType(span));
+-                SyntaxShape::Any
++                working_set.error(ParseError::LabeledError(
++                    "Unexpected custom completer in type spec".into(),
++                    "Type specifications do not support custom completers".into(),
++                    span,
++                ));
+             }
++            //TODO: Handle error case for unknown shapes
++            working_set.error(ParseError::UnknownType(span));
++            SyntaxShape::Any
+         }
+     }
+ }
+ 
++/// Handles the specification of custom completions with `type@completer`.
++pub fn parse_completer(
++    working_set: &mut StateWorkingSet,
++    bytes: &[u8],
++    span: Span,
++) -> Option<DeclId> {
++    let cmd_name = trim_quotes(bytes);
++    if cmd_name.is_empty() {
++        working_set.error(ParseError::Expected(
++            "the command name of a completion function",
++            span,
++        ));
++        return None;
++    }
++    working_set.find_decl(cmd_name)
++}
++
+ fn parse_generic_shape(
+     working_set: &mut StateWorkingSet<'_>,
+     bytes: &[u8],
+     span: Span,
+-    use_loc: ShapeDescriptorUse,
+ ) -> SyntaxShape {
+     let (type_name, type_params) = split_generic_params(working_set, bytes, span);
+     match type_name {
+         b"oneof" => SyntaxShape::OneOf(match type_params {
+-            Some(params) => parse_type_params(working_set, params, use_loc),
++            Some(params) => parse_type_params(working_set, params),
+             None => vec![],
+         }),
+         b"list" => SyntaxShape::List(Box::new(match type_params {
+             Some(params) => {
+-                let mut parsed_params = parse_type_params(working_set, params, use_loc);
++                let mut parsed_params = parse_type_params(working_set, params);
+                 if parsed_params.len() > 1 {
+                     working_set.error(ParseError::LabeledError(
+                         "expected a single type parameter".into(),
+@@ -149,11 +113,11 @@ fn parse_generic_shape(
+             None => SyntaxShape::Any,
+         })),
+         b"record" => SyntaxShape::Record(match type_params {
+-            Some(params) => parse_named_type_params(working_set, params, use_loc),
++            Some(params) => parse_named_type_params(working_set, params),
+             None => vec![],
+         }),
+         b"table" => SyntaxShape::Table(match type_params {
+-            Some(params) => parse_named_type_params(working_set, params, use_loc),
++            Some(params) => parse_named_type_params(working_set, params),
+             None => vec![],
+         }),
+         _ => {
+@@ -204,7 +168,6 @@ fn split_generic_params<'a>(
+ fn parse_named_type_params(
+     working_set: &mut StateWorkingSet,
+     Spanned { item: source, span }: Spanned<&[u8]>,
+-    use_loc: ShapeDescriptorUse,
+ ) -> Vec<(String, SyntaxShape)> {
+     let (tokens, err) = lex_signature(source, span.start, &[b'\n', b'\r'], &[b':', b','], true);
+ 
+@@ -279,7 +242,7 @@ fn parse_named_type_params(
+         }
+ 
+         let shape_bytes = working_set.get_span_contents(tokens[idx].span).to_vec();
+-        let shape = parse_shape_name(working_set, &shape_bytes, tokens[idx].span, use_loc);
++        let shape = parse_shape_name(working_set, &shape_bytes, tokens[idx].span);
+         sig.push((key, shape));
+         idx += 1;
+     }
+@@ -290,7 +253,6 @@ fn parse_named_type_params(
+ fn parse_type_params(
+     working_set: &mut StateWorkingSet,
+     Spanned { item: source, span }: Spanned<&[u8]>,
+-    use_loc: ShapeDescriptorUse,
+ ) -> Vec<SyntaxShape> {
+     let (tokens, err) = lex_signature(source, span.start, &[b'\n', b'\r'], &[b':', b','], true);
+ 
+@@ -312,7 +274,7 @@ fn parse_type_params(
+         }
+ 
+         let shape_bytes = working_set.get_span_contents(tokens[idx].span).to_vec();
+-        let shape = parse_shape_name(working_set, &shape_bytes, tokens[idx].span, use_loc);
++        let shape = parse_shape_name(working_set, &shape_bytes, tokens[idx].span);
+         sig.push(shape);
+         idx += 1;
+     }
+diff --git a/crates/nu-parser/src/parser.rs b/crates/nu-parser/src/parser.rs
+index 6eb87aadc2..1ef552602c 100644
+--- a/crates/nu-parser/src/parser.rs
++++ b/crates/nu-parser/src/parser.rs
+@@ -6,7 +6,7 @@ use crate::{
+     lite_parser::{LiteCommand, LitePipeline, LiteRedirection, LiteRedirectionTarget, lite_parse},
+     parse_keywords::*,
+     parse_patterns::parse_pattern,
+-    parse_shape_specs::{ShapeDescriptorUse, parse_shape_name, parse_type},
++    parse_shape_specs::{parse_completer, parse_shape_name, parse_type},
+     type_check::{self, check_range_types, math_result_type, type_compatible},
+ };
+ use itertools::Itertools;
+@@ -1071,6 +1071,7 @@ pub fn parse_internal_call(
+                     desc: "".to_string(),
+                     var_id: None,
+                     default_value: None,
++                    custom_completion: None,
+                 })
+             }
+ 
+@@ -1324,7 +1325,6 @@ pub fn parse_call(working_set: &mut StateWorkingSet, spans: &[Span], head: Span)
+                 span: _,
+                 span_id: _,
+                 ty,
+-                custom_completion,
+             } = &alias.clone().wrapped_call
+             {
+                 trace!("parsing: alias of external call");
+@@ -1338,14 +1338,13 @@ pub fn parse_call(working_set: &mut StateWorkingSet, spans: &[Span], head: Span)
+                     final_args.push(arg);
+                 }
+ 
+-                let mut expression = Expression::new(
++                let expression = Expression::new(
+                     working_set,
+                     Expr::ExternalCall(head, final_args.into()),
+                     Span::concat(spans),
+                     ty.clone(),
+                 );
+ 
+-                expression.custom_completion = *custom_completion;
+                 return expression;
+             } else {
+                 trace!("parsing: alias of internal call");
+@@ -3756,6 +3755,7 @@ pub fn parse_row_condition(working_set: &mut StateWorkingSet, spans: &[Span]) ->
+                 shape: SyntaxShape::Any,
+                 var_id: Some(var_id),
+                 default_value: None,
++                custom_completion: None,
+             });
+ 
+             compile_block(working_set, &mut block);
+@@ -3940,6 +3940,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                             required: false,
+                                             var_id: Some(var_id),
+                                             default_value: None,
++                                            custom_completion: None,
+                                         },
+                                         type_annotated: false,
+                                     });
+@@ -4001,6 +4002,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                                 required: false,
+                                                 var_id: Some(var_id),
+                                                 default_value: None,
++                                                custom_completion: None,
+                                             },
+                                             type_annotated: false,
+                                         });
+@@ -4043,6 +4045,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                         required: false,
+                                         var_id: Some(var_id),
+                                         default_value: None,
++                                        custom_completion: None,
+                                     },
+                                     type_annotated: false,
+                                 });
+@@ -4110,6 +4113,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                         shape: SyntaxShape::Any,
+                                         var_id: Some(var_id),
+                                         default_value: None,
++                                        custom_completion: None,
+                                     },
+                                     required: false,
+                                     type_annotated: false,
+@@ -4137,6 +4141,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                     shape: SyntaxShape::Any,
+                                     var_id: Some(var_id),
+                                     default_value: None,
++                                    custom_completion: None,
+                                 }));
+                                 parse_mode = ParseMode::Arg;
+                             }
+@@ -4163,6 +4168,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                         shape: SyntaxShape::Any,
+                                         var_id: Some(var_id),
+                                         default_value: None,
++                                        custom_completion: None,
+                                     },
+                                     required: true,
+                                     type_annotated: false,
+@@ -4172,31 +4178,62 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                         }
+                         ParseMode::Type => {
+                             if let Some(last) = args.last_mut() {
+-                                let syntax_shape = parse_shape_name(
+-                                    working_set,
+-                                    &contents,
+-                                    span,
+-                                    ShapeDescriptorUse::Argument,
+-                                );
++                                let (syntax_shape, completer) = if contents.contains(&b'@') {
++                                    let mut split = contents.splitn(2, |b| b == &b'@');
++
++                                    let shape_name = split
++                                        .next()
++                                        .expect("If `bytes` contains `@` splitn returns 2 slices");
++                                    let shape_span =
++                                        Span::new(span.start, span.start + shape_name.len());
++                                    let cmd_span =
++                                        Span::new(span.start + shape_name.len() + 1, span.end);
++                                    let cmd_name = split
++                                        .next()
++                                        .expect("If `bytes` contains `@` splitn returns 2 slices");
++                                    (
++                                        parse_shape_name(working_set, shape_name, shape_span),
++                                        parse_completer(working_set, cmd_name, cmd_span),
++                                    )
++                                } else {
++                                    (parse_shape_name(working_set, &contents, span), None)
++                                };
+                                 //TODO check if we're replacing a custom parameter already
+                                 match last {
+                                     Arg::Positional {
+-                                        arg: PositionalArg { shape, var_id, .. },
++                                        arg:
++                                            PositionalArg {
++                                                shape,
++                                                var_id,
++                                                custom_completion,
++                                                ..
++                                            },
+                                         required: _,
+                                         type_annotated,
+                                     } => {
+                                         working_set.set_variable_type(var_id.expect("internal error: all custom parameters must have var_ids"), syntax_shape.to_type());
++                                        *custom_completion = completer;
+                                         *shape = syntax_shape;
+                                         *type_annotated = true;
+                                     }
+                                     Arg::RestPositional(PositionalArg {
+-                                        shape, var_id, ..
++                                        shape,
++                                        var_id,
++                                        custom_completion,
++                                        ..
+                                     }) => {
+                                         working_set.set_variable_type(var_id.expect("internal error: all custom parameters must have var_ids"), Type::List(Box::new(syntax_shape.to_type())));
++                                        *custom_completion = completer;
+                                         *shape = syntax_shape;
+                                     }
+                                     Arg::Flag {
+-                                        flag: Flag { arg, var_id, .. },
++                                        flag:
++                                            Flag {
++                                                arg,
++                                                var_id,
++                                                custom_completion,
++                                                ..
++                                            },
+                                         type_annotated,
+                                     } => {
+                                         working_set.set_variable_type(var_id.expect("internal error: all custom parameters must have var_ids"), syntax_shape.to_type());
+@@ -4207,6 +4244,7 @@ pub fn parse_signature_helper(working_set: &mut StateWorkingSet, span: Span) ->
+                                                 span,
+                                             ));
+                                         }
++                                        *custom_completion = completer;
+                                         *arg = Some(syntax_shape);
+                                         *type_annotated = true;
+                                     }
+@@ -5163,11 +5201,6 @@ pub fn parse_value(
+     }
+ 
+     match shape {
+-        SyntaxShape::CompleterWrapper(shape, custom_completion) => {
+-            let mut expression = parse_value(working_set, span, shape);
+-            expression.custom_completion = Some(*custom_completion);
+-            expression
+-        }
+         SyntaxShape::Number => parse_number(working_set, span),
+         SyntaxShape::Float => parse_float(working_set, span),
+         SyntaxShape::Int => parse_int(working_set, span),
+diff --git a/crates/nu-protocol/src/ast/expression.rs b/crates/nu-protocol/src/ast/expression.rs
+index c05dd2b813..2cd388a4bd 100644
+--- a/crates/nu-protocol/src/ast/expression.rs
++++ b/crates/nu-protocol/src/ast/expression.rs
+@@ -1,5 +1,5 @@
+ use crate::{
+-    BlockId, DeclId, GetSpan, IN_VARIABLE_ID, Signature, Span, SpanId, Type, VarId,
++    BlockId, GetSpan, IN_VARIABLE_ID, Signature, Span, SpanId, Type, VarId,
+     ast::{Argument, Block, Expr, ExternalArgument, ImportPattern, MatchPattern, RecordItem},
+     engine::StateWorkingSet,
+ };
+@@ -15,7 +15,6 @@ pub struct Expression {
+     pub span: Span,
+     pub span_id: SpanId,
+     pub ty: Type,
+-    pub custom_completion: Option<DeclId>,
+ }
+ 
+ impl Expression {
+@@ -26,7 +25,6 @@ impl Expression {
+             span,
+             span_id,
+             ty: Type::Any,
+-            custom_completion: None,
+         }
+     }
+ 
+@@ -572,7 +570,6 @@ impl Expression {
+             span,
+             span_id,
+             ty,
+-            custom_completion: None,
+         }
+     }
+ 
+@@ -582,7 +579,6 @@ impl Expression {
+             span,
+             span_id,
+             ty,
+-            custom_completion: None,
+         }
+     }
+ 
+@@ -592,7 +588,6 @@ impl Expression {
+             span,
+             span_id: SpanId::new(0),
+             ty,
+-            custom_completion: None,
+         }
+     }
+ 
+@@ -602,7 +597,6 @@ impl Expression {
+             span: self.span,
+             span_id,
+             ty: self.ty,
+-            custom_completion: self.custom_completion,
+         }
+     }
+ 
+diff --git a/crates/nu-protocol/src/signature.rs b/crates/nu-protocol/src/signature.rs
+index 80bef3cc66..08d93b07ca 100644
+--- a/crates/nu-protocol/src/signature.rs
++++ b/crates/nu-protocol/src/signature.rs
+@@ -1,6 +1,6 @@
+ use crate::{
+-    BlockId, DeprecationEntry, Example, FromValue, PipelineData, ShellError, SyntaxShape, Type,
+-    Value, VarId,
++    BlockId, DeclId, DeprecationEntry, Example, FromValue, PipelineData, ShellError, SyntaxShape,
++    Type, Value, VarId,
+     engine::{Call, Command, CommandType, EngineState, Stack},
+ };
+ use nu_derive_value::FromValue as DeriveFromValue;
+@@ -24,6 +24,7 @@ pub struct Flag {
+     // For custom commands
+     pub var_id: Option<VarId>,
+     pub default_value: Option<Value>,
++    pub custom_completion: Option<DeclId>,
+ }
+ 
+ /// The signature definition for a positional argument
+@@ -36,6 +37,7 @@ pub struct PositionalArg {
+     // For custom commands
+     pub var_id: Option<VarId>,
+     pub default_value: Option<Value>,
++    pub custom_completion: Option<DeclId>,
+ }
+ 
+ /// Command categories
+@@ -255,6 +257,7 @@ impl Signature {
+             required: false,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         };
+         self.named.push(flag);
+         self
+@@ -319,6 +322,7 @@ impl Signature {
+             shape: shape.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+@@ -337,6 +341,7 @@ impl Signature {
+             shape: shape.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+@@ -354,6 +359,7 @@ impl Signature {
+             shape: shape.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+@@ -393,6 +399,7 @@ impl Signature {
+             desc: desc.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+@@ -416,6 +423,7 @@ impl Signature {
+             desc: desc.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+@@ -438,6 +446,7 @@ impl Signature {
+             desc: desc.into(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         });
+ 
+         self
+diff --git a/crates/nu-protocol/src/syntax_shape.rs b/crates/nu-protocol/src/syntax_shape.rs
+index 7f1e2f95b6..d6bc92c468 100644
+--- a/crates/nu-protocol/src/syntax_shape.rs
++++ b/crates/nu-protocol/src/syntax_shape.rs
+@@ -1,4 +1,4 @@
+-use crate::{DeclId, Type};
++use crate::Type;
+ use serde::{Deserialize, Serialize};
+ use std::fmt::Display;
+ 
+@@ -29,9 +29,6 @@ pub enum SyntaxShape {
+     /// A closure is allowed, eg `{|| start this thing}`
+     Closure(Option<Vec<SyntaxShape>>),
+ 
+-    /// A [`SyntaxShape`] with custom completion logic
+-    CompleterWrapper(Box<SyntaxShape>, DeclId),
+-
+     /// A datetime value, eg `2022-02-02` or `2019-10-12T07:20:50.52+00:00`
+     DateTime,
+ 
+@@ -147,7 +144,6 @@ impl SyntaxShape {
+             SyntaxShape::Closure(_) => Type::Closure,
+             SyntaxShape::Binary => Type::Binary,
+             SyntaxShape::CellPath => Type::Any,
+-            SyntaxShape::CompleterWrapper(inner, _) => inner.to_type(),
+             SyntaxShape::DateTime => Type::Date,
+             SyntaxShape::Duration => Type::Duration,
+             SyntaxShape::Expression => Type::Any,
+@@ -252,7 +248,6 @@ impl Display for SyntaxShape {
+             SyntaxShape::ExternalArgument => write!(f, "external-argument"),
+             SyntaxShape::Boolean => write!(f, "bool"),
+             SyntaxShape::Error => write!(f, "error"),
+-            SyntaxShape::CompleterWrapper(x, _) => write!(f, "completable<{x}>"),
+             SyntaxShape::OneOf(list) => {
+                 write!(f, "oneof<")?;
+                 if let Some((last, rest)) = list.split_last() {

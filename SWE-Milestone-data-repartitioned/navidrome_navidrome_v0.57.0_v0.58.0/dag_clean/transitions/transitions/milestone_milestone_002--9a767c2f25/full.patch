@@ -1,0 +1,1263 @@
+diff --git a/cmd/wire_gen.go b/cmd/wire_gen.go
+index 59cf91e891ffdfed21a940db5fa8bfe567f8920a..dc558c393352565ed09ca3d5106254c71b545b65 100644
+--- a/cmd/wire_gen.go
++++ b/cmd/wire_gen.go
+@@ -175,7 +175,7 @@ func GetPlaybackServer() playback.PlaybackServer {
+ 	return playbackServer
+ }
+ 
+-func getPluginManager() *plugins.Manager {
++func getPluginManager() plugins.Manager {
+ 	sqlDB := db.Db()
+ 	dataStore := persistence.New(sqlDB)
+ 	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
+@@ -185,9 +185,9 @@ func getPluginManager() *plugins.Manager {
+ 
+ // wire_injectors.go:
+ 
+-var allProviders = wire.NewSet(core.Set, artwork.Set, server.New, subsonic.New, nativeapi.New, public.New, persistence.New, lastfm.NewRouter, listenbrainz.NewRouter, events.GetBroker, scanner.New, scanner.NewWatcher, plugins.GetManager, metrics.GetPrometheusInstance, db.Db, wire.Bind(new(agents.PluginLoader), new(*plugins.Manager)), wire.Bind(new(scrobbler.PluginLoader), new(*plugins.Manager)))
++var allProviders = wire.NewSet(core.Set, artwork.Set, server.New, subsonic.New, nativeapi.New, public.New, persistence.New, lastfm.NewRouter, listenbrainz.NewRouter, events.GetBroker, scanner.New, scanner.NewWatcher, plugins.GetManager, metrics.GetPrometheusInstance, db.Db, wire.Bind(new(agents.PluginLoader), new(plugins.Manager)), wire.Bind(new(scrobbler.PluginLoader), new(plugins.Manager)))
+ 
+-func GetPluginManager(ctx context.Context) *plugins.Manager {
++func GetPluginManager(ctx context.Context) plugins.Manager {
+ 	manager := getPluginManager()
+ 	manager.SetSubsonicRouter(CreateSubsonicAPIRouter(ctx))
+ 	return manager
+diff --git a/cmd/wire_injectors.go b/cmd/wire_injectors.go
+index 9530e9bcf6aa0e160be33c7f00673aceea141101..e2bc6cd1baba1fe5ed92dd1c316fd2640a5400bc 100644
+--- a/cmd/wire_injectors.go
++++ b/cmd/wire_injectors.go
+@@ -42,8 +42,8 @@ var allProviders = wire.NewSet(
+ 	plugins.GetManager,
+ 	metrics.GetPrometheusInstance,
+ 	db.Db,
+-	wire.Bind(new(agents.PluginLoader), new(*plugins.Manager)),
+-	wire.Bind(new(scrobbler.PluginLoader), new(*plugins.Manager)),
++	wire.Bind(new(agents.PluginLoader), new(plugins.Manager)),
++	wire.Bind(new(scrobbler.PluginLoader), new(plugins.Manager)),
+ )
+ 
+ func CreateDataStore() model.DataStore {
+@@ -118,13 +118,13 @@ func GetPlaybackServer() playback.PlaybackServer {
+ 	))
+ }
+ 
+-func getPluginManager() *plugins.Manager {
++func getPluginManager() plugins.Manager {
+ 	panic(wire.Build(
+ 		allProviders,
+ 	))
+ }
+ 
+-func GetPluginManager(ctx context.Context) *plugins.Manager {
++func GetPluginManager(ctx context.Context) plugins.Manager {
+ 	manager := getPluginManager()
+ 	manager.SetSubsonicRouter(CreateSubsonicAPIRouter(ctx))
+ 	return manager
+diff --git a/conf/configuration.go b/conf/configuration.go
+index 258e3727fc35b1d4bcdf5bfccbd34992b3acd72b..bb1ae120b087c456dc7dc2f8b78f1064059cd1f6 100644
+--- a/conf/configuration.go
++++ b/conf/configuration.go
+@@ -264,13 +264,15 @@ func Load(noConfigDump bool) {
+ 		os.Exit(1)
+ 	}
+ 
+-	if Server.Plugins.Folder == "" {
+-		Server.Plugins.Folder = filepath.Join(Server.DataFolder, "plugins")
+-	}
+-	err = os.MkdirAll(Server.Plugins.Folder, 0700)
+-	if err != nil {
+-		_, _ = fmt.Fprintln(os.Stderr, "FATAL: Error creating plugins path:", err)
+-		os.Exit(1)
++	if Server.Plugins.Enabled {
++		if Server.Plugins.Folder == "" {
++			Server.Plugins.Folder = filepath.Join(Server.DataFolder, "plugins")
++		}
++		err = os.MkdirAll(Server.Plugins.Folder, 0700)
++		if err != nil {
++			_, _ = fmt.Fprintln(os.Stderr, "FATAL: Error creating plugins path:", err)
++			os.Exit(1)
++		}
+ 	}
+ 
+ 	Server.ConfigFile = viper.GetViper().ConfigFileUsed()
+diff --git a/plugins/README.md b/plugins/README.md
+index 31f967879af46e0292476c84e7440d532900eb4f..100230cbf3d60d058498b94239dff1f3ae8444fb 100644
+--- a/plugins/README.md
++++ b/plugins/README.md
+@@ -196,7 +196,7 @@ See the [cache.proto](host/cache/cache.proto) file for the full API definition.
+ 
+ #### SchedulerService
+ 
+-The SchedulerService provides a unified interface for scheduling both one-time and recurring tasks. See the [scheduler.proto](host/scheduler/scheduler.proto) file for the full API.
++The SchedulerService provides a unified interface for scheduling both one-time and recurring tasks, as well as accessing current time information. See the [scheduler.proto](host/scheduler/scheduler.proto) file for the full API.
+ 
+ ```protobuf
+ service SchedulerService {
+@@ -208,11 +208,50 @@ service SchedulerService {
+ 
+    // Cancel any scheduled job
+    rpc CancelSchedule(CancelRequest) returns (CancelResponse);
++
++   // Get current time in multiple formats
++   rpc TimeNow(TimeNowRequest) returns (TimeNowResponse);
+ }
+ ```
+ 
++**Key Features:**
++
+ - **One-time scheduling**: Schedule a callback to be executed once after a specified delay.
+ - **Recurring scheduling**: Schedule a callback to be executed repeatedly according to a cron expression.
++- **Current time access**: Get the current time in standardized formats for time-based operations.
++
++**TimeNow Function:**
++
++The `TimeNow` function returns the current time in three formats:
++
++```protobuf
++message TimeNowResponse {
++    string rfc3339_nano = 1;     // RFC3339 format with nanosecond precision
++    int64 unix_milli = 2;        // Unix timestamp in milliseconds
++    string local_time_zone = 3;  // Local timezone name (e.g., "UTC", "America/New_York")
++}
++```
++
++This allows plugins to:
++
++- Get high-precision timestamps for logging and event correlation
++- Perform time-based calculations using Unix timestamps
++- Handle timezone-aware operations by knowing the server's local timezone
++
++Example usage:
++
++```go
++// Get current time information
++timeResp, err := scheduler.TimeNow(ctx, &scheduler.TimeNowRequest{})
++if err != nil {
++    return err
++}
++
++// Use the different time formats
++timestamp := timeResp.Rfc3339Nano     // "2024-01-15T10:30:45.123456789Z"
++unixMs := timeResp.UnixMilli          // 1705312245123
++timezone := timeResp.LocalTimeZone    // "UTC"
++```
+ 
+ Plugins using this service must implement the `SchedulerCallback` interface:
+ 
+@@ -433,7 +472,7 @@ If no permissions are needed, use an empty permissions object: `"permissions": {
+ The following permission keys correspond to host services:
+ 
+ | Permission    | Host Service       | Description                                        | Required Fields                                       |
+-|---------------|--------------------|----------------------------------------------------|-------------------------------------------------------|
++| ------------- | ------------------ | -------------------------------------------------- | ----------------------------------------------------- |
+ | `http`        | HttpService        | Make HTTP requests (GET, POST, PUT, DELETE, etc..) | `reason`, `allowedUrls`                               |
+ | `websocket`   | WebSocketService   | Connect to and communicate via WebSockets          | `reason`, `allowedUrls`                               |
+ | `cache`       | CacheService       | Store and retrieve cached data with TTL            | `reason`                                              |
+diff --git a/plugins/adapter_media_agent.go b/plugins/adapter_media_agent.go
+index 43fc0e030a96072a49ca3bd27877f48c3e0c7f4f..7f29051e4c49598128f136f09d826989b63e371d 100644
+--- a/plugins/adapter_media_agent.go
++++ b/plugins/adapter_media_agent.go
+@@ -10,7 +10,7 @@ import (
+ )
+ 
+ // NewWasmMediaAgent creates a new adapter for a MetadataAgent plugin
+-func newWasmMediaAgent(wasmPath, pluginID string, m *Manager, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
++func newWasmMediaAgent(wasmPath, pluginID string, m *managerImpl, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
+ 	loader, err := api.NewMetadataAgentPlugin(context.Background(), api.WazeroRuntime(runtime), api.WazeroModuleConfig(mc))
+ 	if err != nil {
+ 		log.Error("Error creating media metadata service plugin", "plugin", pluginID, "path", wasmPath, err)
+diff --git a/plugins/adapter_media_agent_test.go b/plugins/adapter_media_agent_test.go
+index 709fd62cd25ce0a462f4e20f7fe00c0dafc69658..e730507f3b8f4a69cd1560b782d5b1483b0c8df6 100644
+--- a/plugins/adapter_media_agent_test.go
++++ b/plugins/adapter_media_agent_test.go
+@@ -14,7 +14,7 @@ import (
+ 
+ var _ = Describe("Adapter Media Agent", func() {
+ 	var ctx context.Context
+-	var mgr *Manager
++	var mgr *managerImpl
+ 
+ 	BeforeEach(func() {
+ 		ctx = GinkgoT().Context()
+diff --git a/plugins/adapter_scheduler_callback.go b/plugins/adapter_scheduler_callback.go
+index 2fe94d6139fe5be51c840b5a689a901cc6f72b9c..2e9f5a9682df7a456fadbf54882940b59e0a3722 100644
+--- a/plugins/adapter_scheduler_callback.go
++++ b/plugins/adapter_scheduler_callback.go
+@@ -9,7 +9,7 @@ import (
+ )
+ 
+ // newWasmSchedulerCallback creates a new adapter for a SchedulerCallback plugin
+-func newWasmSchedulerCallback(wasmPath, pluginID string, m *Manager, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
++func newWasmSchedulerCallback(wasmPath, pluginID string, m *managerImpl, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
+ 	loader, err := api.NewSchedulerCallbackPlugin(context.Background(), api.WazeroRuntime(runtime), api.WazeroModuleConfig(mc))
+ 	if err != nil {
+ 		log.Error("Error creating scheduler callback plugin", "plugin", pluginID, "path", wasmPath, err)
+diff --git a/plugins/adapter_scrobbler.go b/plugins/adapter_scrobbler.go
+index b9c27901f2e8057e627806e747181015aa4e3700..874ce6b3d189475f3577f84c51dbb87a1adef819 100644
+--- a/plugins/adapter_scrobbler.go
++++ b/plugins/adapter_scrobbler.go
+@@ -12,7 +12,7 @@ import (
+ 	"github.com/tetratelabs/wazero"
+ )
+ 
+-func newWasmScrobblerPlugin(wasmPath, pluginID string, m *Manager, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
++func newWasmScrobblerPlugin(wasmPath, pluginID string, m *managerImpl, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
+ 	loader, err := api.NewScrobblerPlugin(context.Background(), api.WazeroRuntime(runtime), api.WazeroModuleConfig(mc))
+ 	if err != nil {
+ 		log.Error("Error creating scrobbler service plugin", "plugin", pluginID, "path", wasmPath, err)
+diff --git a/plugins/adapter_websocket_callback.go b/plugins/adapter_websocket_callback.go
+index c45ee342e72cc6b24a4d1daa1c00fe58271e2249..288578d823e8d7b7b4b21cfba3add4caef547098 100644
+--- a/plugins/adapter_websocket_callback.go
++++ b/plugins/adapter_websocket_callback.go
+@@ -9,7 +9,7 @@ import (
+ )
+ 
+ // newWasmWebSocketCallback creates a new adapter for a WebSocketCallback plugin
+-func newWasmWebSocketCallback(wasmPath, pluginID string, m *Manager, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
++func newWasmWebSocketCallback(wasmPath, pluginID string, m *managerImpl, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin {
+ 	loader, err := api.NewWebSocketCallbackPlugin(context.Background(), api.WazeroRuntime(runtime), api.WazeroModuleConfig(mc))
+ 	if err != nil {
+ 		log.Error("Error creating WebSocket callback plugin", "plugin", pluginID, "path", wasmPath, err)
+diff --git a/plugins/api/api.pb.go b/plugins/api/api.pb.go
+index 47359890411530332db5b1fa1365fa7d5b10c654..b570d5c61ca851d0d0c4b3d396888452caac8280 100644
+--- a/plugins/api/api.pb.go
++++ b/plugins/api/api.pb.go
+@@ -903,7 +903,6 @@ type InitRequest struct {
+ 	sizeCache     protoimpl.SizeCache
+ 	unknownFields protoimpl.UnknownFields
+ 
+-	// Empty for now
+ 	Config map[string]string `protobuf:"bytes,1,rep,name=config,proto3" json:"config,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // Configuration specific to this plugin
+ }
+ 
+diff --git a/plugins/api/api.proto b/plugins/api/api.proto
+index c451a82fc32d364cdda666cf5bc1f0303ba88792..7929ff9e63a5cb9a36d950bb48701de60589b56b 100644
+--- a/plugins/api/api.proto
++++ b/plugins/api/api.proto
+@@ -194,7 +194,6 @@ service LifecycleManagement {
+ }
+ 
+ message InitRequest {
+-  // Empty for now
+   map<string, string> config = 1;  // Configuration specific to this plugin
+ }
+ 
+diff --git a/plugins/api/api_plugin_dev_named_registry.go b/plugins/api/api_plugin_dev_named_registry.go
+index 05421ad734f9dca2ca5f49365c233585ef7759c9..2ddb68779912e39336edd3911de2f90ee6b06f0e 100644
+--- a/plugins/api/api_plugin_dev_named_registry.go
++++ b/plugins/api/api_plugin_dev_named_registry.go
+@@ -88,3 +88,7 @@ func (n *namedSchedulerService) CancelSchedule(ctx context.Context, request *sch
+ 	request.ScheduleId = key
+ 	return n.svc.CancelSchedule(ctx, request)
+ }
++
++func (n *namedSchedulerService) TimeNow(ctx context.Context, request *scheduler.TimeNowRequest) (*scheduler.TimeNowResponse, error) {
++	return n.svc.TimeNow(ctx, request)
++}
+diff --git a/plugins/examples/discord-rich-presence/README.md b/plugins/examples/discord-rich-presence/README.md
+index 8cb97224a61bd06e140eb5ad2507725ff78d82ac..80b12166fa1aedc6b06162c7b7a0249e18c27537 100644
+--- a/plugins/examples/discord-rich-presence/README.md
++++ b/plugins/examples/discord-rich-presence/README.md
+@@ -59,7 +59,7 @@ clientID, users, err := d.getConfig(ctx)
+ Add the following to `navidrome.toml` and adjust for your tokens:
+ 
+ ```toml
+-[PluginSettings.discord-rich-presence]
++[PluginConfig.discord-rich-presence]
+ ClientID = "123456789012345678"
+ Users = "alice:token123,bob:token456"
+ ```
+diff --git a/plugins/host/scheduler/scheduler.pb.go b/plugins/host/scheduler/scheduler.pb.go
+index 6d4c292051f8aabc139d27342d4353d2bb535d31..07d250cc55f7ed1d0d9c15f8194e797835ae249f 100644
+--- a/plugins/host/scheduler/scheduler.pb.go
++++ b/plugins/host/scheduler/scheduler.pb.go
+@@ -154,6 +154,51 @@ func (x *CancelResponse) GetError() string {
+ 	return ""
+ }
+ 
++type TimeNowRequest struct {
++	state         protoimpl.MessageState
++	sizeCache     protoimpl.SizeCache
++	unknownFields protoimpl.UnknownFields
++}
++
++func (x *TimeNowRequest) ProtoReflect() protoreflect.Message {
++	panic(`not implemented`)
++}
++
++type TimeNowResponse struct {
++	state         protoimpl.MessageState
++	sizeCache     protoimpl.SizeCache
++	unknownFields protoimpl.UnknownFields
++
++	Rfc3339Nano   string `protobuf:"bytes,1,opt,name=rfc3339_nano,json=rfc3339Nano,proto3" json:"rfc3339_nano,omitempty"`         // Current time in RFC3339Nano format
++	UnixMilli     int64  `protobuf:"varint,2,opt,name=unix_milli,json=unixMilli,proto3" json:"unix_milli,omitempty"`              // Current time as Unix milliseconds timestamp
++	LocalTimeZone string `protobuf:"bytes,3,opt,name=local_time_zone,json=localTimeZone,proto3" json:"local_time_zone,omitempty"` // Local timezone name (e.g., "America/New_York", "UTC")
++}
++
++func (x *TimeNowResponse) ProtoReflect() protoreflect.Message {
++	panic(`not implemented`)
++}
++
++func (x *TimeNowResponse) GetRfc3339Nano() string {
++	if x != nil {
++		return x.Rfc3339Nano
++	}
++	return ""
++}
++
++func (x *TimeNowResponse) GetUnixMilli() int64 {
++	if x != nil {
++		return x.UnixMilli
++	}
++	return 0
++}
++
++func (x *TimeNowResponse) GetLocalTimeZone() string {
++	if x != nil {
++		return x.LocalTimeZone
++	}
++	return ""
++}
++
+ // go:plugin type=host version=1
+ type SchedulerService interface {
+ 	// One-time event scheduling
+@@ -162,4 +207,6 @@ type SchedulerService interface {
+ 	ScheduleRecurring(context.Context, *ScheduleRecurringRequest) (*ScheduleResponse, error)
+ 	// Cancel any scheduled job
+ 	CancelSchedule(context.Context, *CancelRequest) (*CancelResponse, error)
++	// Get current time in multiple formats
++	TimeNow(context.Context, *TimeNowRequest) (*TimeNowResponse, error)
+ }
+diff --git a/plugins/host/scheduler/scheduler.proto b/plugins/host/scheduler/scheduler.proto
+index 39fd32a5853e33296f3da9e22a816da5b2ccb3cf..d164b4f9060ecb17dadd5bb87e1691fb09049bb5 100644
+--- a/plugins/host/scheduler/scheduler.proto
++++ b/plugins/host/scheduler/scheduler.proto
+@@ -14,6 +14,9 @@ service SchedulerService {
+     
+     // Cancel any scheduled job
+     rpc CancelSchedule(CancelRequest) returns (CancelResponse);
++    
++    // Get current time in multiple formats
++    rpc TimeNow(TimeNowRequest) returns (TimeNowResponse);
+ }
+ 
+ message ScheduleOneTimeRequest {
+@@ -39,4 +42,14 @@ message CancelRequest {
+ message CancelResponse {
+     bool success = 1;              // Whether cancellation was successful
+     string error = 2;              // Error message if cancellation failed
++}
++
++message TimeNowRequest {
++    // Empty request - no parameters needed
++}
++
++message TimeNowResponse {
++    string rfc3339_nano = 1;       // Current time in RFC3339Nano format
++    int64 unix_milli = 2;          // Current time as Unix milliseconds timestamp
++    string local_time_zone = 3;    // Local timezone name (e.g., "America/New_York", "UTC")
+ } 
+\ No newline at end of file
+diff --git a/plugins/host/scheduler/scheduler_host.pb.go b/plugins/host/scheduler/scheduler_host.pb.go
+index 289f3f0bb975a5917b08bacdafe68f97c0fa222f..714603a3b0a7964af9a833f900f5bc6c3a11b7f5 100644
+--- a/plugins/host/scheduler/scheduler_host.pb.go
++++ b/plugins/host/scheduler/scheduler_host.pb.go
+@@ -44,6 +44,11 @@ func Instantiate(ctx context.Context, r wazero.Runtime, hostFunctions SchedulerS
+ 		WithParameterNames("offset", "size").
+ 		Export("cancel_schedule")
+ 
++	envBuilder.NewFunctionBuilder().
++		WithGoModuleFunction(api.GoModuleFunc(h._TimeNow), []api.ValueType{i32, i32}, []api.ValueType{i64}).
++		WithParameterNames("offset", "size").
++		Export("time_now")
++
+ 	_, err := envBuilder.Instantiate(ctx)
+ 	return err
+ }
+@@ -134,3 +139,32 @@ func (h _schedulerService) _CancelSchedule(ctx context.Context, m api.Module, st
+ 	ptrLen := (ptr << uint64(32)) | uint64(len(buf))
+ 	stack[0] = ptrLen
+ }
++
++// Get current time in multiple formats
++
++func (h _schedulerService) _TimeNow(ctx context.Context, m api.Module, stack []uint64) {
++	offset, size := uint32(stack[0]), uint32(stack[1])
++	buf, err := wasm.ReadMemory(m.Memory(), offset, size)
++	if err != nil {
++		panic(err)
++	}
++	request := new(TimeNowRequest)
++	err = request.UnmarshalVT(buf)
++	if err != nil {
++		panic(err)
++	}
++	resp, err := h.TimeNow(ctx, request)
++	if err != nil {
++		panic(err)
++	}
++	buf, err = resp.MarshalVT()
++	if err != nil {
++		panic(err)
++	}
++	ptr, err := wasm.WriteMemory(ctx, m, buf)
++	if err != nil {
++		panic(err)
++	}
++	ptrLen := (ptr << uint64(32)) | uint64(len(buf))
++	stack[0] = ptrLen
++}
+diff --git a/plugins/host/scheduler/scheduler_plugin.pb.go b/plugins/host/scheduler/scheduler_plugin.pb.go
+index afbed2bf0786b4ba3e33055e5e48662d6e85b7ce..ab7f8cd483d15357824b3e4dadc77fa7d25ae99f 100644
+--- a/plugins/host/scheduler/scheduler_plugin.pb.go
++++ b/plugins/host/scheduler/scheduler_plugin.pb.go
+@@ -88,3 +88,26 @@ func (h schedulerService) CancelSchedule(ctx context.Context, request *CancelReq
+ 	}
+ 	return response, nil
+ }
++
++//go:wasmimport env time_now
++func _time_now(ptr uint32, size uint32) uint64
++
++func (h schedulerService) TimeNow(ctx context.Context, request *TimeNowRequest) (*TimeNowResponse, error) {
++	buf, err := request.MarshalVT()
++	if err != nil {
++		return nil, err
++	}
++	ptr, size := wasm.ByteToPtr(buf)
++	ptrSize := _time_now(ptr, size)
++	wasm.Free(ptr)
++
++	ptr = uint32(ptrSize >> 32)
++	size = uint32(ptrSize)
++	buf = wasm.PtrToByte(ptr, size)
++
++	response := new(TimeNowResponse)
++	if err = response.UnmarshalVT(buf); err != nil {
++		return nil, err
++	}
++	return response, nil
++}
+diff --git a/plugins/host/scheduler/scheduler_vtproto.pb.go b/plugins/host/scheduler/scheduler_vtproto.pb.go
+index 1606ab7f035d78743997f35f56354fdcd1b538b7..ee6421783893303899b07be07f32b272b66f1048 100644
+--- a/plugins/host/scheduler/scheduler_vtproto.pb.go
++++ b/plugins/host/scheduler/scheduler_vtproto.pb.go
+@@ -256,6 +256,91 @@ func (m *CancelResponse) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+ 	return len(dAtA) - i, nil
+ }
+ 
++func (m *TimeNowRequest) MarshalVT() (dAtA []byte, err error) {
++	if m == nil {
++		return nil, nil
++	}
++	size := m.SizeVT()
++	dAtA = make([]byte, size)
++	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
++	if err != nil {
++		return nil, err
++	}
++	return dAtA[:n], nil
++}
++
++func (m *TimeNowRequest) MarshalToVT(dAtA []byte) (int, error) {
++	size := m.SizeVT()
++	return m.MarshalToSizedBufferVT(dAtA[:size])
++}
++
++func (m *TimeNowRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
++	if m == nil {
++		return 0, nil
++	}
++	i := len(dAtA)
++	_ = i
++	var l int
++	_ = l
++	if m.unknownFields != nil {
++		i -= len(m.unknownFields)
++		copy(dAtA[i:], m.unknownFields)
++	}
++	return len(dAtA) - i, nil
++}
++
++func (m *TimeNowResponse) MarshalVT() (dAtA []byte, err error) {
++	if m == nil {
++		return nil, nil
++	}
++	size := m.SizeVT()
++	dAtA = make([]byte, size)
++	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
++	if err != nil {
++		return nil, err
++	}
++	return dAtA[:n], nil
++}
++
++func (m *TimeNowResponse) MarshalToVT(dAtA []byte) (int, error) {
++	size := m.SizeVT()
++	return m.MarshalToSizedBufferVT(dAtA[:size])
++}
++
++func (m *TimeNowResponse) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
++	if m == nil {
++		return 0, nil
++	}
++	i := len(dAtA)
++	_ = i
++	var l int
++	_ = l
++	if m.unknownFields != nil {
++		i -= len(m.unknownFields)
++		copy(dAtA[i:], m.unknownFields)
++	}
++	if len(m.LocalTimeZone) > 0 {
++		i -= len(m.LocalTimeZone)
++		copy(dAtA[i:], m.LocalTimeZone)
++		i = encodeVarint(dAtA, i, uint64(len(m.LocalTimeZone)))
++		i--
++		dAtA[i] = 0x1a
++	}
++	if m.UnixMilli != 0 {
++		i = encodeVarint(dAtA, i, uint64(m.UnixMilli))
++		i--
++		dAtA[i] = 0x10
++	}
++	if len(m.Rfc3339Nano) > 0 {
++		i -= len(m.Rfc3339Nano)
++		copy(dAtA[i:], m.Rfc3339Nano)
++		i = encodeVarint(dAtA, i, uint64(len(m.Rfc3339Nano)))
++		i--
++		dAtA[i] = 0xa
++	}
++	return len(dAtA) - i, nil
++}
++
+ func encodeVarint(dAtA []byte, offset int, v uint64) int {
+ 	offset -= sov(v)
+ 	base := offset
+@@ -355,6 +440,37 @@ func (m *CancelResponse) SizeVT() (n int) {
+ 	return n
+ }
+ 
++func (m *TimeNowRequest) SizeVT() (n int) {
++	if m == nil {
++		return 0
++	}
++	var l int
++	_ = l
++	n += len(m.unknownFields)
++	return n
++}
++
++func (m *TimeNowResponse) SizeVT() (n int) {
++	if m == nil {
++		return 0
++	}
++	var l int
++	_ = l
++	l = len(m.Rfc3339Nano)
++	if l > 0 {
++		n += 1 + l + sov(uint64(l))
++	}
++	if m.UnixMilli != 0 {
++		n += 1 + sov(uint64(m.UnixMilli))
++	}
++	l = len(m.LocalTimeZone)
++	if l > 0 {
++		n += 1 + l + sov(uint64(l))
++	}
++	n += len(m.unknownFields)
++	return n
++}
++
+ func sov(x uint64) (n int) {
+ 	return (bits.Len64(x|1) + 6) / 7
+ }
+@@ -915,6 +1031,191 @@ func (m *CancelResponse) UnmarshalVT(dAtA []byte) error {
+ 	}
+ 	return nil
+ }
++func (m *TimeNowRequest) UnmarshalVT(dAtA []byte) error {
++	l := len(dAtA)
++	iNdEx := 0
++	for iNdEx < l {
++		preIndex := iNdEx
++		var wire uint64
++		for shift := uint(0); ; shift += 7 {
++			if shift >= 64 {
++				return ErrIntOverflow
++			}
++			if iNdEx >= l {
++				return io.ErrUnexpectedEOF
++			}
++			b := dAtA[iNdEx]
++			iNdEx++
++			wire |= uint64(b&0x7F) << shift
++			if b < 0x80 {
++				break
++			}
++		}
++		fieldNum := int32(wire >> 3)
++		wireType := int(wire & 0x7)
++		if wireType == 4 {
++			return fmt.Errorf("proto: TimeNowRequest: wiretype end group for non-group")
++		}
++		if fieldNum <= 0 {
++			return fmt.Errorf("proto: TimeNowRequest: illegal tag %d (wire type %d)", fieldNum, wire)
++		}
++		switch fieldNum {
++		default:
++			iNdEx = preIndex
++			skippy, err := skip(dAtA[iNdEx:])
++			if err != nil {
++				return err
++			}
++			if (skippy < 0) || (iNdEx+skippy) < 0 {
++				return ErrInvalidLength
++			}
++			if (iNdEx + skippy) > l {
++				return io.ErrUnexpectedEOF
++			}
++			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
++			iNdEx += skippy
++		}
++	}
++
++	if iNdEx > l {
++		return io.ErrUnexpectedEOF
++	}
++	return nil
++}
++func (m *TimeNowResponse) UnmarshalVT(dAtA []byte) error {
++	l := len(dAtA)
++	iNdEx := 0
++	for iNdEx < l {
++		preIndex := iNdEx
++		var wire uint64
++		for shift := uint(0); ; shift += 7 {
++			if shift >= 64 {
++				return ErrIntOverflow
++			}
++			if iNdEx >= l {
++				return io.ErrUnexpectedEOF
++			}
++			b := dAtA[iNdEx]
++			iNdEx++
++			wire |= uint64(b&0x7F) << shift
++			if b < 0x80 {
++				break
++			}
++		}
++		fieldNum := int32(wire >> 3)
++		wireType := int(wire & 0x7)
++		if wireType == 4 {
++			return fmt.Errorf("proto: TimeNowResponse: wiretype end group for non-group")
++		}
++		if fieldNum <= 0 {
++			return fmt.Errorf("proto: TimeNowResponse: illegal tag %d (wire type %d)", fieldNum, wire)
++		}
++		switch fieldNum {
++		case 1:
++			if wireType != 2 {
++				return fmt.Errorf("proto: wrong wireType = %d for field Rfc3339Nano", wireType)
++			}
++			var stringLen uint64
++			for shift := uint(0); ; shift += 7 {
++				if shift >= 64 {
++					return ErrIntOverflow
++				}
++				if iNdEx >= l {
++					return io.ErrUnexpectedEOF
++				}
++				b := dAtA[iNdEx]
++				iNdEx++
++				stringLen |= uint64(b&0x7F) << shift
++				if b < 0x80 {
++					break
++				}
++			}
++			intStringLen := int(stringLen)
++			if intStringLen < 0 {
++				return ErrInvalidLength
++			}
++			postIndex := iNdEx + intStringLen
++			if postIndex < 0 {
++				return ErrInvalidLength
++			}
++			if postIndex > l {
++				return io.ErrUnexpectedEOF
++			}
++			m.Rfc3339Nano = string(dAtA[iNdEx:postIndex])
++			iNdEx = postIndex
++		case 2:
++			if wireType != 0 {
++				return fmt.Errorf("proto: wrong wireType = %d for field UnixMilli", wireType)
++			}
++			m.UnixMilli = 0
++			for shift := uint(0); ; shift += 7 {
++				if shift >= 64 {
++					return ErrIntOverflow
++				}
++				if iNdEx >= l {
++					return io.ErrUnexpectedEOF
++				}
++				b := dAtA[iNdEx]
++				iNdEx++
++				m.UnixMilli |= int64(b&0x7F) << shift
++				if b < 0x80 {
++					break
++				}
++			}
++		case 3:
++			if wireType != 2 {
++				return fmt.Errorf("proto: wrong wireType = %d for field LocalTimeZone", wireType)
++			}
++			var stringLen uint64
++			for shift := uint(0); ; shift += 7 {
++				if shift >= 64 {
++					return ErrIntOverflow
++				}
++				if iNdEx >= l {
++					return io.ErrUnexpectedEOF
++				}
++				b := dAtA[iNdEx]
++				iNdEx++
++				stringLen |= uint64(b&0x7F) << shift
++				if b < 0x80 {
++					break
++				}
++			}
++			intStringLen := int(stringLen)
++			if intStringLen < 0 {
++				return ErrInvalidLength
++			}
++			postIndex := iNdEx + intStringLen
++			if postIndex < 0 {
++				return ErrInvalidLength
++			}
++			if postIndex > l {
++				return io.ErrUnexpectedEOF
++			}
++			m.LocalTimeZone = string(dAtA[iNdEx:postIndex])
++			iNdEx = postIndex
++		default:
++			iNdEx = preIndex
++			skippy, err := skip(dAtA[iNdEx:])
++			if err != nil {
++				return err
++			}
++			if (skippy < 0) || (iNdEx+skippy) < 0 {
++				return ErrInvalidLength
++			}
++			if (iNdEx + skippy) > l {
++				return io.ErrUnexpectedEOF
++			}
++			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
++			iNdEx += skippy
++		}
++	}
++
++	if iNdEx > l {
++		return io.ErrUnexpectedEOF
++	}
++	return nil
++}
+ 
+ func skip(dAtA []byte) (n int, err error) {
+ 	l := len(dAtA)
+diff --git a/plugins/host_scheduler.go b/plugins/host_scheduler.go
+index 6cea932807f4d8e7a9063957faa227bda2e64ed0..d9561d5db19c0663d1c35f5978deada6938c8441 100644
+--- a/plugins/host_scheduler.go
++++ b/plugins/host_scheduler.go
+@@ -46,16 +46,20 @@ func (s SchedulerHostFunctions) CancelSchedule(ctx context.Context, req *schedul
+ 	return s.ss.cancelSchedule(ctx, s.pluginID, req)
+ }
+ 
++func (s SchedulerHostFunctions) TimeNow(ctx context.Context, req *scheduler.TimeNowRequest) (*scheduler.TimeNowResponse, error) {
++	return s.ss.timeNow(ctx, req)
++}
++
+ type schedulerService struct {
+ 	// Map of schedule IDs to their callback info
+ 	schedules  map[string]*ScheduledCallback
+-	manager    *Manager
++	manager    *managerImpl
+ 	navidSched navidsched.Scheduler // Navidrome scheduler for recurring jobs
+ 	mu         sync.Mutex
+ }
+ 
+ // newSchedulerService creates a new schedulerService instance
+-func newSchedulerService(manager *Manager) *schedulerService {
++func newSchedulerService(manager *managerImpl) *schedulerService {
+ 	return &schedulerService{
+ 		schedules:  make(map[string]*ScheduledCallback),
+ 		manager:    manager,
+@@ -261,6 +265,17 @@ func (s *schedulerService) cancelSchedule(_ context.Context, pluginID string, re
+ 	}, nil
+ }
+ 
++// timeNow returns the current time in multiple formats
++func (s *schedulerService) timeNow(_ context.Context, req *scheduler.TimeNowRequest) (*scheduler.TimeNowResponse, error) {
++	now := time.Now()
++
++	return &scheduler.TimeNowResponse{
++		Rfc3339Nano:   now.Format(time.RFC3339Nano),
++		UnixMilli:     now.UnixMilli(),
++		LocalTimeZone: now.Location().String(),
++	}, nil
++}
++
+ // runOneTimeSchedule handles the one-time schedule execution and callback
+ func (s *schedulerService) runOneTimeSchedule(ctx context.Context, internalScheduleId string, delay time.Duration) {
+ 	tmr := time.NewTimer(delay)
+diff --git a/plugins/host_scheduler_test.go b/plugins/host_scheduler_test.go
+index f544d716e44daa8a389fcbb9dba7e77e1f92a6cc..1a3efaae91caf055feacc941ed78fbb94079588d 100644
+--- a/plugins/host_scheduler_test.go
++++ b/plugins/host_scheduler_test.go
+@@ -2,7 +2,9 @@ package plugins
+ 
+ import (
+ 	"context"
++	"time"
+ 
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/host/scheduler"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -11,12 +13,12 @@ import (
+ var _ = Describe("SchedulerService", func() {
+ 	var (
+ 		ss         *schedulerService
+-		manager    *Manager
++		manager    *managerImpl
+ 		pluginName = "test_plugin"
+ 	)
+ 
+ 	BeforeEach(func() {
+-		manager = createManager(nil, nil)
++		manager = createManager(nil, metrics.NewNoopInstance())
+ 		ss = manager.schedulerService
+ 	})
+ 
+@@ -163,4 +165,28 @@ var _ = Describe("SchedulerService", func() {
+ 			Expect(ss.scheduleCount()).To(Equal(beforeCount), "Job count should remain the same after replacement")
+ 		})
+ 	})
++
++	Describe("TimeNow", func() {
++		It("returns current time in RFC3339Nano, Unix milliseconds, and local timezone", func() {
++			now := time.Now()
++			req := &scheduler.TimeNowRequest{}
++			resp, err := ss.timeNow(context.Background(), req)
++
++			Expect(err).ToNot(HaveOccurred())
++			Expect(resp.UnixMilli).To(BeNumerically(">=", now.UnixMilli()))
++			Expect(resp.LocalTimeZone).ToNot(BeEmpty())
++
++			// Validate RFC3339Nano format can be parsed
++			parsedTime, parseErr := time.Parse(time.RFC3339Nano, resp.Rfc3339Nano)
++			Expect(parseErr).ToNot(HaveOccurred())
++
++			// Validate that Unix milliseconds is reasonably close to the RFC3339Nano time
++			expectedMillis := parsedTime.UnixMilli()
++			Expect(resp.UnixMilli).To(Equal(expectedMillis))
++
++			// Validate local timezone matches the current system timezone
++			expectedTimezone := now.Location().String()
++			Expect(resp.LocalTimeZone).To(Equal(expectedTimezone))
++		})
++	})
+ })
+diff --git a/plugins/host_websocket.go b/plugins/host_websocket.go
+index 131596b94cba8dc14948852b877e7f77cf169e8f..452ea6633c5fa1cbc6025374f4e864f458046b47 100644
+--- a/plugins/host_websocket.go
++++ b/plugins/host_websocket.go
+@@ -50,12 +50,12 @@ func (s WebSocketHostFunctions) Close(ctx context.Context, req *websocket.CloseR
+ // websocketService implements the WebSocket service functionality
+ type websocketService struct {
+ 	connections map[string]*WebSocketConnection
+-	manager     *Manager
++	manager     *managerImpl
+ 	mu          sync.RWMutex
+ }
+ 
+ // newWebsocketService creates a new websocketService instance
+-func newWebsocketService(manager *Manager) *websocketService {
++func newWebsocketService(manager *managerImpl) *websocketService {
+ 	return &websocketService{
+ 		connections: make(map[string]*WebSocketConnection),
+ 		manager:     manager,
+diff --git a/plugins/host_websocket_test.go b/plugins/host_websocket_test.go
+index b6f4e20945a1539ec5689f66d8977350fb2cd4fc..00b20b452989e9766fc2302d53ba6d274c44112d 100644
+--- a/plugins/host_websocket_test.go
++++ b/plugins/host_websocket_test.go
+@@ -17,7 +17,7 @@ import (
+ var _ = Describe("WebSocket Host Service", func() {
+ 	var (
+ 		wsService      *websocketService
+-		manager        *Manager
++		manager        *managerImpl
+ 		ctx            context.Context
+ 		server         *httptest.Server
+ 		upgrader       gorillaws.Upgrader
+diff --git a/plugins/manager.go b/plugins/manager.go
+index 89ff854ae3f1a039dda1cd441787c4905e2df43c..6d872eff4f9f6661c5e4a7cd64d5620af3d2bd9f 100644
+--- a/plugins/manager.go
++++ b/plugins/manager.go
+@@ -40,7 +40,7 @@ const (
+ )
+ 
+ // pluginCreators maps capability types to their respective creator functions
+-type pluginConstructor func(wasmPath, pluginID string, m *Manager, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin
++type pluginConstructor func(wasmPath, pluginID string, m *managerImpl, runtime api.WazeroNewRuntime, mc wazero.ModuleConfig) WasmPlugin
+ 
+ var pluginCreators = map[string]pluginConstructor{
+ 	CapabilityMetadataAgent:     newWasmMediaAgent,
+@@ -86,8 +86,21 @@ func (p *plugin) waitForCompilation() error {
+ 
+ type SubsonicRouter http.Handler
+ 
+-// Manager is a singleton that manages plugins
+-type Manager struct {
++type Manager interface {
++	SetSubsonicRouter(router SubsonicRouter)
++	EnsureCompiled(name string) error
++	PluginNames(serviceName string) []string
++	LoadPlugin(name string, capability string) WasmPlugin
++	LoadAllPlugins(capability string) []WasmPlugin
++	LoadMediaAgent(name string) (agents.Interface, bool)
++	LoadAllMediaAgents() []agents.Interface
++	LoadScrobbler(name string) (scrobbler.Scrobbler, bool)
++	LoadAllScrobblers() []scrobbler.Scrobbler
++	ScanPlugins()
++}
++
++// managerImpl is a singleton that manages plugins
++type managerImpl struct {
+ 	plugins          map[string]*plugin             // Map of plugin folder name to plugin info
+ 	mu               sync.RWMutex                   // Protects plugins map
+ 	subsonicRouter   atomic.Pointer[SubsonicRouter] // Subsonic API router
+@@ -99,16 +112,19 @@ type Manager struct {
+ 	metrics          metrics.Metrics
+ }
+ 
+-// GetManager returns the singleton instance of Manager
+-func GetManager(ds model.DataStore, metrics metrics.Metrics) *Manager {
+-	return singleton.GetInstance(func() *Manager {
++// GetManager returns the singleton instance of managerImpl
++func GetManager(ds model.DataStore, metrics metrics.Metrics) Manager {
++	if !conf.Server.Plugins.Enabled {
++		return &noopManager{}
++	}
++	return singleton.GetInstance(func() *managerImpl {
+ 		return createManager(ds, metrics)
+ 	})
+ }
+ 
+-// createManager creates a new Manager instance. Used in tests
+-func createManager(ds model.DataStore, metrics metrics.Metrics) *Manager {
+-	m := &Manager{
++// createManager creates a new managerImpl instance. Used in tests
++func createManager(ds model.DataStore, metrics metrics.Metrics) *managerImpl {
++	m := &managerImpl{
+ 		plugins:   make(map[string]*plugin),
+ 		lifecycle: newPluginLifecycleManager(),
+ 		ds:        ds,
+@@ -122,14 +138,14 @@ func createManager(ds model.DataStore, metrics metrics.Metrics) *Manager {
+ 	return m
+ }
+ 
+-// SetSubsonicRouter sets the SubsonicRouter after Manager initialization
+-func (m *Manager) SetSubsonicRouter(router SubsonicRouter) {
++// SetSubsonicRouter sets the SubsonicRouter after managerImpl initialization
++func (m *managerImpl) SetSubsonicRouter(router SubsonicRouter) {
+ 	m.subsonicRouter.Store(&router)
+ }
+ 
+ // registerPlugin adds a plugin to the registry with the given parameters
+ // Used internally by ScanPlugins to register plugins
+-func (m *Manager) registerPlugin(pluginID, pluginDir, wasmPath string, manifest *schema.PluginManifest) *plugin {
++func (m *managerImpl) registerPlugin(pluginID, pluginDir, wasmPath string, manifest *schema.PluginManifest) *plugin {
+ 	// Create custom runtime function
+ 	customRuntime := m.createRuntime(pluginID, manifest.Permissions)
+ 
+@@ -190,7 +206,7 @@ func (m *Manager) registerPlugin(pluginID, pluginDir, wasmPath string, manifest
+ }
+ 
+ // initializePluginIfNeeded calls OnInit on plugins that implement LifecycleManagement
+-func (m *Manager) initializePluginIfNeeded(plugin *plugin) {
++func (m *managerImpl) initializePluginIfNeeded(plugin *plugin) {
+ 	// Skip if already initialized
+ 	if m.lifecycle.isInitialized(plugin) {
+ 		return
+@@ -207,7 +223,7 @@ func (m *Manager) initializePluginIfNeeded(plugin *plugin) {
+ }
+ 
+ // ScanPlugins scans the plugins directory, discovers all valid plugins, and registers them for use.
+-func (m *Manager) ScanPlugins() {
++func (m *managerImpl) ScanPlugins() {
+ 	// Clear existing plugins
+ 	m.mu.Lock()
+ 	m.plugins = make(map[string]*plugin)
+@@ -259,7 +275,7 @@ func (m *Manager) ScanPlugins() {
+ }
+ 
+ // PluginNames returns the folder names of all plugins that implement the specified capability
+-func (m *Manager) PluginNames(capability string) []string {
++func (m *managerImpl) PluginNames(capability string) []string {
+ 	m.mu.RLock()
+ 	defer m.mu.RUnlock()
+ 
+@@ -275,28 +291,26 @@ func (m *Manager) PluginNames(capability string) []string {
+ 	return names
+ }
+ 
+-func (m *Manager) getPlugin(name string, capability string) (*plugin, WasmPlugin) {
++func (m *managerImpl) getPlugin(name string, capability string) (*plugin, WasmPlugin, error) {
+ 	m.mu.RLock()
+ 	defer m.mu.RUnlock()
+ 	info, infoOk := m.plugins[name]
+ 	adapter, adapterOk := m.adapters[name+"_"+capability]
+ 
+ 	if !infoOk {
+-		log.Warn("Plugin not found", "name", name)
+-		return nil, nil
++		return nil, nil, fmt.Errorf("plugin not registered: %s", name)
+ 	}
+ 	if !adapterOk {
+-		log.Warn("Plugin adapter not found", "name", name, "capability", capability)
+-		return nil, nil
++		return nil, nil, fmt.Errorf("plugin adapter not registered: %s, capability: %s", name, capability)
+ 	}
+-	return info, adapter
++	return info, adapter, nil
+ }
+ 
+ // LoadPlugin instantiates and returns a plugin by folder name
+-func (m *Manager) LoadPlugin(name string, capability string) WasmPlugin {
+-	info, adapter := m.getPlugin(name, capability)
+-	if info == nil {
+-		log.Warn("Plugin not found", "name", name, "capability", capability)
++func (m *managerImpl) LoadPlugin(name string, capability string) WasmPlugin {
++	info, adapter, err := m.getPlugin(name, capability)
++	if err != nil {
++		log.Warn("Error loading plugin", err)
+ 		return nil
+ 	}
+ 
+@@ -318,7 +332,7 @@ func (m *Manager) LoadPlugin(name string, capability string) WasmPlugin {
+ // EnsureCompiled waits for a plugin to finish compilation and returns any compilation error.
+ // This is useful when you need to wait for compilation without loading a specific capability,
+ // such as during plugin refresh operations or health checks.
+-func (m *Manager) EnsureCompiled(name string) error {
++func (m *managerImpl) EnsureCompiled(name string) error {
+ 	m.mu.RLock()
+ 	plugin, ok := m.plugins[name]
+ 	m.mu.RUnlock()
+@@ -331,7 +345,7 @@ func (m *Manager) EnsureCompiled(name string) error {
+ }
+ 
+ // LoadAllPlugins instantiates and returns all plugins that implement the specified capability
+-func (m *Manager) LoadAllPlugins(capability string) []WasmPlugin {
++func (m *managerImpl) LoadAllPlugins(capability string) []WasmPlugin {
+ 	names := m.PluginNames(capability)
+ 	if len(names) == 0 {
+ 		return nil
+@@ -348,7 +362,7 @@ func (m *Manager) LoadAllPlugins(capability string) []WasmPlugin {
+ }
+ 
+ // LoadMediaAgent instantiates and returns a media agent plugin by folder name
+-func (m *Manager) LoadMediaAgent(name string) (agents.Interface, bool) {
++func (m *managerImpl) LoadMediaAgent(name string) (agents.Interface, bool) {
+ 	plugin := m.LoadPlugin(name, CapabilityMetadataAgent)
+ 	if plugin == nil {
+ 		return nil, false
+@@ -358,7 +372,7 @@ func (m *Manager) LoadMediaAgent(name string) (agents.Interface, bool) {
+ }
+ 
+ // LoadAllMediaAgents instantiates and returns all media agent plugins
+-func (m *Manager) LoadAllMediaAgents() []agents.Interface {
++func (m *managerImpl) LoadAllMediaAgents() []agents.Interface {
+ 	plugins := m.LoadAllPlugins(CapabilityMetadataAgent)
+ 
+ 	return slice.Map(plugins, func(p WasmPlugin) agents.Interface {
+@@ -367,7 +381,7 @@ func (m *Manager) LoadAllMediaAgents() []agents.Interface {
+ }
+ 
+ // LoadScrobbler instantiates and returns a scrobbler plugin by folder name
+-func (m *Manager) LoadScrobbler(name string) (scrobbler.Scrobbler, bool) {
++func (m *managerImpl) LoadScrobbler(name string) (scrobbler.Scrobbler, bool) {
+ 	plugin := m.LoadPlugin(name, CapabilityScrobbler)
+ 	if plugin == nil {
+ 		return nil, false
+@@ -377,10 +391,32 @@ func (m *Manager) LoadScrobbler(name string) (scrobbler.Scrobbler, bool) {
+ }
+ 
+ // LoadAllScrobblers instantiates and returns all scrobbler plugins
+-func (m *Manager) LoadAllScrobblers() []scrobbler.Scrobbler {
++func (m *managerImpl) LoadAllScrobblers() []scrobbler.Scrobbler {
+ 	plugins := m.LoadAllPlugins(CapabilityScrobbler)
+ 
+ 	return slice.Map(plugins, func(p WasmPlugin) scrobbler.Scrobbler {
+ 		return p.(scrobbler.Scrobbler)
+ 	})
+ }
++
++type noopManager struct{}
++
++func (n noopManager) SetSubsonicRouter(router SubsonicRouter) {}
++
++func (n noopManager) EnsureCompiled(name string) error { return nil }
++
++func (n noopManager) PluginNames(serviceName string) []string { return nil }
++
++func (n noopManager) LoadPlugin(name string, capability string) WasmPlugin { return nil }
++
++func (n noopManager) LoadAllPlugins(capability string) []WasmPlugin { return nil }
++
++func (n noopManager) LoadMediaAgent(name string) (agents.Interface, bool) { return nil, false }
++
++func (n noopManager) LoadAllMediaAgents() []agents.Interface { return nil }
++
++func (n noopManager) LoadScrobbler(name string) (scrobbler.Scrobbler, bool) { return nil, false }
++
++func (n noopManager) LoadAllScrobblers() []scrobbler.Scrobbler { return nil }
++
++func (n noopManager) ScanPlugins() {}
+diff --git a/plugins/manager_test.go b/plugins/manager_test.go
+index 55a3b8f728cd09426872e2900a8df598e1ea96fd..a6bb8ff0f3ec42f10b6f8d418621fd11f0821fc9 100644
+--- a/plugins/manager_test.go
++++ b/plugins/manager_test.go
+@@ -12,7 +12,7 @@ import (
+ )
+ 
+ var _ = Describe("Plugin Manager", func() {
+-	var mgr *Manager
++	var mgr *managerImpl
+ 	var ctx context.Context
+ 
+ 	BeforeEach(func() {
+@@ -76,7 +76,7 @@ var _ = Describe("Plugin Manager", func() {
+ 
+ 	Describe("ScanPlugins", func() {
+ 		var tempPluginsDir string
+-		var m *Manager
++		var m *managerImpl
+ 
+ 		BeforeEach(func() {
+ 			tempPluginsDir, _ = os.MkdirTemp("", "navidrome-plugins-test-*")
+diff --git a/plugins/manifest_permissions_test.go b/plugins/manifest_permissions_test.go
+index da221eb56ec7edff9c89cbc2dfaa5b412645aa62..188e1774600d19f6d4a7005d200d511bdb40cd02 100644
+--- a/plugins/manifest_permissions_test.go
++++ b/plugins/manifest_permissions_test.go
+@@ -47,7 +47,7 @@ func createTestPlugin(tempDir, name string, permissions schema.PluginManifestPer
+ 
+ var _ = Describe("Plugin Permissions", func() {
+ 	var (
+-		mgr     *Manager
++		mgr     *managerImpl
+ 		tempDir string
+ 		ctx     context.Context
+ 	)
+diff --git a/plugins/plugin_lifecycle_manager_test.go b/plugins/plugin_lifecycle_manager_test.go
+index c0621b2a708e9000844ff4067bae52507e99d9ac..e46f29b7658980fb0006df0738e5902861290b9a 100644
+--- a/plugins/plugin_lifecycle_manager_test.go
++++ b/plugins/plugin_lifecycle_manager_test.go
+@@ -18,7 +18,7 @@ func hasInitService(info *plugin) bool {
+ }
+ 
+ var _ = Describe("LifecycleManagement", func() {
+-	Describe("Plugin Lifecycle Manager", func() {
++	Describe("Plugin Lifecycle managerImpl", func() {
+ 		var lifecycleManager *pluginLifecycleManager
+ 
+ 		BeforeEach(func() {
+diff --git a/plugins/runtime.go b/plugins/runtime.go
+index f68175efcadc17337d73e041d8244ce1a18b6394..ee298e63d1b76f59f15b0517866995ea6419c78c 100644
+--- a/plugins/runtime.go
++++ b/plugins/runtime.go
+@@ -41,7 +41,7 @@ var (
+ 
+ // createRuntime returns a function that creates a new wazero runtime and instantiates the required host functions
+ // based on the given plugin permissions
+-func (m *Manager) createRuntime(pluginID string, permissions schema.PluginManifestPermissions) api.WazeroNewRuntime {
++func (m *managerImpl) createRuntime(pluginID string, permissions schema.PluginManifestPermissions) api.WazeroNewRuntime {
+ 	return func(ctx context.Context) (wazero.Runtime, error) {
+ 		// Check if runtime already exists
+ 		if rt, ok := runtimePool.Load(pluginID); ok {
+@@ -70,7 +70,7 @@ func (m *Manager) createRuntime(pluginID string, permissions schema.PluginManife
+ }
+ 
+ // createCachingRuntime handles the complex logic of setting up a new cachingRuntime
+-func (m *Manager) createCachingRuntime(ctx context.Context, pluginID string, permissions schema.PluginManifestPermissions) (*cachingRuntime, error) {
++func (m *managerImpl) createCachingRuntime(ctx context.Context, pluginID string, permissions schema.PluginManifestPermissions) (*cachingRuntime, error) {
+ 	// Get compilation cache
+ 	compCache, err := getCompilationCache()
+ 	if err != nil {
+@@ -94,7 +94,7 @@ func (m *Manager) createCachingRuntime(ctx context.Context, pluginID string, per
+ }
+ 
+ // setupHostServices configures all the permitted host services for a plugin
+-func (m *Manager) setupHostServices(ctx context.Context, r wazero.Runtime, pluginID string, permissions schema.PluginManifestPermissions) error {
++func (m *managerImpl) setupHostServices(ctx context.Context, r wazero.Runtime, pluginID string, permissions schema.PluginManifestPermissions) error {
+ 	// Define all available host services
+ 	type hostService struct {
+ 		name        string
+diff --git a/plugins/runtime_test.go b/plugins/runtime_test.go
+index 32cd421181b096da1408751536fa14ca4716b230..507f68b20abf53c3cc6af0ebf44f626dafefdda1 100644
+--- a/plugins/runtime_test.go
++++ b/plugins/runtime_test.go
+@@ -34,7 +34,7 @@ var _ = Describe("Runtime", func() {
+ var _ = Describe("CachingRuntime", func() {
+ 	var (
+ 		ctx    context.Context
+-		mgr    *Manager
++		mgr    *managerImpl
+ 		plugin *wasmScrobblerPlugin
+ 	)
+ 
+diff --git a/server/subsonic/middlewares.go b/server/subsonic/middlewares.go
+index b8f01c83ecb0b45654c85422bbe36d587264c05b..af1ba448f283483f7cc124d8904560fc993906a1 100644
+--- a/server/subsonic/middlewares.go
++++ b/server/subsonic/middlewares.go
+@@ -47,11 +47,23 @@ func postFormToQueryParams(next http.Handler) http.Handler {
+ 	})
+ }
+ 
++func fromInternalOrProxyAuth(r *http.Request) (string, bool) {
++	username := server.InternalAuth(r)
++
++	// If the username comes from internal auth, do not also do reverse proxy auth, as
++	// the request will have no reverse proxy IP
++	if username != "" {
++		return username, true
++	}
++
++	return server.UsernameFromReverseProxyHeader(r), false
++}
++
+ func checkRequiredParameters(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		var requiredParameters []string
+ 
+-		username := cmp.Or(server.InternalAuth(r), server.UsernameFromReverseProxyHeader(r))
++		username, _ := fromInternalOrProxyAuth(r)
+ 		if username != "" {
+ 			requiredParameters = []string{"v", "c"}
+ 		} else {
+@@ -91,10 +103,9 @@ func authenticate(ds model.DataStore) func(next http.Handler) http.Handler {
+ 			var usr *model.User
+ 			var err error
+ 
+-			internalAuth := server.InternalAuth(r)
+-			proxyAuth := server.UsernameFromReverseProxyHeader(r)
+-			if username := cmp.Or(internalAuth, proxyAuth); username != "" {
+-				authType := If(internalAuth != "", "internal", "reverse-proxy")
++			username, isInternalAuth := fromInternalOrProxyAuth(r)
++			if username != "" {
++				authType := If(isInternalAuth, "internal", "reverse-proxy")
+ 				usr, err = ds.User(ctx).FindByUsername(username)
+ 				if errors.Is(err, context.Canceled) {
+ 					log.Debug(ctx, "API: Request canceled when authenticating", "auth", authType, "username", username, "remoteAddr", r.RemoteAddr, err)

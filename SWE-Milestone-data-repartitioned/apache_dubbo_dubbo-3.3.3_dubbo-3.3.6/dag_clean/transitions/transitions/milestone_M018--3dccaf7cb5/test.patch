@@ -1,0 +1,730 @@
+diff --git a/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/AbortPolicyWithReportTest.java b/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/AbortPolicyWithReportTest.java
+index 5bafc1454e62e5849f8a65ef33e916ecdeef0f16..cfb7f3a2d495332b9599c600a285a00f66e71fed 100644
+--- a/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/AbortPolicyWithReportTest.java
++++ b/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/AbortPolicyWithReportTest.java
+@@ -77,6 +77,7 @@ class AbortPolicyWithReportTest {
+ 
+         await().until(() -> AbortPolicyWithReport.guard.availablePermits() == 1);
+         Assertions.assertNotNull(fileOutputStream.get());
++        executorService.shutdown();
+     }
+ 
+     @Test
+@@ -135,6 +136,7 @@ class AbortPolicyWithReportTest {
+         Assertions.assertEquals(
+                 runTimes, finishedCount.get() + failureCount.get(), "all the test thread should be run completely");
+         Assertions.assertEquals(1, jStackCount.get(), "'jstack' should be called only once in 10 minutes");
++        threadPoolExecutor.shutdown();
+     }
+ 
+     @Test
+diff --git a/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/eager/EagerThreadPoolExecutorTest.java b/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/eager/EagerThreadPoolExecutorTest.java
+index d3534d10eacafd21a53bbad7710b61376654b3da..8932662ea8f4174533b62ab322e0b3094bbe9c09 100644
+--- a/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/eager/EagerThreadPoolExecutorTest.java
++++ b/dubbo-common/src/test/java/org/apache/dubbo/common/threadpool/support/eager/EagerThreadPoolExecutorTest.java
+@@ -106,6 +106,8 @@ class EagerThreadPoolExecutorTest {
+         Thread.sleep(5000);
+         // cores theads are all alive.
+         Assertions.assertEquals(executor.getPoolSize(), cores, "more than cores threads alive!");
++
++        executor.shutdown();
+     }
+ 
+     @Test
+@@ -169,6 +171,8 @@ class EagerThreadPoolExecutorTest {
+         await().until(() -> executor.getActiveCount() == 0);
+ 
+         await().until(() -> executor.getPoolSize() == cores);
++
++        executor.shutdown();
+     }
+ 
+     @Test
+@@ -224,6 +228,8 @@ class EagerThreadPoolExecutorTest {
+         await().until(() -> executor.getActiveCount() == 0);
+ 
+         executor.execute(runnable);
++
++        executor.shutdown();
+     }
+ 
+     @Test
+@@ -279,5 +285,7 @@ class EagerThreadPoolExecutorTest {
+         executor.execute(runnable);
+         semaphore.release(5);
+         await().until(() -> executor.getActiveCount() == 0);
++
++        executor.shutdown();
+     }
+ }
+diff --git a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ReferenceConfigTest.java b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ReferenceConfigTest.java
+index f2dc427e8c111ac75bb068a325403a2813ed1233..43ec8e0467367e4edcb3bc411998417ed27104c9 100644
+--- a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ReferenceConfigTest.java
++++ b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ReferenceConfigTest.java
+@@ -1003,73 +1003,77 @@ class ReferenceConfigTest {
+ 
+         DemoService demoService = new DemoServiceImpl();
+         ServiceConfig<DemoService> serviceConfig = new ServiceConfig<>();
+-        serviceConfig.setInterface(DemoService.class);
+-        serviceConfig.setRegistry(new RegistryConfig(zkUrl1));
+-        serviceConfig.setScopeModel(moduleModel);
+-        serviceConfig.setRef(demoService);
+-        serviceConfig.export();
+-
+-        String basePath = DemoService.class
+-                .getProtectionDomain()
+-                .getCodeSource()
+-                .getLocation()
+-                .getFile();
+-        basePath = URLDecoder.decode(basePath, "UTF-8");
+-        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+-        TestClassLoader classLoader1 = new TestClassLoader(classLoader, basePath);
+-        TestClassLoader classLoader2 = new TestClassLoader(classLoader, basePath);
+-
+-        Class<?> class1 = classLoader1.loadClass(DemoService.class.getName(), false);
+-        Class<?> class2 = classLoader2.loadClass(DemoService.class.getName(), false);
+-
+-        Assertions.assertNotEquals(class1, class2);
+-
+-        ReferenceConfig<DemoService> referenceConfig1 = new ReferenceConfig<>();
+-        referenceConfig1.setInterface(class1);
+-        referenceConfig1.setRegistry(new RegistryConfig(zkUrl1));
+-        referenceConfig1.setScopeModel(moduleModel);
+-        referenceConfig1.setScope("remote");
+-        Object demoService1 = referenceConfig1.get();
+-
+-        for (Class<?> anInterface : demoService1.getClass().getInterfaces()) {
+-            Assertions.assertNotEquals(DemoService.class, anInterface);
+-        }
+-        Assertions.assertTrue(Arrays.stream(demoService1.getClass().getInterfaces())
+-                .anyMatch((clazz) -> clazz.getClassLoader().equals(classLoader1)));
++        try {
++            serviceConfig.setInterface(DemoService.class);
++            serviceConfig.setRegistry(new RegistryConfig(zkUrl1));
++            serviceConfig.setScopeModel(moduleModel);
++            serviceConfig.setRef(demoService);
++            serviceConfig.export();
++
++            String basePath = DemoService.class
++                    .getProtectionDomain()
++                    .getCodeSource()
++                    .getLocation()
++                    .getFile();
++            basePath = URLDecoder.decode(basePath, "UTF-8");
++            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
++            TestClassLoader classLoader1 = new TestClassLoader(classLoader, basePath);
++            TestClassLoader classLoader2 = new TestClassLoader(classLoader, basePath);
++
++            Class<?> class1 = classLoader1.loadClass(DemoService.class.getName(), false);
++            Class<?> class2 = classLoader2.loadClass(DemoService.class.getName(), false);
++
++            Assertions.assertNotEquals(class1, class2);
++
++            ReferenceConfig<DemoService> referenceConfig1 = new ReferenceConfig<>();
++            referenceConfig1.setInterface(class1);
++            referenceConfig1.setRegistry(new RegistryConfig(zkUrl1));
++            referenceConfig1.setScopeModel(moduleModel);
++            referenceConfig1.setScope("remote");
++            Object demoService1 = referenceConfig1.get();
++
++            for (Class<?> anInterface : demoService1.getClass().getInterfaces()) {
++                Assertions.assertNotEquals(DemoService.class, anInterface);
++            }
++            Assertions.assertTrue(Arrays.stream(demoService1.getClass().getInterfaces())
++                    .anyMatch((clazz) -> clazz.getClassLoader().equals(classLoader1)));
+ 
+-        java.lang.reflect.Method callBean1 = demoService1.getClass().getDeclaredMethod("callInnerClass");
+-        callBean1.setAccessible(true);
+-        Object result1 = callBean1.invoke(demoService1);
++            java.lang.reflect.Method callBean1 = demoService1.getClass().getDeclaredMethod("callInnerClass");
++            callBean1.setAccessible(true);
++            Object result1 = callBean1.invoke(demoService1);
+ 
+-        Assertions.assertNotEquals(result1.getClass(), DemoService.InnerClass.class);
+-        Assertions.assertEquals(classLoader1, result1.getClass().getClassLoader());
++            Assertions.assertNotEquals(result1.getClass(), DemoService.InnerClass.class);
++            Assertions.assertEquals(classLoader1, result1.getClass().getClassLoader());
+ 
+-        ReferenceConfig<DemoService> referenceConfig2 = new ReferenceConfig<>();
+-        referenceConfig2.setInterface(class2);
+-        referenceConfig2.setRegistry(new RegistryConfig(zkUrl1));
+-        referenceConfig2.setScopeModel(moduleModel);
+-        referenceConfig2.setScope("remote");
+-        Object demoService2 = referenceConfig2.get();
++            ReferenceConfig<DemoService> referenceConfig2 = new ReferenceConfig<>();
++            referenceConfig2.setInterface(class2);
++            referenceConfig2.setRegistry(new RegistryConfig(zkUrl1));
++            referenceConfig2.setScopeModel(moduleModel);
++            referenceConfig2.setScope("remote");
++            Object demoService2 = referenceConfig2.get();
+ 
+-        for (Class<?> anInterface : demoService2.getClass().getInterfaces()) {
+-            Assertions.assertNotEquals(DemoService.class, anInterface);
++            for (Class<?> anInterface : demoService2.getClass().getInterfaces()) {
++                Assertions.assertNotEquals(DemoService.class, anInterface);
++            }
++            Assertions.assertTrue(Arrays.stream(demoService2.getClass().getInterfaces())
++                    .anyMatch((clazz) -> clazz.getClassLoader().equals(classLoader2)));
++
++            java.lang.reflect.Method callBean2 = demoService2.getClass().getDeclaredMethod("callInnerClass");
++            callBean2.setAccessible(true);
++            Object result2 = callBean2.invoke(demoService2);
++
++            Assertions.assertNotEquals(callBean1, callBean2);
++            Assertions.assertNotEquals(result2.getClass(), DemoService.InnerClass.class);
++            Assertions.assertEquals(classLoader2, result2.getClass().getClassLoader());
++            Assertions.assertNotEquals(result1.getClass(), result2.getClass());
++
++            applicationModel.destroy();
++            DubboBootstrap.getInstance().destroy();
++            Thread.currentThread().setContextClassLoader(classLoader);
++            Thread.currentThread().getContextClassLoader().loadClass(DemoService.class.getName());
++        } finally {
++            serviceConfig.unexport();
+         }
+-        Assertions.assertTrue(Arrays.stream(demoService2.getClass().getInterfaces())
+-                .anyMatch((clazz) -> clazz.getClassLoader().equals(classLoader2)));
+-
+-        java.lang.reflect.Method callBean2 = demoService2.getClass().getDeclaredMethod("callInnerClass");
+-        callBean2.setAccessible(true);
+-        Object result2 = callBean2.invoke(demoService2);
+-
+-        Assertions.assertNotEquals(callBean1, callBean2);
+-        Assertions.assertNotEquals(result2.getClass(), DemoService.InnerClass.class);
+-        Assertions.assertEquals(classLoader2, result2.getClass().getClassLoader());
+-        Assertions.assertNotEquals(result1.getClass(), result2.getClass());
+-
+-        applicationModel.destroy();
+-        DubboBootstrap.getInstance().destroy();
+-        Thread.currentThread().setContextClassLoader(classLoader);
+-        Thread.currentThread().getContextClassLoader().loadClass(DemoService.class.getName());
+     }
+ 
+     @Test
+@@ -1105,47 +1109,52 @@ class ReferenceConfigTest {
+                 clazz1impl.getDeclaredConstructor(AtomicReference.class, AtomicReference.class);
+ 
+         ServiceConfig serviceConfig = new ServiceConfig<>();
+-        serviceConfig.setInterfaceClassLoader(classLoader1);
+-        serviceConfig.setInterface(clazz1);
+-        serviceConfig.setRegistry(new RegistryConfig(zkUrl1));
+-        serviceConfig.setScopeModel(moduleModel);
+-        serviceConfig.setRef(declaredConstructor.newInstance(innerRequestReference, innerResultReference));
+-        serviceConfig.export();
+-
+-        Class<?> clazz2 = classLoader2.loadClass(MultiClassLoaderService.class.getName(), false);
+-        Class<?> requestClazzOrigin = classLoader2.loadClass(MultiClassLoaderServiceRequest.class.getName(), false);
+-        Class<?> requestClazzCustom2 = compileCustomRequest(classLoader2);
+-        Class<?> resultClazzCustom3 = compileCustomResult(classLoader3);
+-        classLoader2.loadedClass.put(requestClazzCustom2.getName(), requestClazzCustom2);
+-        classLoader3.loadedClass.put(resultClazzCustom3.getName(), resultClazzCustom3);
+-
+-        ReferenceConfig<DemoService> referenceConfig1 = new ReferenceConfig<>();
+-        referenceConfig1.setInterface(clazz2);
+-        referenceConfig1.setInterfaceClassLoader(classLoader3);
+-        referenceConfig1.setRegistry(new RegistryConfig(zkUrl1));
+-        referenceConfig1.setScopeModel(moduleModel);
+-        referenceConfig1.setScope("remote");
+-        referenceConfig1.setTimeout(30000);
+-        Object object1 = referenceConfig1.get();
+-
+-        java.lang.reflect.Method callBean1 = object1.getClass().getDeclaredMethod("call", requestClazzOrigin);
+-        callBean1.setAccessible(true);
+-        Object result1 = callBean1.invoke(
+-                object1, requestClazzCustom2.getDeclaredConstructor().newInstance());
+-
+-        Assertions.assertEquals(resultClazzCustom3, result1.getClass());
+-        Assertions.assertNotEquals(classLoader2, result1.getClass().getClassLoader());
+-        Assertions.assertEquals(
+-                classLoader1, innerRequestReference.get().getClass().getClassLoader());
+-
+-        Thread.currentThread().setContextClassLoader(classLoader1);
+-        callBean1.invoke(object1, requestClazzCustom2.getDeclaredConstructor().newInstance());
+-        Assertions.assertEquals(classLoader1, Thread.currentThread().getContextClassLoader());
+-
+-        applicationModel.destroy();
+-        DubboBootstrap.getInstance().destroy();
+-        Thread.currentThread().setContextClassLoader(classLoader);
+-        Thread.currentThread().getContextClassLoader().loadClass(DemoService.class.getName());
++        try {
++            serviceConfig.setInterfaceClassLoader(classLoader1);
++            serviceConfig.setInterface(clazz1);
++            serviceConfig.setRegistry(new RegistryConfig(zkUrl1));
++            serviceConfig.setScopeModel(moduleModel);
++            serviceConfig.setRef(declaredConstructor.newInstance(innerRequestReference, innerResultReference));
++            serviceConfig.export();
++
++            Class<?> clazz2 = classLoader2.loadClass(MultiClassLoaderService.class.getName(), false);
++            Class<?> requestClazzOrigin = classLoader2.loadClass(MultiClassLoaderServiceRequest.class.getName(), false);
++            Class<?> requestClazzCustom2 = compileCustomRequest(classLoader2);
++            Class<?> resultClazzCustom3 = compileCustomResult(classLoader3);
++            classLoader2.loadedClass.put(requestClazzCustom2.getName(), requestClazzCustom2);
++            classLoader3.loadedClass.put(resultClazzCustom3.getName(), resultClazzCustom3);
++
++            ReferenceConfig<DemoService> referenceConfig1 = new ReferenceConfig<>();
++            referenceConfig1.setInterface(clazz2);
++            referenceConfig1.setInterfaceClassLoader(classLoader3);
++            referenceConfig1.setRegistry(new RegistryConfig(zkUrl1));
++            referenceConfig1.setScopeModel(moduleModel);
++            referenceConfig1.setScope("remote");
++            referenceConfig1.setTimeout(30000);
++            Object object1 = referenceConfig1.get();
++
++            java.lang.reflect.Method callBean1 = object1.getClass().getDeclaredMethod("call", requestClazzOrigin);
++            callBean1.setAccessible(true);
++            Object result1 = callBean1.invoke(
++                    object1, requestClazzCustom2.getDeclaredConstructor().newInstance());
++
++            Assertions.assertEquals(resultClazzCustom3, result1.getClass());
++            Assertions.assertNotEquals(classLoader2, result1.getClass().getClassLoader());
++            Assertions.assertEquals(
++                    classLoader1, innerRequestReference.get().getClass().getClassLoader());
++
++            Thread.currentThread().setContextClassLoader(classLoader1);
++            callBean1.invoke(
++                    object1, requestClazzCustom2.getDeclaredConstructor().newInstance());
++            Assertions.assertEquals(classLoader1, Thread.currentThread().getContextClassLoader());
++
++            applicationModel.destroy();
++            DubboBootstrap.getInstance().destroy();
++            Thread.currentThread().setContextClassLoader(classLoader);
++            Thread.currentThread().getContextClassLoader().loadClass(DemoService.class.getName());
++        } finally {
++            serviceConfig.unexport();
++        }
+     }
+ 
+     @Test
+@@ -1159,26 +1168,30 @@ class ReferenceConfigTest {
+         Thread.currentThread().setContextClassLoader(classLoader);
+ 
+         ServiceConfig<DemoService> serviceConfig = new ServiceConfig<>(applicationModel.newModule());
+-        serviceConfig.setInterface(DemoService.class);
+-        serviceConfig.setProtocol(new ProtocolConfig("dubbo", -1));
+-        serviceConfig.setRegistry(new RegistryConfig("N/A"));
+-        serviceConfig.setRef(new DemoServiceImpl());
+-        serviceConfig.export();
+-
+-        ReferenceConfig<DemoService> referenceConfig = new ReferenceConfig<>(applicationModel.newModule());
+-        referenceConfig.setInterface(DemoService.class);
+-        referenceConfig.setRegistry(new RegistryConfig("N/A"));
+-        DemoService demoService = referenceConfig.get();
+-
+-        demoService.sayName("Dubbo");
+-        Assertions.assertEquals(classLoader, Thread.currentThread().getContextClassLoader());
+-
+-        Thread.currentThread().setContextClassLoader(null);
+-        demoService.sayName("Dubbo");
+-        Assertions.assertNull(Thread.currentThread().getContextClassLoader());
+-
+-        Thread.currentThread().setContextClassLoader(originClassLoader);
+-        frameworkModel.destroy();
++        try {
++            serviceConfig.setInterface(DemoService.class);
++            serviceConfig.setProtocol(new ProtocolConfig("dubbo", -1));
++            serviceConfig.setRegistry(new RegistryConfig("N/A"));
++            serviceConfig.setRef(new DemoServiceImpl());
++            serviceConfig.export();
++
++            ReferenceConfig<DemoService> referenceConfig = new ReferenceConfig<>(applicationModel.newModule());
++            referenceConfig.setInterface(DemoService.class);
++            referenceConfig.setRegistry(new RegistryConfig("N/A"));
++            DemoService demoService = referenceConfig.get();
++
++            demoService.sayName("Dubbo");
++            Assertions.assertEquals(classLoader, Thread.currentThread().getContextClassLoader());
++
++            Thread.currentThread().setContextClassLoader(null);
++            demoService.sayName("Dubbo");
++            Assertions.assertNull(Thread.currentThread().getContextClassLoader());
++
++            Thread.currentThread().setContextClassLoader(originClassLoader);
++            frameworkModel.destroy();
++        } finally {
++            serviceConfig.unexport();
++        }
+     }
+ 
+     private Class<?> compileCustomRequest(ClassLoader classLoader) throws NotFoundException, CannotCompileException {
+diff --git a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ServiceConfigTest.java b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ServiceConfigTest.java
+index 924d0d14ca0d6a7960467233e43f9eff0b659818..9a562cbc213ff957afff895302a5032b6dcbc23c 100644
+--- a/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ServiceConfigTest.java
++++ b/dubbo-config/dubbo-config-api/src/test/java/org/apache/dubbo/config/ServiceConfigTest.java
+@@ -171,24 +171,28 @@ class ServiceConfigTest {
+     void testExport() throws Exception {
+         service.export();
+ 
+-        assertThat(service.getExportedUrls(), hasSize(1));
+-        URL url = service.toUrl();
+-        assertThat(url.getProtocol(), equalTo("mockprotocol2"));
+-        assertThat(url.getPath(), equalTo(DemoService.class.getName()));
+-        assertThat(url.getParameters(), hasEntry(ANYHOST_KEY, "true"));
+-        assertThat(url.getParameters(), hasEntry(APPLICATION_KEY, "app"));
+-        assertThat(url.getParameters(), hasKey(BIND_IP_KEY));
+-        assertThat(url.getParameters(), hasKey(BIND_PORT_KEY));
+-        assertThat(url.getParameters(), hasEntry(EXPORT_KEY, "true"));
+-        assertThat(url.getParameters(), hasEntry("echo.0.callback", "false"));
+-        assertThat(url.getParameters(), hasEntry(GENERIC_KEY, "false"));
+-        assertThat(url.getParameters(), hasEntry(INTERFACE_KEY, DemoService.class.getName()));
+-        assertThat(url.getParameters(), hasKey(METHODS_KEY));
+-        assertThat(url.getParameters().get(METHODS_KEY), containsString("echo"));
+-        assertThat(url.getParameters(), hasEntry(SIDE_KEY, PROVIDER));
+-        // export DemoService in "mockprotocol2" protocol.
+-        Mockito.verify(protocolDelegate, times(1)).export(Mockito.any(Invoker.class));
+-        // MetadataService will be exported on either dubbo or triple (the only two default acceptable protocol)
++        try {
++            assertThat(service.getExportedUrls(), hasSize(1));
++            URL url = service.toUrl();
++            assertThat(url.getProtocol(), equalTo("mockprotocol2"));
++            assertThat(url.getPath(), equalTo(DemoService.class.getName()));
++            assertThat(url.getParameters(), hasEntry(ANYHOST_KEY, "true"));
++            assertThat(url.getParameters(), hasEntry(APPLICATION_KEY, "app"));
++            assertThat(url.getParameters(), hasKey(BIND_IP_KEY));
++            assertThat(url.getParameters(), hasKey(BIND_PORT_KEY));
++            assertThat(url.getParameters(), hasEntry(EXPORT_KEY, "true"));
++            assertThat(url.getParameters(), hasEntry("echo.0.callback", "false"));
++            assertThat(url.getParameters(), hasEntry(GENERIC_KEY, "false"));
++            assertThat(url.getParameters(), hasEntry(INTERFACE_KEY, DemoService.class.getName()));
++            assertThat(url.getParameters(), hasKey(METHODS_KEY));
++            assertThat(url.getParameters().get(METHODS_KEY), containsString("echo"));
++            assertThat(url.getParameters(), hasEntry(SIDE_KEY, PROVIDER));
++            // export DemoService in "mockprotocol2" protocol.
++            Mockito.verify(protocolDelegate, times(1)).export(Mockito.any(Invoker.class));
++            // MetadataService will be exported on either dubbo or triple (the only two default acceptable protocol)
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -198,23 +202,31 @@ class ServiceConfigTest {
+         service.getProvider().setGroup("groupA");
+         service.export();
+ 
+-        String serviceVersion = service.getVersion();
+-        String serviceVersion2 = service.toUrl().getVersion();
++        try {
++            String serviceVersion = service.getVersion();
++            String serviceVersion2 = service.toUrl().getVersion();
+ 
+-        String group = service.getGroup();
+-        String group2 = service.toUrl().getGroup();
++            String group = service.getGroup();
++            String group2 = service.toUrl().getGroup();
+ 
+-        assertEquals(serviceVersion2, serviceVersion);
+-        assertEquals(group, group2);
++            assertEquals(serviceVersion2, serviceVersion);
++            assertEquals(group, group2);
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+     void testProxy() throws Exception {
+         service2.export();
+ 
+-        assertThat(service2.getExportedUrls(), hasSize(1));
+-        assertEquals(2, TestProxyFactory.count); // local injvm and registry protocol, so expected is 2
+-        TestProxyFactory.count = 0;
++        try {
++            assertThat(service2.getExportedUrls(), hasSize(1));
++            assertEquals(2, TestProxyFactory.count); // local injvm and registry protocol, so expected is 2
++            TestProxyFactory.count = 0;
++        } finally {
++            service2.unexport();
++        }
+     }
+ 
+     @Test
+@@ -232,8 +244,12 @@ class ServiceConfigTest {
+             public void unexported(ServiceConfig sc) {}
+         });
+         delayService.export();
+-        assertTrue(delayService.getExportedUrls().isEmpty());
+-        latch.await();
++        try {
++            assertTrue(delayService.getExportedUrls().isEmpty());
++            latch.await();
++        } finally {
++            delayService.unexport();
++        }
+     }
+ 
+     @Test
+@@ -317,8 +333,12 @@ class ServiceConfigTest {
+     @Test
+     void testApplicationInUrl() {
+         service.export();
+-        assertNotNull(service.toUrl().getApplication());
+-        Assertions.assertEquals("app", service.toUrl().getApplication());
++        try {
++            assertNotNull(service.toUrl().getApplication());
++            Assertions.assertEquals("app", service.toUrl().getApplication());
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -345,24 +365,28 @@ class ServiceConfigTest {
+     void testExportWithoutRegistryConfig() {
+         serviceWithoutRegistryConfig.export();
+ 
+-        assertThat(serviceWithoutRegistryConfig.getExportedUrls(), hasSize(1));
+-        URL url = serviceWithoutRegistryConfig.toUrl();
+-        assertThat(url.getProtocol(), equalTo("mockprotocol2"));
+-        assertThat(url.getPath(), equalTo(DemoService.class.getName()));
+-        assertThat(url.getParameters(), hasEntry(ANYHOST_KEY, "true"));
+-        assertThat(url.getParameters(), hasEntry(APPLICATION_KEY, "app"));
+-        assertThat(url.getParameters(), hasKey(BIND_IP_KEY));
+-        assertThat(url.getParameters(), hasKey(BIND_PORT_KEY));
+-        assertThat(url.getParameters(), hasEntry(EXPORT_KEY, "true"));
+-        assertThat(url.getParameters(), hasEntry("echo.0.callback", "false"));
+-        assertThat(url.getParameters(), hasEntry(GENERIC_KEY, "false"));
+-        assertThat(url.getParameters(), hasEntry(INTERFACE_KEY, DemoService.class.getName()));
+-        assertThat(url.getParameters(), hasKey(METHODS_KEY));
+-        assertThat(url.getParameters().get(METHODS_KEY), containsString("echo"));
+-        assertThat(url.getParameters(), hasEntry(SIDE_KEY, PROVIDER));
+-        // export DemoService in "mockprotocol2" protocol (MetadataService will be not exported if no registry
+-        // specified)
+-        Mockito.verify(protocolDelegate, times(1)).export(Mockito.any(Invoker.class));
++        try {
++            assertThat(serviceWithoutRegistryConfig.getExportedUrls(), hasSize(1));
++            URL url = serviceWithoutRegistryConfig.toUrl();
++            assertThat(url.getProtocol(), equalTo("mockprotocol2"));
++            assertThat(url.getPath(), equalTo(DemoService.class.getName()));
++            assertThat(url.getParameters(), hasEntry(ANYHOST_KEY, "true"));
++            assertThat(url.getParameters(), hasEntry(APPLICATION_KEY, "app"));
++            assertThat(url.getParameters(), hasKey(BIND_IP_KEY));
++            assertThat(url.getParameters(), hasKey(BIND_PORT_KEY));
++            assertThat(url.getParameters(), hasEntry(EXPORT_KEY, "true"));
++            assertThat(url.getParameters(), hasEntry("echo.0.callback", "false"));
++            assertThat(url.getParameters(), hasEntry(GENERIC_KEY, "false"));
++            assertThat(url.getParameters(), hasEntry(INTERFACE_KEY, DemoService.class.getName()));
++            assertThat(url.getParameters(), hasKey(METHODS_KEY));
++            assertThat(url.getParameters().get(METHODS_KEY), containsString("echo"));
++            assertThat(url.getParameters(), hasEntry(SIDE_KEY, PROVIDER));
++            // export DemoService in "mockprotocol2" protocol (MetadataService will be not exported if no registry
++            // specified)
++            Mockito.verify(protocolDelegate, times(1)).export(Mockito.any(Invoker.class));
++        } finally {
++            serviceWithoutRegistryConfig.unexport();
++        }
+     }
+ 
+     @Test
+@@ -374,10 +398,14 @@ class ServiceConfigTest {
+ 
+         service.export();
+ 
+-        Map<String, ServiceConfig> exportedServices = mockServiceListener.getExportedServices();
+-        assertEquals(1, exportedServices.size());
+-        ServiceConfig serviceConfig = exportedServices.get(service.getUniqueServiceName());
+-        assertSame(service, serviceConfig);
++        try {
++            Map<String, ServiceConfig> exportedServices = mockServiceListener.getExportedServices();
++            assertEquals(1, exportedServices.size());
++            ServiceConfig serviceConfig = exportedServices.get(service.getUniqueServiceName());
++            assertSame(service, serviceConfig);
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -404,6 +432,7 @@ class ServiceConfigTest {
+             service.setMethods(Lists.newArrayList(methodConfig));
+ 
+             service.export();
++            service.unexport();
+         });
+     }
+ 
+@@ -433,8 +462,13 @@ class ServiceConfigTest {
+ 
+         service.export();
+ 
+-        assertFalse(service.getExportedUrls().isEmpty());
+-        assertEquals("false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        try {
++            assertFalse(service.getExportedUrls().isEmpty());
++            assertEquals(
++                    "false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -462,8 +496,13 @@ class ServiceConfigTest {
+ 
+         service.export();
+ 
+-        assertFalse(service.getExportedUrls().isEmpty());
+-        assertEquals("false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        try {
++            assertFalse(service.getExportedUrls().isEmpty());
++            assertEquals(
++                    "false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -491,8 +530,13 @@ class ServiceConfigTest {
+ 
+         service.export();
+ 
+-        assertFalse(service.getExportedUrls().isEmpty());
+-        assertEquals("false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        try {
++            assertFalse(service.getExportedUrls().isEmpty());
++            assertEquals(
++                    "false", service.getExportedUrls().get(0).getParameters().get("sayName.0.callback"));
++        } finally {
++            service.unexport();
++        }
+     }
+ 
+     @Test
+@@ -520,6 +564,7 @@ class ServiceConfigTest {
+             service.setMethods(Lists.newArrayList(methodConfig));
+ 
+             service.export();
++            service.unexport();
+         });
+     }
+ 
+@@ -548,6 +593,7 @@ class ServiceConfigTest {
+             service.setMethods(Lists.newArrayList(methodConfig));
+ 
+             service.export();
++            service.unexport();
+         });
+     }
+ 
+@@ -576,6 +622,7 @@ class ServiceConfigTest {
+             service.setMethods(Lists.newArrayList(methodConfig));
+ 
+             service.export();
++            service.unexport();
+         });
+     }
+ 
+diff --git a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/isolation/spring/annotation/AnnotationIsolationTest.java b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/isolation/spring/annotation/AnnotationIsolationTest.java
+index eda4503d08f80b4d11f141aa584a60cc476c17a9..01155cddd994db00512505007c5b3185087afaca 100644
+--- a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/isolation/spring/annotation/AnnotationIsolationTest.java
++++ b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/isolation/spring/annotation/AnnotationIsolationTest.java
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.dubbo.config.spring.isolation.spring.annotation;
+ 
++import org.apache.dubbo.common.utils.NetUtils;
+ import org.apache.dubbo.config.ApplicationConfig;
+ import org.apache.dubbo.config.ProtocolConfig;
+ import org.apache.dubbo.config.RegistryConfig;
+@@ -113,14 +114,14 @@ public class AnnotationIsolationTest extends BaseTest {
+         // expose services with dubbo protocol
+         @Bean
+         public ProtocolConfig dubbo() {
+-            ProtocolConfig protocolConfig = new ProtocolConfig("dubbo");
++            ProtocolConfig protocolConfig = new ProtocolConfig("dubbo", NetUtils.getAvailablePort());
+             return protocolConfig;
+         }
+ 
+         // expose services with tri protocol
+         @Bean
+         public ProtocolConfig tri() {
+-            ProtocolConfig protocolConfig = new ProtocolConfig("tri");
++            ProtocolConfig protocolConfig = new ProtocolConfig("tri", NetUtils.getAvailablePort());
+             return protocolConfig;
+         }
+ 
+diff --git a/dubbo-configcenter/dubbo-configcenter-apollo/src/test/java/org/apache/dubbo/configcenter/support/apollo/ApolloDynamicConfigurationTest.java b/dubbo-configcenter/dubbo-configcenter-apollo/src/test/java/org/apache/dubbo/configcenter/support/apollo/ApolloDynamicConfigurationTest.java
+index 3558272881a1902030b6bd4a9e09ae75b966f4a2..4c24ea07ba6b89661610cea5166f44cca8df3817 100644
+--- a/dubbo-configcenter/dubbo-configcenter-apollo/src/test/java/org/apache/dubbo/configcenter/support/apollo/ApolloDynamicConfigurationTest.java
++++ b/dubbo-configcenter/dubbo-configcenter-apollo/src/test/java/org/apache/dubbo/configcenter/support/apollo/ApolloDynamicConfigurationTest.java
+@@ -20,6 +20,7 @@ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.config.configcenter.ConfigChangeType;
+ import org.apache.dubbo.common.config.configcenter.ConfigurationListener;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
++import org.apache.dubbo.rpc.model.FrameworkModel;
+ 
+ import java.io.FileOutputStream;
+ import java.io.IOException;
+@@ -60,6 +61,7 @@ class ApolloDynamicConfigurationTest {
+      */
+     @BeforeEach
+     public void setUp() {
++        FrameworkModel.destroyAll();
+         String apolloUrl = System.getProperty("apollo.configService");
+         String urlForDubbo = "apollo://" + apolloUrl.substring(apolloUrl.lastIndexOf("/") + 1)
+                 + "/org.apache.dubbo.apollo.testService?namespace=dubbo&check=true";
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/test/java/org/apache/dubbo/remoting/http12/message/codec/HttpUtilsTest.java b/dubbo-remoting/dubbo-remoting-http12/src/test/java/org/apache/dubbo/remoting/http12/message/codec/HttpUtilsTest.java
+index 315879e6a111c63559854b924bc1231444c6832f..1e586b108399c59bfe16aeb7e2197f15557c29c6 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/test/java/org/apache/dubbo/remoting/http12/message/codec/HttpUtilsTest.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/test/java/org/apache/dubbo/remoting/http12/message/codec/HttpUtilsTest.java
+@@ -24,15 +24,14 @@ import org.junit.jupiter.api.Test;
+ public class HttpUtilsTest {
+ 
+     @Test
+-    void testGetCharsetFromContentType() {
+-        String charset = HttpUtils.getCharsetFromContentType("text/html;charset=utf-8");
++    void testParseCharset() {
++        String charset = HttpUtils.parseCharset("text/html;charset=utf-8");
+         Assertions.assertEquals("utf-8", charset);
+-        charset = HttpUtils.getCharsetFromContentType("text/html");
++        charset = HttpUtils.parseCharset("text/html");
+         Assertions.assertEquals("", charset);
+-        charset = HttpUtils.getCharsetFromContentType("application/json;charset=utf-8; boundary=__X_PAW_BOUNDARY__");
++        charset = HttpUtils.parseCharset("application/json;charset=utf-8; boundary=__X_PAW_BOUNDARY__");
+         Assertions.assertEquals("utf-8", charset);
+-        charset =
+-                HttpUtils.getCharsetFromContentType("multipart/form-data; charset=utf-8; boundary=__X_PAW_BOUNDARY__");
++        charset = HttpUtils.parseCharset("multipart/form-data; charset=utf-8; boundary=__X_PAW_BOUNDARY__");
+         Assertions.assertEquals("utf-8", charset);
+     }
+ }
+diff --git a/dubbo-remoting/dubbo-remoting-netty/src/test/java/org/apache/dubbo/remoting/transport/netty/NettyClientTest.java b/dubbo-remoting/dubbo-remoting-netty/src/test/java/org/apache/dubbo/remoting/transport/netty/NettyClientTest.java
+index 46337903d62064234ef29372760dd3b85bed1e6e..b9dde7cf2dc1443c677d4a106b3822f8af9de460 100644
+--- a/dubbo-remoting/dubbo-remoting-netty/src/test/java/org/apache/dubbo/remoting/transport/netty/NettyClientTest.java
++++ b/dubbo-remoting/dubbo-remoting-netty/src/test/java/org/apache/dubbo/remoting/transport/netty/NettyClientTest.java
+@@ -23,6 +23,7 @@ import org.apache.dubbo.remoting.RemotingServer;
+ import org.apache.dubbo.remoting.exchange.ExchangeChannel;
+ import org.apache.dubbo.remoting.exchange.Exchangers;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
++import org.apache.dubbo.rpc.model.FrameworkModel;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -43,6 +44,7 @@ class NettyClientTest {
+ 
+     @BeforeAll
+     public static void setUp() throws Exception {
++        FrameworkModel.destroyAll();
+         URL url = URL.valueOf("exchange://localhost:" + port + "?server=netty3&codec=exchange");
+         ApplicationModel applicationModel = ApplicationModel.defaultModel();
+         ApplicationConfig applicationConfig = new ApplicationConfig("provider-app");
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/ReplierDispatcherTest.java b/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/ReplierDispatcherTest.java
+index c30ad6f9956cb4ac1816e43053274888ea8285e8..16cf5dd0cc3ad4b07735fe3bf7705fda1b207987 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/ReplierDispatcherTest.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/ReplierDispatcherTest.java
+@@ -27,6 +27,7 @@ import org.apache.dubbo.remoting.exchange.ExchangeServer;
+ import org.apache.dubbo.remoting.exchange.Exchangers;
+ import org.apache.dubbo.remoting.exchange.support.ReplierDispatcher;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
++import org.apache.dubbo.rpc.model.FrameworkModel;
+ import org.apache.dubbo.rpc.model.ModuleModel;
+ 
+ import java.io.Serializable;
+@@ -58,6 +59,7 @@ class ReplierDispatcherTest {
+ 
+     @BeforeEach
+     public void startServer() throws RemotingException {
++        FrameworkModel.destroyAll();
+         port = NetUtils.getAvailablePort();
+         ReplierDispatcher dispatcher = new ReplierDispatcher();
+         dispatcher.addReplier(RpcMessage.class, new RpcMessageHandler());

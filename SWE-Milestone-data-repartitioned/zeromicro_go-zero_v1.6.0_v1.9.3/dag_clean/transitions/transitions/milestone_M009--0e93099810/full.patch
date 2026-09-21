@@ -1,0 +1,541 @@
+diff --git a/core/proc/shutdown.go b/core/proc/shutdown.go
+index 763742a298df3a7f7050fe814bc16eaad24b2072..71ce429a4b0a6c283ef1b6b54b6f7c6f99c71ee1 100644
+--- a/core/proc/shutdown.go
++++ b/core/proc/shutdown.go
+@@ -82,6 +82,9 @@ func (lm *listenerManager) addListener(fn func()) (waitForCalled func()) {
+ 	})
+ 	lm.lock.Unlock()
+ 
++	// we can return lm.waitGroup.Wait directly,
++	// but we want to make the returned func more readable.
++	// creating an extra closure would be negligible in practice.
+ 	return func() {
+ 		lm.waitGroup.Wait()
+ 	}
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 27ec45ad0fa29cbd3edf1d7b01674f0ca7094564..b769cb08745be77411838a1906c463563ab85786 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -77,9 +77,14 @@ func (sg *ServiceGroup) doStart() {
+ }
+ 
+ func (sg *ServiceGroup) doStop() {
++	group := threading.NewRoutineGroup()
+ 	for _, service := range sg.services {
+-		service.Stop()
++		// new variable to avoid closure problems, can be removed after go 1.22
++		// see https://golang.org/doc/faq#closures_and_goroutines
++		service := service
++		group.Run(service.Stop)
+ 	}
++	group.Wait()
+ }
+ 
+ // WithStart wraps a start func as a Service.
+diff --git a/gateway/config.go b/gateway/config.go
+index 3d8e4dfd7abd8e61ee5c5170127dd510542bc715..29e5f254dd1de85ee38d5e43ccfca393dd724df9 100644
+--- a/gateway/config.go
++++ b/gateway/config.go
+@@ -12,14 +12,22 @@ type (
+ 		Upstreams []Upstream
+ 	}
+ 
++	// HttpClientConf is the configuration for an HTTP client.
++	HttpClientConf struct {
++		Target  string
++		Prefix  string `json:",optional"`
++		Timeout int64  `json:",default=3000"`
++	}
++
+ 	// RouteMapping is a mapping between a gateway route and an upstream rpc method.
+ 	RouteMapping struct {
+ 		// Method is the HTTP method, like GET, POST, PUT, DELETE.
+ 		Method string
+ 		// Path is the HTTP path.
+ 		Path string
+-		// RpcPath is the gRPC rpc method, with format of package.service/method
+-		RpcPath string
++		// RpcPath is the gRPC rpc method, with format of package.service/method, optional.
++		// If the mapping is for HTTP, it's not necessary.
++		RpcPath string `json:",optional"`
+ 	}
+ 
+ 	// Upstream is the configuration for an upstream.
+@@ -27,12 +35,14 @@ type (
+ 		// Name is the name of the upstream.
+ 		Name string `json:",optional"`
+ 		// Grpc is the target of the upstream.
+-		Grpc zrpc.RpcClientConf
++		Grpc *zrpc.RpcClientConf `json:",optional"`
++		// Http is the target of the upstream.
++		Http *HttpClientConf `json:",optional=!grpc"`
+ 		// ProtoSets is the file list of proto set, like [hello.pb].
+ 		// if your proto file import another proto file, you need to write multi-file slice,
+ 		// like [hello.pb, common.pb].
+ 		ProtoSets []string `json:",optional"`
+-		// Mappings is the mapping between gateway routes and Upstream rpc methods.
++		// Mappings is the mapping between gateway routes and Upstream methods.
+ 		// Keep it blank if annotations are added in rpc methods.
+ 		Mappings []RouteMapping `json:",optional"`
+ 	}
+diff --git a/gateway/internal/headerprocessor.go b/gateway/internal/headerprocessor.go
+index 11181f78a418a63c158fc295ff0dd78c5454c142..bb50ee225e11dd0e924425c6892f36d69b52e766 100644
+--- a/gateway/internal/headerprocessor.go
++++ b/gateway/internal/headerprocessor.go
+@@ -11,16 +11,40 @@ const (
+ 	metadataPrefix       = "gateway-"
+ )
+ 
++// OpenTelemetry trace propagation headers that need to be forwarded to gRPC metadata.
++// These headers are used by the W3C Trace Context standard for distributed tracing.
++var traceHeaders = map[string]bool{
++	"traceparent": true,
++	"tracestate":  true,
++	"baggage":     true,
++}
++
+ // ProcessHeaders builds the headers for the gateway from HTTP headers.
++// It forwards both custom metadata headers (with Grpc-Metadata- prefix)
++// and OpenTelemetry trace propagation headers (traceparent, tracestate, baggage)
++// to ensure distributed tracing works correctly across the gateway.
+ func ProcessHeaders(header http.Header) []string {
+ 	var headers []string
+ 
+ 	for k, v := range header {
++		// Forward OpenTelemetry trace propagation headers
++		// These must be lowercase per gRPC metadata conventions
++		if lowerKey := strings.ToLower(k); traceHeaders[lowerKey] {
++			for _, vv := range v {
++				headers = append(headers, lowerKey+":"+vv)
++			}
++			continue
++		}
++
++		// Forward custom metadata headers with Grpc-Metadata- prefix
+ 		if !strings.HasPrefix(k, metadataHeaderPrefix) {
+ 			continue
+ 		}
+ 
+-		key := fmt.Sprintf("%s%s", metadataPrefix, strings.TrimPrefix(k, metadataHeaderPrefix))
++		// gRPC metadata keys are case-insensitive and stored as lowercase,
++		// so we lowercase the key to match gRPC conventions
++		trimmedKey := strings.TrimPrefix(k, metadataHeaderPrefix)
++		key := strings.ToLower(fmt.Sprintf("%s%s", metadataPrefix, trimmedKey))
+ 		for _, vv := range v {
+ 			headers = append(headers, key+":"+vv)
+ 		}
+diff --git a/gateway/internal/requestparser.go b/gateway/internal/requestparser.go
+index f239c0a8f25c0ee8c03feac260142eefcac2d8cb..91737c76a403624140a653888d09a2c6052cfbab 100644
+--- a/gateway/internal/requestparser.go
++++ b/gateway/internal/requestparser.go
+@@ -26,15 +26,15 @@ func NewRequestParser(r *http.Request, resolver jsonpb.AnyResolver) (grpcurl.Req
+ 
+ 	body, ok := getBody(r)
+ 	if !ok {
+-		return buildJsonRequestParser(params, resolver)
++		return buildJsonRequestParserFromMap(params, resolver)
+ 	}
+ 
+ 	if len(params) == 0 {
+-		return grpcurl.NewJSONRequestParser(body, resolver), nil
++		return buildJsonRequestParserFromReader(body, resolver)
+ 	}
+ 
+ 	m := make(map[string]any)
+-	if err := json.NewDecoder(body).Decode(&m); err != nil {
++	if err := json.NewDecoder(body).Decode(&m); err != nil && err != io.EOF {
+ 		return nil, err
+ 	}
+ 
+@@ -42,17 +42,28 @@ func NewRequestParser(r *http.Request, resolver jsonpb.AnyResolver) (grpcurl.Req
+ 		m[k] = v
+ 	}
+ 
+-	return buildJsonRequestParser(m, resolver)
++	return buildJsonRequestParserFromMap(m, resolver)
+ }
+ 
+-func buildJsonRequestParser(m map[string]any, resolver jsonpb.AnyResolver) (
++func buildJsonRequestParserFromMap(data map[string]any, resolver jsonpb.AnyResolver) (
+ 	grpcurl.RequestParser, error) {
+ 	var buf bytes.Buffer
+-	if err := json.NewEncoder(&buf).Encode(m); err != nil {
++	if err := json.NewEncoder(&buf).Encode(data); err != nil {
+ 		return nil, err
+ 	}
+ 
+-	return grpcurl.NewJSONRequestParser(&buf, resolver), nil
++	return buildJsonRequestParserFromReader(&buf, resolver)
++}
++
++// buildJsonRequestParserFromReader creates a JSON request parser with ignoring unknown fields.
++func buildJsonRequestParserFromReader(data io.Reader, resolver jsonpb.AnyResolver) (
++	grpcurl.RequestParser, error) {
++	unmarshaler := jsonpb.Unmarshaler{
++		AllowUnknownFields: true,
++		AnyResolver:        resolver,
++	}
++
++	return grpcurl.NewJSONRequestParserWithUnmarshaler(data, unmarshaler), nil
+ }
+ 
+ func getBody(r *http.Request) (io.Reader, bool) {
+diff --git a/gateway/server.go b/gateway/server.go
+index 71d1e554eff00c04e40edb5813989455090499bf..4a5578ff45c26adc358accbabcee3584dd6236ea 100644
+--- a/gateway/server.go
++++ b/gateway/server.go
+@@ -3,28 +3,38 @@ package gateway
+ import (
+ 	"context"
+ 	"fmt"
++	"io"
+ 	"net/http"
++	"net/url"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/fullstorydev/grpcurl"
+ 	"github.com/golang/protobuf/jsonpb"
+ 	"github.com/jhump/protoreflect/grpcreflect"
++	"github.com/zeromicro/go-zero/core/logc"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/mr"
++	"github.com/zeromicro/go-zero/core/threading"
+ 	"github.com/zeromicro/go-zero/gateway/internal"
+ 	"github.com/zeromicro/go-zero/rest"
++	"github.com/zeromicro/go-zero/rest/httpc"
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ 	"github.com/zeromicro/go-zero/zrpc"
+ 	"google.golang.org/grpc/codes"
+ )
+ 
++const defaultHttpScheme = "http"
++
+ type (
+ 	// Server is a gateway server.
+ 	Server struct {
+ 		*rest.Server
+ 		upstreams     []Upstream
++		conns         []zrpc.Client
+ 		processHeader func(http.Header) []string
+ 		dialer        func(conf zrpc.RpcClientConf) zrpc.Client
++		middlewares   []rest.Middleware
+ 	}
+ 
+ 	// Option defines the method to customize Server.
+@@ -51,8 +61,24 @@ func (s *Server) Start() {
+ }
+ 
+ // Stop stops the gateway server.
++// To get a graceful shutdown, it stops the HTTP server first, then closes gRPC connections.
+ func (s *Server) Stop() {
++	// stop the HTTP server first, then close gRPC connections.
++	// in case the gRPC server is stopped first,
++	// the HTTP server may still be running to accept requests.
+ 	s.Server.Stop()
++
++	group := threading.NewRoutineGroup()
++	for _, conn := range s.conns {
++		// new variable to avoid closure problems, can be removed after go 1.22
++		// see https://golang.org/doc/faq#closures_and_goroutines
++		conn := conn
++		group.Run(func() {
++			// ignore the error when closing the connection
++			_ = conn.Conn().Close()
++		})
++	}
++	group.Wait()
+ }
+ 
+ func (s *Server) build() error {
+@@ -65,51 +91,11 @@ func (s *Server) build() error {
+ 			source <- up
+ 		}
+ 	}, func(up Upstream, writer mr.Writer[rest.Route], cancel func(error)) {
+-		var cli zrpc.Client
+-		if s.dialer != nil {
+-			cli = s.dialer(up.Grpc)
+-		} else {
+-			cli = zrpc.MustNewClient(up.Grpc)
+-		}
+-
+-		source, err := s.createDescriptorSource(cli, up)
+-		if err != nil {
+-			cancel(fmt.Errorf("%s: %w", up.Name, err))
+-			return
+-		}
+-
+-		methods, err := internal.GetMethods(source)
+-		if err != nil {
+-			cancel(fmt.Errorf("%s: %w", up.Name, err))
+-			return
+-		}
+-
+-		resolver := grpcurl.AnyResolverFromDescriptorSource(source)
+-		for _, m := range methods {
+-			if len(m.HttpMethod) > 0 && len(m.HttpPath) > 0 {
+-				writer.Write(rest.Route{
+-					Method:  m.HttpMethod,
+-					Path:    m.HttpPath,
+-					Handler: s.buildHandler(source, resolver, cli, m.RpcPath),
+-				})
+-			}
+-		}
+-
+-		methodSet := make(map[string]struct{})
+-		for _, m := range methods {
+-			methodSet[m.RpcPath] = struct{}{}
+-		}
+-		for _, m := range up.Mappings {
+-			if _, ok := methodSet[m.RpcPath]; !ok {
+-				cancel(fmt.Errorf("%s: rpc method %s not found", up.Name, m.RpcPath))
+-				return
+-			}
+-
+-			writer.Write(rest.Route{
+-				Method:  strings.ToUpper(m.Method),
+-				Path:    m.Path,
+-				Handler: s.buildHandler(source, resolver, cli, m.RpcPath),
+-			})
++		// up.Grpc and up.Http are exclusive
++		if up.Grpc != nil {
++			s.buildGrpcRoute(up, writer, cancel)
++		} else if up.Http != nil {
++			s.buildHttpRoute(up, writer)
+ 		}
+ 	}, func(pipe <-chan rest.Route, cancel func(error)) {
+ 		for route := range pipe {
+@@ -118,9 +104,16 @@ func (s *Server) build() error {
+ 	})
+ }
+ 
+-func (s *Server) buildHandler(source grpcurl.DescriptorSource, resolver jsonpb.AnyResolver,
++func (s *Server) buildChainHandler(handler http.HandlerFunc) http.HandlerFunc {
++	for i := len(s.middlewares) - 1; i >= 0; i-- {
++		handler = s.middlewares[i](handler)
++	}
++	return handler
++}
++
++func (s *Server) buildGrpcHandler(source grpcurl.DescriptorSource, resolver jsonpb.AnyResolver,
+ 	cli zrpc.Client, rpcPath string) func(http.ResponseWriter, *http.Request) {
+-	return func(w http.ResponseWriter, r *http.Request) {
++	handler := func(w http.ResponseWriter, r *http.Request) {
+ 		parser, err := internal.NewRequestParser(r, resolver)
+ 		if err != nil {
+ 			httpx.ErrorCtx(r.Context(), w, err)
+@@ -139,33 +132,126 @@ func (s *Server) buildHandler(source grpcurl.DescriptorSource, resolver jsonpb.A
+ 			httpx.ErrorCtx(r.Context(), w, st.Err())
+ 		}
+ 	}
++
++	return s.buildChainHandler(handler)
+ }
+ 
+-func (s *Server) createDescriptorSource(cli zrpc.Client, up Upstream) (grpcurl.DescriptorSource, error) {
+-	var source grpcurl.DescriptorSource
+-	var err error
++func (s *Server) buildGrpcRoute(up Upstream, writer mr.Writer[rest.Route], cancel func(error)) {
++	var cli zrpc.Client
++	if s.dialer != nil {
++		cli = s.dialer(*up.Grpc)
++	} else {
++		cli = zrpc.MustNewClient(*up.Grpc)
++	}
++	s.conns = append(s.conns, cli)
+ 
+-	if len(up.ProtoSets) > 0 {
+-		source, err = grpcurl.DescriptorSourceFromProtoSets(up.ProtoSets...)
++	source, err := createDescriptorSource(cli, up)
++	if err != nil {
++		cancel(fmt.Errorf("%s: %w", up.Name, err))
++		return
++	}
++
++	methods, err := internal.GetMethods(source)
++	if err != nil {
++		cancel(fmt.Errorf("%s: %w", up.Name, err))
++		return
++	}
++
++	resolver := grpcurl.AnyResolverFromDescriptorSource(source)
++	for _, m := range methods {
++		if len(m.HttpMethod) > 0 && len(m.HttpPath) > 0 {
++			writer.Write(rest.Route{
++				Method:  m.HttpMethod,
++				Path:    m.HttpPath,
++				Handler: s.buildGrpcHandler(source, resolver, cli, m.RpcPath),
++			})
++		}
++	}
++
++	methodSet := make(map[string]struct{})
++	for _, m := range methods {
++		methodSet[m.RpcPath] = struct{}{}
++	}
++	for _, m := range up.Mappings {
++		if _, ok := methodSet[m.RpcPath]; !ok {
++			cancel(fmt.Errorf("%s: rpc method %s not found", up.Name, m.RpcPath))
++			return
++		}
++
++		writer.Write(rest.Route{
++			Method:  strings.ToUpper(m.Method),
++			Path:    m.Path,
++			Handler: s.buildGrpcHandler(source, resolver, cli, m.RpcPath),
++		})
++	}
++}
++
++func (s *Server) buildHttpHandler(target *HttpClientConf) http.HandlerFunc {
++	handler := func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set(httpx.ContentType, httpx.JsonContentType)
++		req, err := buildRequestWithNewTarget(r, target)
+ 		if err != nil {
+-			return nil, err
++			httpx.ErrorCtx(r.Context(), w, err)
++			return
++		}
++
++		// set the timeout if it's configured, take effect only if it's greater than 0
++		// and less than the deadline of the original request
++		if target.Timeout > 0 {
++			timeout := time.Duration(target.Timeout) * time.Millisecond
++			ctx, cancel := context.WithTimeout(r.Context(), timeout)
++			defer cancel()
++			req = req.WithContext(ctx)
++		}
++
++		resp, err := httpc.DoRequest(req)
++		if err != nil {
++			httpx.ErrorCtx(r.Context(), w, err)
++			return
++		}
++		defer resp.Body.Close()
++
++		for key, values := range resp.Header {
++			for _, value := range values {
++				w.Header().Add(key, value)
++			}
++		}
++
++		w.WriteHeader(resp.StatusCode)
++		if _, err = io.Copy(w, resp.Body); err != nil {
++			// log the error with original request info
++			logc.Error(r.Context(), err)
+ 		}
+-	} else {
+-		client := grpcreflect.NewClientAuto(context.Background(), cli.Conn())
+-		source = grpcurl.DescriptorSourceFromServer(context.Background(), client)
+ 	}
++	return s.buildChainHandler(handler)
++}
+ 
+-	return source, nil
++func (s *Server) buildHttpRoute(up Upstream, writer mr.Writer[rest.Route]) {
++	for _, m := range up.Mappings {
++		writer.Write(rest.Route{
++			Method:  strings.ToUpper(m.Method),
++			Path:    m.Path,
++			Handler: s.buildHttpHandler(up.Http),
++		})
++	}
+ }
+ 
+ func (s *Server) ensureUpstreamNames() error {
+ 	for i := 0; i < len(s.upstreams); i++ {
+-		target, err := s.upstreams[i].Grpc.BuildTarget()
+-		if err != nil {
+-			return err
++		if len(s.upstreams[i].Name) > 0 {
++			continue
+ 		}
+ 
+-		s.upstreams[i].Name = target
++		if s.upstreams[i].Grpc != nil {
++			target, err := s.upstreams[i].Grpc.BuildTarget()
++			if err != nil {
++				return err
++			}
++
++			s.upstreams[i].Name = target
++		} else if s.upstreams[i].Http != nil {
++			s.upstreams[i].Name = s.upstreams[i].Http.Target
++		}
+ 	}
+ 
+ 	return nil
+@@ -188,6 +274,61 @@ func WithHeaderProcessor(processHeader func(http.Header) []string) func(*Server)
+ 	}
+ }
+ 
++// WithMiddleware adds one or more middleware functions to process HTTP requests.
++// Multiple middlewares will be executed in the order they were passed (like an onion model).
++func WithMiddleware(middlewares ...rest.Middleware) func(*Server) {
++	return func(s *Server) {
++		s.middlewares = append(s.middlewares, middlewares...)
++	}
++}
++
++func buildRequestWithNewTarget(r *http.Request, target *HttpClientConf) (*http.Request, error) {
++	u := *r.URL
++	u.Host = target.Target
++	if len(u.Scheme) == 0 {
++		u.Scheme = defaultHttpScheme
++	}
++
++	if len(target.Prefix) > 0 {
++		var err error
++		u.Path, err = url.JoinPath(target.Prefix, u.Path)
++		if err != nil {
++			return nil, err
++		}
++	}
++
++	newReq := &http.Request{
++		Method:        r.Method,
++		URL:           &u,
++		Header:        r.Header.Clone(),
++		Proto:         r.Proto,
++		ProtoMajor:    r.ProtoMajor,
++		ProtoMinor:    r.ProtoMinor,
++		ContentLength: r.ContentLength,
++		Body:          io.NopCloser(r.Body),
++	}
++
++	// make sure the context is passed to the new request
++	return newReq.WithContext(r.Context()), nil
++}
++
++func createDescriptorSource(cli zrpc.Client, up Upstream) (grpcurl.DescriptorSource, error) {
++	var source grpcurl.DescriptorSource
++	var err error
++
++	if len(up.ProtoSets) > 0 {
++		source, err = grpcurl.DescriptorSourceFromProtoSets(up.ProtoSets...)
++		if err != nil {
++			return nil, err
++		}
++	} else {
++		client := grpcreflect.NewClientAuto(context.Background(), cli.Conn())
++		source = grpcurl.DescriptorSourceFromServer(context.Background(), client)
++	}
++
++	return source, nil
++}
++
+ // withDialer sets a dialer to create a gRPC client.
+ func withDialer(dialer func(conf zrpc.RpcClientConf) zrpc.Client) func(*Server) {
+ 	return func(s *Server) {
+diff --git a/rest/httpc/requests.go b/rest/httpc/requests.go
+index defe25991fb361f902746925ba6df7b8419c827e..a7924a052804323a7efccf236e7751e9cb21254a 100644
+--- a/rest/httpc/requests.go
++++ b/rest/httpc/requests.go
+@@ -183,7 +183,6 @@ func request(r *http.Request, cli client) (*http.Response, error) {
+ 	for i := len(respHandlers) - 1; i >= 0; i-- {
+ 		respHandlers[i](resp, err)
+ 	}
+-
+ 	if err != nil {
+ 		span.RecordError(err)
+ 		span.SetStatus(codes.Error, err.Error())

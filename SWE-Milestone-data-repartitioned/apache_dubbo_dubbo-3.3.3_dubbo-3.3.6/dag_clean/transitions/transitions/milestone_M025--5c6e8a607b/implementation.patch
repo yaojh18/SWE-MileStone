@@ -1,0 +1,364 @@
+diff --git a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
+index b776dbe3a7148b3fe1db9423c1ddbd065db2a911..96f51ee492e578d41e3ce3bb66c7604dce13f3b4 100644
+--- a/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
++++ b/dubbo-cluster/src/main/java/org/apache/dubbo/rpc/cluster/loadbalance/ConsistentHashLoadBalance.java
+@@ -54,6 +54,13 @@ public class ConsistentHashLoadBalance extends AbstractLoadBalance {
+         String methodName = RpcUtils.getMethodName(invocation);
+         String key = invokers.get(0).getUrl().getServiceKey() + "." + methodName;
+         int invokersHashCode = invokers.hashCode();
++        // If the detection is successful, return in advance. it may be different from selector, but it doesn't matter
++        ConsistentHashSelector<T> oldSelector0;
++        if ((oldSelector0 = (ConsistentHashSelector<T>) selectors.get(key)) != null
++                && oldSelector0.identityHashCode == invokersHashCode) {
++            return oldSelector0.select(invocation);
++        }
++
+         // using the hashcode of invoker list to create consistent selector by atomic computation.
+         ConsistentHashSelector<T> selector = (ConsistentHashSelector<T>) selectors.compute(
+                 key,
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/threadlocal/NamedInternalThreadFactory.java b/dubbo-common/src/main/java/org/apache/dubbo/common/threadlocal/NamedInternalThreadFactory.java
+index 7b7f14aae07cd828ced28ecb76153a6286cdd60a..06e666f129ab3e4cb87e7071d346fdfac8e587f0 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/threadlocal/NamedInternalThreadFactory.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/threadlocal/NamedInternalThreadFactory.java
+@@ -39,7 +39,7 @@ public class NamedInternalThreadFactory extends NamedThreadFactory {
+     @Override
+     public Thread newThread(Runnable runnable) {
+         String name = mPrefix + mThreadNum.getAndIncrement();
+-        InternalThread ret = new InternalThread(mGroup, InternalRunnable.Wrap(runnable), name, 0);
++        InternalThread ret = new InternalThread(InternalRunnable.Wrap(runnable), name);
+         ret.setDaemon(mDaemon);
+         return ret;
+     }
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/threadpool/serial/SerializingExecutor.java b/dubbo-common/src/main/java/org/apache/dubbo/common/threadpool/serial/SerializingExecutor.java
+index 05fd83d1e4d86104eef836c75ebd2486301958f4..0dda349c8a1c870961718d4d453f64b996ce8834 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/threadpool/serial/SerializingExecutor.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/threadpool/serial/SerializingExecutor.java
+@@ -19,6 +19,7 @@ package org.apache.dubbo.common.threadpool.serial;
+ import java.util.Queue;
+ import java.util.concurrent.ConcurrentLinkedQueue;
+ import java.util.concurrent.Executor;
++import java.util.concurrent.RejectedExecutionException;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ 
+ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+@@ -73,6 +74,11 @@ public final class SerializingExecutor implements Executor, Runnable {
+                     executor.execute(this);
+                     success = true;
+                 }
++            } catch (RejectedExecutionException e) {
++                if (!isShutdown(executor)) {
++                    // ignore exception if the executor is shutdown
++                    throw e;
++                }
+             } finally {
+                 // It is possible that at this point that there are still tasks in
+                 // the queue, it would be nice to keep trying but the error may not
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NamedThreadFactory.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NamedThreadFactory.java
+index a7ea031a9b70de8cce8f12db88158bace9a2e83e..433671b40b33bdeb7c07d7fff8ff23ccbcaf6447 100755
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NamedThreadFactory.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NamedThreadFactory.java
+@@ -32,8 +32,6 @@ public class NamedThreadFactory implements ThreadFactory {
+ 
+     protected final boolean mDaemon;
+ 
+-    protected final ThreadGroup mGroup;
+-
+     public NamedThreadFactory() {
+         this("pool-" + POOL_SEQ.getAndIncrement(), false);
+     }
+@@ -45,22 +43,16 @@ public class NamedThreadFactory implements ThreadFactory {
+     public NamedThreadFactory(String prefix, boolean daemon) {
+         mPrefix = prefix + "-thread-";
+         mDaemon = daemon;
+-        SecurityManager s = System.getSecurityManager();
+-        mGroup = (s == null) ? Thread.currentThread().getThreadGroup() : s.getThreadGroup();
+     }
+ 
+     @Override
+     public Thread newThread(Runnable runnable) {
+         String name = mPrefix + mThreadNum.getAndIncrement();
+-        Thread ret = new Thread(mGroup, runnable, name, 0);
++        Thread ret = new Thread(runnable, name);
+         ret.setDaemon(mDaemon);
+         return ret;
+     }
+ 
+-    public ThreadGroup getThreadGroup() {
+-        return mGroup;
+-    }
+-
+     // for test
+     public AtomicInteger getThreadNum() {
+         return mThreadNum;
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+index d53c36a73cdae9670ab46179cf6703a8ad01d504..bbd2b912de625c6962aae639c1952feba92d3cf0 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+@@ -547,7 +547,11 @@ public final class NetUtils {
+                     if (addressOp.isPresent()) {
+                         try {
+                             if (addressOp.get().isReachable(100)) {
+-                                return networkInterface;
++                                if (addressOp.get().isSiteLocalAddress()) {
++                                    return networkInterface;
++                                } else {
++                                    result = networkInterface;
++                                }
+                             }
+                         } catch (IOException e) {
+                             // ignore
+diff --git a/dubbo-plugin/dubbo-auth/pom.xml b/dubbo-plugin/dubbo-auth/pom.xml
+index c96561dd0feabc0772f3e391deabd3248e3b619d..5e44eedc008be9e7fdcd96eeeaffdd52fad127a1 100644
+--- a/dubbo-plugin/dubbo-auth/pom.xml
++++ b/dubbo-plugin/dubbo-auth/pom.xml
+@@ -42,12 +42,6 @@
+       <artifactId>dubbo-rpc-api</artifactId>
+       <version>${project.version}</version>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-compiler/pom.xml b/dubbo-plugin/dubbo-compiler/pom.xml
+index 2f8ad351739ee296e176b9e12dd2f11c41a271ee..6eaac35e4030b46c626d6130f8f0852d2518c15b 100644
+--- a/dubbo-plugin/dubbo-compiler/pom.xml
++++ b/dubbo-plugin/dubbo-compiler/pom.xml
+@@ -59,12 +59,6 @@
+       <groupId>com.salesforce.servicelibs</groupId>
+       <artifactId>grpc-contrib</artifactId>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-filter-cache/pom.xml b/dubbo-plugin/dubbo-filter-cache/pom.xml
+index 5b27e2c9c643cdd18ffe092119542ca5795ce5a4..b07e54a3e19e1c0a91d32434a90d80d84e8f953b 100644
+--- a/dubbo-plugin/dubbo-filter-cache/pom.xml
++++ b/dubbo-plugin/dubbo-filter-cache/pom.xml
+@@ -47,12 +47,6 @@
+       <version>${hazelcast_version}</version>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-filter-validation/pom.xml b/dubbo-plugin/dubbo-filter-validation/pom.xml
+index 00c487a04ea59feecbf81008fdccb41532310b44..1c9ec03f6fffb722b306c15af25d6e123ea81f1b 100644
+--- a/dubbo-plugin/dubbo-filter-validation/pom.xml
++++ b/dubbo-plugin/dubbo-filter-validation/pom.xml
+@@ -77,12 +77,6 @@
+       <version>${jaxb_api_version}</version>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-native/pom.xml b/dubbo-plugin/dubbo-native/pom.xml
+index 3695ce2a1480465f5ca087dbfaed206135b32984..42ceeffa0faacddd755303ecba5ffe3d3c3310d1 100644
+--- a/dubbo-plugin/dubbo-native/pom.xml
++++ b/dubbo-plugin/dubbo-native/pom.xml
+@@ -33,12 +33,6 @@
+       <artifactId>dubbo-common</artifactId>
+       <version>${project.parent.version}</version>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-qos-api/pom.xml b/dubbo-plugin/dubbo-qos-api/pom.xml
+index 6c9d8ffa1b2d6daf80dcb1ca148e18777ab3674b..db420c0ace90110aa29ea8afe9dd9b8ee97e0207 100644
+--- a/dubbo-plugin/dubbo-qos-api/pom.xml
++++ b/dubbo-plugin/dubbo-qos-api/pom.xml
+@@ -43,12 +43,6 @@
+       <artifactId>dubbo-common</artifactId>
+       <version>${project.version}</version>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-qos/pom.xml b/dubbo-plugin/dubbo-qos/pom.xml
+index 8b428b6f0325b6d310e710af631a4e6bd324cb32..f65c454cb71d1e793a8d03f4577af19112c87f01 100644
+--- a/dubbo-plugin/dubbo-qos/pom.xml
++++ b/dubbo-plugin/dubbo-qos/pom.xml
+@@ -86,12 +86,6 @@
+       <artifactId>dubbo-metrics-default</artifactId>
+       <version>${project.version}</version>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-reactive/pom.xml b/dubbo-plugin/dubbo-reactive/pom.xml
+index 6bd922f9f76ae746c5e858146810ecd20b23df70..bd2601fc91f5b4770657c4c5471a48c8e8c8d574 100644
+--- a/dubbo-plugin/dubbo-reactive/pom.xml
++++ b/dubbo-plugin/dubbo-reactive/pom.xml
+@@ -45,12 +45,6 @@
+       <groupId>io.projectreactor</groupId>
+       <artifactId>reactor-core</artifactId>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-rest-jaxrs/pom.xml b/dubbo-plugin/dubbo-rest-jaxrs/pom.xml
+index 8aaf240772d819bac9330733494c1ac36f864f72..9dd04fd05daf7ef4d497bd1cb6f9f82fb5a7700c 100644
+--- a/dubbo-plugin/dubbo-rest-jaxrs/pom.xml
++++ b/dubbo-plugin/dubbo-rest-jaxrs/pom.xml
+@@ -84,12 +84,6 @@
+       <artifactId>spock-core</artifactId>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-rest-spring/pom.xml b/dubbo-plugin/dubbo-rest-spring/pom.xml
+index 6c9a0ef425777f84e0f77e4c19929613e6dba13c..c786df8317b0aa6c45edce6ebdc4f78cf5ba8bb0 100644
+--- a/dubbo-plugin/dubbo-rest-spring/pom.xml
++++ b/dubbo-plugin/dubbo-rest-spring/pom.xml
+@@ -93,12 +93,6 @@
+       <artifactId>spock-core</artifactId>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-security/pom.xml b/dubbo-plugin/dubbo-security/pom.xml
+index 401ff1ca4659dab6fb2415c158d65e0bfa1a28c3..0fda27afff8f2486fd6dc3c97e72c94c0e0753e3 100644
+--- a/dubbo-plugin/dubbo-security/pom.xml
++++ b/dubbo-plugin/dubbo-security/pom.xml
+@@ -93,12 +93,6 @@
+       <version>${project.version}</version>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 3e357d55ea31ae458c0d0e1e74a143bfd751d5ee..1b6063a02750da376a69988ffe80a6de15c5f9c1 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -99,12 +99,6 @@
+     </dependency>
+     <!-- jackson -->
+ 
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-triple-servlet/pom.xml b/dubbo-plugin/dubbo-triple-servlet/pom.xml
+index 509656e57546b31a98dd68e057c11014e7c055f0..a0040dacbcd66bb313d824bd7362d5d4868bba82 100644
+--- a/dubbo-plugin/dubbo-triple-servlet/pom.xml
++++ b/dubbo-plugin/dubbo-triple-servlet/pom.xml
+@@ -54,12 +54,6 @@
+       <version>${project.version}</version>
+       <scope>test</scope>
+     </dependency>
+-    <dependency>
+-      <groupId>org.apache.dubbo</groupId>
+-      <artifactId>dubbo-test-check</artifactId>
+-      <version>${project.parent.version}</version>
+-      <scope>test</scope>
+-    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-plugin/dubbo-triple-servlet/src/main/java/org/apache/dubbo/rpc/protocol/tri/servlet/HttpMetadataAdapter.java b/dubbo-plugin/dubbo-triple-servlet/src/main/java/org/apache/dubbo/rpc/protocol/tri/servlet/HttpMetadataAdapter.java
+index 829d046497a3ddff587945af1d1dbb30668d2ac1..8c67bc4aae25749e595b7c41bc4a962ccade1b8d 100644
+--- a/dubbo-plugin/dubbo-triple-servlet/src/main/java/org/apache/dubbo/rpc/protocol/tri/servlet/HttpMetadataAdapter.java
++++ b/dubbo-plugin/dubbo-triple-servlet/src/main/java/org/apache/dubbo/rpc/protocol/tri/servlet/HttpMetadataAdapter.java
+@@ -16,7 +16,6 @@
+  */
+ package org.apache.dubbo.rpc.protocol.tri.servlet;
+ 
+-import org.apache.dubbo.remoting.http12.HttpHeaderNames;
+ import org.apache.dubbo.remoting.http12.HttpHeaders;
+ import org.apache.dubbo.remoting.http12.h2.Http2Header;
+ 
+@@ -55,7 +54,7 @@ public final class HttpMetadataAdapter implements Http2Header {
+             }
+             headers.add(PseudoHeaderName.METHOD.value(), method());
+             headers.add(PseudoHeaderName.SCHEME.value(), request.getScheme());
+-            headers.add(PseudoHeaderName.AUTHORITY.value(), request.getHeader(HttpHeaderNames.HOST.getName()));
++            headers.add(PseudoHeaderName.AUTHORITY.value(), request.getServerName());
+             headers.add(PseudoHeaderName.PROTOCOL.value(), request.getProtocol());
+             this.headers = headers;
+         }
+diff --git a/dubbo-rpc/dubbo-rpc-api/src/main/java/org/apache/dubbo/rpc/RpcServiceContext.java b/dubbo-rpc/dubbo-rpc-api/src/main/java/org/apache/dubbo/rpc/RpcServiceContext.java
+index 6bc36b75ae44c5cf454c491c3651017947637a92..0768e08bf90fa38b23ba93dafc710b0e0f9d0328 100644
+--- a/dubbo-rpc/dubbo-rpc-api/src/main/java/org/apache/dubbo/rpc/RpcServiceContext.java
++++ b/dubbo-rpc/dubbo-rpc-api/src/main/java/org/apache/dubbo/rpc/RpcServiceContext.java
+@@ -625,7 +625,7 @@ public class RpcServiceContext extends RpcContext {
+         this.needPrintRouterSnapshot = needPrintRouterSnapshot;
+     }
+ 
+-    public RpcServiceContext setLocalInvoke(boolean localInvoke) {
++    public RpcServiceContext setLocalInvoke(Boolean localInvoke) {
+         this.localInvoke = localInvoke;
+         return this;
+     }

@@ -1,0 +1,946 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.asf.yaml b/.asf.yaml
+index 4f41badc91d2e5b4215be992b8b2a49da192a894..db8c17d077dddb22cf7e99898243f6c9b5892983 100644
+--- a/.asf.yaml
++++ b/.asf.yaml
+@@ -37,15 +37,51 @@ github:
+     # Enable GitHub Discussions for community discussions
+     discussions: true
+   protected_branches:
+-    master: {}
+-    2.5.x: {}
+-    2.6.x: {}
+-    2.7.x: {}
+-    3.0: {}
+-    3.1: {}
+-    3.2: {}
+-    3.3: {}
+-    3.4: {}
++    master: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.5.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.6.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.7.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.0: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.1: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.2: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.3: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.4: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
+   labels:
+     - java
+     - rpc
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/constants/CommonConstants.java b/dubbo-common/src/main/java/org/apache/dubbo/common/constants/CommonConstants.java
+index 8d414b648bab8b7a9567a3dcd0227835d37fd5cd..50cc0a830cfabb5b00e62f18997ea4779d664b6d 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/constants/CommonConstants.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/constants/CommonConstants.java
+@@ -738,6 +738,15 @@ public interface CommonConstants {
+          */
+         String DUBBO_PREFERRED_NETWORK_INTERFACE = "dubbo.network.interface.preferred";
+ 
++        /**
++         * The property name for {@link NetworkInterface#isPointToPoint() return whether a network interface is a point
++         * to point interface} that the Dubbo application will determine whether to ignore the point-to-point network
++         * interface
++         *
++         * @since 3.3
++         */
++        String DUBBO_NETWORK_INTERFACE_POINT_TO_POINT_IGNORED = "dubbo.network.interface.point-to-point.ignored";
++
+         String DUBBO_CLASS_DESERIALIZE_ALLOWED_LIST = "dubbo.security.serialize.allowedClassList";
+         String DUBBO_CLASS_DESERIALIZE_BLOCKED_LIST = "dubbo.security.serialize.blockedClassList";
+         String DUBBO_CLASS_DESERIALIZE_OPEN_CHECK = "dubbo.security.serialize.openCheckClass";
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+index d53c36a73cdae9670ab46179cf6703a8ad01d504..9a8689319cc6504f018731ecfb04ef55dd0e79cb 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+@@ -451,6 +451,11 @@ public final class NetUtils {
+                 || !networkInterface.isUp()) {
+             return true;
+         }
++        if (Boolean.parseBoolean(SystemPropertyConfigUtils.getSystemProperty(
++                        CommonConstants.DubboProperty.DUBBO_NETWORK_INTERFACE_POINT_TO_POINT_IGNORED, "false"))
++                && networkInterface.isPointToPoint()) {
++            return true;
++        }
+         String ignoredInterfaces = SystemPropertyConfigUtils.getSystemProperty(
+                 CommonConstants.DubboProperty.DUBBO_NETWORK_IGNORED_INTERFACE);
+         String networkInterfaceDisplayName;
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ModuleModel.java b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ModuleModel.java
+index 130fe863ddf6d7b78f73773e5f5c71ed64777da6..0c9203442e724de79a445845f48ca27b253e717a 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ModuleModel.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/rpc/model/ModuleModel.java
+@@ -209,7 +209,8 @@ public class ModuleModel extends ScopeModel {
+                 new HashMap<>(0),
+                 ClassUtils.getClassLoader(internalService));
+ 
+-        logger.info("Dynamically registering consumer model " + serviceKey + " into model " + this.getDesc());
++        logger.info("[INSTANCE_REGISTER] Dynamically registering consumer model " + serviceKey + " into model "
++                + this.getDesc());
+         serviceRepository.registerConsumer(consumerModel);
+         return consumerModel;
+     }
+diff --git a/dubbo-common/src/main/resources/security/serialize.allowlist b/dubbo-common/src/main/resources/security/serialize.allowlist
+index b84a0e5c88fe34b596557f9632c286eee5030fbf..68411a6ed2bb7f3eceaff0f3ebd55221c1836c92 100644
+--- a/dubbo-common/src/main/resources/security/serialize.allowlist
++++ b/dubbo-common/src/main/resources/security/serialize.allowlist
+@@ -139,3 +139,20 @@ org.apache.dubbo.common.URL
+ org.apache.dubbo.common.url.component.URLAddress
+ org.apache.dubbo.common.url.component.URLPlainParam
+ org.apache.dubbo.common.url.component.PathURLAddress
++org.apache.dubbo.remoting.http12.exception.DecodeException
++org.apache.dubbo.remoting.http12.exception.EncodeException
++org.apache.dubbo.remoting.http12.exception.HttpOverPayloadException
++org.apache.dubbo.remoting.http12.exception.HttpRequestTimeout
++org.apache.dubbo.remoting.http12.exception.HttpResultPayloadException
++org.apache.dubbo.remoting.http12.exception.HttpStatusException
++org.apache.dubbo.remoting.http12.exception.UnimplementedException
++org.apache.dubbo.remoting.http12.exception.UnsupportedMediaTypeException
++org.apache.dubbo.rpc.protocol.tri.rest.PathParserException
++org.apache.dubbo.rpc.protocol.tri.rest.RestBadRequestException
++org.apache.dubbo.rpc.protocol.tri.rest.RestException
++org.apache.dubbo.rpc.protocol.tri.rest.RestInitializeException
++org.apache.dubbo.rpc.protocol.tri.rest.RestMappingException
++org.apache.dubbo.rpc.protocol.tri.rest.RestParameterException
++org.apache.dubbo.remoting.http12.h2.CancelStreamException
++org.apache.dubbo.rpc.protocol.tri.ThrowableWrapper
++org.apache.dubbo.rpc.StatusRpcException
+diff --git a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/ServiceConfig.java b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/ServiceConfig.java
+index 33c9a581ab798c58c66463514b3376ad93ed6e8e..d9745b22443b0e27a46e42c5d1436805c463b5c4 100644
+--- a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/ServiceConfig.java
++++ b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/ServiceConfig.java
+@@ -425,25 +425,30 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
+         if (!exported) {
+             return;
+         }
+-        logger.info("Try to register interface application mapping for service " + url.getServiceKey());
++        logger.info("[INSTANCE_REGISTER] [METADATA_REGISTER] Try to register interface application mapping for service "
++                + url.getServiceKey());
+         boolean succeeded = false;
+         try {
+             succeeded = serviceNameMapping.map(url);
+             if (succeeded) {
+-                logger.info("Successfully registered interface application mapping for service " + url.getServiceKey());
++                logger.info(
++                        "[INSTANCE_REGISTER][METADATA_REGISTER] Successfully registered interface application mapping for service "
++                                + url.getServiceKey());
+             } else {
+                 logger.error(
+                         CONFIG_SERVER_DISCONNECTED,
+                         "configuration server disconnected",
+                         "",
+-                        "Failed register interface application mapping for service " + url.getServiceKey());
++                        "[INSTANCE_REGISTER] [METADATA_REGISTER] Failed register interface application mapping for service "
++                                + url.getServiceKey());
+             }
+         } catch (Exception e) {
+             logger.error(
+                     CONFIG_SERVER_DISCONNECTED,
+                     "configuration server disconnected",
+                     "",
+-                    "Failed register interface application mapping for service " + url.getServiceKey(),
++                    "[INSTANCE_REGISTER] [METADATA_REGISTER] Failed register interface application mapping for service "
++                            + url.getServiceKey(),
+                     e);
+         }
+         if (!succeeded && serviceNameMapping.hasValidMetadataCenter()) {
+@@ -929,8 +934,8 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
+ 
+                 if (logger.isInfoEnabled()) {
+                     if (url.getParameter(REGISTER_KEY, true)) {
+-                        logger.info("Register dubbo service " + interfaceClass.getName() + " url " + url
+-                                + " to registry " + registryURL.getAddress());
++                        logger.info("[INSTANCE_REGISTER] Register dubbo service " + interfaceClass.getName() + " url "
++                                + url + " to registry " + registryURL.getAddress());
+                     } else {
+                         logger.info("Export dubbo service " + interfaceClass.getName() + " to url " + url);
+                     }
+@@ -942,7 +947,8 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
+         } else {
+ 
+             if (logger.isInfoEnabled()) {
+-                logger.info("Export dubbo service " + interfaceClass.getName() + " to url " + url);
++                logger.info("[SERVICE_PUBLISH][METADATA_REGISTER] Export dubbo service " + interfaceClass.getName()
++                        + " to url " + url);
+             }
+ 
+             doExportUrl(url, true, registerType);
+@@ -984,7 +990,8 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
+         local = local.setScopeModel(getScopeModel()).setServiceModel(providerModel);
+         local = local.addParameter(EXPORTER_LISTENER_KEY, LOCAL_PROTOCOL);
+         doExportUrl(local, false, RegisterTypeEnum.AUTO_REGISTER);
+-        logger.info("Export dubbo service " + interfaceClass.getName() + " to local registry url : " + local);
++        logger.info("[SERVICE_PUBLISH][METADATA_REGISTER] Export dubbo service " + interfaceClass.getName()
++                + " to local registry url : " + local);
+     }
+ 
+     /**
+@@ -1165,7 +1172,10 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
+         if (!RANDOM_PORT_MAP.containsKey(protocol)) {
+             RANDOM_PORT_MAP.put(protocol, port);
+             logger.warn(
+-                    CONFIG_USE_RANDOM_PORT, "", "", "Use random available port(" + port + ") for protocol " + protocol);
++                    CONFIG_USE_RANDOM_PORT,
++                    "",
++                    "",
++                    "[SERVICE_PUBLISH] Use random available port(" + port + ") for protocol " + protocol);
+         }
+     }
+ 
+diff --git a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/bootstrap/builders/InternalServiceConfigBuilder.java b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/bootstrap/builders/InternalServiceConfigBuilder.java
+index f9915833a5ea65c95a93d48121462e0c68d95c5f..c9a26b834a2bb0bdb5587cfd7507de0602887643 100644
+--- a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/bootstrap/builders/InternalServiceConfigBuilder.java
++++ b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/bootstrap/builders/InternalServiceConfigBuilder.java
+@@ -269,8 +269,8 @@ public class InternalServiceConfigBuilder<T> {
+ 
+         this.nullAssert();
+ 
+-        logger.info("Using " + this.protocol + " protocol to export " + interfaceClass.getName() + " service on port "
+-                + protocolConfig.getPort());
++        logger.info("[SERVICE_PUBLISH] [METADATA_REGISTER] Using " + this.protocol + " protocol to export "
++                + interfaceClass.getName() + " service on port " + protocolConfig.getPort());
+ 
+         applicationModel
+                 .getApplicationConfigManager()
+diff --git a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/metadata/ConfigurableMetadataServiceExporter.java b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/metadata/ConfigurableMetadataServiceExporter.java
+index 0a29223ac95f1c94a3d0a1a9a47904436d217e6c..caa5b3f55db6c7797d397154dd4658e318f277a1 100644
+--- a/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/metadata/ConfigurableMetadataServiceExporter.java
++++ b/dubbo-config/dubbo-config-api/src/main/java/org/apache/dubbo/config/metadata/ConfigurableMetadataServiceExporter.java
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.dubbo.config.metadata;
+ 
++import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.threadpool.manager.FrameworkExecutorRepository;
+@@ -31,6 +32,7 @@ import org.apache.dubbo.registry.client.metadata.MetadataServiceDelegation;
+ import org.apache.dubbo.registry.client.metadata.MetadataServiceDelegationV2;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+ import java.util.concurrent.ExecutorService;
+@@ -71,7 +73,7 @@ public class ConfigurableMetadataServiceExporter {
+     }
+ 
+     public synchronized ConfigurableMetadataServiceExporter export() {
+-        if (serviceConfig == null || !isExported()) {
++        if (!isExported()) {
+             if (MetadataServiceVersionUtils.needExportV1(applicationModel)) {
+                 exportV1();
+             }
+@@ -84,13 +86,28 @@ public class ConfigurableMetadataServiceExporter {
+                         CONFIG_METADATA_SERVICE_EXPORTED,
+                         "",
+                         "",
+-                        "The MetadataService has been exported : " + serviceConfig.getExportedUrls());
++                        "The MetadataService has been exported : " + getExportedUrls());
+             }
+         }
+ 
+         return this;
+     }
+ 
++    /**
++     * Get exported urls which include v1 and v2 if existed
++     * @return exported urls
++     */
++    public List<URL> getExportedUrls() {
++        List<URL> urls = new ArrayList<>();
++        if (serviceConfig != null) {
++            urls.addAll(serviceConfig.getExportedUrls());
++        }
++        if (serviceConfigV2 != null) {
++            urls.addAll(serviceConfigV2.getExportedUrls());
++        }
++        return urls;
++    }
++
+     private static final String INTERNAL_METADATA_REGISTRY_ID = "internal-metadata-registry";
+ 
+     private void exportV1() {
+@@ -113,7 +130,8 @@ public class ConfigurableMetadataServiceExporter {
+         metadataService.setMetadataURL(serviceConfig.getExportedUrls().get(0));
+ 
+         if (logger.isInfoEnabled()) {
+-            logger.info("The MetadataService exports urls : " + serviceConfig.getExportedUrls());
++            logger.info("[SERVICE_PUBLISH] [METADATA_REGISTER] The MetadataService exports urls : "
++                    + serviceConfig.getExportedUrls());
+         }
+     }
+ 
+@@ -137,7 +155,8 @@ public class ConfigurableMetadataServiceExporter {
+         metadataServiceV2.setMetadataUrl(serviceConfigV2.getExportedUrls().get(0));
+ 
+         if (logger.isInfoEnabled()) {
+-            logger.info("The MetadataServiceV2 exports urls : " + serviceConfigV2.getExportedUrls());
++            logger.info("[SERVICE_PUBLISH][METADATA_REGISTER] The MetadataServiceV2 exports urls : "
++                    + serviceConfigV2.getExportedUrls());
+         }
+     }
+ 
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/AbstractServiceNameMapping.java b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/AbstractServiceNameMapping.java
+index d26684a512c10c9add47be4d33c22215348ca478..84d6a5c42b6f7001a43580f2d33c9440df341642 100644
+--- a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/AbstractServiceNameMapping.java
++++ b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/AbstractServiceNameMapping.java
+@@ -102,7 +102,7 @@ public abstract class AbstractServiceNameMapping implements ServiceNameMapping {
+         // Asynchronously register listener in case previous cache does not exist or cache expired.
+         if (CollectionUtils.isEmpty(mappingServices)) {
+             try {
+-                logger.info("Local cache mapping is empty");
++                logger.info("[METADATA_REGISTER] Local cache mapping is empty");
+                 mappingServices = (new AsyncMappingTask(listener, subscribedURL, false)).call();
+             } catch (Exception e) {
+                 // ignore
+diff --git a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/MetadataInfo.java b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/MetadataInfo.java
+index d7dccf8df1c63d9be558f3066c82f0cca0260a4a..88a9acdca3d97da6751bbd72578e37a89e57aaf5 100644
+--- a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/MetadataInfo.java
++++ b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/MetadataInfo.java
+@@ -202,7 +202,7 @@ public class MetadataInfo implements Serializable {
+             if (!StringUtils.isEquals(this.revision, tempRevision)) {
+                 if (logger.isInfoEnabled()) {
+                     logger.info(String.format(
+-                            "metadata revision changed: %s -> %s, app: %s, services: %d",
++                            "[METADATA_REGISTER] metadata revision changed: %s -> %s, app: %s, services: %d",
+                             this.revision, tempRevision, this.app, this.services.size()));
+                 }
+                 this.revision = tempRevision;
+diff --git a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/report/support/AbstractMetadataReport.java b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/report/support/AbstractMetadataReport.java
+index f21e99b3dfd6cac9f25655e988fa9ef14aca6104..d2b54a2b1ea33599c7c719096ab5aaabfe3ad3ef 100644
+--- a/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/report/support/AbstractMetadataReport.java
++++ b/dubbo-metadata/dubbo-metadata-api/src/main/java/org/apache/dubbo/metadata/report/support/AbstractMetadataReport.java
+@@ -306,8 +306,8 @@ public abstract class AbstractMetadataReport implements MetadataReport {
+                     boolean result = true;
+                     try {
+                         if (logger.isInfoEnabled()) {
+-                            logger.info("store provider metadata. Identifier : " + providerMetadataIdentifier
+-                                    + "; definition: " + serviceDefinition);
++                            logger.info("[METADATA_REGISTER] store provider metadata. Identifier : "
++                                    + providerMetadataIdentifier + "; definition: " + serviceDefinition);
+                         }
+                         allMetadataReports.put(providerMetadataIdentifier, serviceDefinition);
+                         failedReports.remove(providerMetadataIdentifier);
+@@ -347,8 +347,8 @@ public abstract class AbstractMetadataReport implements MetadataReport {
+             MetadataIdentifier consumerMetadataIdentifier, Map<String, String> serviceParameterMap) {
+         try {
+             if (logger.isInfoEnabled()) {
+-                logger.info("store consumer metadata. Identifier : " + consumerMetadataIdentifier + "; definition: "
+-                        + serviceParameterMap);
++                logger.info("[METADATA_REGISTER] store consumer metadata. Identifier : " + consumerMetadataIdentifier
++                        + "; definition: " + serviceParameterMap);
+             }
+             allMetadataReports.put(consumerMetadataIdentifier, serviceParameterMap);
+             failedReports.remove(consumerMetadataIdentifier);
+diff --git a/dubbo-metadata/dubbo-metadata-report-nacos/src/main/java/org/apache/dubbo/metadata/store/nacos/NacosMetadataReport.java b/dubbo-metadata/dubbo-metadata-report-nacos/src/main/java/org/apache/dubbo/metadata/store/nacos/NacosMetadataReport.java
+index d6dac4355ee381b8c9976579deaed50c4dadc80e..86f6062dec5e97ff7d2bbbdef8efe55e10bedd4a 100644
+--- a/dubbo-metadata/dubbo-metadata-report-nacos/src/main/java/org/apache/dubbo/metadata/store/nacos/NacosMetadataReport.java
++++ b/dubbo-metadata/dubbo-metadata-report-nacos/src/main/java/org/apache/dubbo/metadata/store/nacos/NacosMetadataReport.java
+@@ -299,13 +299,16 @@ public class NacosMetadataReport extends AbstractMetadataReport {
+         return new ConfigItem(content, casMd5);
+     }
+ 
++    /**
++     * allow adding listener without checking if the serviceKey is existed in the map.
++     * there are multiple references which have the same serviceKey but might have multiple listeners,
++     * because the extra parameters of their subscribed URLs might be different.
++     */
+     @Override
+     public Set<String> getServiceAppMapping(String serviceKey, MappingListener listener, URL url) {
+         String group = DEFAULT_MAPPING_GROUP;
+ 
+-        if (null == casListenerMap.get(buildListenerKey(serviceKey, group))) {
+-            addCasServiceMappingListener(serviceKey, group, listener);
+-        }
++        addCasServiceMappingListener(serviceKey, group, listener);
+         String content = getConfig(serviceKey, group);
+         return ServiceNameMapping.getAppNames(content);
+     }
+diff --git a/dubbo-plugin/dubbo-security/pom.xml b/dubbo-plugin/dubbo-security/pom.xml
+index 401ff1ca4659dab6fb2415c158d65e0bfa1a28c3..3da981f85e4c0977b4b4b03565411e0095e5a954 100644
+--- a/dubbo-plugin/dubbo-security/pom.xml
++++ b/dubbo-plugin/dubbo-security/pom.xml
+@@ -134,12 +134,27 @@
+           <skip>true</skip>
+         </configuration>
+       </plugin>
++      <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
++      <plugin>
++        <groupId>kr.motd.maven</groupId>
++        <artifactId>os-maven-plugin</artifactId>
++        <version>${maven_os_plugin_version}</version>
++        <executions>
++          <execution>
++            <goals>
++              <goal>detect</goal>
++            </goals>
++            <phase>initialize</phase>
++          </execution>
++        </executions>
++      </plugin>
+     </plugins>
+     <extensions>
++      <!-- add os-maven-plugin to extensions for `mvn install` -->
+       <extension>
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+-        <version>1.7.1</version>
++        <version>${maven_os_plugin_version}</version>
+       </extension>
+     </extensions>
+   </build>
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3e357d55ea31ae458c0d0e1e74a143bfd751d5ee 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,7 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistry.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistry.java
+index f84255abeb77d095030a82a5bee3729e3fc24094..2896da74bf10988f04c7b15c0b5375e181b918b7 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistry.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/ServiceDiscoveryRegistry.java
+@@ -233,7 +233,7 @@ public class ServiceDiscoveryRegistry extends FailbackRegistry {
+ 
+                 if (CollectionUtils.isEmpty(mappingByUrl)) {
+                     logger.info(
+-                            "No interface-apps mapping found in local cache, stop subscribing, will automatically wait for mapping listener callback: "
++                            "[METADATA_REGISTER] No interface-apps mapping found in local cache, stop subscribing, will automatically wait for mapping listener callback: "
+                                     + url);
+                     //                if (check) {
+                     //                    throw new IllegalStateException("Should has at least one way to know which
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataServiceNameMapping.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataServiceNameMapping.java
+index 6db3dd7d217db5824762cb632608c99095d96440..85f1016c8c17cb29b497c767c2e24d4dc1612f77 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataServiceNameMapping.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataServiceNameMapping.java
+@@ -80,7 +80,10 @@ public class MetadataServiceNameMapping extends AbstractServiceNameMapping {
+         if (CollectionUtils.isEmpty(
+                 applicationModel.getApplicationConfigManager().getMetadataConfigs())) {
+             logger.warn(
+-                    COMMON_PROPERTY_TYPE_MISMATCH, "", "", "No valid metadata config center found for mapping report.");
++                    COMMON_PROPERTY_TYPE_MISMATCH,
++                    "",
++                    "",
++                    "[METADATA_REGISTER] No valid metadata config center found for mapping report.");
+             return false;
+         }
+         String serviceInterface = url.getServiceInterface();
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
+index 663d213247e0f20c338fbea4f57f5ef94c2daa19..10a89cda5dca5c39b38550369ab784c4ff75ea97 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/MetadataUtils.java
+@@ -77,7 +77,7 @@ public class MetadataUtils {
+     public static void publishServiceDefinition(
+             URL url, ServiceDescriptor serviceDescriptor, ApplicationModel applicationModel) {
+         if (getMetadataReports(applicationModel).isEmpty()) {
+-            logger.info("Remote Metadata Report Server is not provided or unavailable, "
++            logger.info("[METADATA_REGISTER] Remote Metadata Report Server is not provided or unavailable, "
+                     + "will stop registering service definition to remote center!");
+             return;
+         }
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/ServiceInstanceMetadataUtils.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/ServiceInstanceMetadataUtils.java
+index ba84044c45afae9bb913ee2ef32b25a048d6e782..c80a7fb0b4a7aa6357d25441be5c08910a236ea9 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/ServiceInstanceMetadataUtils.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/client/metadata/ServiceInstanceMetadataUtils.java
+@@ -210,7 +210,7 @@ public class ServiceInstanceMetadataUtils {
+         RegistryManager registryManager = applicationModel.getBeanFactory().getBean(RegistryManager.class);
+         // register service instance
+         if (CollectionUtils.isNotEmpty(registryManager.getServiceDiscoveries())) {
+-            LOGGER.info("Start registering instance address to registry.");
++            LOGGER.info("[METADATA_REGISTER] Start registering instance address to registry.");
+             List<ServiceDiscovery> serviceDiscoveries = registryManager.getServiceDiscoveries();
+             for (ServiceDiscovery serviceDiscovery : serviceDiscoveries) {
+                 MetricsEventBus.post(
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryProtocol.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryProtocol.java
+index 17ae1800cd69f74437986e3f368d5f5eebd36f56..aea5b717d7e7156e72d2bed1dd4d660fad07994a 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryProtocol.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/integration/RegistryProtocol.java
+@@ -1077,8 +1077,9 @@ public class RegistryProtocol implements Protocol, ScopeModelAware {
+                                         .getProtocol()
+                                         .equals(getRegisterUrl().getProtocol()))
+                         .forEach(u -> u.setRegistered(true));
+-                logger.info("Registered dubbo service " + getRegisterUrl().getServiceKey() + " url " + getRegisterUrl()
+-                        + " to registry " + registryUrl);
++                logger.info("[INSTANCE_REGISTER] Registered dubbo service "
++                        + getRegisterUrl().getServiceKey() + " url " + getRegisterUrl() + " to registry "
++                        + registryUrl);
+             }
+         }
+ 
+diff --git a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/support/AbstractRegistry.java b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/support/AbstractRegistry.java
+index 27983bf958f4de8016395bfe7a9270f1a4f72c4b..437c1a8783089fb71fd1117b072488fe8d08ced7 100644
+--- a/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/support/AbstractRegistry.java
++++ b/dubbo-registry/dubbo-registry-api/src/main/java/org/apache/dubbo/registry/support/AbstractRegistry.java
+@@ -553,7 +553,7 @@ public abstract class AbstractRegistry implements Registry {
+             return;
+         }
+         if (logger.isInfoEnabled()) {
+-            logger.info("Notify urls for subscribe url " + url + ", url size: " + urls.size());
++            logger.info("[INSTANCE_REGISTER] Notify urls for subscribe url " + url + ", url size: " + urls.size());
+         }
+         // keep every provider's category.
+         Map<String, List<URL>> result = new HashMap<>();
+diff --git a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
+index 1977d2b52ff593e7454f27ea4d9d280fe55aebf6..1ce751daf45ff2212bb7d0d05180618a39c5e873 100644
+--- a/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
++++ b/dubbo-remoting/dubbo-remoting-api/src/main/java/org/apache/dubbo/remoting/transport/AbstractServer.java
+@@ -66,8 +66,8 @@ public abstract class AbstractServer extends AbstractEndpoint implements Remotin
+         try {
+             doOpen();
+             if (logger.isInfoEnabled()) {
+-                logger.info("Start " + getClass().getSimpleName() + " bind " + getBindAddress() + ", export "
+-                        + getLocalAddress());
++                logger.info("[SERVICE_PUBLISH][METADATA_REGISTER] Start "
++                        + getClass().getSimpleName() + " bind " + getBindAddress() + ", export " + getLocalAddress());
+             }
+         } catch (Throwable t) {
+             throw new RemotingException(
+diff --git a/dubbo-remoting/dubbo-remoting-http3/pom.xml b/dubbo-remoting/dubbo-remoting-http3/pom.xml
+index 4955a9ed08c043b6aed1460af1e9144a793b4f5b..9ff6e6868c28898140320f1976e27d3e3566c55b 100644
+--- a/dubbo-remoting/dubbo-remoting-http3/pom.xml
++++ b/dubbo-remoting/dubbo-remoting-http3/pom.xml
+@@ -53,4 +53,31 @@
+       <scope>test</scope>
+     </dependency>
+   </dependencies>
++
++  <build>
++    <plugins>
++      <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
++      <plugin>
++        <groupId>kr.motd.maven</groupId>
++        <artifactId>os-maven-plugin</artifactId>
++        <version>${maven_os_plugin_version}</version>
++        <executions>
++          <execution>
++            <goals>
++              <goal>detect</goal>
++            </goals>
++            <phase>initialize</phase>
++          </execution>
++        </executions>
++      </plugin>
++    </plugins>
++    <extensions>
++      <!-- add os-maven-plugin to extensions for `mvn install` -->
++      <extension>
++        <groupId>kr.motd.maven</groupId>
++        <artifactId>os-maven-plugin</artifactId>
++        <version>${maven_os_plugin_version}</version>
++      </extension>
++    </extensions>
++  </build>
+ </project>
+diff --git a/dubbo-rpc/dubbo-rpc-triple/pom.xml b/dubbo-rpc/dubbo-rpc-triple/pom.xml
+index 5d0a0140c4ca36150358e6794b35d70d471631b8..940ada7e08b02ed00f4b1ca721a934c521431101 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/pom.xml
++++ b/dubbo-rpc/dubbo-rpc-triple/pom.xml
+@@ -132,6 +132,7 @@
+   </dependencies>
+   <build>
+     <plugins>
++      <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+       <plugin>
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+@@ -193,5 +194,13 @@
+         </executions>
+       </plugin>
+     </plugins>
++    <extensions>
++      <!-- add os-maven-plugin to extensions for `mvn install` -->
++      <extension>
++        <groupId>kr.motd.maven</groupId>
++        <artifactId>os-maven-plugin</artifactId>
++        <version>${maven_os_plugin_version}</version>
++      </extension>
++    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md b/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
+index a753c9ef36b9c44cd87c87392a2a0b641b3dea2c..73c20b7bc7e16119fc5b95fa5ab590969ac08b05 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
++++ b/dubbo-spring-boot-project/dubbo-spring-boot-actuator/README.md
+@@ -100,7 +100,7 @@ Suppose a Spring Boot Web application did not specify `management.server.port`,
+ ```
+ 
+ 
+- `memory`, `load`,  `threadpool` and `server` are Dubbo's build-in `StatusChecker`s in above example. 
++ `memory`, `load`,  `threadpool` and `server` are Dubbo's built-in `StatusChecker`s in above example. 
+  Dubbo allows the application to extend `StatusChecker`'s SPI. 
+ 
+ Default , `memory` and `load` will be added into Dubbo's `HealthIndicator` , it could be overridden by 
+@@ -118,11 +118,11 @@ externalized configuration [`StatusChecker`'s defaults](#statuschecker-defaults)
+ 
+ 
+ 
+-### Build-in `StatusChecker`s
++### Built-in `StatusChecker`s
+ 
+ 
+ 
+- `META-INF/dubbo/internal/org.apache.dubbo.common.status.StatusChecker` declares Build-in `StatusChecker`s as follow :
++ `META-INF/dubbo/internal/org.apache.dubbo.common.status.StatusChecker` declares built-in `StatusChecker`s as follow :
+ 
+ ```properties
+ registry=org.apache.dubbo.registry.status.RegistryStatusChecker
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java b/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
+index 5e856b2929ef987d2fa2913d9b472ccdeee06f8e..eb2676d3179b4dc02fd9148f4d78565a3f46e50e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot-autoconfigure/src/main/java/org/apache/dubbo/spring/boot/autoconfigure/observability/ObservationHandlerGrouping.java
+@@ -30,8 +30,6 @@ import org.springframework.util.MultiValueMap;
+  * Groups {@link ObservationHandler ObservationHandlers} by type.
+  * copy from {@link org.springframework.boot.actuate.autoconfigure.observation.ObservationHandlerGrouping}
+  * this class is available starting from Boot 3.0. It's not available if you're using Boot < 3.0
+- *
+- * @author Andy Wilkinson
+  */
+ class ObservationHandlerGrouping {
+ 
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/DubboNetInterfaceConfigApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/DubboNetInterfaceConfigApplicationListener.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..0b06ca6ecc405ccf85a04fd5f671bc6ceb9e0904
+--- /dev/null
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/DubboNetInterfaceConfigApplicationListener.java
+@@ -0,0 +1,59 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.boot.context.event;
++
++import org.apache.dubbo.common.constants.CommonConstants;
++import org.apache.dubbo.common.utils.StringUtils;
++
++import org.springframework.boot.context.event.ApplicationContextInitializedEvent;
++import org.springframework.context.ApplicationListener;
++import org.springframework.core.Ordered;
++import org.springframework.core.annotation.Order;
++import org.springframework.core.env.ConfigurableEnvironment;
++
++/**
++ * @since 3.3
++ */
++@Order(Ordered.HIGHEST_PRECEDENCE + 20) // After LoggingApplicationListener#DEFAULT_ORDER
++public class DubboNetInterfaceConfigApplicationListener
++        implements ApplicationListener<ApplicationContextInitializedEvent> {
++
++    @Override
++    public void onApplicationEvent(ApplicationContextInitializedEvent event) {
++        ConfigurableEnvironment environment = event.getApplicationContext().getEnvironment();
++        String preferredNetworkInterface =
++                System.getProperty(CommonConstants.DubboProperty.DUBBO_PREFERRED_NETWORK_INTERFACE);
++        if (StringUtils.isBlank(preferredNetworkInterface)) {
++            preferredNetworkInterface =
++                    environment.getProperty(CommonConstants.DubboProperty.DUBBO_PREFERRED_NETWORK_INTERFACE);
++            if (StringUtils.isNotBlank(preferredNetworkInterface)) {
++                System.setProperty(
++                        CommonConstants.DubboProperty.DUBBO_PREFERRED_NETWORK_INTERFACE, preferredNetworkInterface);
++            }
++        }
++        String ignoredNetworkInterface =
++                System.getProperty(CommonConstants.DubboProperty.DUBBO_NETWORK_IGNORED_INTERFACE);
++        if (StringUtils.isBlank(ignoredNetworkInterface)) {
++            ignoredNetworkInterface =
++                    environment.getProperty(CommonConstants.DubboProperty.DUBBO_NETWORK_IGNORED_INTERFACE);
++            if (StringUtils.isNotBlank(ignoredNetworkInterface)) {
++                System.setProperty(
++                        CommonConstants.DubboProperty.DUBBO_NETWORK_IGNORED_INTERFACE, ignoredNetworkInterface);
++            }
++        }
++    }
++}
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 28a86e7b62272991e0be5eae2a001d1975b2c2f5..885f8d75c9dc27adc3ba13bf43f45bfe6fbe2d40 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -22,7 +22,7 @@ import org.apache.dubbo.common.logger.LoggerFactory;
+ 
+ import java.util.concurrent.atomic.AtomicBoolean;
+ 
+-import org.springframework.boot.context.event.ApplicationEnvironmentPreparedEvent;
++import org.springframework.boot.context.event.ApplicationContextInitializedEvent;
+ import org.springframework.context.ApplicationListener;
+ import org.springframework.core.Ordered;
+ import org.springframework.core.annotation.Order;
+@@ -38,12 +38,12 @@ import static org.apache.dubbo.spring.boot.util.DubboUtils.LINE_SEPARATOR;
+  * @since 2.7.0
+  */
+ @Order(Ordered.HIGHEST_PRECEDENCE + 20 + 1) // After LoggingApplicationListener#DEFAULT_ORDER
+-public class WelcomeLogoApplicationListener implements ApplicationListener<ApplicationEnvironmentPreparedEvent> {
++public class WelcomeLogoApplicationListener implements ApplicationListener<ApplicationContextInitializedEvent> {
+ 
+     private static AtomicBoolean processed = new AtomicBoolean(false);
+ 
+     @Override
+-    public void onApplicationEvent(ApplicationEnvironmentPreparedEvent event) {
++    public void onApplicationEvent(ApplicationContextInitializedEvent event) {
+ 
+         // Skip if processed before, prevent duplicated execution in Hierarchical ApplicationContext
+         if (processed.get()) {
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/resources/META-INF/spring.factories b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/resources/META-INF/spring.factories
+index e2fad464e7a01e7f2156c4d6bdcb179732fee721..6bd78ab1f87e18c76dc0d8ecfb68aa4b4b95e8a2 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/resources/META-INF/spring.factories
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/resources/META-INF/spring.factories
+@@ -1,5 +1,6 @@
+ org.springframework.context.ApplicationListener=\
+-org.apache.dubbo.spring.boot.context.event.WelcomeLogoApplicationListener
++org.apache.dubbo.spring.boot.context.event.WelcomeLogoApplicationListener,\
++  org.apache.dubbo.spring.boot.context.event.DubboNetInterfaceConfigApplicationListener
+ org.springframework.boot.env.EnvironmentPostProcessor=\
+ org.apache.dubbo.spring.boot.env.DubboDefaultPropertiesEnvironmentPostProcessor
+ org.springframework.context.ApplicationContextInitializer=\
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..d0df68f2b9af4d3071d4dce788a7c22e1264e62c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -165,7 +165,6 @@
+ 
+     <!-- For unify spring boot 3 version -->
+     <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+@@ -497,7 +496,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +645,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

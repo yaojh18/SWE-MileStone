@@ -1,0 +1,1031 @@
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index be55d55a2b2cc619c4bd7f997f4d30f49f96c4b1..d32f8c5fed2697ea621f1adc3015270ae1a8c14c 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -59,7 +59,7 @@ func GetBreaker(name string) Breaker {
+ // NoBreakerFor disables the circuit breaker for the given name.
+ func NoBreakerFor(name string) {
+ 	lock.Lock()
+-	breakers[name] = newNopBreaker()
++	breakers[name] = NopBreaker()
+ 	lock.Unlock()
+ }
+ 
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index a1b2e7ccb95b985dadb765c0e038f521b99c6023..f72dc358229c22417767218e68dfee401ef73bd7 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -4,7 +4,8 @@ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+ 
+-func newNopBreaker() Breaker {
++// NopBreaker returns a breaker that never trigger breaker circuit.
++func NopBreaker() Breaker {
+ 	return nopBreaker{}
+ }
+ 
+diff --git a/core/collection/cache.go b/core/collection/cache.go
+index ace21ece60d33dcd4ca4e0fcab026a1599e311ae..77ca505588ce2b7b22fa98c6fd152eaa05e56c6a 100644
+--- a/core/collection/cache.go
++++ b/core/collection/cache.go
+@@ -81,6 +81,10 @@ func (c *Cache) Del(key string) {
+ 	delete(c.data, key)
+ 	c.lruCache.remove(key)
+ 	c.lock.Unlock()
++
++	// RemoveTimer is called outside the lock to avoid performance impact from this
++	// potentially time-consuming operation. Data integrity is maintained by lruCache,
++	// which will eventually evict any remaining entries when capacity is exceeded.
+ 	c.timingWheel.RemoveTimer(key)
+ }
+ 
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 64796ef78b16ddd2224a9ea3aedb776368b9605e..6a23b8bc209b7968e6e19c38ebadb7b59add028d 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -192,7 +192,7 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
+ 	case reflect.Array, reflect.Slice:
+ 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
+ 	case reflect.Chan, reflect.Func:
+-		return nil, fmt.Errorf("unsupported type: %s", tp.Kind())
++		return nil, fmt.Errorf("unsupported type: %s,fullName: %s", tp.Kind(), fullName)
+ 	default:
+ 		return &fieldInfo{
+ 			children: make(map[string]*fieldInfo),
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index c54ae7476c90c3d1fc3b32e5a8142717cfb84935..5501190c24d7677ad7eb33d585c41a1e581f0447 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -118,7 +118,7 @@ func validateOptional(field reflect.StructField, value reflect.Value) error {
+ 		if value.IsNil() {
+ 			return fmt.Errorf("field %q is nil", field.Name)
+ 		}
+-	case reflect.Array, reflect.Slice, reflect.Map:
++	case reflect.Slice, reflect.Map:
+ 		if value.IsNil() || value.Len() == 0 {
+ 			return fmt.Errorf("field %q is empty", field.Name)
+ 		}
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 15215693b62a24f7fb0c659dd50c2a4f806f3128..bf2bc912172eb7f5b5a4db82eacd7dd24c9be304 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -2,10 +2,10 @@ package mapping
+ 
+ import (
+ 	"encoding"
++	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"math"
+ 	"reflect"
+ 	"strconv"
+ 	"strings"
+@@ -114,7 +114,8 @@ func (u *Unmarshaler) unmarshalValuer(m Valuer, v any, fullName string) error {
+ 	return u.unmarshalWithFullName(simpleValuer{current: m}, v, fullName)
+ }
+ 
+-func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -155,7 +156,8 @@ func (u *Unmarshaler) fillMapFromString(value reflect.Value, mapValue any) error
+ 	return nil
+ }
+ 
+-func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -224,11 +226,11 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 	switch v := mapValue.(type) {
+ 	case fmt.Stringer:
+ 		if err := jsonx.UnmarshalFromString(v.String(), &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	case string:
+ 		if err := jsonx.UnmarshalFromString(v, &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	default:
+ 		return errUnsupportedType
+@@ -250,6 +252,10 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 
+ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int,
+ 	baseKind reflect.Kind, value any, fullName string) error {
++	if value == nil {
++		return errNilSliceElement
++	}
++
+ 	ithVal := slice.Index(index)
+ 	switch v := value.(type) {
+ 	case fmt.Stringer:
+@@ -304,7 +310,34 @@ func (u *Unmarshaler) fillSliceWithDefault(derefedType reflect.Type, value refle
+ 	return u.fillSlice(derefedType, value, slice, fullName)
+ }
+ 
+-func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any, fullName string) (reflect.Value, error) {
++func (u *Unmarshaler) fillUnmarshalerStruct(fieldType reflect.Type,
++	value reflect.Value, targetValue string) error {
++	if !value.CanSet() {
++		return errValueNotSettable
++	}
++
++	baseType := Deref(fieldType)
++	target := reflect.New(baseType)
++	switch u.key {
++	case jsonTagKey:
++		unmarshaler, ok := target.Interface().(json.Unmarshaler)
++		if !ok {
++			return errUnsupportedType
++		}
++
++		if err := unmarshaler.UnmarshalJSON([]byte(targetValue)); err != nil {
++			return err
++		}
++	default:
++		return errUnsupportedType
++	}
++
++	value.Set(target)
++	return nil
++}
++
++func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
++	fullName string) (reflect.Value, error) {
+ 	mapType := reflect.MapOf(keyType, elemType)
+ 	valueType := reflect.TypeOf(mapValue)
+ 	if mapType == valueType {
+@@ -396,6 +429,15 @@ func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
+ 	return targetValue, nil
+ }
+ 
++func (u *Unmarshaler) implementsUnmarshaler(t reflect.Type) bool {
++	switch u.key {
++	case jsonTagKey:
++		return t.Implements(reflect.TypeOf((*json.Unmarshaler)(nil)).Elem())
++	default:
++		return false
++	}
++}
++
+ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Valuer, fullName string) (
+ 	string, *fieldOptionsWithContext, error) {
+ 	key, options, err := parseKeyAndOptions(u.key, field)
+@@ -425,6 +467,10 @@ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Value
+ 		}
+ 	}
+ 
++	if u.opts.fillDefault {
++		return key, &options.fieldOptionsWithContext, nil
++	}
++
+ 	optsWithContext, err := options.toOptionsWithContext(key, m, fullName)
+ 	if err != nil {
+ 		return "", nil, err
+@@ -566,9 +612,28 @@ func (u *Unmarshaler) processFieldNotFromString(fieldType reflect.Type, value re
+ 	case valueKind == reflect.String && typeKind == reflect.Map:
+ 		return u.fillMapFromString(value, mapValue)
+ 	case valueKind == reflect.String && typeKind == reflect.Slice:
++		// try to find out if it's a byte slice, golang use []byte Marshal to base64 but there only SliceOf uint8/bytes can convert to []byte
++		// more details https://pkg.go.dev/encoding/json#Marshal
++		//> Array and slice values encode as JSON arrays, except that []byte encodes as a base64-encoded string, and a nil slice encodes as the null JSON value.
++		//and also u can find this https://stackoverflow.com/questions/34089750/marshal-byte-to-json-giving-a-strange-string
++		if fieldType.Elem().Kind() == reflect.Uint8 {
++			strVal := mapValue.(string)
++			decodedBytes, err := base64.StdEncoding.DecodeString(strVal)
++			// if err !=nil do next
++			if err == nil {
++				value.Set(reflect.ValueOf(decodedBytes))
++				return nil
++			}
++		}
+ 		return u.fillSliceFromString(fieldType, value, mapValue, fullName)
+ 	case valueKind == reflect.String && derefedFieldType == durationType:
+-		return fillDurationValue(fieldType, value, mapValue.(string))
++		v, ok := mapValue.(string)
++		if !ok {
++			return fmt.Errorf("unexpected type %T, expected a string value for field %s", mapValue, fullName)
++		}
++		return fillDurationValue(fieldType, value, v)
++	case valueKind == reflect.String && typeKind == reflect.Struct && u.implementsUnmarshaler(fieldType):
++		return u.fillUnmarshalerStruct(fieldType, value, mapValue.(string))
+ 	default:
+ 		return u.processFieldPrimitive(fieldType, value, mapValue, opts, fullName)
+ 	}
+@@ -622,7 +687,12 @@ func (u *Unmarshaler) processFieldPrimitiveWithJSONNumber(fieldType reflect.Type
+ 			return err
+ 		}
+ 
+-		if fValue > math.MaxFloat32 {
++		// if value is a pointer, we need to check overflow with the pointer's value.
++		derefedValue := value
++		for derefedValue.Type().Kind() == reflect.Ptr {
++			derefedValue = derefedValue.Elem()
++		}
++		if derefedValue.CanFloat() && derefedValue.OverflowFloat(fValue) {
+ 			return fmt.Errorf("parsing %q as float32: value out of range", v.String())
+ 		}
+ 
+@@ -684,7 +754,15 @@ func (u *Unmarshaler) processFieldTextUnmarshaler(fieldType reflect.Type, value
+ 			return true, tval.UnmarshalText(mv)
+ 		}
+ 	}
+-
++	//[]byte
++	if fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.Uint8 {
++		b, err := base64.StdEncoding.DecodeString(mapValue.(string))
++		if err != nil {
++			return false, err
++		}
++		value.SetBytes(b)
++		return true, nil
++	}
+ 	return false, nil
+ }
+ 
+@@ -694,24 +772,26 @@ func (u *Unmarshaler) processFieldWithEnvValue(fieldType reflect.Type, value ref
+ 		return err
+ 	}
+ 
+-	fieldKind := fieldType.Kind()
+-	switch fieldKind {
+-	case reflect.Bool:
++	derefType := Deref(fieldType)
++	derefKind := derefType.Kind()
++	switch {
++	case derefKind == reflect.String:
++		SetValue(fieldType, value, toReflectValue(derefType, envVal))
++		return nil
++	case derefKind == reflect.Bool:
+ 		val, err := strconv.ParseBool(envVal)
+ 		if err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		value.SetBool(val)
++		SetValue(fieldType, value, toReflectValue(derefType, val))
+ 		return nil
+-	case durationType.Kind():
++	case derefType == durationType:
++		// time.Duration is a special case, its derefKind is reflect.Int64.
+ 		if err := fillDurationValue(fieldType, value, envVal); err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		return nil
+-	case reflect.String:
+-		value.SetString(envVal)
+ 		return nil
+ 	default:
+ 		return u.processFieldPrimitiveWithJSONNumber(fieldType, value, json.Number(envVal), opts, fullName)
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index 67ea0ae3393ef4e14c812949937de928504a72a0..e74900c25b2d2f5222ca4158b88dfc1c4edd592e 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -36,6 +36,7 @@ const (
+ var (
+ 	errUnsupportedType  = errors.New("unsupported type on setting field value")
+ 	errNumberRange      = errors.New("wrong number range setting")
++	errNilSliceElement  = errors.New("null element for slice")
+ 	optionsCache        = make(map[string]optionsCacheValue)
+ 	cacheLock           sync.RWMutex
+ 	structRequiredCache = make(map[reflect.Type]requiredCacheValue)
+@@ -572,6 +573,10 @@ func toFloat64(v any) (float64, bool) {
+ 	}
+ }
+ 
++func toReflectValue(tp reflect.Type, v any) reflect.Value {
++	return reflect.ValueOf(v).Convert(Deref(tp))
++}
++
+ func usingDifferentKeys(key string, field reflect.StructField) bool {
+ 	if len(field.Tag) > 0 {
+ 		if _, ok := field.Tag.Lookup(key); !ok {
+diff --git a/core/stores/sqlc/cachedsql.go b/core/stores/sqlc/cachedsql.go
+index 8b81e9254928087d2a1f496908af4491ca9e6ac3..addf3b404b1b0b91565a4ea13425a0477730e4ad 100644
+--- a/core/stores/sqlc/cachedsql.go
++++ b/core/stores/sqlc/cachedsql.go
+@@ -190,6 +190,17 @@ func (cc CachedConn) QueryRowNoCacheCtx(ctx context.Context, v any, q string,
+ 	return cc.db.QueryRowCtx(ctx, v, q, args...)
+ }
+ 
++// QueryRowPartialNoCache unmarshals into v with given statement.
++func (cc CachedConn) QueryRowPartialNoCache(v any, q string, args ...any) error {
++	return cc.QueryRowPartialNoCacheCtx(context.Background(), v, q, args...)
++}
++
++// QueryRowPartialNoCacheCtx unmarshals into v with given statement.
++func (cc CachedConn) QueryRowPartialNoCacheCtx(ctx context.Context, v any, q string,
++	args ...any) error {
++	return cc.db.QueryRowPartialCtx(ctx, v, q, args...)
++}
++
+ // QueryRowsNoCache unmarshals into v with given statement.
+ // It doesn't use cache, because it might cause consistency problem.
+ func (cc CachedConn) QueryRowsNoCache(v any, q string, args ...any) error {
+@@ -203,6 +214,19 @@ func (cc CachedConn) QueryRowsNoCacheCtx(ctx context.Context, v any, q string,
+ 	return cc.db.QueryRowsCtx(ctx, v, q, args...)
+ }
+ 
++// QueryRowsPartialNoCache unmarshals into v with given statement.
++// It doesn't use cache, because it might cause consistency problem.
++func (cc CachedConn) QueryRowsPartialNoCache(v any, q string, args ...any) error {
++	return cc.QueryRowsPartialNoCacheCtx(context.Background(), v, q, args...)
++}
++
++// QueryRowsPartialNoCacheCtx unmarshals into v with given statement.
++// It doesn't use cache, because it might cause consistency problem.
++func (cc CachedConn) QueryRowsPartialNoCacheCtx(ctx context.Context, v any, q string,
++	args ...any) error {
++	return cc.db.QueryRowsPartialCtx(ctx, v, q, args...)
++}
++
+ // SetCache sets v into cache with given key.
+ func (cc CachedConn) SetCache(key string, val any) error {
+ 	return cc.SetCacheCtx(context.Background(), key, val)
+diff --git a/core/stores/sqlx/metrics.go b/core/stores/sqlx/metrics.go
+index 1092c9a201d5087f90d71bd5a0d5b321ca914b7e..0e03f92b056385c01542509ec228a7b750ab2cc3 100644
+--- a/core/stores/sqlx/metrics.go
++++ b/core/stores/sqlx/metrics.go
+@@ -8,7 +8,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/metric"
+ )
+ 
+-const namespace = "mysql_client"
++const namespace = "sql_client"
+ 
+ var (
+ 	metricReqDur = metric.NewHistogramVec(&metric.HistogramVecOpts{
+@@ -41,6 +41,7 @@ var (
+ 
+ type (
+ 	statGetter struct {
++		host      string
+ 		dbName    string
+ 		hash      string
+ 		poolStats func() sql.DBStats
+diff --git a/core/stores/sqlx/mysql.go b/core/stores/sqlx/mysql.go
+index 3c026921e311465a3df6e33377e8d6dfb50b62ce..e7797095a1b4df09b72568a409b9c8eb910400c4 100644
+--- a/core/stores/sqlx/mysql.go
++++ b/core/stores/sqlx/mysql.go
+@@ -13,7 +13,7 @@ const (
+ 
+ // NewMysql returns a mysql connection.
+ func NewMysql(datasource string, opts ...SqlOption) SqlConn {
+-	opts = append(opts, withMysqlAcceptable())
++	opts = append([]SqlOption{withMysqlAcceptable()}, opts...)
+ 	return NewSqlConn(mysqlDriverName, datasource, opts...)
+ }
+ 
+diff --git a/core/stores/sqlx/orm.go b/core/stores/sqlx/orm.go
+index 9924eefc02f0df9a992c3711875da586c152184e..b395f3c525ecb324989671b851dcba71a9454f0e 100644
+--- a/core/stores/sqlx/orm.go
++++ b/core/stores/sqlx/orm.go
+@@ -1,6 +1,7 @@
+ package sqlx
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"reflect"
+ 	"strings"
+@@ -8,7 +9,10 @@ import (
+ 	"github.com/zeromicro/go-zero/core/mapping"
+ )
+ 
+-const tagName = "db"
++const (
++	tagIgnore = "-"
++	tagName   = "db"
++)
+ 
+ var (
+ 	// ErrNotMatchDestination is an error that indicates not matching destination to scan.
+@@ -66,25 +70,20 @@ func getTaggedFieldValueMap(v reflect.Value) (map[string]any, error) {
+ }
+ 
+ func getValueInterface(value reflect.Value) (any, error) {
+-	switch value.Kind() {
+-	case reflect.Ptr:
+-		if !value.CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	if !value.CanAddr() || !value.Addr().CanInterface() {
++		return nil, ErrNotReadableValue
++	}
+ 
+-		if value.IsNil() {
+-			baseValueType := mapping.Deref(value.Type())
+-			value.Set(reflect.New(baseValueType))
+-		}
++	if value.Kind() == reflect.Pointer && value.IsNil() {
++		baseValueType := mapping.Deref(value.Type())
++		value.Set(reflect.New(baseValueType))
++	}
+ 
+-		return value.Interface(), nil
+-	default:
+-		if !value.CanAddr() || !value.Addr().CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	return value.Addr().Interface(), nil
++}
+ 
+-		return value.Addr().Interface(), nil
+-	}
++func isScanFailed(err error) bool {
++	return err != nil && !errors.Is(err, context.DeadlineExceeded)
+ }
+ 
+ func mapStructFieldsIntoSlice(v reflect.Value, columns []string, strict bool) ([]any, error) {
+@@ -248,7 +247,7 @@ func unmarshalRows(v any, scanner rowsScanner, strict bool) error {
+ 			return ErrUnsupportedValueType
+ 		}
+ 
+-		return nil
++		return scanner.Err()
+ 	default:
+ 		return ErrUnsupportedValueType
+ 	}
+@@ -264,13 +263,17 @@ func unwrapFields(v reflect.Value) []reflect.Value {
+ 			continue
+ 		}
+ 
++		childType := indirect.Type().Field(i)
++		if parseTagName(childType) == tagIgnore {
++			continue
++		}
++
+ 		if child.Kind() == reflect.Ptr && child.IsNil() {
+ 			baseValueType := mapping.Deref(child.Type())
+ 			child.Set(reflect.New(baseValueType))
+ 		}
+ 
+ 		child = reflect.Indirect(child)
+-		childType := indirect.Type().Field(i)
+ 		if child.Kind() == reflect.Struct && childType.Anonymous {
+ 			fields = append(fields, unwrapFields(child)...)
+ 		} else {
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 9603af5b3b0857e58348d6408dded4c2399d14c3..4dde5d43f034b896c420caf119b067754cbaac48 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -42,21 +42,6 @@ type (
+ 	// SqlOption defines the method to customize a sql connection.
+ 	SqlOption func(*commonSqlConn)
+ 
+-	// StmtSession interface represents a session that can be used to execute statements.
+-	StmtSession interface {
+-		Close() error
+-		Exec(args ...any) (sql.Result, error)
+-		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
+-		QueryRow(v any, args ...any) error
+-		QueryRowCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowPartial(v any, args ...any) error
+-		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
+-		QueryRows(v any, args ...any) error
+-		QueryRowsCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowsPartial(v any, args ...any) error
+-		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
+-	}
+-
+ 	// thread-safe
+ 	// Because CORBA doesn't support PREPARE, so we need to combine the
+ 	// query arguments into one string and do underlying query without arguments
+@@ -65,7 +50,7 @@ type (
+ 		onError  func(context.Context, error)
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+-		accept   func(error) bool
++		accept   breaker.Acceptable
+ 	}
+ 
+ 	connProvider func() (*sql.DB, error)
+@@ -76,18 +61,6 @@ type (
+ 		Query(query string, args ...any) (*sql.Rows, error)
+ 		QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+ 	}
+-
+-	statement struct {
+-		query string
+-		stmt  *sql.Stmt
+-	}
+-
+-	stmtConn interface {
+-		Exec(args ...any) (sql.Result, error)
+-		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
+-		Query(args ...any) (*sql.Rows, error)
+-		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
+-	}
+ )
+ 
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+@@ -189,8 +162,10 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 		}
+ 
+ 		stmt = statement{
+-			query: query,
+-			stmt:  st,
++			query:  query,
++			stmt:   st,
++			brk:    db.brk,
++			accept: db.acceptable,
+ 		}
+ 		return nil
+ 	}, db.acceptable)
+@@ -311,7 +286,7 @@ func (db *commonSqlConn) acceptable(err error) bool {
+ 
+ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows) error,
+ 	q string, args ...any) (err error) {
+-	var qerr error
++	var scanFailed bool
+ 	err = db.brk.DoWithAcceptable(func() error {
+ 		conn, err := db.connProv()
+ 		if err != nil {
+@@ -320,11 +295,14 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 		}
+ 
+ 		return query(ctx, conn, func(rows *sql.Rows) error {
+-			qerr = scanner(rows)
+-			return qerr
++			e := scanner(rows)
++			if isScanFailed(e) {
++				scanFailed = true
++			}
++			return e
+ 		}, q, args...)
+ 	}, func(err error) bool {
+-		return errors.Is(err, qerr) || db.acceptable(err)
++		return scanFailed || db.acceptable(err)
+ 	})
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+ 		metricReqErr.Inc("queryRows", "breaker")
+@@ -333,87 +311,17 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func (s statement) Close() error {
+-	return s.stmt.Close()
+-}
+-
+-func (s statement) Exec(args ...any) (sql.Result, error) {
+-	return s.ExecCtx(context.Background(), args...)
+-}
+-
+-func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
+-	ctx, span := startSpan(ctx, "Exec")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return execStmt(ctx, s.stmt, s.query, args...)
+-}
+-
+-func (s statement) QueryRow(v any, args ...any) error {
+-	return s.QueryRowCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRow")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowPartial(v any, args ...any) error {
+-	return s.QueryRowPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRows(v any, args ...any) error {
+-	return s.QueryRowsCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRows")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowsPartial(v any, args ...any) error {
+-	return s.QueryRowsPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowsPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+ 	return func(conn *commonSqlConn) {
+-		conn.accept = acceptable
++		if conn.accept == nil {
++			conn.accept = acceptable
++		} else {
++			pre := conn.accept
++			conn.accept = func(err error) bool {
++				return pre(err) || acceptable(err)
++			}
++		}
+ 	}
+ }
+diff --git a/core/stores/sqlx/sqlmanager.go b/core/stores/sqlx/sqlmanager.go
+index db652edc3d3915fabd4b338172af6edfe4d8a6d9..1bcdcf19c47324b88cd4a51c5c0ac1fda2148484 100644
+--- a/core/stores/sqlx/sqlmanager.go
++++ b/core/stores/sqlx/sqlmanager.go
+@@ -1,10 +1,14 @@
+ package sqlx
+ 
+ import (
++	"crypto/sha256"
+ 	"database/sql"
++	"encoding/hex"
+ 	"io"
+ 	"time"
+ 
++	"github.com/go-sql-driver/mysql"
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+@@ -23,6 +27,23 @@ func getCachedSqlConn(driverName, server string) (*sql.DB, error) {
+ 			return nil, err
+ 		}
+ 
++		if driverName != mysqlDriverName {
++			if cfg, e := mysql.ParseDSN(server); e != nil {
++				// if cannot parse, don't collect the metrics
++				logx.Error(e)
++			} else {
++				checksum := sha256.Sum256([]byte(server))
++				connCollector.registerClient(&statGetter{
++					host:   cfg.Addr,
++					dbName: cfg.DBName,
++					hash:   hex.EncodeToString(checksum[:]),
++					poolStats: func() sql.DBStats {
++						return conn.Stats()
++					},
++				})
++			}
++		}
++
+ 		return conn, nil
+ 	})
+ 	if err != nil {
+diff --git a/core/stores/sqlx/stmt.go b/core/stores/sqlx/stmt.go
+index ab688abbd586575e29adab5e81e25fac50e3eaa9..5813b9d65face5730d17171d03599830680854fc 100644
+--- a/core/stores/sqlx/stmt.go
++++ b/core/stores/sqlx/stmt.go
+@@ -3,8 +3,10 @@ package sqlx
+ import (
+ 	"context"
+ 	"database/sql"
++	"errors"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -18,6 +20,146 @@ var (
+ 	logSlowSql    = syncx.ForAtomicBool(true)
+ )
+ 
++type (
++	// StmtSession interface represents a session that can be used to execute statements.
++	StmtSession interface {
++		Close() error
++		Exec(args ...any) (sql.Result, error)
++		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
++		QueryRow(v any, args ...any) error
++		QueryRowCtx(ctx context.Context, v any, args ...any) error
++		QueryRowPartial(v any, args ...any) error
++		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
++		QueryRows(v any, args ...any) error
++		QueryRowsCtx(ctx context.Context, v any, args ...any) error
++		QueryRowsPartial(v any, args ...any) error
++		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
++	}
++
++	statement struct {
++		query  string
++		stmt   *sql.Stmt
++		brk    breaker.Breaker
++		accept breaker.Acceptable
++	}
++
++	stmtConn interface {
++		Exec(args ...any) (sql.Result, error)
++		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
++		Query(args ...any) (*sql.Rows, error)
++		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
++	}
++)
++
++func (s statement) Close() error {
++	return s.stmt.Close()
++}
++
++func (s statement) Exec(args ...any) (sql.Result, error) {
++	return s.ExecCtx(context.Background(), args...)
++}
++
++func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
++	ctx, span := startSpan(ctx, "Exec")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	err = s.brk.DoWithAcceptable(func() error {
++		result, err = execStmt(ctx, s.stmt, s.query, args...)
++		return err
++	}, func(err error) bool {
++		return s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_exec", "breaker")
++	}
++
++	return
++}
++
++func (s statement) QueryRow(v any, args ...any) error {
++	return s.QueryRowCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRow")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowPartial(v any, args ...any) error {
++	return s.QueryRowPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) QueryRows(v any, args ...any) error {
++	return s.QueryRowsCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRows")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowsPartial(v any, args ...any) error {
++	return s.QueryRowsPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowsPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) queryRows(ctx context.Context, scanFn func(any, rowsScanner) error,
++	v any, args ...any) error {
++	var scanFailed bool
++
++	err := s.brk.DoWithAcceptable(func() error {
++		return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
++			err := scanFn(v, rows)
++			if isScanFailed(err) {
++				scanFailed = true
++			}
++			return err
++		}, s.query, args...)
++	}, func(err error) bool {
++		return scanFailed || s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_queryRows", "breaker")
++	}
++
++	return err
++}
++
+ // DisableLog disables logging of sql statements, includes info and slow logs.
+ func DisableLog() {
+ 	logSql.Set(false)
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index d983077ce4994064a1d4d4862a83360b2449479d..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"fmt"
++
++	"github.com/zeromicro/go-zero/core/breaker"
+ )
+ 
+ type (
+@@ -75,6 +77,7 @@ func (t txSession) PrepareCtx(ctx context.Context, q string) (stmtSession StmtSe
+ 	return statement{
+ 		query: q,
+ 		stmt:  stmt,
++		brk:   breaker.NopBreaker(),
+ 	}, nil
+ }
+ 
+diff --git a/internal/devserver/config.go b/internal/devserver/config.go
+index 1c0950d0c99203f427c34a625a6a29ed8c55ae16..aa11b2fd6d0258a8e6be143d3e5ff585349e0e9a 100644
+--- a/internal/devserver/config.go
++++ b/internal/devserver/config.go
+@@ -2,11 +2,12 @@ package devserver
+ 
+ // Config is config for inner http server.
+ type Config struct {
+-	Enabled       bool   `json:",default=true"`
+-	Host          string `json:",optional"`
+-	Port          int    `json:",default=6060"`
+-	MetricsPath   string `json:",default=/metrics"`
+-	HealthPath    string `json:",default=/healthz"`
+-	EnableMetrics bool   `json:",default=true"`
+-	EnablePprof   bool   `json:",default=true"`
++	Enabled        bool   `json:",default=true"`
++	Host           string `json:",optional"`
++	Port           int    `json:",default=6060"`
++	MetricsPath    string `json:",default=/metrics"`
++	HealthPath     string `json:",default=/healthz"`
++	EnableMetrics  bool   `json:",default=true"`
++	EnablePprof    bool   `json:",default=true"`
++	HealthRespInfo string `json:",default=OK"`
+ }
+diff --git a/internal/devserver/server.go b/internal/devserver/server.go
+index 4b34f56c7e1ef81b54260439e633109448a34644..57293adc88e9a59aa2dbb55720bee41682168419 100644
+--- a/internal/devserver/server.go
++++ b/internal/devserver/server.go
+@@ -32,13 +32,13 @@ func NewServer(config Config) *Server {
+ 	}
+ }
+ 
+-func (s *Server) addRoutes() {
++func (s *Server) addRoutes(c Config) {
+ 	// route path, routes list
+ 	s.handleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+ 		_ = json.NewEncoder(w).Encode(s.routes)
+ 	})
+ 	// health
+-	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler())
++	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthRespInfo))
+ 
+ 	// metrics
+ 	if s.config.EnableMetrics {
+@@ -62,8 +62,8 @@ func (s *Server) handleFunc(pattern string, handler http.HandlerFunc) {
+ }
+ 
+ // StartAsync start inner http server background.
+-func (s *Server) StartAsync() {
+-	s.addRoutes()
++func (s *Server) StartAsync(c Config) {
++	s.addRoutes(c)
+ 	threading.GoSafe(func() {
+ 		addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+ 		logx.Infof("Starting dev http server at %s", addr)
+@@ -78,7 +78,7 @@ func StartAgent(c Config) {
+ 	once.Do(func() {
+ 		if c.Enabled {
+ 			s := NewServer(c)
+-			s.StartAsync()
++			s.StartAsync(c)
+ 		}
+ 	})
+ }
+diff --git a/internal/health/health.go b/internal/health/health.go
+index 7c238d9cdc1b4ae71882e4fe3deb932789605ac9..4711ee5067d6812b970d38e4deafb010346b52e6 100644
+--- a/internal/health/health.go
++++ b/internal/health/health.go
+@@ -44,10 +44,10 @@ func AddProbe(probe Probe) {
+ }
+ 
+ // CreateHttpHandler create health http handler base on given probe.
+-func CreateHttpHandler() http.HandlerFunc {
++func CreateHttpHandler(healthRespInfo string) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, _ *http.Request) {
+ 		if defaultHealthManager.IsReady() {
+-			_, _ = w.Write([]byte("OK"))
++			_, _ = w.Write([]byte(healthRespInfo))
+ 		} else {
+ 			http.Error(w, "Service Unavailable\n"+defaultHealthManager.verboseInfo(),
+ 				http.StatusServiceUnavailable)
+@@ -111,6 +111,10 @@ func (p *comboHealthManager) IsReady() bool {
+ 	p.mu.Lock()
+ 	defer p.mu.Unlock()
+ 
++	if len(p.probes) == 0 {
++		return false
++	}
++
+ 	for _, probe := range p.probes {
+ 		if !probe.IsReady() {
+ 			return false
+diff --git a/internal/mock/depositserver.go b/internal/mock/depositserver.go
+index d8d6030bbbdbb2851f8565c63cb1f27ffe2f9497..6f7a62750569719309d807b958c6af26370dcbc5 100644
+--- a/internal/mock/depositserver.go
++++ b/internal/mock/depositserver.go
+@@ -12,7 +12,7 @@ import (
+ type DepositServer struct{}
+ 
+ // Deposit handles the deposit requests.
+-func (*DepositServer) Deposit(_ context.Context, req *DepositRequest) (*DepositResponse, error) {
++func (*DepositServer) Deposit(ctx context.Context, req *DepositRequest) (*DepositResponse, error) {
+ 	if req.GetAmount() < 0 {
+ 		return nil, status.Errorf(codes.InvalidArgument, "cannot deposit %v", req.GetAmount())
+ 	}
+diff --git a/tools/goctl/rpc/generator/genpb.go b/tools/goctl/rpc/generator/genpb.go
+index 65761a1029060fc00c9635a081d543eb4ca00fbd..758bc2f631ffab7c4e3a3d6b1489c5d0d1739e54 100644
+--- a/tools/goctl/rpc/generator/genpb.go
++++ b/tools/goctl/rpc/generator/genpb.go
+@@ -1,7 +1,6 @@
+ package generator
+ 
+ import (
+-	"errors"
+ 	"fmt"
+ 	"io/fs"
+ 	"os"
+@@ -87,7 +86,7 @@ func findPbFile(current string, src string, grpc bool) (string, error) {
+ 		}
+ 		return nil
+ 	})
+-	if errors.Is(err, os.ErrExist) {
++	if err == os.ErrExist {
+ 		return filepath.Dir(filepath.Join(current, ret)), nil
+ 	}
+ 	return "", err
+diff --git a/tools/goctl/util/format/format.go b/tools/goctl/util/format/format.go
+index 40284617bf0a028f64fb1ac58832a1736d368fa9..e69640a3b2b08e80f9e63850a257a2d7be28d2d6 100644
+--- a/tools/goctl/util/format/format.go
++++ b/tools/goctl/util/format/format.go
+@@ -115,7 +115,7 @@ func split(content string) ([]string, error) {
+ 	for {
+ 		r, _, err := reader.ReadRune()
+ 		if err != nil {
+-			if errors.Is(err, io.EOF) {
++			if err == io.EOF {
+ 				if buffer.Len() > 0 {
+ 					list = append(list, buffer.String())
+ 				}

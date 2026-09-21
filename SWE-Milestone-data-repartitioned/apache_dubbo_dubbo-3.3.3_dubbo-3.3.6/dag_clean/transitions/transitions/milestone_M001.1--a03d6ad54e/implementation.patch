@@ -1,0 +1,613 @@
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 3e357d55ea31ae458c0d0e1e74a143bfd751d5ee..3979728e7ba05928bc4a9e03f4e11ab16eb4c426 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -30,6 +30,7 @@
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
+     <spring.oauth2.server>1.5.1</spring.oauth2.server>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+ 
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -79,7 +94,6 @@
+       <scope>test</scope>
+       <optional>true</optional>
+     </dependency>
+-
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
+index e70aeaeb9e94985d2786f96866ec9bfc12945e6c..37416cba1bd06f449ad2de7d7d1280d7c6826e73 100644
+--- a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/jackson/ObjectMapperCodec.java
+@@ -21,15 +21,18 @@ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.common.utils.StringUtils;
++import org.apache.dubbo.spring.security.oauth2.OAuth2SecurityModule;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.function.Consumer;
+ 
++import com.fasterxml.jackson.databind.Module;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.fasterxml.jackson.databind.module.SimpleModule;
+ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+ import org.springframework.security.jackson2.CoreJackson2Module;
++import org.springframework.security.jackson2.SecurityJackson2Modules;
+ 
+ public class ObjectMapperCodec {
+ 
+@@ -100,6 +103,10 @@ public class ObjectMapperCodec {
+     private void registerDefaultModule() {
+         mapper.registerModule(new CoreJackson2Module());
+         mapper.registerModule(new JavaTimeModule());
++        mapper.registerModule(new OAuth2SecurityModule());
++        List<Module> securityModules =
++                SecurityJackson2Modules.getModules(this.getClass().getClassLoader());
++        mapper.registerModules(securityModules);
+ 
+         List<String> jacksonModuleClassNameList = new ArrayList<>();
+         jacksonModuleClassNameList.add(
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..724e8efa54ffe36acd9e7008550468cc77d3ffdd
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/AuthorizationGrantTypeMixin.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class AuthorizationGrantTypeMixin {
++
++    @JsonCreator
++    public AuthorizationGrantTypeMixin(@JsonProperty("value") String value) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca2d80f5f964d6002ac4f527ef6dc6ad8873dd67
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/BearerTokenAuthenticationMixin.java
+@@ -0,0 +1,44 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Collection;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.core.GrantedAuthority;
++import org.springframework.security.oauth2.core.OAuth2AccessToken;
++import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class BearerTokenAuthenticationMixin {
++
++    @JsonCreator
++    public BearerTokenAuthenticationMixin(
++            @JsonProperty("principal") OAuth2AuthenticatedPrincipal principal,
++            @JsonProperty("credentials") OAuth2AccessToken credentials,
++            @JsonProperty("authorities") Collection<? extends GrantedAuthority> authorities) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d43671357a6747ff31ff318627ebacf759ff711
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientAuthenticationMethodMixin.java
+@@ -0,0 +1,36 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class ClientAuthenticationMethodMixin {
++
++    @JsonCreator
++    public ClientAuthenticationMethodMixin(@JsonProperty("value") String value) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..4ca8dae66b40fc95713c1f1a2420e8aeaf1181ad
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/ClientSettingsMixin.java
+@@ -0,0 +1,38 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class ClientSettingsMixin {
++
++    @JsonCreator
++    public ClientSettingsMixin(@JsonProperty("settings") Map<String, Object> settings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8626a6e7f9e35ed2cf77096027b0f58825673c12
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2AuthenticatedPrincipalMixin.java
+@@ -0,0 +1,43 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Collection;
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.core.GrantedAuthority;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class OAuth2AuthenticatedPrincipalMixin {
++
++    @JsonCreator
++    public OAuth2AuthenticatedPrincipalMixin(
++            @JsonProperty("name") String name,
++            @JsonProperty("attributes") Map<String, Object> attributes,
++            @JsonProperty("authorities") Collection<? extends GrantedAuthority> authorities) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..b864fa0d412491cc5812f23c8533d8c94e19884b
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2ClientAuthenticationTokenMixin.java
+@@ -0,0 +1,44 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.lang.Nullable;
++import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class OAuth2ClientAuthenticationTokenMixin {
++
++    @JsonCreator
++    public OAuth2ClientAuthenticationTokenMixin(
++            @JsonProperty("clientId") String clientId,
++            @JsonProperty("clientAuthenticationMethod") ClientAuthenticationMethod clientAuthenticationMethod,
++            @JsonProperty("credentials") @Nullable Object credentials,
++            @JsonProperty("additionalParameters") @Nullable Map<String, Object> additionalParameters) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..93be4aef610f12bdc94a08d05aed7a70f2906230
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/OAuth2SecurityModule.java
+@@ -0,0 +1,96 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import org.apache.dubbo.common.utils.ClassUtils;
++
++import java.util.ArrayList;
++import java.util.Collections;
++
++import com.fasterxml.jackson.databind.module.SimpleModule;
++
++public class OAuth2SecurityModule extends SimpleModule {
++
++    public OAuth2SecurityModule() {
++        super(OAuth2SecurityModule.class.getName());
++    }
++
++    @Override
++    public void setupModule(SetupContext context) {
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2AuthenticatedPrincipalMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.DefaultOAuth2AuthenticatedPrincipal",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2AuthenticatedPrincipalMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthentication",
++                "org.apache.dubbo.spring.security.oauth2.BearerTokenAuthenticationMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken",
++                "org.apache.dubbo.spring.security.oauth2.OAuth2ClientAuthenticationTokenMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.ClientAuthenticationMethod",
++                ClientAuthenticationMethodMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.client.RegisteredClient",
++                "org.apache.dubbo.spring.security.oauth2.RegisteredClientMixin");
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.core.AuthorizationGrantType",
++                AuthorizationGrantTypeMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.settings.ClientSettings",
++                ClientSettingsMixin.class);
++        setMixInAnnotations(
++                context,
++                "org.springframework.security.oauth2.server.authorization.settings.TokenSettings",
++                TokenSettingsMixin.class);
++        context.setMixInAnnotations(
++                Collections.unmodifiableCollection(new ArrayList<>()).getClass(), UnmodifiableCollectionMixin.class);
++    }
++
++    private void setMixInAnnotations(SetupContext context, String oauth2ClassName, String mixinClassName) {
++        Class<?> oauth2Class = loadClassIfPresent(oauth2ClassName);
++        if (oauth2Class != null) {
++            context.setMixInAnnotations(oauth2Class, loadClassIfPresent(mixinClassName));
++        }
++    }
++
++    private void setMixInAnnotations(SetupContext context, String oauth2ClassName, Class<?> mixinClass) {
++        Class<?> oauth2Class = loadClassIfPresent(oauth2ClassName);
++        if (oauth2Class != null) {
++            context.setMixInAnnotations(oauth2Class, mixinClass);
++        }
++    }
++
++    private Class<?> loadClassIfPresent(String oauth2ClassName) {
++        try {
++            return ClassUtils.forName(oauth2ClassName, OAuth2SecurityModule.class.getClassLoader());
++
++        } catch (Throwable ignored) {
++        }
++        return null;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f4977a22208407494f4aa552c5fc9912ae1319ca
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/RegisteredClientMixin.java
+@@ -0,0 +1,59 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.time.Instant;
++import java.util.Set;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++import org.springframework.security.oauth2.core.AuthorizationGrantType;
++import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class RegisteredClientMixin {
++
++    /**
++     * declare clientSettings and tokenSettings as Object type to avoid COMPILATION ERROR when compile it with jdk8
++     * or jdk11, both ClientSettings and TokenSettings class file version are 61.0 which is higher than the version
++     * which jdk8 (class file version: 52.0) or jdk11 (class file version: 55.0) could support.
++     */
++    @JsonCreator
++    public RegisteredClientMixin(
++            @JsonProperty("id") String id,
++            @JsonProperty("clientId") String clientId,
++            @JsonProperty("clientIdIssuedAt") Instant clientIdIssuedAt,
++            @JsonProperty("clientSecret") String clientSecret,
++            @JsonProperty("clientSecretExpiresAt") Instant clientSecretExpiresAt,
++            @JsonProperty("clientName") String clientName,
++            @JsonProperty("clientAuthenticationMethods") Set<ClientAuthenticationMethod> clientAuthenticationMethods,
++            @JsonProperty("authorizationGrantTypes") Set<AuthorizationGrantType> authorizationGrantTypes,
++            @JsonProperty("redirectUris") Set<String> redirectUris,
++            @JsonProperty("postLogoutRedirectUris") Set<String> postLogoutRedirectUris,
++            @JsonProperty("scopes") Set<String> scopes,
++            @JsonProperty("clientSettings") Object clientSettings,
++            @JsonProperty("tokenSettings") Object tokenSettings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..093f68e7fb2f2ff05a9521e92749c7536b444f1f
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/TokenSettingsMixin.java
+@@ -0,0 +1,38 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import java.util.Map;
++
++import com.fasterxml.jackson.annotation.JsonAutoDetect;
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.annotation.JsonTypeInfo;
++
++@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
++@JsonAutoDetect(
++        fieldVisibility = JsonAutoDetect.Visibility.ANY,
++        getterVisibility = JsonAutoDetect.Visibility.NONE,
++        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
++        creatorVisibility = JsonAutoDetect.Visibility.NONE)
++@JsonIgnoreProperties(ignoreUnknown = true)
++abstract class TokenSettingsMixin {
++
++    @JsonCreator
++    public TokenSettingsMixin(@JsonProperty("settings") Map<String, Object> settings) {}
++}
+diff --git a/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c1097b6591d5b85c82e8ea644282c9d41b6f71a
+--- /dev/null
++++ b/dubbo-plugin/dubbo-spring-security/src/main/java/org/apache/dubbo/spring/security/oauth2/UnmodifiableCollectionMixin.java
+@@ -0,0 +1,37 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.spring.security.oauth2;
++
++import org.apache.dubbo.spring.security.oauth2.UnmodifiableCollectionMixin.UnmodifiableCollectionConverter;
++
++import java.util.Collection;
++import java.util.Collections;
++
++import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
++import com.fasterxml.jackson.databind.util.StdConverter;
++
++@JsonDeserialize(converter = UnmodifiableCollectionConverter.class)
++abstract class UnmodifiableCollectionMixin {
++
++    public static class UnmodifiableCollectionConverter extends StdConverter<Collection<Object>, Collection<Object>> {
++
++        @Override
++        public Collection<Object> convert(Collection<Object> value) {
++            return Collections.unmodifiableCollection(value);
++        }
++    }
++}

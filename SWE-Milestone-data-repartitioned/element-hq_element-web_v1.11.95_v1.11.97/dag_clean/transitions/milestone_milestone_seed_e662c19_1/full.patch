@@ -1,0 +1,850 @@
+diff --git a/res/css/_components.pcss b/res/css/_components.pcss
+index 90129601958795ec20b1dfb2d131429feba9ca76..f1a853e90e345594268f922590505070bf7b210f 100644
+--- a/res/css/_components.pcss
++++ b/res/css/_components.pcss
+@@ -227,6 +227,7 @@
+ @import "./views/messages/_DisambiguatedProfile.pcss";
+ @import "./views/messages/_EventTileBubble.pcss";
+ @import "./views/messages/_HiddenBody.pcss";
++@import "./views/messages/_HiddenMediaPlaceholder.pcss";
+ @import "./views/messages/_JumpToDatePicker.pcss";
+ @import "./views/messages/_LegacyCallEvent.pcss";
+ @import "./views/messages/_MEmoteBody.pcss";
+diff --git a/res/css/views/messages/_HiddenMediaPlaceholder.pcss b/res/css/views/messages/_HiddenMediaPlaceholder.pcss
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7efe6ec7e12cb42aec7e53a46bc0599d057131d
+--- /dev/null
++++ b/res/css/views/messages/_HiddenMediaPlaceholder.pcss
+@@ -0,0 +1,29 @@
++.mx_HiddenMediaPlaceholder {
++    border: none;
++    width: 100%;
++    height: 100%;
++    inset: 0;
++
++    /* To center the text in the middle of the frame */
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    text-align: center;
++
++    cursor: pointer;
++    background-color: $header-panel-bg-color;
++
++    > div {
++        color: $accent;
++        /* Icon alignment */
++        display: flex;
++        > svg {
++            margin-top: auto;
++            margin-bottom: auto;
++        }
++    }
++}
++
++.mx_EventTile:hover .mx_HiddenMediaPlaceholder {
++    background-color: $background;
++}
+diff --git a/res/css/views/messages/_MImageBody.pcss b/res/css/views/messages/_MImageBody.pcss
+index 5942bb44b3deb3fd7fc4b7fe8685675e444fc442..bb5f87956870594751b689d11148054cb296a171 100644
+--- a/res/css/views/messages/_MImageBody.pcss
++++ b/res/css/views/messages/_MImageBody.pcss
+@@ -79,39 +79,3 @@ Please see LICENSE files in the repository root for full details.
+     color: $imagebody-giflabel-color;
+     pointer-events: none;
+ }
+-
+-.mx_HiddenImagePlaceholder {
+-    position: absolute;
+-    inset: 0;
+-
+-    /* To center the text in the middle of the frame */
+-    display: flex;
+-    align-items: center;
+-    justify-content: center;
+-    text-align: center;
+-
+-    cursor: pointer;
+-    background-color: $header-panel-bg-color;
+-
+-    .mx_HiddenImagePlaceholder_button {
+-        color: $accent;
+-
+-        span.mx_HiddenImagePlaceholder_eye {
+-            margin-right: 8px;
+-
+-            background-color: $accent;
+-            mask-image: url("$(res)/img/element-icons/eye.svg");
+-            display: inline-block;
+-            width: 18px;
+-            height: 14px;
+-        }
+-
+-        span:not(.mx_HiddenImagePlaceholder_eye) {
+-            vertical-align: text-bottom;
+-        }
+-    }
+-}
+-
+-.mx_EventTile:hover .mx_HiddenImagePlaceholder {
+-    background-color: $background;
+-}
+diff --git a/src/components/views/messages/HiddenMediaPlaceholder.tsx b/src/components/views/messages/HiddenMediaPlaceholder.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..16367ee05a33bcc34f680238ec2bb4abcebba87a
+--- /dev/null
++++ b/src/components/views/messages/HiddenMediaPlaceholder.tsx
+@@ -0,0 +1,24 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React, { type PropsWithChildren, type MouseEventHandler } from "react";
++import { VisibilityOnIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
++
++interface IProps {
++    onClick: MouseEventHandler<HTMLButtonElement>;
++}
++
++export const HiddenMediaPlaceholder: React.FunctionComponent<PropsWithChildren<IProps>> = ({ onClick, children }) => {
++    return (
++        <button onClick={onClick} className="mx_HiddenMediaPlaceholder">
++            <div>
++                <VisibilityOnIcon />
++                <span>{children}</span>
++            </div>
++        </button>
++    );
++};
+diff --git a/src/components/views/messages/HideActionButton.tsx b/src/components/views/messages/HideActionButton.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..8d2baf02203c912455a63cb112a99535437c733a
+--- /dev/null
++++ b/src/components/views/messages/HideActionButton.tsx
+@@ -0,0 +1,44 @@
++/*
++Copyright 2024 New Vector Ltd.
++Copyright 2021 The Matrix.org Foundation C.I.C.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { type MatrixEvent } from "matrix-js-sdk/src/matrix";
++import React from "react";
++import { VisibilityOffIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
++
++import { RovingAccessibleButton } from "../../../accessibility/RovingTabIndex";
++import { _t } from "../../../languageHandler";
++import { useMediaVisible } from "../../../hooks/useMediaVisible";
++
++interface IProps {
++    /**
++     * Matrix event that this action applies to.
++     */
++    mxEvent: MatrixEvent;
++}
++
++/**
++ * Quick action button for marking a media event as hidden.
++ */
++export const HideActionButton: React.FC<IProps> = ({ mxEvent }) => {
++    const [mediaIsVisible, setVisible] = useMediaVisible(mxEvent.getId()!);
++
++    if (!mediaIsVisible) {
++        return;
++    }
++
++    return (
++        <RovingAccessibleButton
++            className="mx_MessageActionBar_iconButton "
++            title={_t("action|hide")}
++            onClick={() => setVisible(false)}
++            placement="left"
++        >
++            <VisibilityOffIcon />
++        </RovingAccessibleButton>
++    );
++};
+diff --git a/src/components/views/messages/MFileBody.tsx b/src/components/views/messages/MFileBody.tsx
+index 674e0f858329c5ca3b3485553409b3dcaedbbf8b..3bb9fb1069031f747f3b13361f2d2b473dc55574 100644
+--- a/src/components/views/messages/MFileBody.tsx
++++ b/src/components/views/messages/MFileBody.tsx
+@@ -93,7 +93,7 @@ export function computedStyle(element: HTMLElement | null): string {
+ 
+ interface IProps extends IBodyProps {
+     /* whether or not to show the default placeholder for the file. Defaults to true. */
+-    showGenericPlaceholder: boolean;
++    showGenericPlaceholder?: boolean;
+ }
+ 
+ interface IState {
+@@ -105,11 +105,6 @@ export default class MFileBody extends React.Component<IProps, IState> {
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+     public state: IState = {};
+-
+-    public static defaultProps = {
+-        showGenericPlaceholder: true,
+-    };
+-
+     private iframe: React.RefObject<HTMLIFrameElement> = createRef();
+     private dummyLink: React.RefObject<HTMLAnchorElement> = createRef();
+     private userDidClick = false;
+@@ -191,15 +186,17 @@ export default class MFileBody extends React.Component<IProps, IState> {
+         const contentUrl = this.getContentUrl();
+         const contentFileSize = this.content.info ? this.content.info.size : null;
+         const fileType = this.content.info?.mimetype ?? "application/octet-stream";
++        // defaultProps breaks types on IBodyProps, so instead define the default here.
++        const showGenericPlaceholder = this.props.showGenericPlaceholder ?? true;
+ 
+         let showDownloadLink =
+-            !this.props.showGenericPlaceholder ||
++            !showGenericPlaceholder ||
+             (this.context.timelineRenderingType !== TimelineRenderingType.Room &&
+                 this.context.timelineRenderingType !== TimelineRenderingType.Search &&
+                 this.context.timelineRenderingType !== TimelineRenderingType.Pinned);
+ 
+         let placeholder: React.ReactNode = null;
+-        if (this.props.showGenericPlaceholder) {
++        if (showGenericPlaceholder) {
+             placeholder = (
+                 <AccessibleButton className="mx_MediaBody mx_MFileBody_info" onClick={this.onPlaceholderClick}>
+                     <span className="mx_MFileBody_info_icon" />
+diff --git a/src/components/views/messages/MImageBody.tsx b/src/components/views/messages/MImageBody.tsx
+index 59d8b988a81fb50a1156a0f7ba0f9cb44b9ad953..15adb01dfc63b401100870e4fb544480ecee9da4 100644
+--- a/src/components/views/messages/MImageBody.tsx
++++ b/src/components/views/messages/MImageBody.tsx
+@@ -33,6 +33,8 @@ import { presentableTextForFile } from "../../../utils/FileUtils";
+ import { createReconnectedListener } from "../../../utils/connection";
+ import MediaProcessingError from "./shared/MediaProcessingError";
+ import { DecryptError, DownloadError } from "../../../utils/DecryptFile";
++import { HiddenMediaPlaceholder } from "./HiddenMediaPlaceholder";
++import { useMediaVisible } from "../../../hooks/useMediaVisible";
+ 
+ enum Placeholder {
+     NoImage,
+@@ -52,11 +54,25 @@ interface IState {
+     };
+     hover: boolean;
+     focus: boolean;
+-    showImage: boolean;
+     placeholder: Placeholder;
+ }
+ 
+-export default class MImageBody extends React.Component<IBodyProps, IState> {
++interface IProps extends IBodyProps {
++    /**
++     * Should the media be behind a preview.
++     */
++    mediaVisible: boolean;
++    /**
++     * Set the visibility of the media event.
++     * @param visible Should the event be visible.
++     */
++    setMediaVisible: (visible: boolean) => void;
++}
++
++/**
++ * @private Only use for inheritance. Use the default export for presentation.
++ */
++export class MImageBodyInner extends React.Component<IProps, IState> {
+     public static contextType = RoomContext;
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+@@ -73,21 +89,14 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+         imgLoaded: false,
+         hover: false,
+         focus: false,
+-        showImage: SettingsStore.getValue("showImages"),
+         placeholder: Placeholder.NoImage,
+     };
+ 
+-    protected showImage(): void {
+-        localStorage.setItem("mx_ShowImage_" + this.props.mxEvent.getId(), "true");
+-        this.setState({ showImage: true });
+-        this.downloadImage();
+-    }
+-
+     protected onClick = (ev: React.MouseEvent): void => {
+         if (ev.button === 0 && !ev.metaKey) {
+             ev.preventDefault();
+-            if (!this.state.showImage) {
+-                this.showImage();
++            if (!this.props.mediaVisible) {
++                this.props.setMediaVisible(true);
+                 return;
+             }
+ 
+@@ -125,7 +134,7 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+     private get shouldAutoplay(): boolean {
+         return !(
+             !this.state.contentUrl ||
+-            !this.state.showImage ||
++            !this.props.mediaVisible ||
+             !this.state.isAnimated ||
+             SettingsStore.getValue("autoplayGifs")
+         );
+@@ -346,14 +355,10 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+     public componentDidMount(): void {
+         this.unmounted = false;
+ 
+-        const showImage =
+-            this.state.showImage || localStorage.getItem("mx_ShowImage_" + this.props.mxEvent.getId()) === "true";
+-
+-        if (showImage) {
++        if (this.props.mediaVisible) {
+             // noinspection JSIgnoredPromiseFromCall
+             this.downloadImage();
+-            this.setState({ showImage: true });
+-        } // else don't download anything because we don't want to display anything.
++        }
+ 
+         // Add a 150ms timer for blurhash to first appear.
+         if (this.props.mxEvent.getContent().info?.[BLURHASH_FIELD]) {
+@@ -372,6 +377,13 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+         });
+     }
+ 
++    public componentDidUpdate(prevProps: Readonly<IProps>): void {
++        if (!prevProps.mediaVisible && this.props.mediaVisible) {
++            // noinspection JSIgnoredPromiseFromCall
++            this.downloadImage();
++        }
++    }
++
+     public componentWillUnmount(): void {
+         this.unmounted = true;
+         MatrixClientPeg.get()?.off(ClientEvent.Sync, this.reconnectedListener);
+@@ -425,8 +437,12 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+             // by the same width and height logic below.
+             if (!this.state.loadedImageDimensions) {
+                 let imageElement: JSX.Element;
+-                if (!this.state.showImage) {
+-                    imageElement = <HiddenImagePlaceholder />;
++                if (!this.props.mediaVisible) {
++                    imageElement = (
++                        <HiddenMediaPlaceholder onClick={this.onClick}>
++                            {_t("timeline|m.image|show_image")}
++                        </HiddenMediaPlaceholder>
++                    );
+                 } else {
+                     imageElement = (
+                         <img
+@@ -495,8 +511,14 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+             );
+         }
+ 
+-        if (!this.state.showImage) {
+-            img = <HiddenImagePlaceholder maxWidth={maxWidth} />;
++        if (!this.props.mediaVisible) {
++            img = (
++                <div style={{ width: maxWidth, height: maxHeight }}>
++                    <HiddenMediaPlaceholder onClick={this.onClick}>
++                        {_t("timeline|m.image|show_image")}
++                    </HiddenMediaPlaceholder>
++                </div>
++            );
+             showPlaceholder = false; // because we're hiding the image, so don't show the placeholder.
+         }
+ 
+@@ -506,7 +528,7 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+         }
+ 
+         let banner: ReactNode | undefined;
+-        if (this.state.showImage && hoverOrFocus) {
++        if (this.props.mediaVisible && hoverOrFocus) {
+             banner = this.getBanner(content);
+         }
+ 
+@@ -552,7 +574,7 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+                 </div>
+ 
+                 {/* HACK: This div fills out space while the image loads, to prevent scroll jumps */}
+-                {!this.props.forExport && !this.state.imgLoaded && (
++                {!this.props.forExport && !this.state.imgLoaded && !placeholder && (
+                     <div style={{ height: maxHeight, width: maxWidth }} />
+                 )}
+             </div>
+@@ -585,12 +607,6 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+                     {children}
+                 </a>
+             );
+-        } else if (!this.state.showImage) {
+-            return (
+-                <div role="button" onClick={this.onClick}>
+-                    {children}
+-                </div>
+-            );
+         }
+         return children;
+     }
+@@ -669,20 +685,10 @@ export default class MImageBody extends React.Component<IBodyProps, IState> {
+     }
+ }
+ 
+-interface PlaceholderIProps {
+-    maxWidth?: number;
+-}
++// Wrap MImageBody component so we can use a hook here.
++const MImageBody: React.FC<IBodyProps> = (props) => {
++    const [mediaVisible, setVisible] = useMediaVisible(props.mxEvent.getId()!);
++    return <MImageBodyInner mediaVisible={mediaVisible} setMediaVisible={setVisible} {...props} />;
++};
+ 
+-export class HiddenImagePlaceholder extends React.PureComponent<PlaceholderIProps> {
+-    public render(): React.ReactNode {
+-        const maxWidth = this.props.maxWidth ? this.props.maxWidth + "px" : null;
+-        return (
+-            <div className="mx_HiddenImagePlaceholder" style={{ maxWidth: `min(100%, ${maxWidth}px)` }}>
+-                <div className="mx_HiddenImagePlaceholder_button">
+-                    <span className="mx_HiddenImagePlaceholder_eye" />
+-                    <span>{_t("timeline|m.image|show_image")}</span>
+-                </div>
+-            </div>
+-        );
+-    }
+-}
++export default MImageBody;
+diff --git a/src/components/views/messages/MImageReplyBody.tsx b/src/components/views/messages/MImageReplyBody.tsx
+index 32fd27c62a6839dabb2d410560f2148497a25b54..5bbb00ef447e9a15039bd8e5509e329836429856 100644
+--- a/src/components/views/messages/MImageReplyBody.tsx
++++ b/src/components/views/messages/MImageReplyBody.tsx
+@@ -9,11 +9,13 @@ Please see LICENSE files in the repository root for full details.
+ import React from "react";
+ import { type ImageContent } from "matrix-js-sdk/src/types";
+ 
+-import MImageBody from "./MImageBody";
++import { MImageBodyInner } from "./MImageBody";
++import { type IBodyProps } from "./IBodyProps";
++import { useMediaVisible } from "../../../hooks/useMediaVisible";
+ 
+ const FORCED_IMAGE_HEIGHT = 44;
+ 
+-export default class MImageReplyBody extends MImageBody {
++class MImageReplyBodyInner extends MImageBodyInner {
+     public onClick = (ev: React.MouseEvent): void => {
+         ev.preventDefault();
+     };
+@@ -35,3 +37,9 @@ export default class MImageReplyBody extends MImageBody {
+         return <div className="mx_MImageReplyBody">{thumbnail}</div>;
+     }
+ }
++const MImageReplyBody: React.FC<IBodyProps> = (props) => {
++    const [mediaVisible, setVisible] = useMediaVisible(props.mxEvent.getId()!);
++    return <MImageReplyBodyInner mediaVisible={mediaVisible} setMediaVisible={setVisible} {...props} />;
++};
++
++export default MImageReplyBody;
+diff --git a/src/components/views/messages/MStickerBody.tsx b/src/components/views/messages/MStickerBody.tsx
+index ccb9bb437bc14fcfce97f262a6bb6ab19585a7f6..29082512d04bffaa2f8cd5064ba50297060d389c 100644
+--- a/src/components/views/messages/MStickerBody.tsx
++++ b/src/components/views/messages/MStickerBody.tsx
+@@ -9,16 +9,18 @@ import React, { type ComponentProps, type ReactNode } from "react";
+ import { type Tooltip } from "@vector-im/compound-web";
+ import { type MediaEventContent } from "matrix-js-sdk/src/types";
+ 
+-import MImageBody from "./MImageBody";
++import { MImageBodyInner } from "./MImageBody";
+ import { BLURHASH_FIELD } from "../../../utils/image-media";
+ import IconsShowStickersSvg from "../../../../res/img/icons-show-stickers.svg";
++import { type IBodyProps } from "./IBodyProps";
++import { useMediaVisible } from "../../../hooks/useMediaVisible";
+ 
+-export default class MStickerBody extends MImageBody {
++class MStickerBodyInner extends MImageBodyInner {
+     // Mostly empty to prevent default behaviour of MImageBody
+     protected onClick = (ev: React.MouseEvent): void => {
+         ev.preventDefault();
+-        if (!this.state.showImage) {
+-            this.showImage();
++        if (!this.props.mediaVisible) {
++            this.props.setMediaVisible?.(true);
+         }
+     };
+ 
+@@ -26,7 +28,7 @@ export default class MStickerBody extends MImageBody {
+     // which is added by mx_MStickerBody_wrapper
+     protected wrapImage(contentUrl: string, children: React.ReactNode): JSX.Element {
+         let onClick: React.MouseEventHandler | undefined;
+-        if (!this.state.showImage) {
++        if (!this.props.mediaVisible) {
+             onClick = this.onClick;
+         }
+         return (
+@@ -75,3 +77,10 @@ export default class MStickerBody extends MImageBody {
+         return null; // we don't need a banner, we have a tooltip
+     }
+ }
++
++const MStickerBody: React.FC<IBodyProps> = (props) => {
++    const [mediaVisible, setVisible] = useMediaVisible(props.mxEvent.getId()!);
++    return <MStickerBodyInner mediaVisible={mediaVisible} setMediaVisible={setVisible} {...props} />;
++};
++
++export default MStickerBody;
+diff --git a/src/components/views/messages/MVideoBody.tsx b/src/components/views/messages/MVideoBody.tsx
+index 00c44b51707967308c3a3d5d1b6064060ce167bc..be0f692fe8e0d5f9a55463f55d779b60514a9266 100644
+--- a/src/components/views/messages/MVideoBody.tsx
++++ b/src/components/views/messages/MVideoBody.tsx
+@@ -21,6 +21,8 @@ import MFileBody from "./MFileBody";
+ import { type ImageSize, suggestedSize as suggestedVideoSize } from "../../../settings/enums/ImageSize";
+ import RoomContext, { TimelineRenderingType } from "../../../contexts/RoomContext";
+ import MediaProcessingError from "./shared/MediaProcessingError";
++import { HiddenMediaPlaceholder } from "./HiddenMediaPlaceholder";
++import { useMediaVisible } from "../../../hooks/useMediaVisible";
+ 
+ interface IState {
+     decryptedUrl: string | null;
+@@ -32,7 +34,19 @@ interface IState {
+     blurhashUrl: string | null;
+ }
+ 
+-export default class MVideoBody extends React.PureComponent<IBodyProps, IState> {
++interface IProps extends IBodyProps {
++    /**
++     * Should the media be behind a preview.
++     */
++    mediaVisible: boolean;
++    /**
++     * Set the visibility of the media event.
++     * @param visible Should the event be visible.
++     */
++    setMediaVisible: (visible: boolean) => void;
++}
++
++class MVideoBodyInner extends React.PureComponent<IProps, IState> {
+     public static contextType = RoomContext;
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+@@ -49,6 +63,10 @@ export default class MVideoBody extends React.PureComponent<IBodyProps, IState>
+         blurhashUrl: null,
+     };
+ 
++    private onClick = (): void => {
++        this.props.setMediaVisible(true);
++    };
++
+     private getContentUrl(): string | undefined {
+         const content = this.props.mxEvent.getContent<MediaEventContent>();
+         // During export, the content url will point to the MSC, which will later point to a local url
+@@ -120,11 +138,7 @@ export default class MVideoBody extends React.PureComponent<IBodyProps, IState>
+         }
+     }
+ 
+-    public async componentDidMount(): Promise<void> {
+-        this.sizeWatcher = SettingsStore.watchSetting("Images.size", null, () => {
+-            this.forceUpdate(); // we don't really have a reliable thing to update, so just update the whole thing
+-        });
+-
++    private async downloadVideo(): Promise<void> {
+         try {
+             this.loadBlurhash();
+         } catch (e) {
+@@ -174,6 +188,23 @@ export default class MVideoBody extends React.PureComponent<IBodyProps, IState>
+         }
+     }
+ 
++    public async componentDidMount(): Promise<void> {
++        this.sizeWatcher = SettingsStore.watchSetting("Images.size", null, () => {
++            this.forceUpdate(); // we don't really have a reliable thing to update, so just update the whole thing
++        });
++
++        // Do not attempt to load the media if we do not want to show previews here.
++        if (this.props.mediaVisible) {
++            await this.downloadVideo();
++        }
++    }
++
++    public async componentDidUpdate(prevProps: Readonly<IProps>): Promise<void> {
++        if (!prevProps.mediaVisible && this.props.mediaVisible) {
++            await this.downloadVideo();
++        }
++    }
++
+     public componentWillUnmount(): void {
+         SettingsStore.unwatchSetting(this.sizeWatcher);
+     }
+@@ -244,6 +275,22 @@ export default class MVideoBody extends React.PureComponent<IBodyProps, IState>
+             );
+         }
+ 
++        // Users may not even want to show a poster, so instead show a preview button.
++        if (!this.props.mediaVisible) {
++            return (
++                <span className="mx_MVideoBody">
++                    <div
++                        className="mx_MVideoBody_container"
++                        style={{ width: maxWidth, height: maxHeight, aspectRatio }}
++                    >
++                        <HiddenMediaPlaceholder onClick={this.onClick}>
++                            {_t("timeline|m.video|show_video")}
++                        </HiddenMediaPlaceholder>
++                    </div>
++                </span>
++            );
++        }
++
+         // Important: If we aren't autoplaying and we haven't decrypted it yet, show a video with a poster.
+         if (!this.props.forExport && content.file !== undefined && this.state.decryptedUrl === null && autoplay) {
+             // Need to decrypt the attachment
+@@ -294,3 +341,11 @@ export default class MVideoBody extends React.PureComponent<IBodyProps, IState>
+         );
+     }
+ }
++
++// Wrap MVideoBody component so we can use a hook here.
++const MVideoBody: React.FC<IBodyProps> = (props) => {
++    const [mediaVisible, setVisible] = useMediaVisible(props.mxEvent.getId()!);
++    return <MVideoBodyInner mediaVisible={mediaVisible} setMediaVisible={setVisible} {...props} />;
++};
++
++export default MVideoBody;
+diff --git a/src/components/views/messages/MessageActionBar.tsx b/src/components/views/messages/MessageActionBar.tsx
+index e6838c635f2b3a867bfadd923e8aa29a9efcb09b..0a48a1898c4405048d44fa2aae706237f86e6ddf 100644
+--- a/src/components/views/messages/MessageActionBar.tsx
++++ b/src/components/views/messages/MessageActionBar.tsx
+@@ -61,6 +61,7 @@ import { type GetRelationsForEvent, type IEventTileType } from "../rooms/EventTi
+ import { type ButtonEvent } from "../elements/AccessibleButton";
+ import PinningUtils from "../../../utils/PinningUtils";
+ import PosthogTrackers from "../../../PosthogTrackers.ts";
++import { HideActionButton } from "./HideActionButton.tsx";
+ 
+ interface IOptionsButtonProps {
+     mxEvent: MatrixEvent;
+@@ -537,6 +538,9 @@ export default class MessageActionBar extends React.PureComponent<IMessageAction
+                         />,
+                     );
+                 }
++                if (MediaEventHelper.canHide(this.props.mxEvent)) {
++                    toolbarOpts.splice(0, 0, <HideActionButton mxEvent={this.props.mxEvent} key="hide" />);
++                }
+             } else if (
+                 // Show thread icon even for deleted messages, but only within main timeline
+                 this.context.timelineRenderingType === TimelineRenderingType.Room &&
+diff --git a/src/components/views/messages/MessageEvent.tsx b/src/components/views/messages/MessageEvent.tsx
+index be634579026694d345485059316056a91ec22ab8..ff97edd1dbe75ec0361b080dffdd83c035b6c75d 100644
+--- a/src/components/views/messages/MessageEvent.tsx
++++ b/src/components/views/messages/MessageEvent.tsx
+@@ -45,8 +45,8 @@ import { type GetRelationsForEvent, type IEventTileOps } from "../rooms/EventTil
+ // onMessageAllowed is handled internally
+ interface IProps extends Omit<IBodyProps, "onMessageAllowed" | "mediaEventHelper"> {
+     /* overrides for the msgtype-specific components, used by ReplyTile to override file rendering */
+-    overrideBodyTypes?: Record<string, typeof React.Component>;
+-    overrideEventTypes?: Record<string, typeof React.Component>;
++    overrideBodyTypes?: Record<string, React.ComponentType<IBodyProps>>;
++    overrideEventTypes?: Record<string, React.ComponentType<IBodyProps>>;
+ 
+     // helper function to access relations for this event
+     getRelationsForEvent?: GetRelationsForEvent;
+@@ -58,7 +58,7 @@ export interface IOperableEventTile {
+     getEventTileOps(): IEventTileOps | null;
+ }
+ 
+-const baseBodyTypes = new Map<string, typeof React.Component>([
++const baseBodyTypes = new Map<string, React.ComponentType<IBodyProps>>([
+     [MsgType.Text, TextualBody],
+     [MsgType.Notice, TextualBody],
+     [MsgType.Emote, TextualBody],
+@@ -80,7 +80,7 @@ const baseEvTypes = new Map<string, React.ComponentType<IBodyProps>>([
+ export default class MessageEvent extends React.Component<IProps> implements IMediaBody, IOperableEventTile {
+     private body: React.RefObject<React.Component | IOperableEventTile> = createRef();
+     private mediaHelper?: MediaEventHelper;
+-    private bodyTypes = new Map<string, typeof React.Component>(baseBodyTypes.entries());
++    private bodyTypes = new Map<string, React.ComponentType<IBodyProps>>(baseBodyTypes.entries());
+     private evTypes = new Map<string, React.ComponentType<IBodyProps>>(baseEvTypes.entries());
+ 
+     public static contextType = MatrixClientContext;
+@@ -115,7 +115,7 @@ export default class MessageEvent extends React.Component<IProps> implements IMe
+     }
+ 
+     private updateComponentMaps(): void {
+-        this.bodyTypes = new Map<string, typeof React.Component>(baseBodyTypes.entries());
++        this.bodyTypes = new Map<string, React.ComponentType<IBodyProps>>(baseBodyTypes.entries());
+         for (const [bodyType, bodyComponent] of Object.entries(this.props.overrideBodyTypes ?? {})) {
+             this.bodyTypes.set(bodyType, bodyComponent);
+         }
+diff --git a/src/components/views/rooms/ReplyTile.tsx b/src/components/views/rooms/ReplyTile.tsx
+index 8084b59ba3b79dfd0d50b77026e688cd82d26611..0f2b580d7e0def9182008ceb0721ffcbc32f2ac2 100644
+--- a/src/components/views/rooms/ReplyTile.tsx
++++ b/src/components/views/rooms/ReplyTile.tsx
+@@ -26,6 +26,7 @@ import { type ViewRoomPayload } from "../../../dispatcher/payloads/ViewRoomPaylo
+ import { renderReplyTile } from "../../../events/EventTileFactory";
+ import { type GetRelationsForEvent } from "../rooms/EventTile";
+ import { MatrixClientPeg } from "../../../MatrixClientPeg";
++import { type IBodyProps } from "../messages/IBodyProps";
+ 
+ interface IProps {
+     mxEvent: MatrixEvent;
+@@ -139,13 +140,13 @@ export default class ReplyTile extends React.PureComponent<IProps> {
+             );
+         }
+ 
+-        const msgtypeOverrides: Record<string, typeof React.Component> = {
++        const msgtypeOverrides: Record<string, React.ComponentType<IBodyProps>> = {
+             [MsgType.Image]: MImageReplyBody,
+             // Override audio and video body with file body. We also hide the download/decrypt button using CSS
+             [MsgType.Audio]: isVoiceMessage(mxEvent) ? MVoiceMessageBody : MFileBody,
+             [MsgType.Video]: MFileBody,
+         };
+-        const evOverrides: Record<string, typeof React.Component> = {
++        const evOverrides: Record<string, React.ComponentType<IBodyProps>> = {
+             // Use MImageReplyBody so that the sticker isn't taking up a lot of space
+             [EventType.Sticker]: MImageReplyBody,
+         };
+diff --git a/src/events/EventTileFactory.tsx b/src/events/EventTileFactory.tsx
+index e0d2a91afb69592d33161757c91ffb74e6e04939..633583485aae5c21271c06fb7d8fdc27cd5d9628 100644
+--- a/src/events/EventTileFactory.tsx
++++ b/src/events/EventTileFactory.tsx
+@@ -42,6 +42,7 @@ import HiddenBody from "../components/views/messages/HiddenBody";
+ import ViewSourceEvent from "../components/views/messages/ViewSourceEvent";
+ import { shouldDisplayAsBeaconTile } from "../utils/beacon/timeline";
+ import { ElementCall } from "../models/Call";
++import { type IBodyProps } from "../components/views/messages/IBodyProps";
+ 
+ // Subset of EventTile's IProps plus some mixins
+ export interface EventTileTypeProps
+@@ -64,8 +65,8 @@ export interface EventTileTypeProps
+     ref?: React.RefObject<any>; // `any` because it's effectively impossible to convince TS of a reasonable type
+     timestamp?: JSX.Element;
+     maxImageHeight?: number; // pixels
+-    overrideBodyTypes?: Record<string, typeof React.Component>;
+-    overrideEventTypes?: Record<string, typeof React.Component>;
++    overrideBodyTypes?: Record<string, React.ComponentType<IBodyProps>>;
++    overrideEventTypes?: Record<string, React.ComponentType<IBodyProps>>;
+ }
+ 
+ type FactoryProps = Omit<EventTileTypeProps, "ref">;
+diff --git a/src/hooks/useMediaVisible.ts b/src/hooks/useMediaVisible.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e244d500cfcc8d7d6135fb0a4034f623333e0062
+--- /dev/null
++++ b/src/hooks/useMediaVisible.ts
+@@ -0,0 +1,35 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { useCallback } from "react";
++
++import { SettingLevel } from "../settings/SettingLevel";
++import { useSettingValue } from "./useSettings";
++import SettingsStore from "../settings/SettingsStore";
++
++/**
++ * Should the media event be visible in the client, or hidden.
++ * @param eventId The eventId of the media event.
++ * @returns A boolean describing the hidden status, and a function to set the visiblity.
++ */
++export function useMediaVisible(eventId: string): [boolean, (visible: boolean) => void] {
++    const defaultShowImages = useSettingValue("showImages", SettingLevel.DEVICE);
++    const eventVisibility = useSettingValue("showMediaEventIds", SettingLevel.DEVICE);
++    const setMediaVisible = useCallback(
++        (visible: boolean) => {
++            SettingsStore.setValue("showMediaEventIds", null, SettingLevel.DEVICE, {
++                ...eventVisibility,
++                [eventId]: visible,
++            });
++        },
++        [eventId, eventVisibility],
++    );
++
++    // Always prefer the explicit per-event user preference here.
++    const imgIsVisible = eventVisibility[eventId] ?? defaultShowImages;
++    return [imgIsVisible, setMediaVisible];
++}
+diff --git a/src/settings/Settings.tsx b/src/settings/Settings.tsx
+index 439b0c112f5ed5d3a0e9d4982b2f5c15b42cac2f..e6792b3867a63f48fab9b3757d8e1431592c56e1 100644
+--- a/src/settings/Settings.tsx
++++ b/src/settings/Settings.tsx
+@@ -272,6 +272,7 @@ export interface Settings {
+     "language": IBaseSetting<string>;
+     "breadcrumb_rooms": IBaseSetting<string[]>;
+     "recent_emoji": IBaseSetting<RecentEmojiData>;
++    "showMediaEventIds": IBaseSetting<{ [eventId: string]: boolean }>;
+     "SpotlightSearch.recentSearches": IBaseSetting<string[]>;
+     "SpotlightSearch.showNsfwPublicRooms": IBaseSetting<boolean>;
+     "room_directory_servers": IBaseSetting<string[]>;
+@@ -966,6 +967,11 @@ export const SETTINGS: Settings = {
+         supportedLevels: [SettingLevel.ACCOUNT],
+         default: [], // list of room IDs, most recent first
+     },
++    "showMediaEventIds": {
++        // not really a setting
++        supportedLevels: [SettingLevel.DEVICE],
++        default: {}, // List of events => is visible
++    },
+     "SpotlightSearch.showNsfwPublicRooms": {
+         supportedLevels: LEVELS_ACCOUNT_SETTINGS,
+         displayName: _td("settings|show_nsfw_content"),
+diff --git a/src/settings/SettingsStore.ts b/src/settings/SettingsStore.ts
+index 671a2ac67612b00893191c3765fb1496cd8341eb..7dac777399d9f19d2ba15cec58b143c996715fb9 100644
+--- a/src/settings/SettingsStore.ts
++++ b/src/settings/SettingsStore.ts
+@@ -697,6 +697,24 @@ export default class SettingsStore {
+         client.on(ClientEvent.Sync, onSync);
+     }
+ 
++    /**
++     * Migrate the setting for visible images to a setting.
++     */
++    private static migrateShowImagesToSettings(): void {
++        const MIGRATION_DONE_FLAG = "mx_show_images_migration_done";
++        if (localStorage.getItem(MIGRATION_DONE_FLAG)) return;
++
++        logger.info("Performing one-time settings migration of shown images to settings store");
++        const newValue = Object.fromEntries(
++            Object.keys(localStorage)
++                .filter((k) => k.startsWith("mx_ShowImage_"))
++                .map((k) => [k.slice("mx_ShowImage_".length), true]),
++        );
++        this.setValue("showMediaEventIds", null, SettingLevel.DEVICE, newValue);
++
++        localStorage.setItem(MIGRATION_DONE_FLAG, "true");
++    }
++
+     /**
+      * Runs or queues any setting migrations needed.
+      */
+@@ -708,6 +726,12 @@ export default class SettingsStore {
+         // be disabled in E2EE rooms.
+         SettingsStore.migrateURLPreviewsE2EE(isFreshLogin);
+ 
++        // This can be removed once enough users have run a version of Element with
++        // this migration.
++        // The consequences of missing the migration are that previously shown images
++        // will now be hidden again, so this fails safely.
++        SettingsStore.migrateShowImagesToSettings();
++
+         // Dev notes: to add your migration, just add a new `migrateMyFeature` function, call it, and
+         // add a comment to note when it can be removed.
+         return;
+diff --git a/src/utils/MediaEventHelper.ts b/src/utils/MediaEventHelper.ts
+index 25339260f36b264e372410e8a276984518ed41eb..98cbe4da58324d5c01003b57393d79465ac2ecab 100644
+--- a/src/utils/MediaEventHelper.ts
++++ b/src/utils/MediaEventHelper.ts
+@@ -113,4 +113,18 @@ export class MediaEventHelper implements IDestroyable {
+         // Finally, it's probably not media
+         return false;
+     }
++
++    /**
++     * Determine if the media event in question supports being hidden in the timeline.
++     * @param event Any matrix event.
++     * @returns `true` if the media can be hidden, otherwise false.
++     */
++    public static canHide(event: MatrixEvent): boolean {
++        if (!event) return false;
++        if (event.isRedacted()) return false;
++        const content = event.getContent();
++        const hideTypes: string[] = [MsgType.Video, MsgType.Image];
++        if (hideTypes.includes(content.msgtype!)) return true;
++        return false;
++    }
+ }

@@ -1,0 +1,489 @@
+diff --git a/apply_patches.py b/apply_patches.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..6c78d27e1239410ac0006d6e4442a0e72beebeb5
+--- /dev/null
++++ b/apply_patches.py
+@@ -0,0 +1,178 @@
++#!/usr/bin/env python3
++"""Apply API compatibility patches for milestone_M09_datetime"""
++
++import re
++import os
++
++def fix_reedline_config():
++    """Fix reedline_config.rs - remove unsupported imports and EditCommand variants"""
++    filepath = "/testbed/crates/nu-cli/src/reedline_config.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove TextObject imports
++    content = content.replace(', TextObject, TextObjectScope,', ',')
++    content = content.replace(', TextObjectType', '')
++
++    # Replace unsupported EditCommand match arms with error returns
++    # Pattern: "commandname" => { ... } or "commandname" => EditCommand::...
++    error_return = 'return Err(ShellError::GenericError { error: "Command not supported".to_string(), msg: "".to_string(), span: None, help: None, inner: vec![] })'
++
++    # For commands that have code blocks
++    for cmd in ['cutinsidepair', 'copyinsidepair', 'cutaroundpair', 'copyaroundpair']:
++        # Match the entire case block including nested braces
++        pattern = rf'"{cmd}" => \{{[^}}]*\{{[^}}]*\}}[^}}]*\}}'
++        content = re.sub(pattern, f'"{cmd}" => {error_return}, // [ENV-PATCH]', content, flags=re.DOTALL)
++
++    # For commands that reference EditCommand directly
++    for cmd in ['copytextobject', 'cuttextobject']:
++        pattern = rf'"{cmd}" => EditCommand::[^,]*,'
++        content = re.sub(pattern, f'"{cmd}" => {error_return}, // [ENV-PATCH]', content)
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_completer():
++    """Fix completer.rs - comment out bool dereference"""
++    filepath = "/testbed/crates/nu-cli/src/completions/completer.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    if '*need_fallback = false;' in content:
++        content = content.replace('*need_fallback = false;', '// [ENV-PATCH] *need_fallback = false;')
++        with open(filepath, 'w') as f:
++            f.write(content)
++        print(f"Fixed {filepath}")
++
++def fix_uucore_imports():
++    """Fix uucore imports - comment out use statements"""
++    files = [
++        "/testbed/crates/nu-command/src/filesystem/ucp.rs",
++        "/testbed/crates/nu-command/src/filesystem/umkdir.rs",
++        "/testbed/crates/nu-command/src/filesystem/umv.rs",
++        "/testbed/crates/nu-command/src/filesystem/utouch.rs",
++        "/testbed/crates/nu-command/src/platform/whoami.rs",
++        "/testbed/crates/nu-command/src/system/uname.rs",
++    ]
++
++    for filepath in files:
++        if not os.path.exists(filepath):
++            continue
++
++        with open(filepath, 'r') as f:
++            content = f.read()
++
++        if 'use uucore::{localized_help_template, translate};' in content:
++            content = content.replace('use uucore::{localized_help_template, translate};',
++                                    '// [ENV-PATCH] use uucore::{localized_help_template, translate};')
++            with open(filepath, 'w') as f:
++                f.write(content)
++            print(f"Fixed {filepath}")
++
++def fix_ucp():
++    """Fix ucp.rs - remove CpError import, unsupported fields, and fix enums"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/ucp.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove CpError import
++    content = content.replace('use uu_cp::CpError;', '// [ENV-PATCH] use uu_cp::CpError;')
++
++    # Remove context and set_selinux_context fields
++    content = re.sub(r'^\s*context:.*$', '', content, flags=re.MULTILINE)
++    content = re.sub(r'^\s*set_selinux_context:.*$', '', content, flags=re.MULTILINE)
++
++    # Fix UpdateMode and BackupMode - replace with valid values
++    content = re.sub(r'\(UpdateMode::IfOlder', '(UpdateMode::ReplaceAll /* [ENV-PATCH] was: IfOlder */', content)
++    content = re.sub(r'\(UpdateMode::All', '(UpdateMode::ReplaceAll /* [ENV-PATCH] was: All */', content)
++    content = content.replace('BackupMode::None', 'BackupMode::NoBackup /* [ENV-PATCH] was: None */')
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_umv():
++    """Fix umv.rs - remove unsupported fields and fix enums"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/umv.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Remove context field
++    content = re.sub(r'^\s*context:.*$', '', content, flags=re.MULTILINE)
++
++    # Fix UpdateMode and BackupMode
++    content = content.replace('UpdateMode::All', 'UpdateMode::ReplaceAll /* [ENV-PATCH] was: All */')
++    content = content.replace('BackupMode::None', 'BackupMode::NoBackup /* [ENV-PATCH] was: None */')
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_umkdir():
++    """Fix umkdir.rs - replace uu_mkdir call with std::fs"""
++    filepath = "/testbed/crates/nu-command/src/filesystem/umkdir.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Comment out Config struct construction
++    content = re.sub(
++        r'let config = uu_mkdir::Config \{[^}]*\};',
++        '// [ENV-PATCH] Commented out uu_mkdir::Config construction',
++        content,
++        flags=re.DOTALL
++    )
++
++    # Replace uu_mkdir call with std::fs
++    content = re.sub(
++        r'uu_mkdir::uu_mkdir\(&config\)',
++        'std::fs::create_dir_all(path) /* [ENV-PATCH] was: uu_mkdir::uu_mkdir(&config) */',
++        content
++    )
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++def fix_update_cells():
++    """Fix update_cells.rs - add .. to Value::Record pattern"""
++    filepath = "/testbed/crates/nu-cmd-extra/src/extra/filters/update_cells.rs"
++    if not os.path.exists(filepath):
++        return
++
++    with open(filepath, 'r') as f:
++        content = f.read()
++
++    # Add .. to Value::Record pattern
++    pattern = r'(Value::Record \{\s*ref mut val,\s*internal_span,\s*\})'
++    replacement = r'Value::Record {\n                    ref mut val,\n                    internal_span,\n                    ..\n                }'
++    content = re.sub(pattern, replacement, content)
++
++    with open(filepath, 'w') as f:
++        f.write(content)
++    print(f"Fixed {filepath}")
++
++if __name__ == "__main__":
++    fix_reedline_config()
++    fix_completer()
++    fix_uucore_imports()
++    fix_ucp()
++    fix_umv()
++    fix_umkdir()
++    fix_update_cells()
++    print("All patches applied successfully")
+diff --git a/crates/nu-lsp/Cargo.toml b/crates/nu-lsp/Cargo.toml
+index 23716bb7515fe7faf6b99fc0c267dde5850c71c5..fd355c723bda1ac5ba48ac377dffecb6a51e8df8 100644
+--- a/crates/nu-lsp/Cargo.toml
++++ b/crates/nu-lsp/Cargo.toml
+@@ -8,7 +8,6 @@ edition = "2024"
+ license = "MIT"
+ 
+ [dependencies]
+-fancy-regex = "0.14"
+ nu-cli = { path = "../nu-cli", version = "0.106.1" }
+ nu-glob = { path = "../nu-glob", version = "0.106.1" }
+ nu-parser = { path = "../nu-parser", version = "0.106.1" }
+@@ -16,6 +15,7 @@ nu-protocol = { path = "../nu-protocol", version = "0.106.1" }
+ nu-utils = { path = "../nu-utils", version = "0.106.1" }
+ 
+ crossbeam-channel = { workspace = true }
++fancy-regex = "0.14"
+ lsp-server = { workspace = true }
+ lsp-textdocument = { workspace = true }
+ lsp-types = { workspace = true }
+@@ -34,7 +34,7 @@ nu-std = { path = "../nu-std", version = "0.106.1" }
+ nu-test-support = { path = "../nu-test-support", version = "0.106.1" }
+ 
+ assert-json-diff = "2.0"
+-rstest = "0.23"
++rstest = { workspace = true, default-features = false }
+ 
+ [lints]
+ workspace = true
+diff --git a/fix_custom_completion.py b/fix_custom_completion.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..31c958ecae374f5decd08a036dcd2f67daa61506
+--- /dev/null
++++ b/fix_custom_completion.py
+@@ -0,0 +1,151 @@
++#!/usr/bin/env python3
++"""
++Fix custom_completion field compatibility for Flag and PositionalArg structs.
++
++This script:
++1. Adds DeclId to imports in signature.rs
++2. Adds custom_completion: Option<DeclId> field to Flag and PositionalArg structs
++3. Adds custom_completion: None to all struct instantiations
++"""
++
++import os
++import re
++from pathlib import Path
++
++
++def fix_signature_rs(path: Path):
++    """Fix signature.rs to add the custom_completion field."""
++    content = path.read_text()
++
++    # Skip if already fixed
++    if "custom_completion" in content:
++        print(f"  Skipping {path} - already has custom_completion")
++        return False
++
++    # Add DeclId to imports (only in the use crate::{...} statement)
++    content = re.sub(
++        r'(use crate::\{\s*\n?\s*)BlockId,',
++        r'\1BlockId, DeclId,',
++        content
++    )
++
++    # Add custom_completion field to Flag struct (after default_value line)
++    content = re.sub(
++        r'(pub struct Flag \{[^}]*pub default_value: Option<Value>,)',
++        r'\1\n    pub custom_completion: Option<DeclId>,',
++        content,
++        flags=re.DOTALL
++    )
++
++    # Add custom_completion field to PositionalArg struct (after default_value line)
++    content = re.sub(
++        r'(pub struct PositionalArg \{[^}]*pub default_value: Option<Value>,)',
++        r'\1\n    pub custom_completion: Option<DeclId>,',
++        content,
++        flags=re.DOTALL
++    )
++
++    path.write_text(content)
++    print(f"  Fixed struct definitions in {path}")
++    return True
++
++
++def fix_struct_instantiations(root_dir: Path):
++    """Add custom_completion: None to all Flag and PositionalArg instantiations."""
++    fixed_files = 0
++
++    for rs_file in root_dir.rglob("*.rs"):
++        if "target" in str(rs_file):
++            continue
++
++        try:
++            content = rs_file.read_text()
++        except:
++            continue
++
++        # Skip if already has custom_completion: None, which means the fix was already applied
++        # Note: Don't skip based on just "custom_completion:" since the code may already use this variable name
++        if re.search(r'default_value:.*\n\s*custom_completion: None,', content):
++            continue
++
++        # Skip if file doesn't contain Flag or PositionalArg instantiations
++        if "Flag {" not in content and "PositionalArg {" not in content:
++            continue
++
++        lines = content.split('\n')
++        new_lines = []
++        modified = False
++        i = 0
++
++        while i < len(lines):
++            line = lines[i]
++            new_lines.append(line)
++
++            # Check if this line contains default_value assignment that ends a struct
++            # Pattern: "default_value: None," or "default_value: Some(...),"
++            # But NOT "pub default_value:" which is a struct definition, not instantiation
++            if 'default_value:' in line and line.rstrip().endswith(',') and 'pub default_value' not in line:
++                # Look back to see if we're inside a Flag or PositionalArg instantiation
++                # by checking for opening brace of these structs
++                in_struct = False
++                struct_indent = 0
++                current_indent = len(line) - len(line.lstrip())
++
++                for j in range(i - 1, max(i - 30, -1), -1):
++                    prev_line = lines[j]
++                    prev_stripped = prev_line.strip()
++
++                    # Check for Flag { or PositionalArg { (but not pattern matching with ..)
++                    if ('Flag {' in prev_line or 'PositionalArg {' in prev_line) and '..' not in prev_line:
++                        in_struct = True
++                        # Get the indentation of the struct fields
++                        struct_indent = current_indent
++                        break
++
++                    # If we hit a closing brace that's not part of the same struct, break
++                    # Only break if the closing brace is at same or less indentation than our line
++                    if (prev_stripped == '},' or prev_stripped == '}' or prev_stripped == ');' or prev_stripped == ')'):
++                        prev_indent = len(prev_line) - len(prev_line.lstrip())
++                        if prev_indent <= current_indent:
++                            break
++
++                if in_struct:
++                    # Add custom_completion: None with same indentation
++                    indent = ' ' * struct_indent
++                    new_lines.append(f"{indent}custom_completion: None,")
++                    modified = True
++
++            i += 1
++
++        if modified:
++            new_content = '\n'.join(new_lines)
++            rs_file.write_text(new_content)
++            fixed_files += 1
++            print(f"  Fixed instantiations in {rs_file}")
++
++    return fixed_files
++
++
++def main():
++    # Use /testbed in Docker, or current directory if running locally
++    testbed = Path("/testbed") if Path("/testbed").exists() else Path(".")
++
++    print(f"Fixing custom_completion field... (testbed={testbed})")
++
++    # Fix signature.rs
++    sig_path = testbed / "crates/nu-protocol/src/signature.rs"
++    print(f"  Looking for signature.rs at {sig_path}")
++    if sig_path.exists():
++        fix_signature_rs(sig_path)
++    else:
++        print(f"  ERROR: signature.rs not found at {sig_path}")
++
++    # Fix all struct instantiations
++    fixed = fix_struct_instantiations(testbed)
++    print(f"Fixed {fixed} files with struct instantiations")
++
++    print("Done!")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/fix_reedline_api.py b/fix_reedline_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..dacd6000c49396f6713334a4fc2142359003aec5
+--- /dev/null
++++ b/fix_reedline_api.py
+@@ -0,0 +1,95 @@
++#!/usr/bin/env python3
++"""
++Fix reedline API compatibility issues by removing TraversalDirection and with_immediately_accept usage.
++This script properly handles the multi-line code blocks that sed struggles with.
++"""
++
++import re
++import sys
++from pathlib import Path
++
++def fix_reedline_config(file_path):
++    """Remove TraversalDirection import and tab_traversal match expression."""
++    with open(file_path, 'r') as f:
++        content = f.read()
++
++    # Remove TraversalDirection from imports
++    content = re.sub(
++        r',\s*TraversalDirection\s*,',
++        ',',
++        content
++    )
++    content = re.sub(
++        r'TraversalDirection\s*,',
++        '',
++        content
++    )
++
++    # Remove the entire tab_traversal match block (lines 292-306)
++    # Pattern: from "columnar_menu = match extract_value("tab_traversal"..."
++    # to the matching closing brace with Err(_) => columnar_menu,
++    pattern = r'''columnar_menu\s*=\s*match\s+extract_value\("tab_traversal",.*?\{\s*
++\s*Ok\(tab_traversal\)\s*=>\s*match\s+tab_traversal\.coerce_str\(\)\?\.as_ref\(\)\s*\{.*?
++\s*\},\s*
++\s*Err\(_\)\s*=>\s*columnar_menu,\s*
++\s*\};'''
++
++    content = re.sub(pattern, '', content, flags=re.DOTALL)
++
++    with open(file_path, 'w') as f:
++        f.write(content)
++
++    return True
++
++def fix_repl(file_path):
++    """Remove with_immediately_accept method calls."""
++    with open(file_path, 'r') as f:
++        lines = f.readlines()
++
++    new_lines = []
++    i = 0
++
++    while i < len(lines):
++        line = lines[i]
++
++        # Check if this line contains .with_immediately_accept
++        if '.with_immediately_accept(' in line:
++            # Check if the previous non-empty line needs a semicolon
++            if new_lines:
++                # Find the last non-empty, non-comment line
++                for j in range(len(new_lines) - 1, -1, -1):
++                    prev_line = new_lines[j].rstrip()
++                    if prev_line and not prev_line.strip().startswith('//'):
++                        # If it ends with ) but not with ; or }, add a semicolon
++                        if prev_line.endswith(')') and not prev_line.endswith(';') and not prev_line.endswith('}'):
++                            new_lines[j] = prev_line + ';\n'
++                        break
++            i += 1
++            continue
++
++        new_lines.append(line)
++        i += 1
++
++    with open(file_path, 'w') as f:
++        f.writelines(new_lines)
++
++    return True
++
++if __name__ == '__main__':
++    testbed_path = Path('/testbed')
++
++    print("Fixing reedline API compatibility...")
++
++    # Fix reedline_config.rs
++    reedline_config = testbed_path / 'crates/nu-cli/src/reedline_config.rs'
++    if reedline_config.exists():
++        fix_reedline_config(reedline_config)
++        print(f"✓ Fixed {reedline_config}")
++
++    # Fix repl.rs
++    repl_file = testbed_path / 'crates/nu-cli/src/repl.rs'
++    if repl_file.exists():
++        fix_repl(repl_file)
++        print(f"✓ Fixed {repl_file}")
++
++    print("Done!")
+diff --git a/nu_cow_patch.rs b/nu_cow_patch.rs
+new file mode 100755
+index 0000000000000000000000000000000000000000..d2de8ac0fea1c9da0005d94a7887b93889bd4d06
+--- /dev/null
++++ b/nu_cow_patch.rs
+@@ -0,0 +1,12 @@
++use serde::{Deserialize, Serialize};
++
++/// A Cow-like enum for static or owned values, used for completion lists.
++/// This is an ENV-PATCH to provide a type that was expected by some cherry-picked commits.
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++#[serde(untagged)]
++pub enum NuCow<B: 'static, O> {
++    /// Borrowed static reference
++    Borrowed(B),
++    /// Owned value
++    Owned(O),
++}

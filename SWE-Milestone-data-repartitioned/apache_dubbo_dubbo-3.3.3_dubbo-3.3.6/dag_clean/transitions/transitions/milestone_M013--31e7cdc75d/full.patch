@@ -1,0 +1,146 @@
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/config/EnvironmentConfiguration.java b/dubbo-common/src/main/java/org/apache/dubbo/common/config/EnvironmentConfiguration.java
+index 8ab70dd0fa96c290f9a9dbe067a50d784d338842..fbdee656128341089a211bc99a59d155c475bf44 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/config/EnvironmentConfiguration.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/config/EnvironmentConfiguration.java
+@@ -16,9 +16,13 @@
+  */
+ package org.apache.dubbo.common.config;
+ 
++import org.apache.dubbo.common.constants.CommonConstants;
+ import org.apache.dubbo.common.utils.StringUtils;
+ 
++import java.util.LinkedHashSet;
++import java.util.Locale;
+ import java.util.Map;
++import java.util.Set;
+ 
+ /**
+  * Configuration from system environment
+@@ -27,21 +31,50 @@ public class EnvironmentConfiguration implements Configuration {
+ 
+     @Override
+     public Object getInternalProperty(String key) {
+-        String value = getenv(key);
+-        if (StringUtils.isEmpty(value)) {
+-            value = getenv(StringUtils.toOSStyleKey(key));
++        if (StringUtils.isEmpty(key)) {
++            return null;
+         }
++        String value = getenv().get(key);
++        if (value != null) {
++            return value;
++        }
++        for (String candidateKey : generateCandidateEnvironmentKeys(key)) {
++            value = getenv().get(candidateKey);
++            if (value != null) {
++                return value;
++            }
++        }
++
++        String osStyleKey = StringUtils.toOSStyleKey(key);
++        value = getenv().get(osStyleKey);
+         return value;
+     }
+ 
+-    public Map<String, String> getProperties() {
+-        return getenv();
+-    }
++    private Set<String> generateCandidateEnvironmentKeys(String originalKey) {
++        Set<String> candidates = new LinkedHashSet<>();
++
++        String dotsToUnderscores =
++                originalKey.replace(CommonConstants.DOT_SEPARATOR, CommonConstants.UNDERLINE_SEPARATOR);
++        String normalizedKey = dotsToUnderscores.replace(
++                CommonConstants.PROPERTIES_CHAR_SEPARATOR, CommonConstants.UNDERLINE_SEPARATOR);
+ 
+-    // Adapt to System api, design for unit test
++        candidates.add(normalizedKey.toUpperCase(Locale.ROOT));
+ 
+-    protected String getenv(String key) {
+-        return System.getenv(key);
++        String springLikeNoHyphens = dotsToUnderscores
++                .replace(CommonConstants.PROPERTIES_CHAR_SEPARATOR, "")
++                .toUpperCase(Locale.ROOT);
++        candidates.add(springLikeNoHyphens);
++
++        String dotsToUnderscoresUpper = dotsToUnderscores.toUpperCase(Locale.ROOT);
++        candidates.add(dotsToUnderscoresUpper);
++
++        candidates.add(normalizedKey);
++
++        return candidates;
++    }
++
++    public Map<String, String> getProperties() {
++        return getenv();
+     }
+ 
+     protected Map<String, String> getenv() {
+diff --git a/dubbo-common/src/test/java/org/apache/dubbo/common/config/EnvironmentConfigurationTest.java b/dubbo-common/src/test/java/org/apache/dubbo/common/config/EnvironmentConfigurationTest.java
+index 7ff12664f67e4ce351ae99934ed1970e45ff5691..95cda9f234c3df8b225008089b3b386d85e82f31 100644
+--- a/dubbo-common/src/test/java/org/apache/dubbo/common/config/EnvironmentConfigurationTest.java
++++ b/dubbo-common/src/test/java/org/apache/dubbo/common/config/EnvironmentConfigurationTest.java
+@@ -30,17 +30,20 @@ class EnvironmentConfigurationTest {
+     private static final String MOCK_KEY = "DUBBO_KEY";
+     private static final String MOCK_VALUE = "mockValue";
+ 
++    private EnvironmentConfiguration envConfig(Map<String, String> map) {
++        return new EnvironmentConfiguration() {
++            @Override
++            protected Map<String, String> getenv() {
++                return map;
++            }
++        };
++    }
++
+     @Test
+     void testGetInternalProperty() {
+         Map<String, String> map = new HashMap<>();
+         map.put(MOCK_KEY, MOCK_VALUE);
+-        EnvironmentConfiguration configuration = new EnvironmentConfiguration() {
+-            @Override
+-            protected String getenv(String key) {
+-                return map.get(key);
+-            }
+-        };
+-        // this UT maybe only works on particular platform, assert only when value is not null.
++        EnvironmentConfiguration configuration = envConfig(map);
+         Assertions.assertEquals(MOCK_VALUE, configuration.getInternalProperty("dubbo.key"));
+         Assertions.assertEquals(MOCK_VALUE, configuration.getInternalProperty("key"));
+         Assertions.assertEquals(MOCK_VALUE, configuration.getInternalProperty("dubbo_key"));
+@@ -59,4 +62,35 @@ class EnvironmentConfigurationTest {
+         };
+         Assertions.assertEquals(map, configuration.getProperties());
+     }
++
++    @Test
++    void testHyphenAndDotKeyResolveFromEnv() {
++        Map<String, String> envMap = new HashMap<>();
++        envMap.put("DUBBO_ABC_DEF_GHI", "v1");
++        envMap.put("DUBBO_ABCDEF_GHI", "v2");
++        envMap.put("DUBBO_ABC-DEF_GHI", "v3");
++        envMap.put("dubbo_abc_def_ghi", "v4");
++
++        EnvironmentConfiguration configuration = envConfig(envMap);
++
++        String dubboKey = "dubbo.abc-def.ghi";
++
++        Assertions.assertEquals("v1", configuration.getProperty(dubboKey));
++
++        envMap.remove("DUBBO_ABC_DEF_GHI");
++        configuration = envConfig(envMap);
++        Assertions.assertEquals("v2", configuration.getProperty(dubboKey));
++
++        envMap.remove("DUBBO_ABCDEF_GHI");
++        configuration = envConfig(envMap);
++        Assertions.assertEquals("v3", configuration.getProperty(dubboKey));
++
++        envMap.remove("DUBBO_ABC-DEF_GHI");
++        configuration = envConfig(envMap);
++        Assertions.assertEquals("v4", configuration.getProperty(dubboKey));
++
++        envMap.remove("dubbo_abc_def_ghi");
++        configuration = envConfig(envMap);
++        Assertions.assertNull(configuration.getProperty(dubboKey));
++    }
+ }

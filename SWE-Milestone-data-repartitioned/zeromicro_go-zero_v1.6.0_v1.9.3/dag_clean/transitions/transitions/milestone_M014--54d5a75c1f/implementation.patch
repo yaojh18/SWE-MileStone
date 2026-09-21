@@ -1,0 +1,608 @@
+diff --git a/core/collection/ring.go b/core/collection/ring.go
+index e43379c1f40636429d758d7ef6b5c4e397bc7515..c7ad4fcba787308387fb34f6d79904ada224e6ac 100644
+--- a/core/collection/ring.go
++++ b/core/collection/ring.go
+@@ -1,8 +1,6 @@
+ package collection
+ 
+-import (
+-	"sync"
+-)
++import "sync"
+ 
+ // A Ring can be used as fixed size ring.
+ type Ring struct {
+diff --git a/core/proc/shutdown.go b/core/proc/shutdown.go
+index 763742a298df3a7f7050fe814bc16eaad24b2072..3241f576b6ba62756e5a6aaad9068c4a24e510b6 100644
+--- a/core/proc/shutdown.go
++++ b/core/proc/shutdown.go
+@@ -14,17 +14,25 @@ import (
+ )
+ 
+ const (
+-	wrapUpTime = time.Second
++	defaultWrapUpTime = time.Second
+ 	// why we use 5500 milliseconds is because most of our queue are blocking mode with 5 seconds
+-	waitTime = 5500 * time.Millisecond
++	defaultWaitTime = 5500 * time.Millisecond
+ )
+ 
+ var (
+-	wrapUpListeners          = new(listenerManager)
+-	shutdownListeners        = new(listenerManager)
+-	delayTimeBeforeForceQuit = waitTime
++	wrapUpListeners   = new(listenerManager)
++	shutdownListeners = new(listenerManager)
++	wrapUpTime        = defaultWrapUpTime
++	waitTime          = defaultWaitTime
++	shutdownLock      sync.Mutex
+ )
+ 
++// ShutdownConf defines the shutdown configuration for the process.
++type ShutdownConf struct {
++	WrapUpTime time.Duration `json:",default=1s"`
++	WaitTime   time.Duration `json:",default=5.5s"`
++}
++
+ // AddShutdownListener adds fn as a shutdown listener.
+ // The returned func can be used to wait for fn getting called.
+ func AddShutdownListener(fn func()) (waitForCalled func()) {
+@@ -39,7 +47,21 @@ func AddWrapUpListener(fn func()) (waitForCalled func()) {
+ 
+ // SetTimeToForceQuit sets the waiting time before force quitting.
+ func SetTimeToForceQuit(duration time.Duration) {
+-	delayTimeBeforeForceQuit = duration
++	shutdownLock.Lock()
++	defer shutdownLock.Unlock()
++	waitTime = duration
++}
++
++func Setup(conf ShutdownConf) {
++	shutdownLock.Lock()
++	defer shutdownLock.Unlock()
++
++	if conf.WrapUpTime > 0 {
++		wrapUpTime = conf.WrapUpTime
++	}
++	if conf.WaitTime > 0 {
++		waitTime = conf.WaitTime
++	}
+ }
+ 
+ // Shutdown calls the registered shutdown listeners, only for test purpose.
+@@ -61,8 +83,12 @@ func gracefulStop(signals chan os.Signal, sig syscall.Signal) {
+ 	time.Sleep(wrapUpTime)
+ 	go shutdownListeners.notifyListeners()
+ 
+-	time.Sleep(delayTimeBeforeForceQuit - wrapUpTime)
+-	logx.Infof("Still alive after %v, going to force kill the process...", delayTimeBeforeForceQuit)
++	shutdownLock.Lock()
++	remainingTime := waitTime - wrapUpTime
++	shutdownLock.Unlock()
++
++	time.Sleep(remainingTime)
++	logx.Infof("Still alive after %v, going to force kill the process...", waitTime)
+ 	_ = syscall.Kill(syscall.Getpid(), sig)
+ }
+ 
+diff --git a/core/proc/signals.go b/core/proc/signals.go
+index f4a57b0887498b6c59f5aacf80059e76302d78c0..bbc41ce5fa79c22f7c83a331bccd307ce0cb4a8f 100644
+--- a/core/proc/signals.go
++++ b/core/proc/signals.go
+@@ -6,18 +6,20 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"syscall"
++	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/logx"
+ )
+ 
+-const timeFormat = "0102150405"
++const (
++	profileDuration = time.Minute
++	timeFormat      = "0102150405"
++)
+ 
+ var done = make(chan struct{})
+ 
+ func init() {
+ 	go func() {
+-		var profiler Stopper
+-
+ 		// https://golang.org/pkg/os/signal/#Notify
+ 		signals := make(chan os.Signal, 1)
+ 		signal.Notify(signals, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM, syscall.SIGINT)
+@@ -28,12 +30,11 @@ func init() {
+ 			case syscall.SIGUSR1:
+ 				dumpGoroutines(fileCreator{})
+ 			case syscall.SIGUSR2:
+-				if profiler == nil {
+-					profiler = StartProfile()
+-				} else {
++				profiler := StartProfile()
++				go func() {
++					<-time.After(profileDuration)
+ 					profiler.Stop()
+-					profiler = nil
+-				}
++				}()
+ 			case syscall.SIGTERM:
+ 				stopOnSignal()
+ 				gracefulStop(signals, syscall.SIGTERM)
+diff --git a/core/prof/profilecenter.go b/core/prof/profilecenter.go
+index 8b03fd211b2a9659e864c8190ec1e850b8dcf7d0..14405ab46b011a5ff4e613fb0285cf691ba2ee65 100644
+--- a/core/prof/profilecenter.go
++++ b/core/prof/profilecenter.go
+@@ -1,13 +1,12 @@
+ package prof
+ 
+ import (
+-	"bytes"
+-	"strconv"
++	"fmt"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+ 
+-	"github.com/olekukonko/tablewriter"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ )
+@@ -28,46 +27,15 @@ type (
+ 
+ const flushInterval = 5 * time.Minute
+ 
+-var (
+-	pc = &profileCenter{
+-		slots: make(map[string]*profileSlot),
+-	}
+-	once sync.Once
+-)
+-
+-func report(name string, duration time.Duration) {
+-	updated := func() bool {
+-		pc.lock.RLock()
+-		defer pc.lock.RUnlock()
+-
+-		slot, ok := pc.slots[name]
+-		if ok {
+-			atomic.AddInt64(&slot.lifecount, 1)
+-			atomic.AddInt64(&slot.lastcount, 1)
+-			atomic.AddInt64(&slot.lifecycle, int64(duration))
+-			atomic.AddInt64(&slot.lastcycle, int64(duration))
+-		}
+-		return ok
+-	}()
+-
+-	if !updated {
+-		func() {
+-			pc.lock.Lock()
+-			defer pc.lock.Unlock()
+-
+-			pc.slots[name] = &profileSlot{
+-				lifecount: 1,
+-				lastcount: 1,
+-				lifecycle: int64(duration),
+-				lastcycle: int64(duration),
+-			}
+-		}()
+-	}
++var pc = &profileCenter{
++	slots: make(map[string]*profileSlot),
++}
+ 
+-	once.Do(flushRepeatly)
++func init() {
++	flushRepeatedly()
+ }
+ 
+-func flushRepeatly() {
++func flushRepeatedly() {
+ 	threading.GoSafe(func() {
+ 		for {
+ 			time.Sleep(flushInterval)
+@@ -76,42 +44,64 @@ func flushRepeatly() {
+ 	})
+ }
+ 
++func report(name string, duration time.Duration) {
++	slot := loadOrStoreSlot(name, duration)
++
++	atomic.AddInt64(&slot.lifecount, 1)
++	atomic.AddInt64(&slot.lastcount, 1)
++	atomic.AddInt64(&slot.lifecycle, int64(duration))
++	atomic.AddInt64(&slot.lastcycle, int64(duration))
++}
++
++func loadOrStoreSlot(name string, duration time.Duration) *profileSlot {
++	pc.lock.RLock()
++	slot, ok := pc.slots[name]
++	pc.lock.RUnlock()
++
++	if ok {
++		return slot
++	}
++
++	pc.lock.Lock()
++	defer pc.lock.Unlock()
++
++	// double-check
++	if slot, ok = pc.slots[name]; ok {
++		return slot
++	}
++
++	slot = &profileSlot{}
++	pc.slots[name] = slot
++	return slot
++}
++
+ func generateReport() string {
+-	var buffer bytes.Buffer
+-	buffer.WriteString("Profiling report\n")
+-	var data [][]string
++	var builder strings.Builder
++	builder.WriteString("Profiling report\n")
++	builder.WriteString("QUEUE,LIFECOUNT,LIFECYCLE,LASTCOUNT,LASTCYCLE\n")
++
+ 	calcFn := func(total, count int64) string {
+ 		if count == 0 {
+ 			return "-"
+ 		}
+-
+ 		return (time.Duration(total) / time.Duration(count)).String()
+ 	}
+ 
+-	func() {
+-		pc.lock.Lock()
+-		defer pc.lock.Unlock()
+-
+-		for key, slot := range pc.slots {
+-			data = append(data, []string{
+-				key,
+-				strconv.FormatInt(slot.lifecount, 10),
+-				calcFn(slot.lifecycle, slot.lifecount),
+-				strconv.FormatInt(slot.lastcount, 10),
+-				calcFn(slot.lastcycle, slot.lastcount),
+-			})
+-
+-			// reset the data for last cycle
+-			slot.lastcount = 0
+-			slot.lastcycle = 0
+-		}
+-	}()
+-
+-	table := tablewriter.NewWriter(&buffer)
+-	table.SetHeader([]string{"QUEUE", "LIFECOUNT", "LIFECYCLE", "LASTCOUNT", "LASTCYCLE"})
+-	table.SetBorder(false)
+-	table.AppendBulk(data)
+-	table.Render()
++	pc.lock.Lock()
++	for key, slot := range pc.slots {
++		builder.WriteString(fmt.Sprintf("%s,%d,%s,%d,%s\n",
++			key,
++			slot.lifecount,
++			calcFn(slot.lifecycle, slot.lifecount),
++			slot.lastcount,
++			calcFn(slot.lastcycle, slot.lastcount),
++		))
++
++		// reset last cycle stats
++		atomic.StoreInt64(&slot.lastcount, 0)
++		atomic.StoreInt64(&slot.lastcycle, 0)
++	}
++	pc.lock.Unlock()
+ 
+-	return buffer.String()
++	return builder.String()
+ }
+diff --git a/core/service/serviceconf.go b/core/service/serviceconf.go
+index a4999ab8b075f5b16e7f5103e60feb715fb17720..8ad3a960eac50fd9b8d2cf1d193415f39268eb87 100644
+--- a/core/service/serviceconf.go
++++ b/core/service/serviceconf.go
+@@ -8,6 +8,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/trace"
+ 	"github.com/zeromicro/go-zero/internal/devserver"
++	"github.com/zeromicro/go-zero/internal/profiling"
+ )
+ 
+ const (
+@@ -37,6 +38,9 @@ type (
+ 		Prometheus prometheus.Config `json:",optional"`
+ 		Telemetry  trace.Config      `json:",optional"`
+ 		DevServer  DevServerConfig   `json:",optional"`
++		Shutdown   proc.ShutdownConf `json:",optional"`
++		// Profiling is the configuration for continuous profiling.
++		Profiling profiling.Config `json:",optional"`
+ 	}
+ )
+ 
+@@ -61,6 +65,7 @@ func (sc ServiceConf) SetUp() error {
+ 		sc.Telemetry.Name = sc.Name
+ 	}
+ 	trace.StartAgent(sc.Telemetry)
++	proc.Setup(sc.Shutdown)
+ 	proc.AddShutdownListener(func() {
+ 		trace.StopAgent()
+ 	})
+@@ -68,7 +73,9 @@ func (sc ServiceConf) SetUp() error {
+ 	if len(sc.MetricsUrl) > 0 {
+ 		stat.SetReportWriter(stat.NewRemoteWriter(sc.MetricsUrl))
+ 	}
++
+ 	devserver.StartAgent(sc.DevServer)
++	profiling.Start(sc.Profiling)
+ 
+ 	return nil
+ }
+diff --git a/internal/profiling/profiling.go b/internal/profiling/profiling.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..d79f0b4fc3027517caed2ed307b2dd987db154ef
+--- /dev/null
++++ b/internal/profiling/profiling.go
+@@ -0,0 +1,263 @@
++package profiling
++
++import (
++	"runtime"
++	"sync"
++	"time"
++
++	"github.com/grafana/pyroscope-go"
++	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/proc"
++	"github.com/zeromicro/go-zero/core/stat"
++	"github.com/zeromicro/go-zero/core/threading"
++)
++
++const (
++	defaultCheckInterval     = time.Second * 10
++	defaultProfilingDuration = time.Minute * 2
++	defaultUploadRate        = time.Second * 15
++)
++
++type (
++	Config struct {
++		// Name is the name of the application.
++		Name string `json:",optional,inherit"`
++		// ServerAddr is the address of the profiling server.
++		ServerAddr string
++		// AuthUser is the username for basic authentication.
++		AuthUser string `json:",optional"`
++		// AuthPassword is the password for basic authentication.
++		AuthPassword string `json:",optional"`
++		// UploadRate is the duration for which profiling data is uploaded.
++		UploadRate time.Duration `json:",default=15s"`
++		// CheckInterval is the interval to check if profiling should start.
++		CheckInterval time.Duration `json:",default=10s"`
++		// ProfilingDuration is the duration for which profiling data is collected.
++		ProfilingDuration time.Duration `json:",default=2m"`
++		// CpuThreshold the collection is allowed only when the current service cpu > CpuThreshold
++		CpuThreshold int64 `json:",default=700,range=[0:1000)"`
++
++		// ProfileType is the type of profiling to be performed.
++		ProfileType ProfileType
++	}
++
++	ProfileType struct {
++		// Logger is a flag to enable or disable logging.
++		Logger bool `json:",default=false"`
++		// CPU is a flag to disable CPU profiling.
++		CPU bool `json:",default=true"`
++		// Goroutines is a flag to disable goroutine profiling.
++		Goroutines bool `json:",default=true"`
++		// Memory is a flag to disable memory profiling.
++		Memory bool `json:",default=true"`
++		// Mutex is a flag to disable mutex profiling.
++		Mutex bool `json:",default=false"`
++		// Block is a flag to disable block profiling.
++		Block bool `json:",default=false"`
++	}
++
++	profiler interface {
++		Start() error
++		Stop() error
++	}
++
++	pyroscopeProfiler struct {
++		c        Config
++		profiler *pyroscope.Profiler
++	}
++)
++
++var (
++	once sync.Once
++
++	newProfiler = func(c Config) profiler {
++		return newPyroscopeProfiler(c)
++	}
++)
++
++// Start initializes the pyroscope profiler with the given configuration.
++func Start(c Config) {
++	// check if the profiling is enabled
++	if len(c.ServerAddr) == 0 {
++		return
++	}
++
++	// set default values for the configuration
++	if c.ProfilingDuration <= 0 {
++		c.ProfilingDuration = defaultProfilingDuration
++	}
++
++	// set default values for the configuration
++	if c.CheckInterval <= 0 {
++		c.CheckInterval = defaultCheckInterval
++	}
++
++	if c.UploadRate <= 0 {
++		c.UploadRate = defaultUploadRate
++	}
++
++	once.Do(func() {
++		logx.Info("continuous profiling started")
++
++		threading.GoSafe(func() {
++			startPyroscope(c, proc.Done())
++		})
++	})
++}
++
++// startPyroscope starts the pyroscope profiler with the given configuration.
++func startPyroscope(c Config, done <-chan struct{}) {
++	var (
++		pr                  profiler
++		err                 error
++		latestProfilingTime time.Time
++		intervalTicker      = time.NewTicker(c.CheckInterval)
++		profilingTicker     = time.NewTicker(c.ProfilingDuration)
++	)
++
++	defer profilingTicker.Stop()
++	defer intervalTicker.Stop()
++
++	for {
++		select {
++		case <-intervalTicker.C:
++			// Check if the machine is overloaded and if the profiler is not running
++			if pr == nil && isCpuOverloaded(c) {
++				pr = newProfiler(c)
++				if err := pr.Start(); err != nil {
++					logx.Errorf("failed to start profiler: %v", err)
++					continue
++				}
++
++				// record the latest profiling time
++				latestProfilingTime = time.Now()
++				logx.Infof("pyroscope profiler started.")
++			}
++		case <-profilingTicker.C:
++			// check if the profiling duration has passed
++			if !time.Now().After(latestProfilingTime.Add(c.ProfilingDuration)) {
++				continue
++			}
++
++			// check if the profiler is already running, if so, skip
++			if pr != nil {
++				if err = pr.Stop(); err != nil {
++					logx.Errorf("failed to stop profiler: %v", err)
++				}
++				logx.Infof("pyroscope profiler stopped.")
++				pr = nil
++			}
++		case <-done:
++			logx.Infof("continuous profiling stopped.")
++			return
++		}
++	}
++}
++
++// genPyroscopeConf generates the pyroscope configuration based on the given config.
++func genPyroscopeConf(c Config) pyroscope.Config {
++	pConf := pyroscope.Config{
++		UploadRate:        c.UploadRate,
++		ApplicationName:   c.Name,
++		BasicAuthUser:     c.AuthUser,     // http basic auth user
++		BasicAuthPassword: c.AuthPassword, // http basic auth password
++		ServerAddress:     c.ServerAddr,
++		Logger:            nil,
++		HTTPHeaders:       map[string]string{},
++		// you can provide static tags via a map:
++		Tags: map[string]string{
++			"name": c.Name,
++		},
++	}
++
++	if c.ProfileType.Logger {
++		pConf.Logger = logx.WithCallerSkip(0)
++	}
++
++	if c.ProfileType.CPU {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileCPU)
++	}
++	if c.ProfileType.Goroutines {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileGoroutines)
++	}
++	if c.ProfileType.Memory {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileAllocObjects, pyroscope.ProfileAllocSpace,
++			pyroscope.ProfileInuseObjects, pyroscope.ProfileInuseSpace)
++	}
++	if c.ProfileType.Mutex {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileMutexCount, pyroscope.ProfileMutexDuration)
++	}
++	if c.ProfileType.Block {
++		pConf.ProfileTypes = append(pConf.ProfileTypes, pyroscope.ProfileBlockCount, pyroscope.ProfileBlockDuration)
++	}
++
++	logx.Infof("applicationName: %s", pConf.ApplicationName)
++
++	return pConf
++}
++
++// isCpuOverloaded checks the machine performance based on the given configuration.
++func isCpuOverloaded(c Config) bool {
++	currentValue := stat.CpuUsage()
++	if currentValue >= c.CpuThreshold {
++		logx.Infof("continuous profiling cpu overload, cpu: %d", currentValue)
++		return true
++	}
++
++	return false
++}
++
++func newPyroscopeProfiler(c Config) profiler {
++	return &pyroscopeProfiler{
++		c: c,
++	}
++}
++
++func (p *pyroscopeProfiler) Start() error {
++	pConf := genPyroscopeConf(p.c)
++	// set mutex and block profile rate
++	setFraction(p.c)
++	prof, err := pyroscope.Start(pConf)
++	if err != nil {
++		resetFraction(p.c)
++		return err
++	}
++
++	p.profiler = prof
++	return nil
++}
++
++func (p *pyroscopeProfiler) Stop() error {
++	if p.profiler == nil {
++		return nil
++	}
++
++	if err := p.profiler.Stop(); err != nil {
++		return err
++	}
++
++	resetFraction(p.c)
++	p.profiler = nil
++
++	return nil
++}
++
++func setFraction(c Config) {
++	// These 2 lines are only required if you're using mutex or block profiling
++	if c.ProfileType.Mutex {
++		runtime.SetMutexProfileFraction(10) // 10/seconds
++	}
++	if c.ProfileType.Block {
++		runtime.SetBlockProfileRate(1000 * 1000) //  1/millisecond
++	}
++}
++
++func resetFraction(c Config) {
++	// These 2 lines are only required if you're using mutex or block profiling
++	if c.ProfileType.Mutex {
++		runtime.SetMutexProfileFraction(0)
++	}
++	if c.ProfileType.Block {
++		runtime.SetBlockProfileRate(0)
++	}
++}

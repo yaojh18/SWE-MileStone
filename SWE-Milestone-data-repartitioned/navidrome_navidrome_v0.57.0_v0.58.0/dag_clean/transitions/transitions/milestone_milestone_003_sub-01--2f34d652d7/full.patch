@@ -1,0 +1,3140 @@
+diff --git a/core/playlists.go b/core/playlists.go
+index 4cdab0d383e4b296819e2ba96b6292f39f4c751a..1d998f1e3ab1245b0dc228df6eaa662c0403bdc8 100644
+--- a/core/playlists.go
++++ b/core/playlists.go
+@@ -326,7 +326,7 @@ func (s *playlists) Update(ctx context.Context, playlistID string,
+ 		if needsTrackRefresh {
+ 			pls, err = repo.GetWithTracks(playlistID, true, false)
+ 			pls.RemoveTracks(idxToRemove)
+-			pls.AddTracks(idsToAdd)
++			pls.AddMediaFilesByID(idsToAdd)
+ 		} else {
+ 			if len(idsToAdd) > 0 {
+ 				_, err = tracks.Add(idsToAdd)
+diff --git a/db/migrations/20250701010108_add_multi_library_support.go b/db/migrations/20250701010108_add_multi_library_support.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..654784d091732e7b60ede6cf770510d861a95f81
+--- /dev/null
++++ b/db/migrations/20250701010108_add_multi_library_support.go
+@@ -0,0 +1,119 @@
++package migrations
++
++import (
++	"context"
++	"database/sql"
++
++	"github.com/pressly/goose/v3"
++)
++
++func init() {
++	goose.AddMigrationContext(upAddMultiLibrarySupport, downAddMultiLibrarySupport)
++}
++
++func upAddMultiLibrarySupport(ctx context.Context, tx *sql.Tx) error {
++	_, err := tx.ExecContext(ctx, `
++	-- Create user_library association table
++		CREATE TABLE user_library (
++			user_id VARCHAR(255) NOT NULL,
++			library_id INTEGER NOT NULL,
++			PRIMARY KEY (user_id, library_id),
++			FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE,
++			FOREIGN KEY (library_id) REFERENCES library(id) ON DELETE CASCADE
++		);
++	-- Create indexes for performance
++		CREATE INDEX idx_user_library_user_id ON user_library(user_id);
++		CREATE INDEX idx_user_library_library_id ON user_library(library_id);
++
++	-- Populate with existing users having access to library ID 1 (existing setup)
++	-- Admin users get access to all libraries, regular users get access to library 1
++		INSERT INTO user_library (user_id, library_id)
++		SELECT u.id, 1
++		FROM user u;
++
++	-- Add total_duration column to library table
++		ALTER TABLE library ADD COLUMN total_duration real DEFAULT 0;
++		UPDATE library SET total_duration = (
++			SELECT IFNULL(SUM(duration),0) from album where album.library_id = library.id and missing = 0
++		);
++
++	-- Add default_new_users column to library table
++		ALTER TABLE library ADD COLUMN default_new_users boolean DEFAULT false;
++		-- Set library ID 1 (default library) as default for new users
++		UPDATE library SET default_new_users = true WHERE id = 1;
++
++	-- Add stats column to library_artist junction table for per-library artist statistics
++		ALTER TABLE library_artist ADD COLUMN stats text DEFAULT '{}';
++		
++	-- Migrate existing global artist stats to per-library format in library_artist table
++	-- For each library_artist association, copy the artist's global stats
++		UPDATE library_artist 
++		SET stats = (
++			SELECT COALESCE(artist.stats, '{}')
++			FROM artist 
++			WHERE artist.id = library_artist.artist_id
++		);
++
++	-- Remove stats column from artist table to eliminate duplication
++	-- Stats are now stored per-library in library_artist table
++		ALTER TABLE artist DROP COLUMN stats;
++
++	-- Create library_tag table for per-library tag statistics
++		CREATE TABLE library_tag (
++			tag_id VARCHAR NOT NULL,
++			library_id INTEGER NOT NULL,
++			album_count INTEGER DEFAULT 0 NOT NULL,
++			media_file_count INTEGER DEFAULT 0 NOT NULL,
++			PRIMARY KEY (tag_id, library_id),
++			FOREIGN KEY (tag_id) REFERENCES tag(id) ON DELETE CASCADE,
++			FOREIGN KEY (library_id) REFERENCES library(id) ON DELETE CASCADE
++		);
++
++	-- Create indexes for optimal query performance
++		CREATE INDEX idx_library_tag_tag_id ON library_tag(tag_id);
++		CREATE INDEX idx_library_tag_library_id ON library_tag(library_id);
++
++	-- Migrate existing tag stats to per-library format in library_tag table
++	-- For existing installations, copy current global stats to library ID 1 (default library)
++		INSERT INTO library_tag (tag_id, library_id, album_count, media_file_count)
++		SELECT t.id, 1, t.album_count, t.media_file_count
++		FROM tag t
++		WHERE EXISTS (SELECT 1 FROM library WHERE id = 1);
++
++	-- Remove global stats from tag table as they are now per-library
++		ALTER TABLE tag DROP COLUMN album_count;
++		ALTER TABLE tag DROP COLUMN media_file_count;
++	`)
++
++	return err
++}
++
++func downAddMultiLibrarySupport(ctx context.Context, tx *sql.Tx) error {
++	_, err := tx.ExecContext(ctx, `
++		-- Restore stats column to artist table before removing from library_artist
++		ALTER TABLE artist ADD COLUMN stats text DEFAULT '{}';
++		
++		-- Restore global stats by aggregating from library_artist (simplified approach)
++		-- In a real rollback scenario, this might need more sophisticated logic
++		UPDATE artist 
++		SET stats = (
++			SELECT COALESCE(la.stats, '{}')
++			FROM library_artist la 
++			WHERE la.artist_id = artist.id 
++			LIMIT 1
++		);
++		
++		ALTER TABLE library_artist DROP COLUMN IF EXISTS stats;
++		DROP INDEX IF EXISTS idx_user_library_library_id;
++		DROP INDEX IF EXISTS idx_user_library_user_id;
++		DROP TABLE IF EXISTS user_library;
++		ALTER TABLE library DROP COLUMN IF EXISTS total_duration;
++		ALTER TABLE library DROP COLUMN IF EXISTS default_new_users;
++		
++		-- Drop library_tag table and its indexes
++		DROP INDEX IF EXISTS idx_library_tag_library_id;
++		DROP INDEX IF EXISTS idx_library_tag_tag_id;
++		DROP TABLE IF EXISTS library_tag;
++	`)
++	return err
++}
+diff --git a/model/album.go b/model/album.go
+index c9dc022cb90193c1febe6ca1e52afbd177d6143b..a8dcfe6827ee89b3c873367daf29b0920650c281 100644
+--- a/model/album.go
++++ b/model/album.go
+@@ -14,6 +14,8 @@ type Album struct {
+ 
+ 	ID            string `structs:"id" json:"id"`
+ 	LibraryID     int    `structs:"library_id" json:"libraryId"`
++	LibraryPath   string `structs:"-" json:"libraryPath" hash:"ignore"`
++	LibraryName   string `structs:"-" json:"libraryName" hash:"ignore"`
+ 	Name          string `structs:"name" json:"name"`
+ 	EmbedArtPath  string `structs:"embed_art_path" json:"-"`
+ 	AlbumArtistID string `structs:"album_artist_id" json:"albumArtistId"` // Deprecated, use Participants
+diff --git a/model/artist.go b/model/artist.go
+index 7f68f9787a85489c3645a3999af33a46e9663ee0..309ee800f6ac7bd2f82a77455bdf3a4420f043d3 100644
+--- a/model/artist.go
++++ b/model/artist.go
+@@ -78,7 +78,7 @@ type ArtistRepository interface {
+ 	UpdateExternalInfo(a *Artist) error
+ 	Get(id string) (*Artist, error)
+ 	GetAll(options ...QueryOptions) (Artists, error)
+-	GetIndex(includeMissing bool, roles ...Role) (ArtistIndexes, error)
++	GetIndex(includeMissing bool, libraryIds []int, roles ...Role) (ArtistIndexes, error)
+ 
+ 	// The following methods are used exclusively by the scanner:
+ 	RefreshPlayCounts() (int64, error)
+diff --git a/model/criteria/fields.go b/model/criteria/fields.go
+index fdcd3828bcbbde07499b125c4ab9cb003e1c5352..3699eb14a4a1685cf77281a7eca895133658b9aa 100644
+--- a/model/criteria/fields.go
++++ b/model/criteria/fields.go
+@@ -53,6 +53,7 @@ var fieldMap = map[string]*mappedField{
+ 	"mbz_recording_id":     {field: "media_file.mbz_recording_id"},
+ 	"mbz_release_track_id": {field: "media_file.mbz_release_track_id"},
+ 	"mbz_release_group_id": {field: "media_file.mbz_release_group_id"},
++	"library_id":           {field: "media_file.library_id", numeric: true},
+ 
+ 	// special fields
+ 	"random": {field: "", order: "random()"}, // pseudo-field for random sorting
+diff --git a/model/errors.go b/model/errors.go
+index ff4be5723b1186cbed1c4e5751b40ba43454ab42..41029d316c00a271331277e4fa338a2b54ddda30 100644
+--- a/model/errors.go
++++ b/model/errors.go
+@@ -8,4 +8,5 @@ var (
+ 	ErrNotAuthorized = errors.New("not authorized")
+ 	ErrExpired       = errors.New("access expired")
+ 	ErrNotAvailable  = errors.New("functionality not available")
++	ErrValidation    = errors.New("validation error")
+ )
+diff --git a/model/folder.go b/model/folder.go
+index 12e0d711effd52675dea8502e83861ee8cbe3340..f715f8c111dce3a181ca0fb8339189f4d04725b9 100644
+--- a/model/folder.go
++++ b/model/folder.go
+@@ -17,7 +17,7 @@ import (
+ type Folder struct {
+ 	ID              string    `structs:"id"`
+ 	LibraryID       int       `structs:"library_id"`
+-	LibraryPath     string    `structs:"-" json:"-" hash:"-"`
++	LibraryPath     string    `structs:"-" json:"-" hash:"ignore"`
+ 	Path            string    `structs:"path"`
+ 	Name            string    `structs:"name"`
+ 	ParentID        string    `structs:"parent_id"`
+diff --git a/model/library.go b/model/library.go
+index fda22f19f47a78a3d10c86effcbe69e5f8bb0552..bcb2864c89c9ecef10b0c80107932bbde0c0f07f 100644
+--- a/model/library.go
++++ b/model/library.go
+@@ -2,40 +2,57 @@ package model
+ 
+ import (
+ 	"time"
++
++	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+ type Library struct {
+-	ID                 int
+-	Name               string
+-	Path               string
+-	RemotePath         string
+-	LastScanAt         time.Time
+-	LastScanStartedAt  time.Time
+-	FullScanInProgress bool
+-	UpdatedAt          time.Time
+-	CreatedAt          time.Time
+-
+-	TotalSongs        int
+-	TotalAlbums       int
+-	TotalArtists      int
+-	TotalFolders      int
+-	TotalFiles        int
+-	TotalMissingFiles int
+-	TotalSize         int64
++	ID                 int       `json:"id" db:"id"`
++	Name               string    `json:"name" db:"name"`
++	Path               string    `json:"path" db:"path"`
++	RemotePath         string    `json:"remotePath" db:"remote_path"`
++	LastScanAt         time.Time `json:"lastScanAt" db:"last_scan_at"`
++	LastScanStartedAt  time.Time `json:"lastScanStartedAt" db:"last_scan_started_at"`
++	FullScanInProgress bool      `json:"fullScanInProgress" db:"full_scan_in_progress"`
++	UpdatedAt          time.Time `json:"updatedAt" db:"updated_at"`
++	CreatedAt          time.Time `json:"createdAt" db:"created_at"`
++	TotalSongs         int       `json:"totalSongs" db:"total_songs"`
++	TotalAlbums        int       `json:"totalAlbums" db:"total_albums"`
++	TotalArtists       int       `json:"totalArtists" db:"total_artists"`
++	TotalFolders       int       `json:"totalFolders" db:"total_folders"`
++	TotalFiles         int       `json:"totalFiles" db:"total_files"`
++	TotalMissingFiles  int       `json:"totalMissingFiles" db:"total_missing_files"`
++	TotalSize          int64     `json:"totalSize" db:"total_size"`
++	TotalDuration      float64   `json:"totalDuration" db:"total_duration"`
++	DefaultNewUsers    bool      `json:"defaultNewUsers" db:"default_new_users"`
+ }
+ 
++const (
++	DefaultLibraryID   = 1
++	DefaultLibraryName = "Music Library"
++)
++
+ type Libraries []Library
+ 
++func (l Libraries) IDs() []int {
++	return slice.Map(l, func(lib Library) int { return lib.ID })
++}
++
+ type LibraryRepository interface {
+ 	Get(id int) (*Library, error)
+ 	// GetPath returns the path of the library with the given ID.
+ 	// Its implementation must be optimized to avoid unnecessary queries.
+ 	GetPath(id int) (string, error)
+ 	GetAll(...QueryOptions) (Libraries, error)
++	CountAll(...QueryOptions) (int64, error)
+ 	Put(*Library) error
++	Delete(id int) error
+ 	StoreMusicFolder() error
+ 	AddArtist(id int, artistID string) error
+ 
++	// User-library association methods
++	GetUsersWithLibraryAccess(libraryID int) (Users, error)
++
+ 	// TODO These methods should be moved to a core service
+ 	ScanBegin(id int, fullScan bool) error
+ 	ScanEnd(id int) error
+diff --git a/model/mediafile.go b/model/mediafile.go
+index d29a2a5098a7c79a38cae985b7b8e8bf4d62eed0..0ef26d746755d6bc1361d3dcd007f0f61ab8f4b7 100644
+--- a/model/mediafile.go
++++ b/model/mediafile.go
+@@ -26,7 +26,8 @@ type MediaFile struct {
+ 	ID          string `structs:"id"  json:"id" hash:"ignore"`
+ 	PID         string `structs:"pid" json:"-" hash:"ignore"`
+ 	LibraryID   int    `structs:"library_id" json:"libraryId" hash:"ignore"`
+-	LibraryPath string `structs:"-" json:"libraryPath" hash:"-"`
++	LibraryPath string `structs:"-" json:"libraryPath" hash:"ignore"`
++	LibraryName string `structs:"-" json:"libraryName" hash:"ignore"`
+ 	FolderID    string `structs:"folder_id" json:"folderId" hash:"ignore"`
+ 	Path        string `structs:"path" json:"path" hash:"ignore"`
+ 	Title       string `structs:"title" json:"title"`
+@@ -367,6 +368,8 @@ type MediaFileRepository interface {
+ 	MarkMissing(bool, ...*MediaFile) error
+ 	MarkMissingByFolder(missing bool, folderIDs ...string) error
+ 	GetMissingAndMatching(libId int) (MediaFileCursor, error)
++	FindRecentFilesByMBZTrackID(missing MediaFile, since time.Time) (MediaFiles, error)
++	FindRecentFilesByProperties(missing MediaFile, since time.Time) (MediaFiles, error)
+ 
+ 	AnnotatedRepository
+ 	BookmarkableRepository
+diff --git a/model/metadata/legacy_ids.go b/model/metadata/legacy_ids.go
+index 25025ea19f546f4564f15f9ba64190f9bd0462cc..0a3bf0bf36bb4511211676147ce758c662e3a99b 100644
+--- a/model/metadata/legacy_ids.go
++++ b/model/metadata/legacy_ids.go
+@@ -14,11 +14,15 @@ import (
+ // These are the legacy ID functions that were used in the original Navidrome ID generation.
+ // They are kept here for backwards compatibility with existing databases.
+ 
+-func legacyTrackID(mf model.MediaFile) string {
+-	return fmt.Sprintf("%x", md5.Sum([]byte(mf.Path)))
++func legacyTrackID(mf model.MediaFile, prependLibId bool) string {
++	id := mf.Path
++	if prependLibId && mf.LibraryID != model.DefaultLibraryID {
++		id = fmt.Sprintf("%d\\%s", mf.LibraryID, id)
++	}
++	return fmt.Sprintf("%x", md5.Sum([]byte(id)))
+ }
+ 
+-func legacyAlbumID(md Metadata) string {
++func legacyAlbumID(mf model.MediaFile, md Metadata, prependLibId bool) string {
+ 	releaseDate := legacyReleaseDate(md)
+ 	albumPath := strings.ToLower(fmt.Sprintf("%s\\%s", legacyMapAlbumArtistName(md), legacyMapAlbumName(md)))
+ 	if !conf.Server.Scanner.GroupAlbumReleases {
+@@ -26,6 +30,9 @@ func legacyAlbumID(md Metadata) string {
+ 			albumPath = fmt.Sprintf("%s\\%s", albumPath, releaseDate)
+ 		}
+ 	}
++	if prependLibId && mf.LibraryID != model.DefaultLibraryID {
++		albumPath = fmt.Sprintf("%d\\%s", mf.LibraryID, albumPath)
++	}
+ 	return fmt.Sprintf("%x", md5.Sum([]byte(albumPath)))
+ }
+ 
+diff --git a/model/metadata/map_mediafile.go b/model/metadata/map_mediafile.go
+index 591b618a3c25babc43d4230beb20a7d4dc48807f..c64e8c7249ee310cb89ed0ca8c425a8d5635d972 100644
+--- a/model/metadata/map_mediafile.go
++++ b/model/metadata/map_mediafile.go
+@@ -7,9 +7,9 @@ import (
+ 	"math"
+ 	"strconv"
+ 
++	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+-	"github.com/navidrome/navidrome/model/id"
+ 	"github.com/navidrome/navidrome/utils/str"
+ )
+ 
+@@ -77,7 +77,7 @@ func (md Metadata) ToMediaFile(libID int, folderID string) model.MediaFile {
+ 
+ 	// Persistent IDs
+ 	mf.PID = md.trackPID(mf)
+-	mf.AlbumID = md.albumID(mf)
++	mf.AlbumID = md.albumID(mf, conf.Server.PID.Album)
+ 
+ 	// BFR These IDs will go away once the UI handle multiple participants.
+ 	// BFR For Legacy Subsonic compatibility, we will set them in the API handlers
+@@ -104,8 +104,7 @@ func (md Metadata) ToMediaFile(libID int, folderID string) model.MediaFile {
+ }
+ 
+ func (md Metadata) AlbumID(mf model.MediaFile, pidConf string) string {
+-	getPID := createGetPID(id.NewHash)
+-	return getPID(mf, md, pidConf)
++	return md.albumID(mf, pidConf)
+ }
+ 
+ func (md Metadata) mapGain(rg, r128 model.TagName) *float64 {
+diff --git a/model/metadata/persistent_ids.go b/model/metadata/persistent_ids.go
+index 0a1451cfb8fdda1c53c8dc0035c295304d68e2d7..67a40e1c594c468a127af29d25a1b773da275850 100644
+--- a/model/metadata/persistent_ids.go
++++ b/model/metadata/persistent_ids.go
+@@ -2,6 +2,7 @@ package metadata
+ 
+ import (
+ 	"cmp"
++	"fmt"
+ 	"path/filepath"
+ 	"strings"
+ 
+@@ -21,13 +22,15 @@ type hashFunc = func(...string) string
+ // Attributes can be either tags or some processed values like folder, albumid, albumartistid, etc.
+ // For each field, it gets all its attributes values and concatenates them, then hashes the result.
+ // If a field is empty, it is skipped and the function looks for the next field.
+-func createGetPID(hash hashFunc) func(mf model.MediaFile, md Metadata, spec string) string {
+-	var getPID func(mf model.MediaFile, md Metadata, spec string) string
+-	getAttr := func(mf model.MediaFile, md Metadata, attr string) string {
++type getPIDFunc = func(mf model.MediaFile, md Metadata, spec string, prependLibId bool) string
++
++func createGetPID(hash hashFunc) getPIDFunc {
++	var getPID getPIDFunc
++	getAttr := func(mf model.MediaFile, md Metadata, attr string, prependLibId bool) string {
+ 		attr = strings.TrimSpace(strings.ToLower(attr))
+ 		switch attr {
+ 		case "albumid":
+-			return getPID(mf, md, conf.Server.PID.Album)
++			return getPID(mf, md, conf.Server.PID.Album, prependLibId)
+ 		case "folder":
+ 			return filepath.Dir(mf.Path)
+ 		case "albumartistid":
+@@ -39,14 +42,14 @@ func createGetPID(hash hashFunc) func(mf model.MediaFile, md Metadata, spec stri
+ 		}
+ 		return md.String(model.TagName(attr))
+ 	}
+-	getPID = func(mf model.MediaFile, md Metadata, spec string) string {
++	getPID = func(mf model.MediaFile, md Metadata, spec string, prependLibId bool) string {
+ 		pid := ""
+ 		fields := strings.Split(spec, "|")
+ 		for _, field := range fields {
+ 			attributes := strings.Split(field, ",")
+ 			hasValue := false
+ 			values := slice.Map(attributes, func(attr string) string {
+-				v := getAttr(mf, md, attr)
++				v := getAttr(mf, md, attr, prependLibId)
+ 				if v != "" {
+ 					hasValue = true
+ 				}
+@@ -57,32 +60,35 @@ func createGetPID(hash hashFunc) func(mf model.MediaFile, md Metadata, spec stri
+ 				break
+ 			}
+ 		}
++		if prependLibId {
++			pid = fmt.Sprintf("%d\\%s", mf.LibraryID, pid)
++		}
+ 		return hash(pid)
+ 	}
+ 
+-	return func(mf model.MediaFile, md Metadata, spec string) string {
++	return func(mf model.MediaFile, md Metadata, spec string, prependLibId bool) string {
+ 		switch spec {
+ 		case "track_legacy":
+-			return legacyTrackID(mf)
++			return legacyTrackID(mf, prependLibId)
+ 		case "album_legacy":
+-			return legacyAlbumID(md)
++			return legacyAlbumID(mf, md, prependLibId)
+ 		}
+-		return getPID(mf, md, spec)
++		return getPID(mf, md, spec, prependLibId)
+ 	}
+ }
+ 
+ func (md Metadata) trackPID(mf model.MediaFile) string {
+-	return createGetPID(id.NewHash)(mf, md, conf.Server.PID.Track)
++	return createGetPID(id.NewHash)(mf, md, conf.Server.PID.Track, true)
+ }
+ 
+-func (md Metadata) albumID(mf model.MediaFile) string {
+-	return createGetPID(id.NewHash)(mf, md, conf.Server.PID.Album)
++func (md Metadata) albumID(mf model.MediaFile, pidConf string) string {
++	return createGetPID(id.NewHash)(mf, md, pidConf, true)
+ }
+ 
+ // BFR Must be configurable?
+ func (md Metadata) artistID(name string) string {
+ 	mf := model.MediaFile{AlbumArtist: name}
+-	return createGetPID(id.NewHash)(mf, md, "albumartistid")
++	return createGetPID(id.NewHash)(mf, md, "albumartistid", false)
+ }
+ 
+ func (md Metadata) mapTrackTitle() string {
+diff --git a/model/metadata/persistent_ids_test.go b/model/metadata/persistent_ids_test.go
+index d07b363310b2c05e0c1b833847d188185717fe7a..8ab6f3699c9a141d33314624d8dbb316286a1a00 100644
+--- a/model/metadata/persistent_ids_test.go
++++ b/model/metadata/persistent_ids_test.go
+@@ -15,7 +15,7 @@ var _ = Describe("getPID", func() {
+ 		md     Metadata
+ 		mf     model.MediaFile
+ 		sum    hashFunc
+-		getPID func(mf model.MediaFile, md Metadata, spec string) string
++		getPID getPIDFunc
+ 	)
+ 
+ 	BeforeEach(func() {
+@@ -28,7 +28,7 @@ var _ = Describe("getPID", func() {
+ 		When("no attributes were present", func() {
+ 			It("should return empty pid", func() {
+ 				md.tags = map[model.TagName][]string{}
+-				pid := getPID(mf, md, spec)
++				pid := getPID(mf, md, spec, false)
+ 				Expect(pid).To(Equal("()"))
+ 			})
+ 		})
+@@ -40,7 +40,7 @@ var _ = Describe("getPID", func() {
+ 					"discnumber":          {"1"},
+ 					"tracknumber":         {"1"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(mbtrackid)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(mbtrackid)"))
+ 			})
+ 		})
+ 		When("only first field is present", func() {
+@@ -48,7 +48,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{
+ 					"musicbrainz_trackid": {"mbtrackid"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(mbtrackid)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(mbtrackid)"))
+ 			})
+ 		})
+ 		When("first is empty, but second field is present", func() {
+@@ -57,7 +57,7 @@ var _ = Describe("getPID", func() {
+ 					"album":      {"album name"},
+ 					"discnumber": {"1"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name\\1\\)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name\\1\\)"))
+ 			})
+ 		})
+ 	})
+@@ -73,7 +73,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{"title": {"title"}}
+ 				md.filePath = "/path/to/file.mp3"
+ 				mf.Title = "Title"
+-				Expect(getPID(mf, md, spec)).To(Equal("(Title)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Title)"))
+ 			})
+ 		})
+ 		When("field is folder", func() {
+@@ -81,7 +81,7 @@ var _ = Describe("getPID", func() {
+ 				spec := "folder|title"
+ 				md.tags = map[model.TagName][]string{"title": {"title"}}
+ 				mf.Path = "/path/to/file.mp3"
+-				Expect(getPID(mf, md, spec)).To(Equal("(/path/to)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(/path/to)"))
+ 			})
+ 		})
+ 		When("field is albumid", func() {
+@@ -94,7 +94,7 @@ var _ = Describe("getPID", func() {
+ 					"releasedate": {"2021-01-01"},
+ 				}
+ 				mf.AlbumArtist = "Album Artist"
+-				Expect(getPID(mf, md, spec)).To(Equal("(((album artist)\\album name\\version\\2021-01-01))"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(((album artist)\\album name\\version\\2021-01-01))"))
+ 			})
+ 		})
+ 		When("field is albumartistid", func() {
+@@ -104,14 +104,14 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 				}
+ 				mf.AlbumArtist = "Album Artist"
+-				Expect(getPID(mf, md, spec)).To(Equal("((album artist))"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("((album artist))"))
+ 			})
+ 		})
+ 		When("field is album", func() {
+ 			It("should return the pid", func() {
+ 				spec := "album|title"
+ 				md.tags = map[model.TagName][]string{"album": {"Album Name"}}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name)"))
+ 			})
+ 		})
+ 	})
+@@ -123,7 +123,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{
+ 					"album": {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name)"))
+ 			})
+ 		})
+ 		When("the spec has spaces", func() {
+@@ -133,7 +133,7 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 					"album":       {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(Album Artist\\album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Album Artist\\album name)"))
+ 			})
+ 		})
+ 		When("the spec has mixed case fields", func() {
+@@ -143,7 +143,7 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 					"album":       {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(Album Artist\\album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Album Artist\\album name)"))
+ 			})
+ 		})
+ 	})
+diff --git a/model/playlist.go b/model/playlist.go
+index 40b666ff9aa09c5f9d936c5b560e198ab6be51ee..a87019ed5ba86fe29edab0e7bd7973c92626adb5 100644
+--- a/model/playlist.go
++++ b/model/playlist.go
+@@ -40,6 +40,21 @@ func (pls Playlist) MediaFiles() MediaFiles {
+ 	return pls.Tracks.MediaFiles()
+ }
+ 
++func (pls *Playlist) refreshStats() {
++	pls.SongCount = len(pls.Tracks)
++	pls.Duration = 0
++	pls.Size = 0
++	for _, t := range pls.Tracks {
++		pls.Duration += t.MediaFile.Duration
++		pls.Size += t.MediaFile.Size
++	}
++}
++
++func (pls *Playlist) SetTracks(tracks PlaylistTracks) {
++	pls.Tracks = tracks
++	pls.refreshStats()
++}
++
+ func (pls *Playlist) RemoveTracks(idxToRemove []int) {
+ 	var newTracks PlaylistTracks
+ 	for i, t := range pls.Tracks {
+@@ -49,6 +64,7 @@ func (pls *Playlist) RemoveTracks(idxToRemove []int) {
+ 		newTracks = append(newTracks, t)
+ 	}
+ 	pls.Tracks = newTracks
++	pls.refreshStats()
+ }
+ 
+ // ToM3U8 exports the playlist to the Extended M3U8 format
+@@ -56,7 +72,7 @@ func (pls *Playlist) ToM3U8() string {
+ 	return pls.MediaFiles().ToM3U8(pls.Name, true)
+ }
+ 
+-func (pls *Playlist) AddTracks(mediaFileIds []string) {
++func (pls *Playlist) AddMediaFilesByID(mediaFileIds []string) {
+ 	pos := len(pls.Tracks)
+ 	for _, mfId := range mediaFileIds {
+ 		pos++
+@@ -68,6 +84,7 @@ func (pls *Playlist) AddTracks(mediaFileIds []string) {
+ 		}
+ 		pls.Tracks = append(pls.Tracks, t)
+ 	}
++	pls.refreshStats()
+ }
+ 
+ func (pls *Playlist) AddMediaFiles(mfs MediaFiles) {
+@@ -82,6 +99,7 @@ func (pls *Playlist) AddMediaFiles(mfs MediaFiles) {
+ 		}
+ 		pls.Tracks = append(pls.Tracks, t)
+ 	}
++	pls.refreshStats()
+ }
+ 
+ func (pls Playlist) CoverArtID() ArtworkID {
+diff --git a/model/searchable.go b/model/searchable.go
+index d372999976789c8872b33b34168631dbc406f7f5..cc4f0b44ea7e11f1973f3d0c25572e46ece5d368 100644
+--- a/model/searchable.go
++++ b/model/searchable.go
+@@ -1,5 +1,5 @@
+ package model
+ 
+ type SearchableRepository[T any] interface {
+-	Search(q string, offset, size int, includeMissing bool) (T, error)
++	Search(q string, offset, size int, includeMissing bool, options ...QueryOptions) (T, error)
+ }
+diff --git a/model/tag.go b/model/tag.go
+index a1f4e28dafdc712a1cd5b941e73ca112c3b96034..8f9c60f37aa4bb3fe95b27f2723510c50513674f 100644
+--- a/model/tag.go
++++ b/model/tag.go
+@@ -153,7 +153,7 @@ func (t Tags) Add(name TagName, v string) {
+ }
+ 
+ type TagRepository interface {
+-	Add(...Tag) error
++	Add(libraryID int, tags ...Tag) error
+ 	UpdateCounts() error
+ }
+ 
+diff --git a/model/user.go b/model/user.go
+index 7c41ac041ab320810d38c3d77dea7a67a9e4c6ac..aabedc0962141eb8c35dec1a41adf2bf525c4f61 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -1,6 +1,8 @@
+ package model
+ 
+-import "time"
++import (
++	"time"
++)
+ 
+ type User struct {
+ 	ID           string     `structs:"id" json:"id"`
+@@ -13,6 +15,9 @@ type User struct {
+ 	CreatedAt    time.Time  `structs:"created_at" json:"createdAt"`
+ 	UpdatedAt    time.Time  `structs:"updated_at" json:"updatedAt"`
+ 
++	// Library associations (many-to-many relationship)
++	Libraries Libraries `structs:"-" json:"libraries,omitempty"`
++
+ 	// This is only available on the backend, and it is never sent over the wire
+ 	Password string `structs:"-" json:"-"`
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+@@ -22,6 +27,18 @@ type User struct {
+ 	CurrentPassword string `structs:"current_password,omitempty" json:"currentPassword,omitempty"`
+ }
+ 
++func (u User) HasLibraryAccess(libraryID int) bool {
++	if u.IsAdmin {
++		return true // Admin users have access to all libraries
++	}
++	for _, lib := range u.Libraries {
++		if lib.ID == libraryID {
++			return true
++		}
++	}
++	return false
++}
++
+ type Users []User
+ 
+ type UserRepository interface {
+@@ -35,4 +52,8 @@ type UserRepository interface {
+ 	FindByUsername(username string) (*User, error)
+ 	// FindByUsernameWithPassword is the same as above, but also returns the decrypted password
+ 	FindByUsernameWithPassword(username string) (*User, error)
++
++	// Library association methods
++	GetUserLibraries(userID string) (Libraries, error)
++	SetUserLibraries(userID string, libraryIDs []int) error
+ }
+diff --git a/persistence/album_repository.go b/persistence/album_repository.go
+index 08bc800395ff78e4c4c35bcf8b92d110d4dc3606..682a409a11c2420b1bb9d25bca9fc708e31cbfd9 100644
+--- a/persistence/album_repository.go
++++ b/persistence/album_repository.go
+@@ -123,6 +123,7 @@ var albumFilters = sync.OnceValue(func() map[string]filterFunc {
+ 		"missing":         booleanFilter,
+ 		"genre_id":        tagIDFilter,
+ 		"role_total_id":   allRolesFilter,
++		"library_id":      libraryIdFilter,
+ 	}
+ 	// Add all album tags as filters
+ 	for tag := range model.AlbumLevelTags() {
+@@ -184,9 +185,10 @@ func allRolesFilter(_ string, value interface{}) Sqlizer {
+ }
+ 
+ func (r *albumRepository) CountAll(options ...model.QueryOptions) (int64, error) {
+-	sql := r.newSelect()
+-	sql = r.withAnnotation(sql, "album.id")
+-	return r.count(sql, options...)
++	query := r.newSelect()
++	query = r.withAnnotation(query, "album.id")
++	query = r.applyLibraryFilter(query)
++	return r.count(query, options...)
+ }
+ 
+ func (r *albumRepository) Exists(id string) (bool, error) {
+@@ -216,8 +218,10 @@ func (r *albumRepository) UpdateExternalInfo(al *model.Album) error {
+ }
+ 
+ func (r *albumRepository) selectAlbum(options ...model.QueryOptions) SelectBuilder {
+-	sql := r.newSelect(options...).Columns("album.*")
+-	return r.withAnnotation(sql, "album.id")
++	sql := r.newSelect(options...).Columns("album.*", "library.path as library_path", "library.name as library_name").
++		LeftJoin("library on album.library_id = library.id")
++	sql = r.withAnnotation(sql, "album.id")
++	return r.applyLibraryFilter(sql)
+ }
+ 
+ func (r *albumRepository) Get(id string) (*model.Album, error) {
+@@ -291,7 +295,6 @@ func (r *albumRepository) TouchByMissingFolder() (int64, error) {
+ // It does not need to load participants, as they are not used by the scanner.
+ func (r *albumRepository) GetTouchedAlbums(libID int) (model.AlbumCursor, error) {
+ 	query := r.selectAlbum().
+-		Join("library on library.id = album.library_id").
+ 		Where(And{
+ 			Eq{"library.id": libID},
+ 			ConcatExpr("album.imported_at > library.last_scan_at"),
+@@ -346,15 +349,15 @@ func (r *albumRepository) purgeEmpty() error {
+ 	return nil
+ }
+ 
+-func (r *albumRepository) Search(q string, offset int, size int, includeMissing bool) (model.Albums, error) {
++func (r *albumRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Albums, error) {
+ 	var res dbAlbums
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectAlbum(), q, []string{"mbz_album_id", "mbz_release_group_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectAlbum(options...), q, []string{"mbz_album_id", "mbz_release_group_id"}, includeMissing, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectAlbum(), q, offset, size, includeMissing, &res, "name")
++		err := r.doSearch(r.selectAlbum(options...), q, offset, size, includeMissing, &res, "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/artist_repository.go b/persistence/artist_repository.go
+index f5b892ba1944308cdc325ff3c2bddc1e4e7f9ab6..3f85ed6d75c48ee02cc024b997e8c8800971e40c 100644
+--- a/persistence/artist_repository.go
++++ b/persistence/artist_repository.go
+@@ -27,9 +27,9 @@ type artistRepository struct {
+ }
+ 
+ type dbArtist struct {
+-	*model.Artist  `structs:",flatten"`
+-	SimilarArtists string `structs:"-" json:"-"`
+-	Stats          string `structs:"-" json:"-"`
++	*model.Artist    `structs:",flatten"`
++	SimilarArtists   string `structs:"-" json:"-"`
++	LibraryStatsJSON string `structs:"-" json:"-"`
+ }
+ 
+ type dbSimilarArtist struct {
+@@ -38,27 +38,45 @@ type dbSimilarArtist struct {
+ }
+ 
+ func (a *dbArtist) PostScan() error {
+-	var stats map[string]map[string]int64
+-	if err := json.Unmarshal([]byte(a.Stats), &stats); err != nil {
+-		return fmt.Errorf("parsing artist stats from db: %w", err)
+-	}
+ 	a.Artist.Stats = make(map[model.Role]model.ArtistStats)
+-	for key, c := range stats {
+-		if key == "total" {
+-			a.Artist.Size = c["s"]
+-			a.Artist.SongCount = int(c["m"])
+-			a.Artist.AlbumCount = int(c["a"])
+-		}
+-		role := model.RoleFromString(key)
+-		if role == model.RoleInvalid {
+-			continue
++
++	if a.LibraryStatsJSON != "" {
++		var rawLibStats map[string]map[string]map[string]int64
++		if err := json.Unmarshal([]byte(a.LibraryStatsJSON), &rawLibStats); err != nil {
++			return fmt.Errorf("parsing artist stats from db: %w", err)
+ 		}
+-		a.Artist.Stats[role] = model.ArtistStats{
+-			SongCount:  int(c["m"]),
+-			AlbumCount: int(c["a"]),
+-			Size:       c["s"],
++
++		for _, stats := range rawLibStats {
++			// Sum all libraries roles stats
++			for key, stat := range stats {
++				// Aggregate stats into the main Artist.Stats map
++				artistStats := model.ArtistStats{
++					SongCount:  int(stat["m"]),
++					AlbumCount: int(stat["a"]),
++					Size:       stat["s"],
++				}
++
++				// Store total stats into the main attributes
++				if key == "total" {
++					a.Artist.Size += artistStats.Size
++					a.Artist.SongCount += artistStats.SongCount
++					a.Artist.AlbumCount += artistStats.AlbumCount
++				}
++
++				role := model.RoleFromString(key)
++				if role == model.RoleInvalid {
++					continue
++				}
++
++				current := a.Artist.Stats[role]
++				current.Size += artistStats.Size
++				current.SongCount += artistStats.SongCount
++				current.AlbumCount += artistStats.AlbumCount
++				a.Artist.Stats[role] = current
++			}
+ 		}
+ 	}
++
+ 	a.Artist.SimilarArtists = nil
+ 	if a.SimilarArtists == "" {
+ 		return nil
+@@ -113,11 +131,12 @@ func NewArtistRepository(ctx context.Context, db dbx.Builder) model.ArtistReposi
+ 	r.indexGroups = utils.ParseIndexGroups(conf.Server.IndexGroups)
+ 	r.tableName = "artist" // To be used by the idFilter below
+ 	r.registerModel(&model.Artist{}, map[string]filterFunc{
+-		"id":      idFilter(r.tableName),
+-		"name":    fullTextFilter(r.tableName, "mbz_artist_id"),
+-		"starred": booleanFilter,
+-		"role":    roleFilter,
+-		"missing": booleanFilter,
++		"id":         idFilter(r.tableName),
++		"name":       fullTextFilter(r.tableName, "mbz_artist_id"),
++		"starred":    booleanFilter,
++		"role":       roleFilter,
++		"missing":    booleanFilter,
++		"library_id": artistLibraryIdFilter,
+ 	})
+ 	r.setSortMappings(map[string]string{
+ 		"name":        "order_artist_name",
+@@ -127,9 +146,9 @@ func NewArtistRepository(ctx context.Context, db dbx.Builder) model.ArtistReposi
+ 		"size":        "stats->>'total'->>'s'",
+ 
+ 		// Stats by credits that are currently available
+-		"maincredit_song_count":  "stats->>'maincredit'->>'m'",
+-		"maincredit_album_count": "stats->>'maincredit'->>'a'",
+-		"maincredit_size":        "stats->>'maincredit'->>'a'",
++		"maincredit_song_count":  "sum(stats->>'maincredit'->>'m')",
++		"maincredit_album_count": "sum(stats->>'maincredit'->>'a')",
++		"maincredit_size":        "sum(stats->>'maincredit'->>'s')",
+ 	})
+ 	return r
+ }
+@@ -137,26 +156,58 @@ func NewArtistRepository(ctx context.Context, db dbx.Builder) model.ArtistReposi
+ func roleFilter(_ string, role any) Sqlizer {
+ 	if role, ok := role.(string); ok {
+ 		if _, ok := model.AllRoles[role]; ok {
+-			return NotEq{fmt.Sprintf("stats ->> '$.%v'", role): nil}
++			return Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL)")
+ 		}
+ 	}
+ 	return Eq{"1": 2}
+ }
+ 
+-func (r *artistRepository) selectArtist(options ...model.QueryOptions) SelectBuilder {
+-	query := r.newSelect(options...).Columns("artist.*")
+-	query = r.withAnnotation(query, "artist.id")
++// artistLibraryIdFilter filters artists based on library access through the library_artist table
++func artistLibraryIdFilter(_ string, value interface{}) Sqlizer {
++	return Eq{"library_artist.library_id": value}
++}
++
++// applyLibraryFilterToArtistQuery applies library filtering to artist queries through the library_artist junction table
++func (r *artistRepository) applyLibraryFilterToArtistQuery(query SelectBuilder) SelectBuilder {
++	user := loggedUser(r.ctx)
++	if user.ID == invalidUserId {
++		// No user context - return empty result set
++		return query.Where(Eq{"1": "0"})
++	}
++
++	// Apply library filtering by joining only with accessible libraries
++	query = query.LeftJoin("library_artist on library_artist.artist_id = artist.id").
++		Join("user_library on user_library.library_id = library_artist.library_id AND user_library.user_id = ?", user.ID)
++
+ 	return query
+ }
+ 
++func (r *artistRepository) selectArtist(options ...model.QueryOptions) SelectBuilder {
++	// Stats Format: {"1": {"albumartist": {"m": 10, "a": 5, "s": 1024}, "artist": {...}}, "2": {...}}
++	query := r.newSelect(options...).Columns("artist.*",
++		"JSON_GROUP_OBJECT(library_artist.library_id, JSONB(library_artist.stats)) as library_stats_json")
++
++	query = r.applyLibraryFilterToArtistQuery(query)
++	query = query.GroupBy("artist.id")
++	return r.withAnnotation(query, "artist.id")
++}
++
+ func (r *artistRepository) CountAll(options ...model.QueryOptions) (int64, error) {
+ 	query := r.newSelect()
++	query = r.applyLibraryFilterToArtistQuery(query)
+ 	query = r.withAnnotation(query, "artist.id")
+ 	return r.count(query, options...)
+ }
+ 
++// Exists checks if an artist with the given ID exists in the database and is accessible by the current user.
+ func (r *artistRepository) Exists(id string) (bool, error) {
+-	return r.exists(Eq{"artist.id": id})
++	// Create a query using the same library filtering logic as selectArtist()
++	query := r.newSelect().Columns("count(distinct artist.id) as exist").Where(Eq{"artist.id": id})
++	query = r.applyLibraryFilterToArtistQuery(query)
++
++	var res struct{ Exist int64 }
++	err := r.queryOne(query, &res)
++	return res.Exist > 0, err
+ }
+ 
+ func (r *artistRepository) Put(a *model.Artist, colsToUpdate ...string) error {
+@@ -213,8 +264,15 @@ func (r *artistRepository) getIndexKey(a model.Artist) string {
+ 	return "#"
+ }
+ 
+-// TODO Cache the index (recalculate when there are changes to the DB)
+-func (r *artistRepository) GetIndex(includeMissing bool, roles ...model.Role) (model.ArtistIndexes, error) {
++// GetIndex returns a list of artists grouped by the first letter of their name, or by the index group if configured.
++// It can filter by roles and libraries, and optionally include artists that are missing (i.e., have no albums).
++// TODO Cache the index (recalculate at scan time)
++func (r *artistRepository) GetIndex(includeMissing bool, libraryIds []int, roles ...model.Role) (model.ArtistIndexes, error) {
++	// Validate library IDs. If no library IDs are provided, return an empty index.
++	if len(libraryIds) == 0 {
++		return nil, nil
++	}
++
+ 	options := model.QueryOptions{Sort: "name"}
+ 	if len(roles) > 0 {
+ 		roleFilters := slice.Map(roles, func(r model.Role) Sqlizer {
+@@ -229,10 +287,19 @@ func (r *artistRepository) GetIndex(includeMissing bool, roles ...model.Role) (m
+ 			options.Filters = And{options.Filters, Eq{"artist.missing": false}}
+ 		}
+ 	}
++
++	libFilter := artistLibraryIdFilter("library_id", libraryIds)
++	if options.Filters == nil {
++		options.Filters = libFilter
++	} else {
++		options.Filters = And{options.Filters, libFilter}
++	}
++
+ 	artists, err := r.GetAll(options)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
+ 	var result model.ArtistIndexes
+ 	for k, v := range slice.Group(artists, r.getIndexKey) {
+ 		result = append(result, model.ArtistIndex{ID: k, Artists: v})
+@@ -299,6 +366,7 @@ on conflict (user_id, item_id, item_type) do update
+ 
+ // RefreshStats updates the stats field for artists whose associated media files were updated after the oldest recorded library scan time.
+ // When allArtists is true, it refreshes stats for all artists. It processes artists in batches to handle potentially large updates.
++// This method now calculates per-library statistics and stores them in the library_artist junction table.
+ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+ 	var allTouchedArtistIDs []string
+ 	if allArtists {
+@@ -327,9 +395,11 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+ 	}
+ 
+ 	// Template for the batch update with placeholder markers that we'll replace
++	// This now calculates per-library statistics and stores them in library_artist.stats
+ 	batchUpdateStatsSQL := `
+     WITH artist_role_counters AS (
+         SELECT jt.atom AS artist_id,
++               mf.library_id,
+                substr(
+                        replace(jt.path, '$.', ''),
+                        1,
+@@ -344,10 +414,11 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+         FROM media_file mf
+         JOIN json_tree(mf.participants) jt ON jt.key = 'id' AND jt.atom IS NOT NULL
+         WHERE jt.atom IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
+-        GROUP BY jt.atom, role
++        GROUP BY jt.atom, mf.library_id, role
+     ),
+     artist_total_counters AS (
+         SELECT mfa.artist_id,
++               mf.library_id,
+                'total' AS role,
+                count(DISTINCT mf.album_id) AS album_count,
+                count(DISTINCT mf.id) AS count,
+@@ -355,40 +426,43 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+         FROM media_file_artists mfa
+         JOIN media_file mf ON mfa.media_file_id = mf.id
+         WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
+-        GROUP BY mfa.artist_id
++        GROUP BY mfa.artist_id, mf.library_id
+     ),
+     artist_participant_counter AS (
+         SELECT mfa.artist_id,
+-            'maincredit' AS role,
+-            count(DISTINCT mf.album_id) AS album_count,
+-            count(DISTINCT mf.id) AS count,
+-            sum(mf.size) AS size
++               mf.library_id,
++               'maincredit' AS role,
++               count(DISTINCT mf.album_id) AS album_count,
++               count(DISTINCT mf.id) AS count,
++               sum(mf.size) AS size
+         FROM media_file_artists mfa
+         JOIN media_file mf ON mfa.media_file_id = mf.id
+         WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
+         AND mfa.role IN ('albumartist', 'artist')
+-        GROUP BY mfa.artist_id
++        GROUP BY mfa.artist_id, mf.library_id
+     ),
+     combined_counters AS (
+-        SELECT artist_id, role, album_count, count, size FROM artist_role_counters
++        SELECT artist_id, library_id, role, album_count, count, size FROM artist_role_counters
+         UNION
+-        SELECT artist_id, role, album_count, count, size FROM artist_total_counters
++        SELECT artist_id, library_id, role, album_count, count, size FROM artist_total_counters
+         UNION
+-        SELECT artist_id, role, album_count, count, size FROM artist_participant_counter
++        SELECT artist_id, library_id, role, album_count, count, size FROM artist_participant_counter
+     ),
+-    artist_counters AS (
+-        SELECT artist_id AS id,
++    library_artist_counters AS (
++        SELECT artist_id,
++               library_id,
+                json_group_object(
+                        replace(role, '"', ''),
+                        json_object('a', album_count, 'm', count, 's', size)
+                ) AS counters
+         FROM combined_counters
+-        GROUP BY artist_id
++        GROUP BY artist_id, library_id
+     )
+-    UPDATE artist
+-    SET stats = coalesce((SELECT counters FROM artist_counters ac WHERE ac.id = artist.id), '{}'),
+-       updated_at = datetime(current_timestamp, 'localtime')
+-    WHERE artist.id IN (ROLE_IDS_PLACEHOLDER) AND artist.id <> '';` // Will replace with actual placeholders
++    UPDATE library_artist
++    SET stats = coalesce((SELECT counters FROM library_artist_counters lac 
++                         WHERE lac.artist_id = library_artist.artist_id 
++                         AND lac.library_id = library_artist.library_id), '{}')
++    WHERE library_artist.artist_id IN (ROLE_IDS_PLACEHOLDER);` // Will replace with actual placeholders
+ 
+ 	var totalRowsAffected int64 = 0
+ 	const batchSize = 1000
+@@ -433,15 +507,16 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+ 	return totalRowsAffected, nil
+ }
+ 
+-func (r *artistRepository) Search(q string, offset int, size int, includeMissing bool) (model.Artists, error) {
++func (r *artistRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Artists, error) {
+ 	var res dbArtists
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectArtist(), q, []string{"mbz_artist_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectArtist(options...), q, []string{"mbz_artist_id"}, includeMissing, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectArtist(), q, offset, size, includeMissing, &res, "json_extract(stats, '$.total.m') desc", "name")
++		err := r.doSearch(r.selectArtist(options...), q, offset, size, includeMissing, &res,
++			"sum(json_extract(stats, '$.total.m')) desc", "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by query %q: %w", q, err)
+ 		}
+@@ -464,9 +539,9 @@ func (r *artistRepository) ReadAll(options ...rest.QueryOptions) (interface{}, e
+ 			role = v
+ 		}
+ 	}
+-	r.sortMappings["song_count"] = "stats->>'" + role + "'->>'m'"
+-	r.sortMappings["album_count"] = "stats->>'" + role + "'->>'a'"
+-	r.sortMappings["size"] = "stats->>'" + role + "'->>'s'"
++	r.sortMappings["song_count"] = "sum(stats->>'" + role + "'->>'m')"
++	r.sortMappings["album_count"] = "sum(stats->>'" + role + "'->>'a')"
++	r.sortMappings["size"] = "sum(stats->>'" + role + "'->>'s')"
+ 	return r.GetAll(r.parseRestOptions(r.ctx, options...))
+ }
+ 
+diff --git a/persistence/artist_repository_test.go b/persistence/artist_repository_test.go
+index 0dc0b087c9e316c027c0b66ec6e0025ff4b6bd3a..ed55a376e23ade9eaa7ed45dfca38cd07bcf4e18 100644
+--- a/persistence/artist_repository_test.go
++++ b/persistence/artist_repository_test.go
+@@ -95,7 +95,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				er := repo.Put(&artistBeatles)
+ 				Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("F"))
+@@ -113,7 +113,7 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			// BFR Empty SortArtistName is not saved in the DB anymore
+ 			XIt("returns the index when PreferSortTags is true and SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -135,7 +135,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				er := repo.Put(&artistBeatles)
+ 				Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -152,7 +152,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns the index when SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -169,27 +169,37 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			BeforeEach(func() {
+ 				raw = repo.(*artistRepository)
+-				// Add stats to artists using direct SQL since Put doesn't populate stats
++				// Add stats to library_artist table since stats are now stored per-library
+ 				composerStats := `{"composer": {"s": 1000, "m": 5, "a": 2}}`
+ 				producerStats := `{"producer": {"s": 500, "m": 3, "a": 1}}`
+ 
+-				// Set Beatles as composer
+-				_, err := raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", composerStats).Where(squirrel.Eq{"id": artistBeatles.ID}))
++				// Set Beatles as composer in library 1
++				_, err := raw.executeSQL(squirrel.Insert("library_artist").
++					Columns("library_id", "artist_id", "stats").
++					Values(1, artistBeatles.ID, composerStats).
++					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
+ 				Expect(err).ToNot(HaveOccurred())
+ 
+-				// Set Kraftwerk as producer
+-				_, err = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", producerStats).Where(squirrel.Eq{"id": artistKraftwerk.ID}))
++				// Set Kraftwerk as producer in library 1
++				_, err = raw.executeSQL(squirrel.Insert("library_artist").
++					Columns("library_id", "artist_id", "stats").
++					Values(1, artistKraftwerk.ID, producerStats).
++					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
+ 				Expect(err).ToNot(HaveOccurred())
+ 			})
+ 
+ 			AfterEach(func() {
+-				// Clean up stats
+-				_, _ = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", "{}").Where(squirrel.Eq{"id": artistBeatles.ID}))
+-				_, _ = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", "{}").Where(squirrel.Eq{"id": artistKraftwerk.ID}))
++				// Clean up stats from library_artist table
++				_, _ = raw.executeSQL(squirrel.Update("library_artist").
++					Set("stats", "{}").
++					Where(squirrel.Eq{"artist_id": artistBeatles.ID, "library_id": 1}))
++				_, _ = raw.executeSQL(squirrel.Update("library_artist").
++					Set("stats", "{}").
++					Where(squirrel.Eq{"artist_id": artistKraftwerk.ID, "library_id": 1}))
+ 			})
+ 
+ 			It("returns only artists with the specified role", func() {
+-				idx, err := repo.GetIndex(false, model.RoleComposer)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(1))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -198,7 +208,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns artists with any of the specified roles", func() {
+-				idx, err := repo.GetIndex(false, model.RoleComposer, model.RoleProducer)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer, model.RoleProducer)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 
+@@ -219,7 +229,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns empty index when no artists have the specified role", func() {
+-				idx, err := repo.GetIndex(false, model.RoleDirector)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleDirector)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(0))
+ 			})
+@@ -239,12 +249,14 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 		Describe("PostScan", func() {
+ 			It("parses stats and similar artists correctly", func() {
+-				stats := map[string]map[string]int64{
+-					"total":    {"s": 1000, "m": 10, "a": 2},
+-					"composer": {"s": 500, "m": 5, "a": 1},
++				stats := map[string]map[string]map[string]int64{
++					"1": {
++						"total":    {"s": 1000, "m": 10, "a": 2},
++						"composer": {"s": 500, "m": 5, "a": 1},
++					},
+ 				}
+ 				statsJSON, _ := json.Marshal(stats)
+-				dba.Stats = string(statsJSON)
++				dba.LibraryStatsJSON = string(statsJSON)
+ 				dba.SimilarArtists = `[{"id":"2","Name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`
+ 
+ 				err := dba.PostScan()
+@@ -306,6 +318,11 @@ var _ = Describe("ArtistRepository", func() {
+ 				raw = repo.(*artistRepository)
+ 				_, err := raw.executeSQL(squirrel.Update(raw.tableName).Set("missing", true).Where(squirrel.Eq{"id": missing.ID}))
+ 				Expect(err).ToNot(HaveOccurred())
++
++				// Associate the existing fixture with library 1 for repository visibility.
++				lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++				err = lr.AddArtist(1, missing.ID)
++				Expect(err).ToNot(HaveOccurred())
+ 			}
+ 
+ 			removeMissing := func() {
+@@ -317,7 +334,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			Context("regular user", func() {
+ 				BeforeEach(func() {
+ 					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, model.User{ID: "u1"})
++					ctx = request.WithUser(ctx, regularUser)
+ 					repo = NewArtistRepository(ctx, GetDBXBuilder())
+ 					insertMissing()
+ 				})
+@@ -337,7 +354,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				})
+ 
+ 				It("does not return missing artist in GetIndex", func() {
+-					idx, err := repo.GetIndex(false)
++					idx, err := repo.GetIndex(false, []int{1})
+ 					Expect(err).ToNot(HaveOccurred())
+ 					// Only 2 artists should be present
+ 					total := 0
+@@ -351,7 +368,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			Context("admin user", func() {
+ 				BeforeEach(func() {
+ 					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, model.User{ID: "admin", IsAdmin: true})
++					ctx = request.WithUser(ctx, adminUser)
+ 					repo = NewArtistRepository(ctx, GetDBXBuilder())
+ 					insertMissing()
+ 				})
+@@ -371,7 +388,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				})
+ 
+ 				It("returns missing artist in GetIndex when included", func() {
+-					idx, err := repo.GetIndex(true)
++					idx, err := repo.GetIndex(true, []int{1})
+ 					Expect(err).ToNot(HaveOccurred())
+ 					total := 0
+ 					for _, ix := range idx {
+@@ -385,19 +402,19 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 	Describe("roleFilter", func() {
+ 		It("filters out roles not present in the participants model", func() {
+-			Expect(roleFilter("", "artist")).To(Equal(squirrel.NotEq{"stats ->> '$.artist'": nil}))
+-			Expect(roleFilter("", "albumartist")).To(Equal(squirrel.NotEq{"stats ->> '$.albumartist'": nil}))
+-			Expect(roleFilter("", "composer")).To(Equal(squirrel.NotEq{"stats ->> '$.composer'": nil}))
+-			Expect(roleFilter("", "conductor")).To(Equal(squirrel.NotEq{"stats ->> '$.conductor'": nil}))
+-			Expect(roleFilter("", "lyricist")).To(Equal(squirrel.NotEq{"stats ->> '$.lyricist'": nil}))
+-			Expect(roleFilter("", "arranger")).To(Equal(squirrel.NotEq{"stats ->> '$.arranger'": nil}))
+-			Expect(roleFilter("", "producer")).To(Equal(squirrel.NotEq{"stats ->> '$.producer'": nil}))
+-			Expect(roleFilter("", "director")).To(Equal(squirrel.NotEq{"stats ->> '$.director'": nil}))
+-			Expect(roleFilter("", "engineer")).To(Equal(squirrel.NotEq{"stats ->> '$.engineer'": nil}))
+-			Expect(roleFilter("", "mixer")).To(Equal(squirrel.NotEq{"stats ->> '$.mixer'": nil}))
+-			Expect(roleFilter("", "remixer")).To(Equal(squirrel.NotEq{"stats ->> '$.remixer'": nil}))
+-			Expect(roleFilter("", "djmixer")).To(Equal(squirrel.NotEq{"stats ->> '$.djmixer'": nil}))
+-			Expect(roleFilter("", "performer")).To(Equal(squirrel.NotEq{"stats ->> '$.performer'": nil}))
++			Expect(roleFilter("", "artist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.artist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "albumartist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.albumartist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "composer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.composer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "conductor")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.conductor.m') IS NOT NULL)")))
++			Expect(roleFilter("", "lyricist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.lyricist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "arranger")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.arranger.m') IS NOT NULL)")))
++			Expect(roleFilter("", "producer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.producer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "director")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.director.m') IS NOT NULL)")))
++			Expect(roleFilter("", "engineer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.engineer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "mixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.mixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "remixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.remixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "djmixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.djmixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "performer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.performer.m') IS NOT NULL)")))
+ 
+ 			Expect(roleFilter("", "wizard")).To(Equal(squirrel.Eq{"1": 2}))
+ 			Expect(roleFilter("", "songanddanceman")).To(Equal(squirrel.Eq{"1": 2}))
+@@ -418,9 +435,12 @@ var _ = Describe("ArtistRepository", func() {
+ 				MbzArtistID: "550e8400-e29b-41d4-a716-446655440010", // Valid UUID v4
+ 			}
+ 
+-			// Insert the test artist into the database
++			// Insert the test artist with its canonical library association.
+ 			err := repo.Put(&artistWithMBID)
+ 			Expect(err).ToNot(HaveOccurred())
++			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++			err = lr.AddArtist(1, artistWithMBID.ID)
++			Expect(err).ToNot(HaveOccurred())
+ 		})
+ 
+ 		AfterEach(func() {
+@@ -453,6 +473,9 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			err := repo.Put(&missingArtist)
+ 			Expect(err).ToNot(HaveOccurred())
++			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++			err = lr.AddArtist(1, missingArtist.ID)
++			Expect(err).ToNot(HaveOccurred())
+ 
+ 			// Should not find missing artist when includeMissing is false
+ 			results, err := repo.Search("550e8400-e29b-41d4-a716-446655440012", 0, 10, false)
+diff --git a/persistence/folder_repository.go b/persistence/folder_repository.go
+index 02b272134c10f5ef780c071b9c64556dc6d62b87..96a9bae82260e9033f79250894d7db6c6d29d7a2 100644
+--- a/persistence/folder_repository.go
++++ b/persistence/folder_repository.go
+@@ -61,8 +61,9 @@ func newFolderRepository(ctx context.Context, db dbx.Builder) model.FolderReposi
+ }
+ 
+ func (r folderRepository) selectFolder(options ...model.QueryOptions) SelectBuilder {
+-	return r.newSelect(options...).Columns("folder.*", "library.path as library_path").
++	sql := r.newSelect(options...).Columns("folder.*", "library.path as library_path").
+ 		Join("library on library.id = folder.library_id")
++	return r.applyLibraryFilter(sql)
+ }
+ 
+ func (r folderRepository) Get(id string) (*model.Folder, error) {
+@@ -85,8 +86,9 @@ func (r folderRepository) GetAll(opt ...model.QueryOptions) ([]model.Folder, err
+ }
+ 
+ func (r folderRepository) CountAll(opt ...model.QueryOptions) (int64, error) {
+-	sq := r.newSelect(opt...).Columns("count(*)")
+-	return r.count(sq)
++	query := r.newSelect(opt...).Columns("count(*)")
++	query = r.applyLibraryFilter(query)
++	return r.count(query)
+ }
+ 
+ func (r folderRepository) GetLastUpdates(lib model.Library) (map[string]model.FolderUpdateInfo, error) {
+diff --git a/persistence/genre_repository.go b/persistence/genre_repository.go
+index e92e1491ab3d3a4377eecad4af9f5ea1761b6c26..311eb0a68d97c09515d00b1f9621214cd9e46719 100644
+--- a/persistence/genre_repository.go
++++ b/persistence/genre_repository.go
+@@ -10,31 +10,18 @@ import (
+ )
+ 
+ type genreRepository struct {
+-	sqlRepository
++	*baseTagRepository
+ }
+ 
+ func NewGenreRepository(ctx context.Context, db dbx.Builder) model.GenreRepository {
+-	r := &genreRepository{}
+-	r.ctx = ctx
+-	r.db = db
+-	r.registerModel(&model.Tag{}, map[string]filterFunc{
+-		"name": containsFilter("tag_value"),
+-	})
+-	r.setSortMappings(map[string]string{
+-		"name": "tag_name",
+-	})
+-	return r
++	genreFilter := model.TagGenre
++	return &genreRepository{
++		baseTagRepository: newBaseTagRepository(ctx, db, &genreFilter),
++	}
+ }
+ 
+ func (r *genreRepository) selectGenre(opt ...model.QueryOptions) SelectBuilder {
+-	return r.newSelect(opt...).
+-		Columns(
+-			"id",
+-			"tag_value as name",
+-			"album_count",
+-			"media_file_count as song_count",
+-		).
+-		Where(Eq{"tag.tag_name": model.TagGenre})
++	return r.newSelect(opt...)
+ }
+ 
+ func (r *genreRepository) GetAll(opt ...model.QueryOptions) (model.Genres, error) {
+@@ -44,12 +31,10 @@ func (r *genreRepository) GetAll(opt ...model.QueryOptions) (model.Genres, error
+ 	return res, err
+ }
+ 
+-func (r *genreRepository) Count(options ...rest.QueryOptions) (int64, error) {
+-	return r.count(r.selectGenre(), r.parseRestOptions(r.ctx, options...))
+-}
++// Override ResourceRepository methods to return Genre objects instead of Tag objects
+ 
+ func (r *genreRepository) Read(id string) (interface{}, error) {
+-	sel := r.selectGenre().Columns("*").Where(Eq{"id": id})
++	sel := r.selectGenre().Where(Eq{"tag.id": id})
+ 	var res model.Genre
+ 	err := r.queryOne(sel, &res)
+ 	return &res, err
+@@ -59,10 +44,6 @@ func (r *genreRepository) ReadAll(options ...rest.QueryOptions) (interface{}, er
+ 	return r.GetAll(r.parseRestOptions(r.ctx, options...))
+ }
+ 
+-func (r *genreRepository) EntityName() string {
+-	return r.tableName
+-}
+-
+ func (r *genreRepository) NewInstance() interface{} {
+ 	return &model.Genre{}
+ }
+diff --git a/persistence/library_repository.go b/persistence/library_repository.go
+index 9c305e52b36dfdfeee91434b7eef0d8b69aac192..314b682bbee37244f640ab309ec1eeba61dec917 100644
+--- a/persistence/library_repository.go
++++ b/persistence/library_repository.go
+@@ -2,10 +2,13 @@ package persistence
+ 
+ import (
+ 	"context"
++	"fmt"
++	"strconv"
+ 	"sync"
+ 	"time"
+ 
+ 	. "github.com/Masterminds/squirrel"
++	"github.com/deluan/rest"
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+@@ -68,41 +71,78 @@ func (r *libraryRepository) GetPath(id int) (string, error) {
+ }
+ 
+ func (r *libraryRepository) Put(l *model.Library) error {
+-	cols := map[string]any{
+-		"name":        l.Name,
+-		"path":        l.Path,
+-		"remote_path": l.RemotePath,
+-		"updated_at":  time.Now(),
+-	}
+-	if l.ID != 0 {
+-		cols["id"] = l.ID
++	if l.ID == model.DefaultLibraryID {
++		currentLib, err := r.Get(1)
++		// if we are creating it, it's ok.
++		if err == nil { // it exists, so we are updating it
++			if currentLib.Path != l.Path {
++				return fmt.Errorf("%w: path for library with ID 1 cannot be changed", model.ErrValidation)
++			}
++		}
+ 	}
+ 
+-	sq := Insert(r.tableName).SetMap(cols).
+-		Suffix(`on conflict(id) do update set name = excluded.name, path = excluded.path, 
+-					remote_path = excluded.remote_path, updated_at = excluded.updated_at`)
+-	_, err := r.executeSQL(sq)
++	var err error
++	l.UpdatedAt = time.Now()
++	if l.ID == 0 {
++		// Insert with autoassigned ID
++		l.CreatedAt = time.Now()
++		err = r.db.Model(l).Insert()
++	} else {
++		// Try to update first
++		cols := map[string]any{
++			"name":              l.Name,
++			"path":              l.Path,
++			"remote_path":       l.RemotePath,
++			"default_new_users": l.DefaultNewUsers,
++			"updated_at":        l.UpdatedAt,
++		}
++		sq := Update(r.tableName).SetMap(cols).Where(Eq{"id": l.ID})
++		rowsAffected, updateErr := r.executeSQL(sq)
++		if updateErr != nil {
++			return updateErr
++		}
++
++		// If no rows were affected, the record doesn't exist, so insert it
++		if rowsAffected == 0 {
++			l.CreatedAt = time.Now()
++			l.UpdatedAt = time.Now()
++			err = r.db.Model(l).Insert()
++		}
++	}
+ 	if err != nil {
+-		libLock.Lock()
+-		defer libLock.Unlock()
+-		libCache[l.ID] = l.Path
++		return err
+ 	}
+-	return err
+-}
+ 
+-const hardCodedMusicFolderID = 1
++	// Auto-assign all libraries to all admin users
++	sql := Expr(`
++INSERT INTO user_library (user_id, library_id)
++SELECT u.id, l.id
++FROM user u
++CROSS JOIN library l
++WHERE u.is_admin = true
++ON CONFLICT (user_id, library_id) DO NOTHING;`,
++	)
++	if _, err = r.executeSQL(sql); err != nil {
++		return fmt.Errorf("failed to assign library to admin users: %w", err)
++	}
++
++	libLock.Lock()
++	defer libLock.Unlock()
++	libCache[l.ID] = l.Path
++	return nil
++}
+ 
+ // TODO Remove this method when we have a proper UI to add libraries
+ // This is a temporary method to store the music folder path from the config in the DB
+ func (r *libraryRepository) StoreMusicFolder() error {
+ 	sq := Update(r.tableName).Set("path", conf.Server.MusicFolder).
+ 		Set("updated_at", time.Now()).
+-		Where(Eq{"id": hardCodedMusicFolderID})
++		Where(Eq{"id": model.DefaultLibraryID})
+ 	_, err := r.executeSQL(sq)
+ 	if err != nil {
+ 		libLock.Lock()
+ 		defer libLock.Unlock()
+-		libCache[hardCodedMusicFolderID] = conf.Server.MusicFolder
++		libCache[model.DefaultLibraryID] = conf.Server.MusicFolder
+ 	}
+ 	return err
+ }
+@@ -150,6 +190,7 @@ func (r *libraryRepository) ScanInProgress() (bool, error) {
+ func (r *libraryRepository) RefreshStats(id int) error {
+ 	var songsRes, albumsRes, artistsRes, foldersRes, filesRes, missingRes struct{ Count int64 }
+ 	var sizeRes struct{ Sum int64 }
++	var durationRes struct{ Sum float64 }
+ 
+ 	err := run.Parallel(
+ 		func() error {
+@@ -180,6 +221,9 @@ func (r *libraryRepository) RefreshStats(id int) error {
+ 		func() error {
+ 			return r.queryOne(Select("ifnull(sum(size),0) as sum").From("album").Where(Eq{"library_id": id, "missing": false}), &sizeRes)
+ 		},
++		func() error {
++			return r.queryOne(Select("ifnull(sum(duration),0) as sum").From("album").Where(Eq{"library_id": id, "missing": false}), &durationRes)
++		},
+ 	)()
+ 	if err != nil {
+ 		return err
+@@ -193,12 +237,34 @@ func (r *libraryRepository) RefreshStats(id int) error {
+ 		Set("total_files", filesRes.Count).
+ 		Set("total_missing_files", missingRes.Count).
+ 		Set("total_size", sizeRes.Sum).
++		Set("total_duration", durationRes.Sum).
+ 		Set("updated_at", time.Now()).
+ 		Where(Eq{"id": id})
+ 	_, err = r.executeSQL(sq)
+ 	return err
+ }
+ 
++func (r *libraryRepository) Delete(id int) error {
++	if !loggedUser(r.ctx).IsAdmin {
++		return model.ErrNotAuthorized
++	}
++	if id == 1 {
++		return fmt.Errorf("%w: library with ID 1 cannot be deleted", model.ErrValidation)
++	}
++
++	err := r.delete(Eq{"id": id})
++	if err != nil {
++		return err
++	}
++
++	// Clear cache entry for this library only if DB operation was successful
++	libLock.Lock()
++	defer libLock.Unlock()
++	delete(libCache, id)
++
++	return nil
++}
++
+ func (r *libraryRepository) GetAll(ops ...model.QueryOptions) (model.Libraries, error) {
+ 	sq := r.newSelect(ops...).Columns("*")
+ 	res := model.Libraries{}
+@@ -206,4 +272,72 @@ func (r *libraryRepository) GetAll(ops ...model.QueryOptions) (model.Libraries,
+ 	return res, err
+ }
+ 
++func (r *libraryRepository) CountAll(ops ...model.QueryOptions) (int64, error) {
++	sq := r.newSelect(ops...)
++	return r.count(sq)
++}
++
++// User-library association methods
++
++func (r *libraryRepository) GetUsersWithLibraryAccess(libraryID int) (model.Users, error) {
++	sel := Select("u.*").
++		From("user u").
++		Join("user_library ul ON u.id = ul.user_id").
++		Where(Eq{"ul.library_id": libraryID}).
++		OrderBy("u.name")
++
++	var res model.Users
++	err := r.queryAll(sel, &res)
++	return res, err
++}
++
++// REST interface methods
++
++func (r *libraryRepository) Count(options ...rest.QueryOptions) (int64, error) {
++	return r.CountAll(r.parseRestOptions(r.ctx, options...))
++}
++
++func (r *libraryRepository) Read(id string) (interface{}, error) {
++	idInt, err := strconv.Atoi(id)
++	if err != nil {
++		log.Trace(r.ctx, "invalid library id: %s", id, err)
++		return nil, rest.ErrNotFound
++	}
++	return r.Get(idInt)
++}
++
++func (r *libraryRepository) ReadAll(options ...rest.QueryOptions) (interface{}, error) {
++	return r.GetAll(r.parseRestOptions(r.ctx, options...))
++}
++
++func (r *libraryRepository) EntityName() string {
++	return "library"
++}
++
++func (r *libraryRepository) NewInstance() interface{} {
++	return &model.Library{}
++}
++
++func (r *libraryRepository) Save(entity interface{}) (string, error) {
++	lib := entity.(*model.Library)
++	lib.ID = 0 // Reset ID to ensure we create a new library
++	err := r.Put(lib)
++	if err != nil {
++		return "", err
++	}
++	return strconv.Itoa(lib.ID), nil
++}
++
++func (r *libraryRepository) Update(id string, entity interface{}, cols ...string) error {
++	lib := entity.(*model.Library)
++	idInt, err := strconv.Atoi(id)
++	if err != nil {
++		return fmt.Errorf("invalid library ID: %s", id)
++	}
++
++	lib.ID = idInt
++	return r.Put(lib)
++}
++
+ var _ model.LibraryRepository = (*libraryRepository)(nil)
++var _ rest.Repository = (*libraryRepository)(nil)
+diff --git a/persistence/mediafile_repository.go b/persistence/mediafile_repository.go
+index dd22b1413491b40c1f0ed9cb0f5fb709ae122e8b..7c2ac577815303ef1300d7953b9bd29460d04d80 100644
+--- a/persistence/mediafile_repository.go
++++ b/persistence/mediafile_repository.go
+@@ -96,6 +96,7 @@ var mediaFileFilter = sync.OnceValue(func() map[string]filterFunc {
+ 		"genre_id":   tagIDFilter,
+ 		"missing":    booleanFilter,
+ 		"artists_id": artistFilter,
++		"library_id": libraryIdFilter,
+ 	}
+ 	// Add all album tags as filters
+ 	for tag := range model.TagMappings() {
+@@ -116,6 +117,7 @@ func mediaFileRecentlyAddedSort() string {
+ func (r *mediaFileRepository) CountAll(options ...model.QueryOptions) (int64, error) {
+ 	query := r.newSelect()
+ 	query = r.withAnnotation(query, "media_file.id")
++	query = r.applyLibraryFilter(query)
+ 	return r.count(query, options...)
+ }
+ 
+@@ -134,10 +136,11 @@ func (r *mediaFileRepository) Put(m *model.MediaFile) error {
+ }
+ 
+ func (r *mediaFileRepository) selectMediaFile(options ...model.QueryOptions) SelectBuilder {
+-	sql := r.newSelect(options...).Columns("media_file.*", "library.path as library_path").
++	sql := r.newSelect(options...).Columns("media_file.*", "library.path as library_path", "library.name as library_name").
+ 		LeftJoin("library on media_file.library_id = library.id")
+ 	sql = r.withAnnotation(sql, "media_file.id")
+-	return r.withBookmark(sql, "media_file.id")
++	sql = r.withBookmark(sql, "media_file.id")
++	return r.applyLibraryFilter(sql)
+ }
+ 
+ func (r *mediaFileRepository) Get(id string) (*model.MediaFile, error) {
+@@ -273,7 +276,7 @@ func (r *mediaFileRepository) GetMissingAndMatching(libId int) (model.MediaFileC
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	sel := r.newSelect().Columns("media_file.*", "library.path as library_path").
++	sel := r.newSelect().Columns("media_file.*", "library.path as library_path", "library.name as library_name").
+ 		LeftJoin("library on media_file.library_id = library.id").
+ 		Where("pid in ("+subQText+")", subQArgs...).
+ 		Where(Or{
+@@ -294,15 +297,57 @@ func (r *mediaFileRepository) GetMissingAndMatching(libId int) (model.MediaFileC
+ 	}, nil
+ }
+ 
+-func (r *mediaFileRepository) Search(q string, offset int, size int, includeMissing bool) (model.MediaFiles, error) {
++// FindRecentFilesByMBZTrackID finds recently added files by MusicBrainz Track ID in other libraries
++func (r *mediaFileRepository) FindRecentFilesByMBZTrackID(missing model.MediaFile, since time.Time) (model.MediaFiles, error) {
++	sel := r.selectMediaFile().Where(And{
++		NotEq{"media_file.library_id": missing.LibraryID},
++		Eq{"media_file.mbz_release_track_id": missing.MbzReleaseTrackID},
++		NotEq{"media_file.mbz_release_track_id": ""}, // Exclude empty MBZ Track IDs
++		Eq{"media_file.suffix": missing.Suffix},
++		Gt{"media_file.created_at": since},
++		Eq{"media_file.missing": false},
++	}).OrderBy("media_file.created_at DESC")
++
++	var res dbMediaFiles
++	err := r.queryAll(sel, &res)
++	if err != nil {
++		return nil, err
++	}
++	return res.toModels(), nil
++}
++
++// FindRecentFilesByProperties finds recently added files by intrinsic properties in other libraries
++func (r *mediaFileRepository) FindRecentFilesByProperties(missing model.MediaFile, since time.Time) (model.MediaFiles, error) {
++	sel := r.selectMediaFile().Where(And{
++		NotEq{"media_file.library_id": missing.LibraryID},
++		Eq{"media_file.title": missing.Title},
++		Eq{"media_file.size": missing.Size},
++		Eq{"media_file.suffix": missing.Suffix},
++		Eq{"media_file.disc_number": missing.DiscNumber},
++		Eq{"media_file.track_number": missing.TrackNumber},
++		Eq{"media_file.album": missing.Album},
++		Eq{"media_file.mbz_release_track_id": ""}, // Exclude files with MBZ Track ID
++		Gt{"media_file.created_at": since},
++		Eq{"media_file.missing": false},
++	}).OrderBy("media_file.created_at DESC")
++
++	var res dbMediaFiles
++	err := r.queryAll(sel, &res)
++	if err != nil {
++		return nil, err
++	}
++	return res.toModels(), nil
++}
++
++func (r *mediaFileRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.MediaFiles, error) {
+ 	var res dbMediaFiles
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectMediaFile(), q, []string{"mbz_recording_id", "mbz_release_track_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectMediaFile(options...), q, []string{"mbz_recording_id", "mbz_release_track_id"}, includeMissing, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectMediaFile(), q, offset, size, includeMissing, &res, "title")
++		err := r.doSearch(r.selectMediaFile(options...), q, offset, size, includeMissing, &res, "title")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/persistence_suite_test.go b/persistence/persistence_suite_test.go
+index 7edfeee1f752b69f0bd7abbf56a5b8ce3a12ff29..a3d5ebc74d23121177622c13d7c35063e0e5aae4 100644
+--- a/persistence/persistence_suite_test.go
++++ b/persistence/persistence_suite_test.go
+@@ -34,6 +34,7 @@ func mf(mf model.MediaFile) model.MediaFile {
+ 	mf.Tags = model.Tags{}
+ 	mf.LibraryID = 1
+ 	mf.LibraryPath = "music" // Default folder
++	mf.LibraryName = "Music Library"
+ 	mf.Participants = model.Participants{
+ 		model.RoleArtist: model.ParticipantList{
+ 			model.Participant{Artist: model.Artist{ID: mf.ArtistID, Name: mf.Artist}},
+@@ -47,6 +48,8 @@ func mf(mf model.MediaFile) model.MediaFile {
+ 
+ func al(al model.Album) model.Album {
+ 	al.LibraryID = 1
++	al.LibraryPath = "music"
++	al.LibraryName = "Music Library"
+ 	al.Discs = model.Discs{}
+ 	al.Tags = model.Tags{}
+ 	al.Participants = model.Participants{}
+@@ -138,14 +141,13 @@ var _ = BeforeSuite(func() {
+ 		}
+ 	}
+ 
+-	//gr := NewGenreRepository(ctx, conn)
+-	//for i := range testGenres {
+-	//	g := testGenres[i]
+-	//	err := gr.Put(&g)
+-	//	if err != nil {
+-	//		panic(err)
+-	//	}
+-	//}
++	// Associate users with library 1 (default test library)
++	for i := range testUsers {
++		err := ur.SetUserLibraries(testUsers[i].ID, []int{1})
++		if err != nil {
++			panic(err)
++		}
++	}
+ 
+ 	alr := NewAlbumRepository(ctx, conn).(*albumRepository)
+ 	for i := range testAlbums {
+@@ -165,6 +167,15 @@ var _ = BeforeSuite(func() {
+ 		}
+ 	}
+ 
++	// Associate artists with library 1 (default test library)
++	lr := NewLibraryRepository(ctx, conn)
++	for i := range testArtists {
++		err := lr.AddArtist(1, testArtists[i].ID)
++		if err != nil {
++			panic(err)
++		}
++	}
++
+ 	mr := NewMediaFileRepository(ctx, conn)
+ 	for i := range testSongs {
+ 		err := mr.Put(&testSongs[i])
+@@ -190,9 +201,9 @@ var _ = BeforeSuite(func() {
+ 		Public:    true,
+ 		SongCount: 2,
+ 	}
+-	plsBest.AddTracks([]string{"1001", "1003"})
++	plsBest.AddMediaFilesByID([]string{"1001", "1003"})
+ 	plsCool = model.Playlist{Name: "Cool", OwnerID: "userid", OwnerName: "userid"}
+-	plsCool.AddTracks([]string{"1004"})
++	plsCool.AddMediaFilesByID([]string{"1004"})
+ 	testPlaylists = []*model.Playlist{&plsBest, &plsCool}
+ 
+ 	pr := NewPlaylistRepository(ctx, conn)
+diff --git a/persistence/playlist_repository.go b/persistence/playlist_repository.go
+index bdaaeeddbabb24fbf39f820f7b658bcf951fe32d..046284e1f02be08b2d5ba223f0346ec3c8c23953 100644
+--- a/persistence/playlist_repository.go
++++ b/persistence/playlist_repository.go
+@@ -161,7 +161,7 @@ func (r *playlistRepository) GetWithTracks(id string, refreshSmartPlaylist, incl
+ 		log.Error(r.ctx, "Error loading playlist tracks ", "playlist", pls.Name, "id", pls.ID, err)
+ 		return nil, err
+ 	}
+-	pls.Tracks = tracks
++	pls.SetTracks(tracks)
+ 	return pls, nil
+ }
+ 
+@@ -263,7 +263,7 @@ func (r *playlistRepository) refreshSmartPlaylist(pls *model.Playlist) bool {
+ 		From("media_file").LeftJoin("annotation on (" +
+ 		"annotation.item_id = media_file.id" +
+ 		" AND annotation.item_type = 'media_file'" +
+-		" AND annotation.user_id = '" + userId(r.ctx) + "')")
++		" AND annotation.user_id = '" + usr.ID + "')")
+ 	sq = r.addCriteria(sq, rules)
+ 	insSql := Insert("playlist_tracks").Columns("id", "playlist_id", "media_file_id").Select(sq)
+ 	_, err = r.executeSQL(insSql)
+@@ -379,6 +379,8 @@ func (r *playlistRepository) refreshCounters(pls *model.Playlist) error {
+ }
+ 
+ func (r *playlistRepository) loadTracks(sel SelectBuilder, id string) (model.PlaylistTracks, error) {
++	sel = r.applyLibraryFilter(sel, "f")
++	userID := loggedUser(r.ctx).ID
+ 	tracksQuery := sel.
+ 		Columns(
+ 			"coalesce(starred, 0) as starred",
+@@ -389,11 +391,12 @@ func (r *playlistRepository) loadTracks(sel SelectBuilder, id string) (model.Pla
+ 			"f.*",
+ 			"playlist_tracks.*",
+ 			"library.path as library_path",
++			"library.name as library_name",
+ 		).
+ 		LeftJoin("annotation on (" +
+ 			"annotation.item_id = media_file_id" +
+ 			" AND annotation.item_type = 'media_file'" +
+-			" AND annotation.user_id = '" + userId(r.ctx) + "')").
++			" AND annotation.user_id = '" + userID + "')").
+ 		Join("media_file f on f.id = media_file_id").
+ 		Join("library on f.library_id = library.id").
+ 		Where(Eq{"playlist_id": id})
+diff --git a/persistence/playlist_repository_test.go b/persistence/playlist_repository_test.go
+index b799d4912def3737c7902a26c708357bf6dabdae..15ae438d9ae0c684dc4268885fcfc2700017d501 100644
+--- a/persistence/playlist_repository_test.go
++++ b/persistence/playlist_repository_test.go
+@@ -79,13 +79,13 @@ var _ = Describe("PlaylistRepository", func() {
+ 	It("Put/Exists/Delete", func() {
+ 		By("saves the playlist to the DB")
+ 		newPls := model.Playlist{Name: "Great!", OwnerID: "userid"}
+-		newPls.AddTracks([]string{"1004", "1003"})
++		newPls.AddMediaFilesByID([]string{"1004", "1003"})
+ 
+ 		By("saves the playlist to the DB")
+ 		Expect(repo.Put(&newPls)).To(BeNil())
+ 
+ 		By("adds repeated songs to a playlist and keeps the order")
+-		newPls.AddTracks([]string{"1004"})
++		newPls.AddMediaFilesByID([]string{"1004"})
+ 		Expect(repo.Put(&newPls)).To(BeNil())
+ 		saved, _ := repo.GetWithTracks(newPls.ID, true, false)
+ 		Expect(saved.Tracks).To(HaveLen(3))
+diff --git a/persistence/playlist_track_repository.go b/persistence/playlist_track_repository.go
+index 80925aa8858a499ec8cc038b9143a69394465c56..01eec0d022299df6b093b3bcf9a15d166eb1e078 100644
+--- a/persistence/playlist_track_repository.go
++++ b/persistence/playlist_track_repository.go
+@@ -47,7 +47,8 @@ func (r *playlistRepository) Tracks(playlistId string, refreshSmartPlaylist bool
+ 	p.db = r.db
+ 	p.tableName = "playlist_tracks"
+ 	p.registerModel(&model.PlaylistTrack{}, map[string]filterFunc{
+-		"missing": booleanFilter,
++		"missing":    booleanFilter,
++		"library_id": libraryIdFilter,
+ 	})
+ 	p.setSortMappings(
+ 		map[string]string{
+@@ -84,11 +85,12 @@ func (r *playlistTrackRepository) Count(options ...rest.QueryOptions) (int64, er
+ }
+ 
+ func (r *playlistTrackRepository) Read(id string) (interface{}, error) {
++	userID := loggedUser(r.ctx).ID
+ 	sel := r.newSelect().
+ 		LeftJoin("annotation on ("+
+ 			"annotation.item_id = media_file_id"+
+ 			" AND annotation.item_type = 'media_file'"+
+-			" AND annotation.user_id = '"+userId(r.ctx)+"')").
++			" AND annotation.user_id = '"+userID+"')").
+ 		Columns(
+ 			"coalesce(starred, 0) as starred",
+ 			"coalesce(play_count, 0) as play_count",
+diff --git a/persistence/scrobble_buffer_repository.go b/persistence/scrobble_buffer_repository.go
+index d0f88903ee12158b8ee5b7ee366e954201f8b39d..ac0d8adebdf3d22a17257f57ffd4c577f66bb422 100644
+--- a/persistence/scrobble_buffer_repository.go
++++ b/persistence/scrobble_buffer_repository.go
+@@ -8,6 +8,7 @@ import (
+ 	. "github.com/Masterminds/squirrel"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/id"
++	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/pocketbase/dbx"
+ )
+ 
+@@ -82,7 +83,20 @@ func (r *scrobbleBufferRepository) Next(service string, userId string) (*model.S
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
++	// Create context with user information for getParticipants call
++	// This is needed because the artist repository requires user context for multi-library support
++	userRepo := NewUserRepository(r.ctx, r.db)
++	user, err := userRepo.Get(res.ScrobbleEntry.UserID)
++	if err != nil {
++		return nil, err
++	}
++	// Temporarily use user context for getParticipants
++	originalCtx := r.ctx
++	r.ctx = request.WithUser(r.ctx, *user)
+ 	res.ScrobbleEntry.Participants, err = r.getParticipants(&res.ScrobbleEntry.MediaFile)
++	r.ctx = originalCtx // Restore original context
++
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/persistence/sql_annotations.go b/persistence/sql_annotations.go
+index daf621ffe4c43d50713a3b7bd288f99096de303f..6691b553c882d1593f4fca900ddfd4d7c1a67632 100644
+--- a/persistence/sql_annotations.go
++++ b/persistence/sql_annotations.go
+@@ -15,15 +15,14 @@ import (
+ const annotationTable = "annotation"
+ 
+ func (r sqlRepository) withAnnotation(query SelectBuilder, idField string) SelectBuilder {
+-	if userId(r.ctx) == invalidUserId {
++	userID := loggedUser(r.ctx).ID
++	if userID == invalidUserId {
+ 		return query
+ 	}
+ 	query = query.
+ 		LeftJoin("annotation on ("+
+ 			"annotation.item_id = "+idField+
+-			// item_ids are unique across different item_types, so the clause below is not needed
+-			//" AND annotation.item_type = '"+r.tableName+"'"+
+-			" AND annotation.user_id = '"+userId(r.ctx)+"')").
++			" AND annotation.user_id = '"+userID+"')").
+ 		Columns(
+ 			"coalesce(starred, 0) as starred",
+ 			"coalesce(rating, 0) as rating",
+@@ -42,8 +41,9 @@ func (r sqlRepository) withAnnotation(query SelectBuilder, idField string) Selec
+ }
+ 
+ func (r sqlRepository) annId(itemID ...string) And {
++	userID := loggedUser(r.ctx).ID
+ 	return And{
+-		Eq{annotationTable + ".user_id": userId(r.ctx)},
++		Eq{annotationTable + ".user_id": userID},
+ 		Eq{annotationTable + ".item_type": r.tableName},
+ 		Eq{annotationTable + ".item_id": itemID},
+ 	}
+@@ -56,8 +56,9 @@ func (r sqlRepository) annUpsert(values map[string]interface{}, itemIDs ...strin
+ 	}
+ 	c, err := r.executeSQL(upd)
+ 	if c == 0 || errors.Is(err, sql.ErrNoRows) {
++		userID := loggedUser(r.ctx).ID
+ 		for _, itemID := range itemIDs {
+-			values["user_id"] = userId(r.ctx)
++			values["user_id"] = userID
+ 			values["item_type"] = r.tableName
+ 			values["item_id"] = itemID
+ 			ins := Insert(annotationTable).SetMap(values)
+@@ -86,8 +87,9 @@ func (r sqlRepository) IncPlayCount(itemID string, ts time.Time) error {
+ 	c, err := r.executeSQL(upd)
+ 
+ 	if c == 0 || errors.Is(err, sql.ErrNoRows) {
++		userID := loggedUser(r.ctx).ID
+ 		values := map[string]interface{}{}
+-		values["user_id"] = userId(r.ctx)
++		values["user_id"] = userID
+ 		values["item_type"] = r.tableName
+ 		values["item_id"] = itemID
+ 		values["play_count"] = 1
+diff --git a/persistence/sql_base_repository.go b/persistence/sql_base_repository.go
+index ea22389a2b9a578d491d7235c4aa3abbb55d6382..9e7a58713da0281768eb56d38e60b9ef8dce8e28 100644
+--- a/persistence/sql_base_repository.go
++++ b/persistence/sql_base_repository.go
+@@ -49,27 +49,14 @@ type sqlRepository struct {
+ 
+ const invalidUserId = "-1"
+ 
+-func userId(ctx context.Context) string {
+-	if user, ok := request.UserFrom(ctx); !ok {
+-		return invalidUserId
+-	} else {
+-		return user.ID
+-	}
+-}
+-
+ func loggedUser(ctx context.Context) *model.User {
+ 	if user, ok := request.UserFrom(ctx); !ok {
+-		return &model.User{}
++		return &model.User{ID: invalidUserId}
+ 	} else {
+ 		return &user
+ 	}
+ }
+ 
+-func isAdmin(ctx context.Context) bool {
+-	user := loggedUser(ctx)
+-	return user.IsAdmin
+-}
+-
+ func (r *sqlRepository) registerModel(instance any, filters map[string]filterFunc) {
+ 	if r.tableName == "" {
+ 		r.tableName = strings.TrimPrefix(reflect.TypeOf(instance).String(), "*model.")
+@@ -199,10 +186,52 @@ func (r sqlRepository) applyFilters(sq SelectBuilder, options ...model.QueryOpti
+ 	return sq
+ }
+ 
++func (r *sqlRepository) withTableName(filter filterFunc) filterFunc {
++	return func(field string, value any) Sqlizer {
++		if r.tableName != "" {
++			field = r.tableName + "." + field
++		}
++		return filter(field, value)
++	}
++}
++
++// libraryIdFilter is a filter function to be added to resources that have a library_id column.
++func libraryIdFilter(_ string, value interface{}) Sqlizer {
++	return Eq{"library_id": value}
++}
++
++// applyLibraryFilter adds library filtering to queries for tables that have a library_id column
++// This ensures users only see content from libraries they have access to
++func (r sqlRepository) applyLibraryFilter(sq SelectBuilder, tableName ...string) SelectBuilder {
++	user := loggedUser(r.ctx)
++
++	// Admin users see all content
++	if user.IsAdmin {
++		return sq
++	}
++
++	// Get user's accessible library IDs
++	userID := loggedUser(r.ctx).ID
++	if userID == invalidUserId {
++		// No user context - return empty result set
++		return sq.Where(Eq{"1": "0"})
++	}
++
++	table := r.tableName
++	if len(tableName) > 0 {
++		table = tableName[0]
++	}
++
++	// Use subquery to filter by user's library access
++	// This approach doesn't require DataStore in context
++	return sq.Where(Expr(table+".library_id IN ("+
++		"SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)", userID))
++}
++
+ func (r sqlRepository) seedKey() string {
+ 	// Seed keys must be all lowercase, or else SQLite3 will encode it, making it not match the seed
+ 	// used in the query. Hashing the user ID and converting it to a hex string will do the trick
+-	userIDHash := md5.Sum([]byte(userId(r.ctx)))
++	userIDHash := md5.Sum([]byte(loggedUser(r.ctx).ID))
+ 	return fmt.Sprintf("%s|%x", r.tableName, userIDHash)
+ }
+ 
+diff --git a/persistence/sql_bookmarks.go b/persistence/sql_bookmarks.go
+index 56645ea21fbd9285221b066d24096f2f759e3fd5..52c4b8e9c44ffe4c0c1d725f98233e75ad15ef7b 100644
+--- a/persistence/sql_bookmarks.go
++++ b/persistence/sql_bookmarks.go
+@@ -15,21 +15,20 @@ import (
+ const bookmarkTable = "bookmark"
+ 
+ func (r sqlRepository) withBookmark(query SelectBuilder, idField string) SelectBuilder {
+-	if userId(r.ctx) == invalidUserId {
++	userID := loggedUser(r.ctx).ID
++	if userID == invalidUserId {
+ 		return query
+ 	}
+ 	return query.
+ 		LeftJoin("bookmark on (" +
+ 			"bookmark.item_id = " + idField +
+-			// item_ids are unique across different item_types, so the clause below is not needed
+-			//" AND bookmark.item_type = '" + r.tableName + "'" +
+-			" AND bookmark.user_id = '" + userId(r.ctx) + "')").
++			" AND bookmark.user_id = '" + userID + "')").
+ 		Columns("coalesce(position, 0) as bookmark_position")
+ }
+ 
+ func (r sqlRepository) bmkID(itemID ...string) And {
+ 	return And{
+-		Eq{bookmarkTable + ".user_id": userId(r.ctx)},
++		Eq{bookmarkTable + ".user_id": loggedUser(r.ctx).ID},
+ 		Eq{bookmarkTable + ".item_type": r.tableName},
+ 		Eq{bookmarkTable + ".item_id": itemID},
+ 	}
+diff --git a/persistence/sql_search.go b/persistence/sql_search.go
+index 3aea958cde7900fc73fa4cc721162834bd154bea..d4d068945b134ae1f214890315ed428de18bdce3 100644
+--- a/persistence/sql_search.go
++++ b/persistence/sql_search.go
+@@ -27,9 +27,9 @@ func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, in
+ 		sq = sq.Where(filter)
+ 		sq = sq.OrderBy(orderBys...)
+ 	} else {
+-		// If the filter is empty, we sort by rowid.
++		// If the filter is empty, we sort by id.
+ 		// This is to speed up the results of `search3?query=""`, for OpenSubsonic
+-		sq = sq.OrderBy(r.tableName + ".rowid")
++		sq = sq.OrderBy(r.tableName + ".id")
+ 	}
+ 	if !includeMissing {
+ 		sq = sq.Where(Eq{r.tableName + ".missing": false})
+diff --git a/persistence/sql_tags.go b/persistence/sql_tags.go
+index d7b48f23e7d0af45a8a154947495bb1c803c8187..b92e18e60a8bc365132ef531e1353c9e957f1dca 100644
+--- a/persistence/sql_tags.go
++++ b/persistence/sql_tags.go
+@@ -1,12 +1,15 @@
+ package persistence
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"fmt"
+ 	"strings"
+ 
+ 	. "github.com/Masterminds/squirrel"
++	"github.com/deluan/rest"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/pocketbase/dbx"
+ )
+ 
+ // Format of a tag in the DB
+@@ -55,3 +58,106 @@ func tagIDFilter(name string, idValue any) Sqlizer {
+ 		},
+ 	)
+ }
++
++// tagLibraryIdFilter filters tags based on library access through the library_tag table
++func tagLibraryIdFilter(_ string, value interface{}) Sqlizer {
++	return Eq{"library_tag.library_id": value}
++}
++
++// baseTagRepository provides common functionality for all tag-based repositories.
++// It handles CRUD operations with optional filtering by tag name.
++type baseTagRepository struct {
++	sqlRepository
++	tagFilter *model.TagName // nil = no filter (all tags), non-nil = filter by specific tag name
++}
++
++// newBaseTagRepository creates a new base tag repository with optional tag filtering.
++// If tagFilter is nil, the repository will work with all tags.
++// If tagFilter is provided, the repository will only work with tags of that specific name.
++func newBaseTagRepository(ctx context.Context, db dbx.Builder, tagFilter *model.TagName) *baseTagRepository {
++	r := &baseTagRepository{
++		tagFilter: tagFilter,
++	}
++	r.ctx = ctx
++	r.db = db
++	r.tableName = "tag"
++	r.registerModel(&model.Tag{}, map[string]filterFunc{
++		"name":       containsFilter("tag_value"),
++		"library_id": tagLibraryIdFilter,
++	})
++	r.setSortMappings(map[string]string{
++		"name": "tag_value",
++	})
++	return r
++}
++
++// newSelect overrides the base implementation to apply tag name filtering and library filtering.
++func (r *baseTagRepository) newSelect(options ...model.QueryOptions) SelectBuilder {
++	user := loggedUser(r.ctx)
++	if user.ID == invalidUserId {
++		// No user context - return empty result set
++		return SelectBuilder{}.Where(Eq{"1": "0"})
++	}
++	sq := r.sqlRepository.newSelect(options...)
++	if r.tagFilter != nil {
++		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
++	}
++	sq = sq.Columns(
++		"tag.id",
++		"tag.tag_value as name",
++		"COALESCE(SUM(library_tag.album_count), 0) as album_count",
++		"COALESCE(SUM(library_tag.media_file_count), 0) as song_count",
++	).
++		LeftJoin("library_tag on library_tag.tag_id = tag.id").
++		// Apply library filtering by joining only with accessible libraries
++		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID).
++		GroupBy("tag.id", "tag.tag_value")
++	return sq
++}
++
++// ResourceRepository interface implementation
++
++func (r *baseTagRepository) Count(options ...rest.QueryOptions) (int64, error) {
++	// Create a query that counts distinct tags without GROUP BY
++	user := loggedUser(r.ctx)
++	if user.ID == invalidUserId {
++		return 0, nil
++	}
++
++	// Build the same base query as newSelect but for counting
++	sq := Select()
++	if r.tagFilter != nil {
++		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
++	}
++
++	// Apply the same joins as newSelect
++	sq = sq.LeftJoin("library_tag on library_tag.tag_id = tag.id").
++		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID)
++
++	return r.count(sq, r.parseRestOptions(r.ctx, options...))
++}
++
++func (r *baseTagRepository) Read(id string) (interface{}, error) {
++	query := r.newSelect().Columns("*").Where(Eq{"id": id})
++	var res model.Tag
++	err := r.queryOne(query, &res)
++	return &res, err
++}
++
++func (r *baseTagRepository) ReadAll(options ...rest.QueryOptions) (interface{}, error) {
++	query := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns("*")
++	var res model.TagList
++	err := r.queryAll(query, &res)
++	return res, err
++}
++
++func (r *baseTagRepository) EntityName() string {
++	return "tag"
++}
++
++func (r *baseTagRepository) NewInstance() interface{} {
++	return model.Tag{}
++}
++
++// Interface compliance check
++var _ model.ResourceRepository = (*baseTagRepository)(nil)
+diff --git a/persistence/tag_repository.go b/persistence/tag_repository.go
+index d63584af0b53994a215f9c56e1f49fa7da992f1b..b224450abd4d9cbf41d8b33d5a32a1c110fc2c97 100644
+--- a/persistence/tag_repository.go
++++ b/persistence/tag_repository.go
+@@ -7,26 +7,22 @@ import (
+ 	"time"
+ 
+ 	. "github.com/Masterminds/squirrel"
+-	"github.com/deluan/rest"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/pocketbase/dbx"
+ )
+ 
+ type tagRepository struct {
+-	sqlRepository
++	*baseTagRepository
+ }
+ 
+ func NewTagRepository(ctx context.Context, db dbx.Builder) model.TagRepository {
+-	r := &tagRepository{}
+-	r.ctx = ctx
+-	r.db = db
+-	r.tableName = "tag"
+-	r.registerModel(&model.Tag{}, nil)
+-	return r
++	return &tagRepository{
++		baseTagRepository: newBaseTagRepository(ctx, db, nil), // nil = no filter, works with all tags
++	}
+ }
+ 
+-func (r *tagRepository) Add(tags ...model.Tag) error {
++func (r *tagRepository) Add(libraryID int, tags ...model.Tag) error {
+ 	for chunk := range slices.Chunk(tags, 200) {
+ 		sq := Insert(r.tableName).Columns("id", "tag_name", "tag_value").
+ 			Suffix("on conflict (id) do nothing")
+@@ -37,34 +33,42 @@ func (r *tagRepository) Add(tags ...model.Tag) error {
+ 		if err != nil {
+ 			return err
+ 		}
++
++		// Create library_tag entries for library filtering
++		libSq := Insert("library_tag").Columns("tag_id", "library_id", "album_count", "media_file_count").
++			Suffix("on conflict (tag_id, library_id) do nothing")
++		for _, t := range chunk {
++			libSq = libSq.Values(t.ID, libraryID, 0, 0)
++		}
++		_, err = r.executeSQL(libSq)
++		if err != nil {
++			return fmt.Errorf("adding library_tag entries: %w", err)
++		}
+ 	}
+ 	return nil
+ }
+ 
+-// UpdateCounts updates the album_count and media_file_count columns in the tag_counts table.
++// UpdateCounts updates the library_tag table with per-library statistics.
+ // Only genres are being updated for now.
+ func (r *tagRepository) UpdateCounts() error {
+ 	template := `
+-with updated_values as (
+-    select jt.value as id, count(distinct %[1]s.id) as %[1]s_count
+-    from %[1]s
+-             join json_tree(tags, '$.genre') as jt
+-    where atom is not null
+-      and key = 'id'
+-    group by jt.value
+-)
+-update tag
+-set %[1]s_count = updated_values.%[1]s_count
+-from updated_values
+-where tag.id = updated_values.id;
++INSERT INTO library_tag (tag_id, library_id, %[1]s_count)
++SELECT jt.value as tag_id, %[1]s.library_id, count(distinct %[1]s.id) as %[1]s_count
++FROM %[1]s
++JOIN json_tree(%[1]s.tags, '$.genre') as jt ON jt.atom IS NOT NULL AND jt.key = 'id'
++JOIN tag ON tag.id = jt.value
++GROUP BY jt.value, %[1]s.library_id
++ON CONFLICT (tag_id, library_id) 
++DO UPDATE SET %[1]s_count = excluded.%[1]s_count;
+ `
++
+ 	for _, table := range []string{"album", "media_file"} {
+ 		start := time.Now()
+ 		query := Expr(fmt.Sprintf(template, table))
+ 		c, err := r.executeSQL(query)
+-		log.Debug(r.ctx, "Updated tag counts", "table", table, "elapsed", time.Since(start), "updated", c)
++		log.Debug(r.ctx, "Updated library tag counts", "table", table, "elapsed", time.Since(start), "updated", c)
+ 		if err != nil {
+-			return fmt.Errorf("updating %s tag counts: %w", table, err)
++			return fmt.Errorf("updating %s library tag counts: %w", table, err)
+ 		}
+ 	}
+ 	return nil
+@@ -74,6 +78,11 @@ func (r *tagRepository) purgeUnused() error {
+ 	del := Delete(r.tableName).Where(`	
+ 	id not in (select jt.value
+ 	from album left join json_tree(album.tags, '$') as jt
++	where atom is not null
++	  and key = 'id'
++	UNION 
++	select jt.value
++	from media_file left join json_tree(media_file.tags, '$') as jt
+ 	where atom is not null
+ 	  and key = 'id')
+ `)
+@@ -87,30 +96,4 @@ func (r *tagRepository) purgeUnused() error {
+ 	return err
+ }
+ 
+-func (r *tagRepository) Count(options ...rest.QueryOptions) (int64, error) {
+-	return r.count(r.newSelect(), r.parseRestOptions(r.ctx, options...))
+-}
+-
+-func (r *tagRepository) Read(id string) (interface{}, error) {
+-	query := r.newSelect().Columns("*").Where(Eq{"id": id})
+-	var res model.Tag
+-	err := r.queryOne(query, &res)
+-	return &res, err
+-}
+-
+-func (r *tagRepository) ReadAll(options ...rest.QueryOptions) (interface{}, error) {
+-	query := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns("*")
+-	var res model.TagList
+-	err := r.queryAll(query, &res)
+-	return res, err
+-}
+-
+-func (r *tagRepository) EntityName() string {
+-	return "tag"
+-}
+-
+-func (r *tagRepository) NewInstance() interface{} {
+-	return model.Tag{}
+-}
+-
+ var _ model.ResourceRepository = &tagRepository{}
+diff --git a/persistence/tag_repository_test.go b/persistence/tag_repository_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c3947a9f7d52bff88d49f665579d7fdb4ace10f8
+--- /dev/null
++++ b/persistence/tag_repository_test.go
+@@ -0,0 +1,311 @@
++package persistence
++
++import (
++	"context"
++	"slices"
++	"strings"
++
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/id"
++	"github.com/navidrome/navidrome/model/request"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"github.com/pocketbase/dbx"
++)
++
++var _ = Describe("TagRepository", func() {
++	var repo model.TagRepository
++	var restRepo model.ResourceRepository
++	var ctx context.Context
++
++	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++		ctx = request.WithUser(log.NewContext(context.TODO()), model.User{ID: "userid", UserName: "johndoe", IsAdmin: true})
++		tagRepo := NewTagRepository(ctx, GetDBXBuilder())
++		repo = tagRepo
++		restRepo = tagRepo.(model.ResourceRepository)
++
++		// Clean the database before each test to ensure isolation
++		db := GetDBXBuilder()
++		_, err := db.NewQuery("DELETE FROM tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("DELETE FROM library_tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Ensure library 1 exists (if it doesn't already)
++		_, err = db.NewQuery("INSERT OR IGNORE INTO library (id, name, path, default_new_users) VALUES (1, 'Test Library', '/test', true)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Ensure the admin user has access to library 1
++		_, err = db.NewQuery("INSERT OR IGNORE INTO user_library (user_id, library_id) VALUES ('userid', 1)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Add comprehensive test data that covers all test scenarios
++		newTag := func(name, value string) model.Tag {
++			return model.Tag{ID: id.NewTagID(name, value), TagName: model.TagName(name), TagValue: value}
++		}
++
++		err = repo.Add(1,
++			// Genre tags
++			newTag("genre", "rock"),
++			newTag("genre", "pop"),
++			newTag("genre", "jazz"),
++			newTag("genre", "electronic"),
++			newTag("genre", "classical"),
++			newTag("genre", "ambient"),
++			newTag("genre", "techno"),
++			newTag("genre", "house"),
++			newTag("genre", "trance"),
++			newTag("genre", "Alternative Rock"),
++			newTag("genre", "Blues"),
++			newTag("genre", "Country"),
++			// Mood tags
++			newTag("mood", "happy"),
++			newTag("mood", "sad"),
++			newTag("mood", "energetic"),
++			newTag("mood", "calm"),
++			// Other tag types
++			newTag("instrument", "guitar"),
++			newTag("instrument", "piano"),
++			newTag("decade", "1980s"),
++			newTag("decade", "1990s"),
++		)
++		Expect(err).ToNot(HaveOccurred())
++	})
++
++	Describe("Add", func() {
++		It("should handle adding new tags", func() {
++			newTag := model.Tag{
++				ID:       id.NewTagID("genre", "experimental"),
++				TagName:  "genre",
++				TagValue: "experimental",
++			}
++
++			err := repo.Add(1, newTag)
++			Expect(err).ToNot(HaveOccurred())
++
++			// Verify tag was added
++			result, err := restRepo.Read(newTag.ID)
++			Expect(err).ToNot(HaveOccurred())
++			resultTag := result.(*model.Tag)
++			Expect(resultTag.TagValue).To(Equal("experimental"))
++
++			// Check count increased
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(21))) // 20 from dataset + 1 new
++		})
++
++		It("should handle duplicate tags gracefully", func() {
++			// Try to add a duplicate tag
++			duplicateTag := model.Tag{
++				ID:       id.NewTagID("genre", "rock"), // This already exists
++				TagName:  "genre",
++				TagValue: "rock",
++			}
++
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // Still 20 tags
++
++			err = repo.Add(1, duplicateTag)
++			Expect(err).ToNot(HaveOccurred()) // Should not error
++
++			// Count should remain the same
++			count, err = restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // Still 20 tags
++		})
++	})
++
++	Describe("UpdateCounts", func() {
++		It("should update tag counts successfully", func() {
++			err := repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle empty database gracefully", func() {
++			// Clear the database first
++			db := GetDBXBuilder()
++			_, err := db.NewQuery("DELETE FROM tag").Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle albums with non-existent tag IDs in JSON gracefully", func() {
++			// Regression test for foreign key constraint error
++			// Create an album with tag IDs in JSON that don't exist in tag table
++			db := GetDBXBuilder()
++
++			// First, create a non-existent tag ID (this simulates tags in JSON that aren't in tag table)
++			nonExistentTagID := id.NewTagID("genre", "nonexistent-genre")
++
++			// Create album with JSON containing the non-existent tag ID
++			albumWithBadTags := `{"genre":[{"id":"` + nonExistentTagID + `","value":"nonexistent-genre"}]}`
++
++			// Insert album directly into database with the problematic JSON
++			_, err := db.NewQuery("INSERT INTO album (id, name, library_id, tags) VALUES ({:id}, {:name}, {:lib}, {:tags})").
++				Bind(dbx.Params{
++					"id":   "test-album-bad-tags",
++					"name": "Album With Bad Tags",
++					"lib":  1,
++					"tags": albumWithBadTags,
++				}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			// This should not fail with foreign key constraint error
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++
++			// Cleanup
++			_, err = db.NewQuery("DELETE FROM album WHERE id = {:id}").
++				Bind(dbx.Params{"id": "test-album-bad-tags"}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle media files with non-existent tag IDs in JSON gracefully", func() {
++			// Regression test for foreign key constraint error with media files
++			db := GetDBXBuilder()
++
++			// Create a non-existent tag ID
++			nonExistentTagID := id.NewTagID("genre", "another-nonexistent-genre")
++
++			// Create media file with JSON containing the non-existent tag ID
++			mediaFileWithBadTags := `{"genre":[{"id":"` + nonExistentTagID + `","value":"another-nonexistent-genre"}]}`
++
++			// Insert media file directly into database with the problematic JSON
++			_, err := db.NewQuery("INSERT INTO media_file (id, title, library_id, tags) VALUES ({:id}, {:title}, {:lib}, {:tags})").
++				Bind(dbx.Params{
++					"id":    "test-media-bad-tags",
++					"title": "Media File With Bad Tags",
++					"lib":   1,
++					"tags":  mediaFileWithBadTags,
++				}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			// This should not fail with foreign key constraint error
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++
++			// Cleanup
++			_, err = db.NewQuery("DELETE FROM media_file WHERE id = {:id}").
++				Bind(dbx.Params{"id": "test-media-bad-tags"}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		})
++	})
++
++	Describe("Count", func() {
++		It("should return correct count of tags", func() {
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // From the test dataset
++		})
++	})
++
++	Describe("Read", func() {
++		It("should return existing tag", func() {
++			rockID := id.NewTagID("genre", "rock")
++			result, err := restRepo.Read(rockID)
++			Expect(err).ToNot(HaveOccurred())
++			resultTag := result.(*model.Tag)
++			Expect(resultTag.ID).To(Equal(rockID))
++			Expect(resultTag.TagName).To(Equal(model.TagName("genre")))
++			Expect(resultTag.TagValue).To(Equal("rock"))
++		})
++
++		It("should return error for non-existent tag", func() {
++			_, err := restRepo.Read("non-existent-id")
++			Expect(err).To(HaveOccurred())
++		})
++	})
++
++	Describe("ReadAll", func() {
++		It("should return all tags from dataset", func() {
++			result, err := restRepo.ReadAll()
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(20))
++		})
++
++		It("should filter tags by partial value correctly", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%rock%"}, // Tags containing 'rock'
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(2)) // "rock" and "Alternative Rock"
++
++			// Verify all returned tags contain 'rock' in their value
++			for _, tag := range tags {
++				Expect(strings.ToLower(tag.TagValue)).To(ContainSubstring("rock"))
++			}
++		})
++
++		It("should filter tags by partial value using LIKE", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%e%"}, // Tags containing 'e'
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(8)) // electronic, house, trance, energetic, Blues, decade x2, Alternative Rock
++
++			// Verify all returned tags contain 'e' in their value
++			for _, tag := range tags {
++				Expect(strings.ToLower(tag.TagValue)).To(ContainSubstring("e"))
++			}
++		})
++
++		It("should sort tags by value ascending", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%r%"}, // Tags containing 'r'
++				Sort:    "name",
++				Order:   "asc",
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(7))
++
++			Expect(slices.IsSortedFunc(tags, func(a, b model.Tag) int {
++				return strings.Compare(strings.ToLower(a.TagValue), strings.ToLower(b.TagValue))
++			}))
++		})
++
++		It("should sort tags by value descending", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%r%"}, // Tags containing 'r'
++				Sort:    "name",
++				Order:   "desc",
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(7))
++
++			Expect(slices.IsSortedFunc(tags, func(a, b model.Tag) int {
++				return strings.Compare(strings.ToLower(b.TagValue), strings.ToLower(a.TagValue)) // Descending order
++			}))
++		})
++	})
++
++	Describe("EntityName", func() {
++		It("should return correct entity name", func() {
++			name := restRepo.EntityName()
++			Expect(name).To(Equal("tag"))
++		})
++	})
++
++	Describe("NewInstance", func() {
++		It("should return new tag instance", func() {
++			instance := restRepo.NewInstance()
++			Expect(instance).To(BeAssignableToTypeOf(model.Tag{}))
++		})
++	})
++})
+diff --git a/persistence/transcoding_repository.go b/persistence/transcoding_repository.go
+index bdcbe72625fbc3a2d599da59b9323dbae7029ab8..125f575412627be15754003708f50ab281d76baa 100644
+--- a/persistence/transcoding_repository.go
++++ b/persistence/transcoding_repository.go
+@@ -41,7 +41,7 @@ func (r *transcodingRepository) FindByFormat(format string) (*model.Transcoding,
+ }
+ 
+ func (r *transcodingRepository) Put(t *model.Transcoding) error {
+-	if !isAdmin(r.ctx) {
++	if !loggedUser(r.ctx).IsAdmin {
+ 		return rest.ErrPermissionDenied
+ 	}
+ 	_, err := r.put(t.ID, t)
+@@ -72,7 +72,7 @@ func (r *transcodingRepository) NewInstance() interface{} {
+ }
+ 
+ func (r *transcodingRepository) Save(entity interface{}) (string, error) {
+-	if !isAdmin(r.ctx) {
++	if !loggedUser(r.ctx).IsAdmin {
+ 		return "", rest.ErrPermissionDenied
+ 	}
+ 	t := entity.(*model.Transcoding)
+@@ -84,7 +84,7 @@ func (r *transcodingRepository) Save(entity interface{}) (string, error) {
+ }
+ 
+ func (r *transcodingRepository) Update(id string, entity interface{}, cols ...string) error {
+-	if !isAdmin(r.ctx) {
++	if !loggedUser(r.ctx).IsAdmin {
+ 		return rest.ErrPermissionDenied
+ 	}
+ 	t := entity.(*model.Transcoding)
+@@ -97,7 +97,7 @@ func (r *transcodingRepository) Update(id string, entity interface{}, cols ...st
+ }
+ 
+ func (r *transcodingRepository) Delete(id string) error {
+-	if !isAdmin(r.ctx) {
++	if !loggedUser(r.ctx).IsAdmin {
+ 		return rest.ErrPermissionDenied
+ 	}
+ 	err := r.delete(Eq{"id": id})
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index 073e32963631557c09aab5a60cfb79ef2231fdf9..a7181b1a74c59edb67bd2eb65cd983b715f242d7 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -3,6 +3,7 @@ package persistence
+ import (
+ 	"context"
+ 	"crypto/sha256"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"strings"
+@@ -17,6 +18,7 @@ import (
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/id"
+ 	"github.com/navidrome/navidrome/utils"
++	"github.com/navidrome/navidrome/utils/slice"
+ 	"github.com/pocketbase/dbx"
+ )
+ 
+@@ -24,6 +26,26 @@ type userRepository struct {
+ 	sqlRepository
+ }
+ 
++type dbUser struct {
++	*model.User   `structs:",flatten"`
++	LibrariesJSON string `structs:"-" json:"-"`
++}
++
++func (u *dbUser) PostScan() error {
++	if u.LibrariesJSON != "" {
++		if err := json.Unmarshal([]byte(u.LibrariesJSON), &u.User.Libraries); err != nil {
++			return fmt.Errorf("parsing user libraries from db: %w", err)
++		}
++	}
++	return nil
++}
++
++type dbUsers []dbUser
++
++func (us dbUsers) toModels() model.Users {
++	return slice.Map(us, func(u dbUser) model.User { return *u.User })
++}
++
+ var (
+ 	once   sync.Once
+ 	encKey []byte
+@@ -33,8 +55,10 @@ func NewUserRepository(ctx context.Context, db dbx.Builder) model.UserRepository
+ 	r := &userRepository{}
+ 	r.ctx = ctx
+ 	r.db = db
++	r.tableName = "user"
+ 	r.registerModel(&model.User{}, map[string]filterFunc{
+ 		"password": invalidFilter(ctx),
++		"name":     r.withTableName(startsWithFilter),
+ 	})
+ 	once.Do(func() {
+ 		_ = r.initPasswordEncryptionKey()
+@@ -42,28 +66,48 @@ func NewUserRepository(ctx context.Context, db dbx.Builder) model.UserRepository
+ 	return r
+ }
+ 
++// selectUserWithLibraries returns a SelectBuilder that includes library information
++func (r *userRepository) selectUserWithLibraries(options ...model.QueryOptions) SelectBuilder {
++	return r.newSelect(options...).
++		Columns(`user.*`,
++			`COALESCE(json_group_array(json_object(
++				'id', library.id,
++				'name', library.name,
++				'path', library.path,
++				'remote_path', library.remote_path,
++				'last_scan_at', library.last_scan_at,
++				'last_scan_started_at', library.last_scan_started_at,
++				'full_scan_in_progress', library.full_scan_in_progress,
++				'updated_at', library.updated_at,
++				'created_at', library.created_at
++			)) FILTER (WHERE library.id IS NOT NULL), '[]') AS libraries_json`).
++		LeftJoin("user_library ul ON user.id = ul.user_id").
++		LeftJoin("library ON ul.library_id = library.id").
++		GroupBy("user.id")
++}
++
+ func (r *userRepository) CountAll(qo ...model.QueryOptions) (int64, error) {
+ 	return r.count(Select(), qo...)
+ }
+ 
+ func (r *userRepository) Get(id string) (*model.User, error) {
+-	sel := r.newSelect().Columns("*").Where(Eq{"id": id})
+-	var res model.User
++	sel := r.selectUserWithLibraries().Where(Eq{"user.id": id})
++	var res dbUser
+ 	err := r.queryOne(sel, &res)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return &res, nil
++	return res.User, nil
+ }
+ 
+ func (r *userRepository) GetAll(options ...model.QueryOptions) (model.Users, error) {
+-	sel := r.newSelect(options...).Columns("*")
+-	res := model.Users{}
++	sel := r.selectUserWithLibraries(options...)
++	var res dbUsers
+ 	err := r.queryAll(sel, &res)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return res, nil
++	return res.toModels(), nil
+ }
+ 
+ func (r *userRepository) Put(u *model.User) error {
+@@ -79,38 +123,65 @@ func (r *userRepository) Put(u *model.User) error {
+ 		return fmt.Errorf("error converting user to SQL args: %w", err)
+ 	}
+ 	delete(values, "current_password")
++
++	// Save/update the user
+ 	update := Update(r.tableName).Where(Eq{"id": u.ID}).SetMap(values)
+ 	count, err := r.executeSQL(update)
+ 	if err != nil {
+ 		return err
+ 	}
+-	if count > 0 {
+-		return nil
++
++	isNewUser := count == 0
++	if isNewUser {
++		values["created_at"] = time.Now()
++		insert := Insert(r.tableName).SetMap(values)
++		_, err = r.executeSQL(insert)
++		if err != nil {
++			return err
++		}
+ 	}
+-	values["created_at"] = time.Now()
+-	insert := Insert(r.tableName).SetMap(values)
+-	_, err = r.executeSQL(insert)
+-	return err
++
++	// Auto-assign all libraries to admin users in a single SQL operation
++	if u.IsAdmin {
++		sql := Expr(
++			"INSERT OR IGNORE INTO user_library (user_id, library_id) SELECT ?, id FROM library",
++			u.ID,
++		)
++		if _, err := r.executeSQL(sql); err != nil {
++			return fmt.Errorf("failed to assign all libraries to admin user: %w", err)
++		}
++	} else if isNewUser { // Only for new regular users
++		// Auto-assign default libraries to new regular users
++		sql := Expr(
++			"INSERT OR IGNORE INTO user_library (user_id, library_id) SELECT ?, id FROM library WHERE default_new_users = true",
++			u.ID,
++		)
++		if _, err := r.executeSQL(sql); err != nil {
++			return fmt.Errorf("failed to assign default libraries to new user: %w", err)
++		}
++	}
++
++	return nil
+ }
+ 
+ func (r *userRepository) FindFirstAdmin() (*model.User, error) {
+-	sel := r.newSelect(model.QueryOptions{Sort: "updated_at", Max: 1}).Columns("*").Where(Eq{"is_admin": true})
+-	var usr model.User
++	sel := r.selectUserWithLibraries(model.QueryOptions{Sort: "updated_at", Max: 1}).Where(Eq{"user.is_admin": true})
++	var usr dbUser
+ 	err := r.queryOne(sel, &usr)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return &usr, nil
++	return usr.User, nil
+ }
+ 
+ func (r *userRepository) FindByUsername(username string) (*model.User, error) {
+-	sel := r.newSelect().Columns("*").Where(Expr("user_name = ? COLLATE NOCASE", username))
+-	var usr model.User
++	sel := r.selectUserWithLibraries().Where(Expr("user.user_name = ? COLLATE NOCASE", username))
++	var usr dbUser
+ 	err := r.queryOne(sel, &usr)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return &usr, nil
++	return usr.User, nil
+ }
+ 
+ func (r *userRepository) FindByUsernameWithPassword(username string) (*model.User, error) {
+@@ -365,6 +436,39 @@ func (r *userRepository) decryptAllPasswords(users model.Users) error {
+ 	return nil
+ }
+ 
++// Library association methods
++
++func (r *userRepository) GetUserLibraries(userID string) (model.Libraries, error) {
++	sel := Select("l.*").
++		From("library l").
++		Join("user_library ul ON l.id = ul.library_id").
++		Where(Eq{"ul.user_id": userID}).
++		OrderBy("l.name")
++
++	var res model.Libraries
++	err := r.queryAll(sel, &res)
++	return res, err
++}
++
++func (r *userRepository) SetUserLibraries(userID string, libraryIDs []int) error {
++	// Remove existing associations
++	delSql := Delete("user_library").Where(Eq{"user_id": userID})
++	if _, err := r.executeSQL(delSql); err != nil {
++		return err
++	}
++
++	// Add new associations
++	if len(libraryIDs) > 0 {
++		insert := Insert("user_library").Columns("user_id", "library_id")
++		for _, libID := range libraryIDs {
++			insert = insert.Values(userID, libID)
++		}
++		_, err := r.executeSQL(insert)
++		return err
++	}
++	return nil
++}
++
+ var _ model.UserRepository = (*userRepository)(nil)
+ var _ rest.Repository = (*userRepository)(nil)
+ var _ rest.Persistable = (*userRepository)(nil)
+diff --git a/scanner/controller_test.go b/scanner/controller_test.go
+index 4f6576a39a1fa744467015364404ec3c8e4c2144..e551e15b170f28f3a8f3f1ac33fc5961eb29d85b 100644
+--- a/scanner/controller_test.go
++++ b/scanner/controller_test.go
+@@ -9,7 +9,6 @@ import (
+ 	"github.com/navidrome/navidrome/core/artwork"
+ 	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/db"
+-	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/persistence"
+ 	"github.com/navidrome/navidrome/scanner"
+ 	"github.com/navidrome/navidrome/server/events"
+@@ -32,7 +31,6 @@ var _ = Describe("Controller", func() {
+ 			ds = &tests.MockDataStore{RealDS: persistence.New(db.Db())}
+ 			ds.MockedProperty = &tests.MockedPropertyRepo{}
+ 			ctrl = scanner.New(ctx, ds, artwork.NoopCacheWarmer(), events.NoopBroker(), core.NewPlaylists(ds), metrics.NewNoopInstance())
+-			Expect(ds.Library(ctx).Put(&model.Library{ID: 1, Name: "lib", Path: "/tmp"})).To(Succeed())
+ 		})
+ 
+ 		It("includes last scan error", func() {
+diff --git a/scanner/phase_1_folders.go b/scanner/phase_1_folders.go
+index 8397d6924da0ac3838a6e2c0a19f9365e9825d7f..32a4d99bfba3b4678af57d80fa1569ddf9983e57 100644
+--- a/scanner/phase_1_folders.go
++++ b/scanner/phase_1_folders.go
+@@ -336,7 +336,7 @@ func (p *phaseFolders) persistChanges(entry *folderEntry) (*folderEntry, error)
+ 		}
+ 
+ 		// Save all tags to DB
+-		err = tagRepo.Add(entry.tags...)
++		err = tagRepo.Add(entry.job.lib.ID, entry.tags...)
+ 		if err != nil {
+ 			log.Error(p.ctx, "Scanner: Error persisting tags to DB", "folder", entry.path, err)
+ 			return err
+diff --git a/scanner/scanner_test.go b/scanner/scanner_test.go
+index 6bb74997f21e674eb70b4a94fc4e1db9a4445f1f..e7e354f21f293d6f032aec9baece1c10acf46ce6 100644
+--- a/scanner/scanner_test.go
++++ b/scanner/scanner_test.go
+@@ -58,12 +58,14 @@ var _ = Describe("Scanner", Ordered, func() {
+ 	})
+ 
+ 	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++		conf.Server.MusicFolder = "fake:///music" // Set to match test library path
++		conf.Server.DevExternalScanner = false
++
+ 		db.Init(ctx)
+ 		DeferCleanup(func() {
+ 			Expect(tests.ClearDB()).To(Succeed())
+ 		})
+-		DeferCleanup(configtest.SetupConfig())
+-		conf.Server.DevExternalScanner = false
+ 
+ 		ds = &tests.MockDataStore{RealDS: persistence.New(db.Db())}
+ 		mfRepo = &mockMediaFileRepo{
+@@ -71,6 +73,16 @@ var _ = Describe("Scanner", Ordered, func() {
+ 		}
+ 		ds.MockedMediaFile = mfRepo
+ 
++		// Create the admin user in the database to match the context
++		adminUser := model.User{
++			ID:          "123",
++			UserName:    "admin",
++			Name:        "Admin User",
++			IsAdmin:     true,
++			NewPassword: "password",
++		}
++		Expect(ds.User(ctx).Put(&adminUser)).To(Succeed())
++
+ 		s = scanner.New(ctx, ds, artwork.NoopCacheWarmer(), events.NoopBroker(),
+ 			core.NewPlaylists(ds), metrics.NewNoopInstance())
+ 
+diff --git a/server/subsonic/browsing.go b/server/subsonic/browsing.go
+index db4e6ded1f06b85503720e565b74f1bb88a2d644..cd77041e091bdda1436646fcb086d85917e43257 100644
+--- a/server/subsonic/browsing.go
++++ b/server/subsonic/browsing.go
+@@ -38,7 +38,7 @@ func (api *Router) getArtist(r *http.Request, libId int, ifModifiedSince time.Ti
+ 
+ 	var indexes model.ArtistIndexes
+ 	if lib.LastScanAt.After(ifModifiedSince) {
+-		indexes, err = api.ds.Artist(ctx).GetIndex(false, model.RoleAlbumArtist)
++		indexes, err = api.ds.Artist(ctx).GetIndex(false, []int{libId}, model.RoleAlbumArtist)
+ 		if err != nil {
+ 			log.Error(ctx, "Error retrieving Indexes", err)
+ 			return nil, 0, err
+diff --git a/server/subsonic/playlists.go b/server/subsonic/playlists.go
+index 83b0408ff995461892a3dc36fef6df957c0187dd..23fac68147ad396c35a02ccca19a28cbd7c3b758 100644
+--- a/server/subsonic/playlists.go
++++ b/server/subsonic/playlists.go
+@@ -76,7 +76,7 @@ func (api *Router) create(ctx context.Context, playlistId, name string, ids []st
+ 			pls.OwnerID = owner.ID
+ 		}
+ 		pls.Tracks = nil
+-		pls.AddTracks(ids)
++		pls.AddMediaFilesByID(ids)
+ 
+ 		err = tx.Playlist(ctx).Put(pls)
+ 		playlistId = pls.ID
+diff --git a/server/subsonic/searching.go b/server/subsonic/searching.go
+index f66846f355a3b0226e34ec2caa3469f6a0c229cc..809c4eeef368bb9114687cc86dcdd336d12b8ff4 100644
+--- a/server/subsonic/searching.go
++++ b/server/subsonic/searching.go
+@@ -41,7 +41,7 @@ func (api *Router) getSearchParams(r *http.Request) (*searchParams, error) {
+ 	return sp, nil
+ }
+ 
+-type searchFunc[T any] func(q string, offset int, size int, includeMissing bool) (T, error)
++type searchFunc[T any] func(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (T, error)
+ 
+ func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, size int, result *T) func() error {
+ 	return func() error {

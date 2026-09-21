@@ -1,0 +1,86 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index b0c9223eb2b5fb867d38f99c0a7eb86a564e0396..4a01ad78cc920375ed401a8c601d981fde4e848b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,18 @@ TBD
+ ===
+ Unreleased changes. Release notes have not yet been written.
+ 
++Bug fixes:
++
++* [BUG #829](https://github.com/BurntSushi/ripgrep/issues/829),
++  [BUG #2731](https://github.com/BurntSushi/ripgrep/issues/2731),
++  [BUG #2747](https://github.com/BurntSushi/ripgrep/issues/2747),
++  [BUG #2778](https://github.com/BurntSushi/ripgrep/issues/2778),
++  [BUG #2836](https://github.com/BurntSushi/ripgrep/issues/2836),
++  [BUG #2933](https://github.com/BurntSushi/ripgrep/pull/2933):
++  Fix bug related to gitignores from parent directories.
++* [BUG #3173](https://github.com/BurntSushi/ripgrep/issues/3173):
++  Fix ancestor ignore filter bug when searching whitelisted hidden files.
++
+ Feature enhancements:
+ 
+ * [FEATURE #2708](https://github.com/BurntSushi/ripgrep/pull/2708):
+diff --git a/crates/ignore/src/dir.rs b/crates/ignore/src/dir.rs
+index b302943ab5a210f2ddad2a77c1611106a6f52165..7c623d441d9a0628afedd7db736c5fe5000fbcc4 100644
+--- a/crates/ignore/src/dir.rs
++++ b/crates/ignore/src/dir.rs
+@@ -461,21 +461,27 @@ impl Ignore {
+                 // off of `path`. Overall, this seems a little ham-fisted, but
+                 // it does fix a nasty bug. It should do fine until we overhaul
+                 // this crate.
+-                let dirpath = self.0.dir.as_path();
+-                let path_prefix = match strip_prefix("./", dirpath) {
+-                    None => dirpath,
+-                    Some(stripped_dot_slash) => stripped_dot_slash,
+-                };
+-                let path = match strip_prefix(path_prefix, path) {
+-                    None => abs_parent_path.join(path),
+-                    Some(p) => {
+-                        let p = match strip_prefix("/", p) {
+-                            None => p,
+-                            Some(p) => p,
+-                        };
+-                        abs_parent_path.join(p)
+-                    }
+-                };
++                let path = abs_parent_path.join(
++                    self.parents()
++                        .take_while(|ig| !ig.0.is_absolute_parent)
++                        .last()
++                        .map_or(path, |ig| {
++                            // This is a weird special case when ripgrep users
++                            // search with just a `.`, as some tools do
++                            // automatically (like consult). In this case, if
++                            // we don't bail out now, the code below will strip
++                            // a leading `.` from `path`, which might mangle
++                            // a hidden file name!
++                            if ig.0.dir.as_path() == Path::new(".") {
++                                return path;
++                            }
++                            let without_dot_slash =
++                                strip_if_is_prefix("./", ig.0.dir.as_path());
++                            let relative_base =
++                                strip_if_is_prefix(without_dot_slash, path);
++                            strip_if_is_prefix("/", relative_base)
++                        }),
++                );
+ 
+                 for ig in
+                     self.parents().skip_while(|ig| !ig.0.is_absolute_parent)
+@@ -874,6 +880,15 @@ fn resolve_git_commondir(
+     Ok(commondir_abs)
+ }
+ 
++/// Strips `prefix` from `path` if it's a prefix, otherwise returns `path`
++/// unchanged.
++fn strip_if_is_prefix<'a, P: AsRef<Path> + ?Sized>(
++    prefix: &'a P,
++    path: &'a Path,
++) -> &'a Path {
++    strip_prefix(prefix, path).map_or(path, |p| p)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{io::Write, path::Path};

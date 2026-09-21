@@ -1,0 +1,680 @@
+diff --git a/core/configcenter/configurator.go b/core/configcenter/configurator.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..cfd02a8068664f8c73314f751eea252d816db68d
+--- /dev/null
++++ b/core/configcenter/configurator.go
+@@ -0,0 +1,200 @@
++package configurator
++
++import (
++	"errors"
++	"fmt"
++	"reflect"
++	"strings"
++	"sync"
++	"sync/atomic"
++
++	"github.com/zeromicro/go-zero/core/configcenter/subscriber"
++	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/mapping"
++	"github.com/zeromicro/go-zero/core/threading"
++)
++
++var (
++	errEmptyConfig            = errors.New("empty config value")
++	errMissingUnmarshalerType = errors.New("missing unmarshaler type")
++)
++
++// Configurator is the interface for configuration center.
++type Configurator[T any] interface {
++	// GetConfig returns the subscription value.
++	GetConfig() (T, error)
++	// AddListener adds a listener to the subscriber.
++	AddListener(listener func())
++}
++
++type (
++	// Config is the configuration for Configurator.
++	Config struct {
++		// Type is the value type, yaml, json or toml.
++		Type string `json:",default=yaml,options=[yaml,json,toml]"`
++		// Log is the flag to control logging.
++		Log bool `json:",default=true"`
++	}
++
++	configCenter[T any] struct {
++		conf        Config
++		unmarshaler LoaderFn
++		subscriber  subscriber.Subscriber
++		listeners   []func()
++		lock        sync.Mutex
++		snapshot    atomic.Value
++	}
++
++	value[T any] struct {
++		data        string
++		marshalData T
++		err         error
++	}
++)
++
++// Configurator is the interface for configuration center.
++var _ Configurator[any] = (*configCenter[any])(nil)
++
++// MustNewConfigCenter returns a Configurator, exits on errors.
++func MustNewConfigCenter[T any](c Config, subscriber subscriber.Subscriber) Configurator[T] {
++	cc, err := NewConfigCenter[T](c, subscriber)
++	logx.Must(err)
++	return cc
++}
++
++// NewConfigCenter returns a Configurator.
++func NewConfigCenter[T any](c Config, subscriber subscriber.Subscriber) (Configurator[T], error) {
++	unmarshaler, ok := Unmarshaler(strings.ToLower(c.Type))
++	if !ok {
++		return nil, fmt.Errorf("unknown format: %s", c.Type)
++	}
++
++	cc := &configCenter[T]{
++		conf:        c,
++		unmarshaler: unmarshaler,
++		subscriber:  subscriber,
++	}
++
++	if err := cc.loadConfig(); err != nil {
++		return nil, err
++	}
++
++	if err := cc.subscriber.AddListener(cc.onChange); err != nil {
++		return nil, err
++	}
++
++	if _, err := cc.GetConfig(); err != nil {
++		return nil, err
++	}
++
++	return cc, nil
++}
++
++// AddListener adds listener to s.
++func (c *configCenter[T]) AddListener(listener func()) {
++	c.lock.Lock()
++	defer c.lock.Unlock()
++	c.listeners = append(c.listeners, listener)
++}
++
++// GetConfig return structured config.
++func (c *configCenter[T]) GetConfig() (T, error) {
++	v := c.value()
++	if v == nil || len(v.data) == 0 {
++		var empty T
++		return empty, errEmptyConfig
++	}
++
++	return v.marshalData, v.err
++}
++
++// Value returns the subscription value.
++func (c *configCenter[T]) Value() string {
++	v := c.value()
++	if v == nil {
++		return ""
++	}
++	return v.data
++}
++
++func (c *configCenter[T]) loadConfig() error {
++	v, err := c.subscriber.Value()
++	if err != nil {
++		if c.conf.Log {
++			logx.Errorf("ConfigCenter loads changed configuration, error: %v", err)
++		}
++		return err
++	}
++
++	if c.conf.Log {
++		logx.Infof("ConfigCenter loads changed configuration, content [%s]", v)
++	}
++
++	c.snapshot.Store(c.genValue(v))
++	return nil
++}
++
++func (c *configCenter[T]) onChange() {
++	if err := c.loadConfig(); err != nil {
++		return
++	}
++
++	c.lock.Lock()
++	listeners := make([]func(), len(c.listeners))
++	copy(listeners, c.listeners)
++	c.lock.Unlock()
++
++	for _, l := range listeners {
++		threading.GoSafe(l)
++	}
++}
++
++func (c *configCenter[T]) value() *value[T] {
++	content := c.snapshot.Load()
++	if content == nil {
++		return nil
++	}
++	return content.(*value[T])
++}
++
++func (c *configCenter[T]) genValue(data string) *value[T] {
++	v := &value[T]{
++		data: data,
++	}
++	if len(data) == 0 {
++		return v
++	}
++
++	t := reflect.TypeOf(v.marshalData)
++	// if the type is nil, it means that the user has not set the type of the configuration.
++	if t == nil {
++		v.err = errMissingUnmarshalerType
++		return v
++	}
++
++	t = mapping.Deref(t)
++	switch t.Kind() {
++	case reflect.Struct, reflect.Array, reflect.Slice:
++		if err := c.unmarshaler([]byte(data), &v.marshalData); err != nil {
++			v.err = err
++			if c.conf.Log {
++				logx.Errorf("ConfigCenter unmarshal configuration failed, err: %+v, content [%s]",
++					err.Error(), data)
++			}
++		}
++	case reflect.String:
++		if str, ok := any(data).(T); ok {
++			v.marshalData = str
++		} else {
++			v.err = errMissingUnmarshalerType
++		}
++	default:
++		if c.conf.Log {
++			logx.Errorf("ConfigCenter unmarshal configuration missing unmarshaler for type: %s, content [%s]",
++				t.Kind(), data)
++		}
++		v.err = errMissingUnmarshalerType
++	}
++
++	return v
++}
+diff --git a/core/configcenter/subscriber/etcd.go b/core/configcenter/subscriber/etcd.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9a11efccbd62269958ce0c412c8e7ff94c87355
+--- /dev/null
++++ b/core/configcenter/subscriber/etcd.go
+@@ -0,0 +1,67 @@
++package subscriber
++
++import (
++	"github.com/zeromicro/go-zero/core/discov"
++	"github.com/zeromicro/go-zero/core/logx"
++)
++
++type (
++	// etcdSubscriber is a subscriber that subscribes to etcd.
++	etcdSubscriber struct {
++		*discov.Subscriber
++	}
++
++	// EtcdConf is the configuration for etcd.
++	EtcdConf = discov.EtcdConf
++)
++
++// MustNewEtcdSubscriber returns an etcd Subscriber, exits on errors.
++func MustNewEtcdSubscriber(conf EtcdConf) Subscriber {
++	s, err := NewEtcdSubscriber(conf)
++	logx.Must(err)
++	return s
++}
++
++// NewEtcdSubscriber returns an etcd Subscriber.
++func NewEtcdSubscriber(conf EtcdConf) (Subscriber, error) {
++	opts := buildSubOptions(conf)
++	s, err := discov.NewSubscriber(conf.Hosts, conf.Key, opts...)
++	if err != nil {
++		return nil, err
++	}
++
++	return &etcdSubscriber{Subscriber: s}, nil
++}
++
++// buildSubOptions constructs the options for creating a new etcd subscriber.
++func buildSubOptions(conf EtcdConf) []discov.SubOption {
++	opts := []discov.SubOption{
++		discov.WithExactMatch(),
++	}
++
++	if len(conf.User) > 0 {
++		opts = append(opts, discov.WithSubEtcdAccount(conf.User, conf.Pass))
++	}
++	if len(conf.CertFile) > 0 || len(conf.CertKeyFile) > 0 || len(conf.CACertFile) > 0 {
++		opts = append(opts, discov.WithSubEtcdTLS(conf.CertFile, conf.CertKeyFile,
++			conf.CACertFile, conf.InsecureSkipVerify))
++	}
++
++	return opts
++}
++
++// AddListener adds a listener to the subscriber.
++func (s *etcdSubscriber) AddListener(listener func()) error {
++	s.Subscriber.AddListener(listener)
++	return nil
++}
++
++// Value returns the value of the subscriber.
++func (s *etcdSubscriber) Value() (string, error) {
++	vs := s.Subscriber.Values()
++	if len(vs) > 0 {
++		return vs[len(vs)-1], nil
++	}
++
++	return "", nil
++}
+diff --git a/core/configcenter/subscriber/subscriber.go b/core/configcenter/subscriber/subscriber.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..e0ad9fc808d8960e5809c52a735f12ca65f2260c
+--- /dev/null
++++ b/core/configcenter/subscriber/subscriber.go
+@@ -0,0 +1,9 @@
++package subscriber
++
++// Subscriber is the interface for configcenter subscribers.
++type Subscriber interface {
++	// AddListener adds a listener to the subscriber.
++	AddListener(listener func()) error
++	// Value returns the value of the subscriber.
++	Value() (string, error)
++}
+diff --git a/core/configcenter/unmarshaler.go b/core/configcenter/unmarshaler.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..dc9fa507448fdc52dd4940919c540633776ea6ea
+--- /dev/null
++++ b/core/configcenter/unmarshaler.go
+@@ -0,0 +1,41 @@
++package configurator
++
++import (
++	"sync"
++
++	"github.com/zeromicro/go-zero/core/conf"
++)
++
++var registry = &unmarshalerRegistry{
++	unmarshalers: map[string]LoaderFn{
++		"json": conf.LoadFromJsonBytes,
++		"toml": conf.LoadFromTomlBytes,
++		"yaml": conf.LoadFromYamlBytes,
++	},
++}
++
++type (
++	// LoaderFn is the function type for loading configuration.
++	LoaderFn func([]byte, any) error
++
++	// unmarshalerRegistry is the registry for unmarshalers.
++	unmarshalerRegistry struct {
++		unmarshalers map[string]LoaderFn
++		mu           sync.RWMutex
++	}
++)
++
++// RegisterUnmarshaler registers an unmarshaler.
++func RegisterUnmarshaler(name string, fn LoaderFn) {
++	registry.mu.Lock()
++	defer registry.mu.Unlock()
++	registry.unmarshalers[name] = fn
++}
++
++// Unmarshaler returns the unmarshaler by name.
++func Unmarshaler(name string) (LoaderFn, bool) {
++	registry.mu.RLock()
++	defer registry.mu.RUnlock()
++	fn, ok := registry.unmarshalers[name]
++	return fn, ok
++}
+diff --git a/core/discov/internal/registry.go b/core/discov/internal/registry.go
+index 97dd97aa8113d2a854ce3d2929253d84adf11589..9fcb5aabbde325259bc696451b6ed99435fb7708 100644
+--- a/core/discov/internal/registry.go
++++ b/core/discov/internal/registry.go
+@@ -2,6 +2,7 @@ package internal
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"io"
+ 	"sort"
+@@ -9,12 +10,14 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
++	clientv3 "go.etcd.io/etcd/client/v3"
++
+ 	"github.com/zeromicro/go-zero/core/contextx"
+ 	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+-	clientv3 "go.etcd.io/etcd/client/v3"
+ )
+ 
+ var (
+@@ -22,12 +25,13 @@ var (
+ 		clusters: make(map[string]*cluster),
+ 	}
+ 	connManager = syncx.NewResourceManager()
++	errClosed   = errors.New("etcd monitor chan has been closed")
+ )
+ 
+ // A Registry is a registry that manages the etcd client connections.
+ type Registry struct {
+ 	clusters map[string]*cluster
+-	lock     sync.Mutex
++	lock     sync.RWMutex
+ }
+ 
+ // GetRegistry returns a global Registry.
+@@ -42,7 +46,7 @@ func (r *Registry) GetConn(endpoints []string) (EtcdClient, error) {
+ }
+ 
+ // Monitor monitors the key on given etcd endpoints, notify with the given UpdateListener.
+-func (r *Registry) Monitor(endpoints []string, key string, l UpdateListener) error {
++func (r *Registry) Monitor(endpoints []string, key string, l UpdateListener, exactMatch bool) error {
+ 	c, exists := r.getCluster(endpoints)
+ 	// if exists, the existing values should be updated to the listener.
+ 	if exists {
+@@ -52,17 +56,24 @@ func (r *Registry) Monitor(endpoints []string, key string, l UpdateListener) err
+ 		}
+ 	}
+ 
+-	return c.monitor(key, l)
++	return c.monitor(key, l, exactMatch)
+ }
+ 
+ func (r *Registry) getCluster(endpoints []string) (c *cluster, exists bool) {
+ 	clusterKey := getClusterKey(endpoints)
+-	r.lock.Lock()
+-	defer r.lock.Unlock()
++	r.lock.RLock()
+ 	c, exists = r.clusters[clusterKey]
++	r.lock.RUnlock()
++
+ 	if !exists {
+-		c = newCluster(endpoints)
+-		r.clusters[clusterKey] = c
++		r.lock.Lock()
++		defer r.lock.Unlock()
++		// double-check locking
++		c, exists = r.clusters[clusterKey]
++		if !exists {
++			c = newCluster(endpoints)
++			r.clusters[clusterKey] = c
++		}
+ 	}
+ 
+ 	return
+@@ -75,7 +86,8 @@ type cluster struct {
+ 	listeners  map[string][]UpdateListener
+ 	watchGroup *threading.RoutineGroup
+ 	done       chan lang.PlaceholderType
+-	lock       sync.Mutex
++	lock       sync.RWMutex
++	exactMatch bool
+ }
+ 
+ func newCluster(endpoints []string) *cluster {
+@@ -105,8 +117,8 @@ func (c *cluster) getClient() (EtcdClient, error) {
+ }
+ 
+ func (c *cluster) getCurrent(key string) []KV {
+-	c.lock.Lock()
+-	defer c.lock.Unlock()
++	c.lock.RLock()
++	defer c.lock.RUnlock()
+ 
+ 	var kvs []KV
+ 	for k, v := range c.values[key] {
+@@ -122,6 +134,7 @@ func (c *cluster) getCurrent(key string) []KV {
+ func (c *cluster) handleChanges(key string, kvs []KV) {
+ 	var add []KV
+ 	var remove []KV
++
+ 	c.lock.Lock()
+ 	listeners := append([]UpdateListener(nil), c.listeners[key]...)
+ 	vals, ok := c.values[key]
+@@ -170,9 +183,9 @@ func (c *cluster) handleChanges(key string, kvs []KV) {
+ }
+ 
+ func (c *cluster) handleWatchEvents(key string, events []*clientv3.Event) {
+-	c.lock.Lock()
++	c.lock.RLock()
+ 	listeners := append([]UpdateListener(nil), c.listeners[key]...)
+-	c.lock.Unlock()
++	c.lock.RUnlock()
+ 
+ 	for _, ev := range events {
+ 		switch ev.Type {
+@@ -213,13 +226,18 @@ func (c *cluster) load(cli EtcdClient, key string) int64 {
+ 	for {
+ 		var err error
+ 		ctx, cancel := context.WithTimeout(c.context(cli), RequestTimeout)
+-		resp, err = cli.Get(ctx, makeKeyPrefix(key), clientv3.WithPrefix())
++		if c.exactMatch {
++			resp, err = cli.Get(ctx, key)
++		} else {
++			resp, err = cli.Get(ctx, makeKeyPrefix(key), clientv3.WithPrefix())
++		}
++
+ 		cancel()
+ 		if err == nil {
+ 			break
+ 		}
+ 
+-		logx.Error(err)
++		logx.Errorf("%s, key is %s", err.Error(), key)
+ 		time.Sleep(coolDownInterval)
+ 	}
+ 
+@@ -236,9 +254,10 @@ func (c *cluster) load(cli EtcdClient, key string) int64 {
+ 	return resp.Header.Revision
+ }
+ 
+-func (c *cluster) monitor(key string, l UpdateListener) error {
++func (c *cluster) monitor(key string, l UpdateListener, exactMatch bool) error {
+ 	c.lock.Lock()
+ 	c.listeners[key] = append(c.listeners[key], l)
++	c.exactMatch = exactMatch
+ 	c.lock.Unlock()
+ 
+ 	cli, err := c.getClient()
+@@ -288,40 +307,53 @@ func (c *cluster) reload(cli EtcdClient) {
+ 
+ func (c *cluster) watch(cli EtcdClient, key string, rev int64) {
+ 	for {
+-		if c.watchStream(cli, key, rev) {
++		err := c.watchStream(cli, key, rev)
++		if err == nil {
+ 			return
+ 		}
++
++		if rev != 0 && errors.Is(err, rpctypes.ErrCompacted) {
++			logx.Errorf("etcd watch stream has been compacted, try to reload, rev %d", rev)
++			rev = c.load(cli, key)
++		}
++
++		// log the error and retry
++		logx.Error(err)
+ 	}
+ }
+ 
+-func (c *cluster) watchStream(cli EtcdClient, key string, rev int64) bool {
+-	var rch clientv3.WatchChan
++func (c *cluster) watchStream(cli EtcdClient, key string, rev int64) error {
++	var (
++		rch      clientv3.WatchChan
++		ops      []clientv3.OpOption
++		watchKey = key
++	)
++	if !c.exactMatch {
++		watchKey = makeKeyPrefix(key)
++		ops = append(ops, clientv3.WithPrefix())
++	}
+ 	if rev != 0 {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix(),
+-			clientv3.WithRev(rev+1))
+-	} else {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix())
++		ops = append(ops, clientv3.WithRev(rev+1))
+ 	}
+ 
++	rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), watchKey, ops...)
++
+ 	for {
+ 		select {
+ 		case wresp, ok := <-rch:
+ 			if !ok {
+-				logx.Error("etcd monitor chan has been closed")
+-				return false
++				return errClosed
+ 			}
+ 			if wresp.Canceled {
+-				logx.Errorf("etcd monitor chan has been canceled, error: %v", wresp.Err())
+-				return false
++				return fmt.Errorf("etcd monitor chan has been canceled, error: %w", wresp.Err())
+ 			}
+ 			if wresp.Err() != nil {
+-				logx.Error(fmt.Sprintf("etcd monitor chan error: %v", wresp.Err()))
+-				return false
++				return fmt.Errorf("etcd monitor chan error: %w", wresp.Err())
+ 			}
+ 
+ 			c.handleWatchEvents(key, wresp.Events)
+ 		case <-c.done:
+-			return true
++			return nil
+ 		}
+ 	}
+ }
+diff --git a/core/discov/subscriber.go b/core/discov/subscriber.go
+index 809dee2a981da2ca29583344020668ceed10aad7..08f89a601ff709c294638de46a8e987d2f2962de 100644
+--- a/core/discov/subscriber.go
++++ b/core/discov/subscriber.go
+@@ -15,9 +15,10 @@ type (
+ 
+ 	// A Subscriber is used to subscribe the given key on an etcd cluster.
+ 	Subscriber struct {
+-		endpoints []string
+-		exclusive bool
+-		items     *container
++		endpoints  []string
++		exclusive  bool
++		exactMatch bool
++		items      *container
+ 	}
+ )
+ 
+@@ -34,7 +35,7 @@ func NewSubscriber(endpoints []string, key string, opts ...SubOption) (*Subscrib
+ 	}
+ 	sub.items = newContainer(sub.exclusive)
+ 
+-	if err := internal.GetRegistry().Monitor(endpoints, key, sub.items); err != nil {
++	if err := internal.GetRegistry().Monitor(endpoints, key, sub.items, sub.exactMatch); err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -59,6 +60,13 @@ func Exclusive() SubOption {
+ 	}
+ }
+ 
++// WithExactMatch turn off querying using key prefixes.
++func WithExactMatch() SubOption {
++	return func(sub *Subscriber) {
++		sub.exactMatch = true
++	}
++}
++
+ // WithSubEtcdAccount provides the etcd username/password.
+ func WithSubEtcdAccount(user, pass string) SubOption {
+ 	return func(sub *Subscriber) {
+diff --git a/zrpc/resolver/internal/kubebuilder.go b/zrpc/resolver/internal/kubebuilder.go
+index 2392cc67a24412f1f8427571529934a9af2a46d1..04616b56a975f0a93727b2bda83a91a25d167c5e 100644
+--- a/zrpc/resolver/internal/kubebuilder.go
++++ b/zrpc/resolver/internal/kubebuilder.go
+@@ -3,10 +3,10 @@ package internal
+ import (
+ 	"context"
+ 	"fmt"
++	"runtime/debug"
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/logx"
+-	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/threading"
+ 	"github.com/zeromicro/go-zero/zrpc/resolver/internal/kube"
+ 	"google.golang.org/grpc/resolver"
+@@ -21,10 +21,30 @@ const (
+ 	nameSelector   = "metadata.name="
+ )
+ 
++type kubeResolver struct {
++	cc     resolver.ClientConn
++	stopCh chan struct{}
++	inf    informers.SharedInformerFactory
++}
++
++func (r *kubeResolver) start() {
++	threading.GoSafe(func() {
++		r.inf.Start(r.stopCh)
++	})
++}
++
++func (r *kubeResolver) ResolveNow(_ resolver.ResolveNowOptions) {}
++
++func (r *kubeResolver) Close() {
++	close(r.stopCh)
++}
++
+ type kubeBuilder struct{}
+ 
+ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+ 	_ resolver.BuildOptions) (resolver.Resolver, error) {
++	logx.Debugf("target: %s, callstack: %s, cc ptr: %p", target, string(debug.Stack()), cc)
++
+ 	svc, err := kube.ParseTarget(target)
+ 	if err != nil {
+ 		return nil, err
+@@ -73,9 +93,6 @@ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+ 		return nil, err
+ 	}
+ 
+-	threading.GoSafe(func() {
+-		inf.Start(proc.Done())
+-	})
+ 	endpoints, err := cs.CoreV1().Endpoints(svc.Namespace).Get(context.Background(), svc.Name, v1.GetOptions{})
+ 	if err != nil {
+ 		return nil, err
+@@ -83,7 +100,15 @@ func (b *kubeBuilder) Build(target resolver.Target, cc resolver.ClientConn,
+ 
+ 	handler.Update(endpoints)
+ 
+-	return &nopResolver{cc: cc}, nil
++	resolver := &kubeResolver{
++		cc:     cc,
++		stopCh: make(chan struct{}),
++		inf:    inf,
++	}
++
++	resolver.start()
++
++	return resolver, nil
+ }
+ 
+ func (b *kubeBuilder) Scheme() string {

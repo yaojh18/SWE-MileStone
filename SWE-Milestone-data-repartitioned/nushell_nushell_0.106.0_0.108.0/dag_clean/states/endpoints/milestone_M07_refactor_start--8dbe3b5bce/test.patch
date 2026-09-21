@@ -1,0 +1,186 @@
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index 2d5334a0b00328cfa9397e59b6dd6ad91f747076..45a76aa852cdcb62cb0d1485a0ac77efdc367314 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -199,7 +199,7 @@ pub fn merge_input(
+             engine_state,
+             stack,
+             &block,
+-            PipelineData::Value(Value::nothing(Span::unknown()), None),
++            PipelineData::value(Value::nothing(Span::unknown()), None),
+         )
+         .is_ok()
+     );
+diff --git a/crates/nu-command/tests/commands/run_external.rs b/crates/nu-command/tests/commands/run_external.rs
+index 93bbb9d6b7df2740163b3f9f770b719e2fbdb937..ade0ebe85a2b8f838bf661d2fda9abf77dc150cf 100644
+--- a/crates/nu-command/tests/commands/run_external.rs
++++ b/crates/nu-command/tests/commands/run_external.rs
+@@ -8,7 +8,7 @@ fn nu_path(prefix: &str) -> String {
+     let binary = nu_test_support::fs::executable_path()
+         .to_string_lossy()
+         .to_string();
+-    format!("{prefix}{binary}")
++    format!("{prefix}{}", binary)
+ }
+ 
+ // Template for run-external test to ensure tests work when calling
+diff --git a/crates/nu-command/tests/format_conversions/nuon.rs b/crates/nu-command/tests/format_conversions/nuon.rs
+index 90c8f982bf2e591bdfbfed7186d9844281bf0207..cdac5323e24d87cb23fa2de7faa8f2b91318b94f 100644
+--- a/crates/nu-command/tests/format_conversions/nuon.rs
++++ b/crates/nu-command/tests/format_conversions/nuon.rs
+@@ -515,19 +515,6 @@ fn quotes_some_strings_necessarily() {
+     assert_eq!(actual.out, "list<string>");
+ }
+ 
+-#[test]
+-fn quotes_some_strings_necessarily_in_record_keys() {
+-    let actual = nu!(pipeline(
+-        r#"
+-        ['=', 'a=', '=a'] | each {
+-           {$in : 42}
+-        } | reduce {|elt, acc| $acc | merge $elt} | to nuon | from nuon | columns | describe
+-        "#
+-    ));
+-
+-    assert_eq!(actual.out, "list<string>");
+-}
+-
+ #[test]
+ fn read_code_should_fail_rather_than_panic() {
+     let actual = nu!(cwd: "tests/fixtures/formats", pipeline(
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index b398b39290f0c605c8dcf119e3309e5e29e1f8ce..34c3a722dd09707b9cfad6c05adbee342e882f99 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::ListStream(
++    let pipe = PipelineData::list_stream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::ByteStream(
++    let data = PipelineData::byte_stream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index 3547b986e74468687a2d853dde8585825b1dcffb..beba4ebd34ed76600d09b471fc0435f3c909bbb1 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -145,7 +145,7 @@ fn test_into_int_from_u32() -> Result<(), ShellError> {
+     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+         .eval_with(
+             "into int from u32",
+-            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
++            PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
+         )?
+         .into_value(Span::test_data())?;
+     assert_eq!(Value::test_int(42), result);
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 011607959a8fb30bdd3a378a9f079b8c4b7dde88..704c885347a54edacde0a1023ac10b116a5ee99d 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,6 +45,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -55,6 +56,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -65,6 +67,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ 
+@@ -78,6 +81,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ 
+@@ -91,6 +95,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ }
+diff --git a/crates/nu-std/tests/test_std-rfc_kv.nu b/crates/nu-std/tests/test_std-rfc_kv.nu
+index 48f16214fa6adf2a3207764357acf5afb28835ea..84467fceeed5d5b84348253ec20a113e6291d562 100644
+--- a/crates/nu-std/tests/test_std-rfc_kv.nu
++++ b/crates/nu-std/tests/test_std-rfc_kv.nu
+@@ -302,17 +302,3 @@ def universal-return_value_only [] {
+     kv drop --universal $key
+     rm $env.NU_UNIVERSAL_KV_PATH
+ }
+-
+-@test
+-def simple-local-set-table [] {
+-    if ('sqlite' not-in (version).features) { return }
+-
+-    let key = (random uuid)
+-
+-    kv set -t foo $key 42
+-    let actual = (kv get -t foo $key)
+-    let expected = 42
+-    assert equal $actual $expected
+-
+-    kv drop -t foo $key | ignore
+-}
+\ No newline at end of file
+diff --git a/tests/repl/test_commandline.rs b/tests/repl/test_commandline.rs
+index c40923cddb8b5692be55b3272c7e33214c31a790..1b52797fc4a8733b34f6eec004ac0aee68c258fa 100644
+--- a/tests/repl/test_commandline.rs
++++ b/tests/repl/test_commandline.rs
+@@ -140,11 +140,3 @@ fn commandline_test_cursor_end() -> TestResult {
+ fn commandline_test_cursor_type() -> TestResult {
+     run_test("commandline get-cursor | describe", "int")
+ }
+-
+-#[test]
+-fn commandline_test_accepted_command() -> TestResult {
+-    run_test(
+-        "commandline edit --accept \"print accepted\"\n | commandline",
+-        "print accepted",
+-    )
+-}

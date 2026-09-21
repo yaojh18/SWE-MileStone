@@ -1,0 +1,222 @@
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b083a7f00aa285d9c1aebcdbad478d2d8ebec305
+--- /dev/null
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md
+@@ -0,0 +1,24 @@
++## 1. startup
++
++1. run the maven plugin `dubbo:compile`, generate protobuf java file.
++2. run `ProviderApplication`
++
++## 2. http request
++
++### 2.1 sample request
++
++```shell
++curl -v -d '{"name":"dubbo"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHello
++```
++
++### 2.2 request async
++
++```shell
++curl -v -d '{"name":"dubbo async"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHelloAsync
++```
++
++### 2.3 server stream
++
++```shell
++curl -v -d '{"name":"dubbo"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHelloStream
++```
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
+index 495af515c44458d6f7ebd28535a973e190c44079..09356e22d20fac6a6d247991d37d1b6b04948003 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
+@@ -16,12 +16,14 @@
+  */
+ package org.apache.dubbo.springboot.idl.demo.provider;
+ 
++import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.config.annotation.DubboService;
+ import org.apache.dubbo.demo.hello.GreeterService;
+ import org.apache.dubbo.demo.hello.HelloReply;
+ import org.apache.dubbo.demo.hello.HelloRequest;
+ 
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.TimeUnit;
+ 
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -45,6 +47,22 @@ public class GreeterServiceImpl implements GreeterService {
+                 HelloReply.newBuilder().setMessage("Hello " + request.getName()).build());
+     }
+ 
++    @Override
++    public void sayHelloStream(HelloRequest request, StreamObserver<HelloReply> responseObserver) {
++        LOGGER.info("Received sayHelloStream request: {}", request.getName());
++        for (int i = 0; i < 5; i++) {
++            try {
++                TimeUnit.SECONDS.sleep(1);
++            } catch (InterruptedException e) {
++                responseObserver.onError(e);
++            }
++            responseObserver.onNext(HelloReply.newBuilder()
++                    .setMessage(i + "# Hello " + request.getName())
++                    .build());
++        }
++        responseObserver.onCompleted();
++    }
++
+     private static HelloReply toReply(String message) {
+         return HelloReply.newBuilder().setMessage(message).build();
+     }
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
+index 8debdd28961373161da06e7eed9ce2ef979d800f..249d72f53d726c4595a7bb2d479c9b282ee01360 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
+@@ -32,4 +32,5 @@ message HelloReply {
+ service GreeterService {
+     // Sends a greeting.
+     rpc sayHello(HelloRequest) returns (HelloReply);
++    rpc sayHelloStream(HelloRequest) returns (stream HelloReply);
+ }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
+index 37cbb35c9ce0f2f9f31a4e34df68f2b23826c88c..f8ac509db6942c80892fc6b147af1d132ca5a891 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
+@@ -17,6 +17,8 @@
+ 
+ package org.apache.dubbo.rpc.protocol.tri.rest.mapping
+ 
++import org.apache.dubbo.rpc.protocol.tri.rest.mapping.condition.PathExpression
++
+ import spock.lang.Specification
+ 
+ class RadixTreeTest extends Specification {
+@@ -59,6 +61,42 @@ class RadixTreeTest extends Specification {
+             '/a/b/c/d' | 0
+     }
+ 
++    def "test repeat add,no predicate function"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath('/a/*/*', false)
++            Boolean val2 = tree.addPath('/a/*/*', true)
++        expect:
++            val1 == null;
++            val2 == false;
++    }
++
++    def "test repeat add,use predicate function"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath(PathExpression.parse('/a/*/*'), false, { a, b -> a == b })
++            Boolean val2 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++            Boolean val3 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++
++        expect:
++            val1 == null;
++            val2 == null;
++        val3 == true;
++    }
++
++    def "test repeat add,use predicate function and Registration"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath(PathExpression.parse('/a/*/*'), false, { a, b -> a == b })
++            Boolean val2 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++            Boolean val3 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++
++        expect:
++            val1 == null;
++            val2 == null;
++            val3 == true;
++    }
++
+     def "test sub path match"() {
+         given:
+             def tree = new RadixTree<String>();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy
+new file mode 100644
+index 0000000000000000000000000000000000000000..de5a1b388ceaee2854f8673c650952738d7e3801
+--- /dev/null
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy
+@@ -0,0 +1,78 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the 'License'); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an 'AS IS' BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.dubbo.rpc.protocol.tri.rest.mapping
++
++import org.apache.dubbo.remoting.http12.HttpMethods
++import org.apache.dubbo.rpc.protocol.tri.rest.mapping.meta.HandlerMeta
++
++import spock.lang.Specification
++
++class RegistrationSpec extends Specification {
++
++    def "isMethodOverlap should return true when methods overlap"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name(), HttpMethods.PUT.name()).build()
++            def mapping2 = new RequestMapping.Builder().method(HttpMethods.PUT.name(), HttpMethods.POST.name()).build()
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return false when methods do not overlap"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name()).build()
++            def mapping2 = new RequestMapping.Builder().method(HttpMethods.PUT.name()).build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            !reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return true if both MethodsCondition is null"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().build()
++            def mapping2 = new RequestMapping.Builder().build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return false if only one MethodsCondition is null"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name()).build()
++            def mapping2 = new RequestMapping.Builder().method().build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++}

@@ -1,0 +1,1632 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index e0938bc92ff2cf8264b8099ac1e1afc63b995b5e..33622fcabc99698e6fb132d5db35c18d778749b0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -99,11 +99,14 @@ jobs:
+           os: macos-latest
+           rust: nightly
+         - build: win-msvc
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly
+         - build: win-gnu
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly-x86_64-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
+     steps:
+     - name: Checkout repository
+       uses: actions/checkout@v4
+@@ -177,7 +180,7 @@ jobs:
+       # 'rg' binary (done in test-complete) with qemu, which is a pain and
+       # doesn't really gain us much. If shell completion works in one place,
+       # it probably works everywhere.
+-      if: matrix.target == '' && matrix.os != 'windows-2022'
++      if: matrix.target == '' && !startsWith(matrix.os, 'windows')
+       shell: bash
+       run: ci/test-complete
+ 
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index f6ea3d926f44da95a1b1fb68867530243978e203..9a9cc0386ee1748cb76a4e4cfae6f916380aa907 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -122,6 +122,10 @@ jobs:
+           os: windows-latest
+           rust: nightly-x86_64-gnu
+           target: x86_64-pc-windows-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
++          target: aarch64-pc-windows-msvc
+         - build: win32-msvc
+           os: windows-latest
+           rust: nightly
+@@ -175,7 +179,7 @@ jobs:
+       shell: bash
+       run: |
+         ${{ env.CARGO }} build --verbose --release --features pcre2 ${{ env.TARGET_FLAGS }}
+-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
++        if [[ "${{ matrix.os }}" == windows-* ]]; then
+           bin="target/${{ matrix.target }}/release/rg.exe"
+         else
+           bin="target/${{ matrix.target }}/release/rg"
+@@ -258,7 +262,7 @@ jobs:
+ 
+     - name: Build archive (Windows)
+       shell: bash
+-      if: matrix.os == 'windows-latest'
++      if: startsWith(matrix.os, 'windows')
+       run: |
+         7z a "$ARCHIVE.zip" "$ARCHIVE"
+         certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+@@ -267,7 +271,7 @@ jobs:
+ 
+     - name: Build archive (Unix)
+       shell: bash
+-      if: matrix.os != 'windows-latest'
++      if: ${{ !startsWith(matrix.os, 'windows') }}
+       run: |
+         tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+         shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9601936b22457ccfe206a30ab6c5d9e0adb013c6..5aff37e7780c23e5621e4b068581db9a52636ba6 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -16,6 +16,9 @@ Bug fixes:
+   [BUG #2836](https://github.com/BurntSushi/ripgrep/issues/2836),
+   [BUG #2933](https://github.com/BurntSushi/ripgrep/pull/2933):
+   Fix bug related to gitignores from parent directories.
++* [BUG #1332](https://github.com/BurntSushi/ripgrep/issues/1332),
++  [BUG #3001](https://github.com/BurntSushi/ripgrep/issues/3001):
++  Make `rg -vf file` where `file` is empty match everything.
+ * [BUG #2177](https://github.com/BurntSushi/ripgrep/issues/2177):
+   Ignore a UTF-8 BOM marker at the start of `.gitignore` (and similar files).
+ 
+@@ -32,6 +35,10 @@ Feature enhancements:
+   Directories containing `.jj` are now treated as git repositories.
+ * [FEATURE #2849](https://github.com/BurntSushi/ripgrep/pull/2849):
+   When using multithreading, schedule files to search in order given on CLI.
++* [FEATURE #2943](https://github.com/BurntSushi/ripgrep/issues/2943):
++  Add `aarch64` release artifacts for Windows.
++* [FEATURE #3048](https://github.com/BurntSushi/ripgrep/pull/3048):
++  Globs in ripgrep (and the `globset` crate) now support nested alternates.
+ 
+ 
+ 14.1.1 (2024-09-08)
+diff --git a/Cargo.lock b/Cargo.lock
+index fac37ce8bcbf5898d6f6d7db5be46e2d6efefb58..49af1f7871600f61d7b6140a6d90aa4854e0e51e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -261,26 +261,6 @@ version = "1.0.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+ 
+-[[package]]
+-name = "jemalloc-sys"
+-version = "0.5.4+5.3.0-patched"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ac6c1946e1cea1788cbfde01c993b52a10e2da07f4bac608228d1bed20bfebf2"
+-dependencies = [
+- "cc",
+- "libc",
+-]
+-
+-[[package]]
+-name = "jemallocator"
+-version = "0.5.4"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a0de374a9f8e63150e6f5e8a60cc14c668226d7a347d8aee1a45766e3c4dd3bc"
+-dependencies = [
+- "jemalloc-sys",
+- "libc",
+-]
+-
+ [[package]]
+ name = "jobserver"
+ version = "0.1.33"
+@@ -413,7 +393,6 @@ dependencies = [
+  "bstr",
+  "grep",
+  "ignore",
+- "jemallocator",
+  "lexopt",
+  "log",
+  "serde",
+@@ -421,6 +400,7 @@ dependencies = [
+  "serde_json",
+  "termcolor",
+  "textwrap",
++ "tikv-jemallocator",
+  "walkdir",
+ ]
+ 
+@@ -503,6 +483,26 @@ version = "0.16.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+ 
++[[package]]
++name = "tikv-jemalloc-sys"
++version = "0.6.0+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cd3c60906412afa9c2b5b5a48ca6a5abe5736aec9eb48ad05037a677e52e4e2d"
++dependencies = [
++ "cc",
++ "libc",
++]
++
++[[package]]
++name = "tikv-jemallocator"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4cec5ff18518d81584f477e9bfdf957f5bb0979b0bac3af4ca30b5b3ae2d2865"
++dependencies = [
++ "libc",
++ "tikv-jemalloc-sys",
++]
++
+ [[package]]
+ name = "unicode-ident"
+ version = "1.0.18"
+diff --git a/Cargo.toml b/Cargo.toml
+index 46fdf31ab83e1e419565e787065f6f207bf0f4dd..16aed2f04d1e2c703a8dd969a96f06613dadc116 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -60,8 +60,8 @@ serde_json = "1.0.23"
+ termcolor = "1.1.0"
+ textwrap = { version = "0.16.0", default-features = false }
+ 
+-[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.jemallocator]
+-version = "0.5.0"
++[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.tikv-jemallocator]
++version = "0.6.0"
+ 
+ [dev-dependencies]
+ serde = "1.0.77"
+diff --git a/FAQ.md b/FAQ.md
+index f244250bed7366e2e75c56583da18b6dffe3d4c8..52a0ed0925870761967477bb88d50eba87c2c661 100644
+--- a/FAQ.md
++++ b/FAQ.md
+@@ -1055,7 +1055,7 @@ How can I donate to ripgrep or its maintainers?
+ 
+ I welcome [sponsorship](https://github.com/sponsors/BurntSushi/).
+ 
+-Or if you'd prefer, donating to a charitably organization that you like would
++Or if you'd prefer, donating to a charitable organization that you like would
+ also be most welcome. My favorites are:
+ 
+ * [The Internet Archive](https://archive.org/donate/)
+diff --git a/build.rs b/build.rs
+index db9584bff5369df8a67ce7dc023c0ab5bf483a0c..4652be4648f4e7a31e88f82b56d063dda008947a 100644
+--- a/build.rs
++++ b/build.rs
+@@ -22,7 +22,7 @@ fn set_windows_exe_options() {
+     manifest.push(MANIFEST);
+     let Some(manifest) = manifest.to_str() else { return };
+ 
+-    println!("cargo:rerun-if-changed={}", MANIFEST);
++    println!("cargo:rerun-if-changed={MANIFEST}");
+     // Embed the Windows application manifest file.
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFEST:EMBED");
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFESTINPUT:{manifest}");
+@@ -42,5 +42,5 @@ fn set_git_revision_hash() {
+     if rev.is_empty() {
+         return;
+     }
+-    println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={}", rev);
++    println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={rev}");
+ }
+diff --git a/crates/core/flags/complete/fish.rs b/crates/core/flags/complete/fish.rs
+index f8f7133bc7fa1c10273b7b2ef913b99617bfc649..8952cdd3820cb2aef1ad3d92ab4c146f33d34e19 100644
+--- a/crates/core/flags/complete/fish.rs
++++ b/crates/core/flags/complete/fish.rs
+@@ -6,11 +6,15 @@ use crate::flags::{defs::FLAGS, CompletionType};
+ 
+ const TEMPLATE: &'static str = "complete -c rg !SHORT! -l !LONG! -d '!DOC!'";
+ const TEMPLATE_NEGATED: &'static str =
+-    "complete -c rg -l !NEGATED! -n '__fish_contains_opt !SHORT! !LONG!' -d '!DOC!'\n";
++    "complete -c rg -l !NEGATED! -n '__rg_contains_opt !LONG! !SHORT!' -d '!DOC!'\n";
+ 
+ /// Generate completions for Fish.
++///
++/// Reference: <https://fishshell.com/docs/current/completions.html>
+ pub(crate) fn generate() -> String {
+     let mut out = String::new();
++    out.push_str(include_str!("prelude.fish"));
++    out.push('\n');
+     for flag in FLAGS.iter() {
+         let short = match flag.name_short() {
+             None => "".to_string(),
+@@ -55,6 +59,10 @@ pub(crate) fn generate() -> String {
+         out.push_str(&completion);
+ 
+         if let Some(negated) = flag.name_negated() {
++            let short = match flag.name_short() {
++                None => "".to_string(),
++                Some(byte) => char::from(byte).to_string(),
++            };
+             out.push_str(
+                 &TEMPLATE_NEGATED
+                     .replace("!NEGATED!", &negated)
+diff --git a/crates/core/flags/complete/powershell.rs b/crates/core/flags/complete/powershell.rs
+index e8a89e2ea0a8dec162e650b53a1c9d36b3993132..17fd2d496571ae24ca9227d8dd7c16aaaa5f6b5b 100644
+--- a/crates/core/flags/complete/powershell.rs
++++ b/crates/core/flags/complete/powershell.rs
+@@ -72,7 +72,7 @@ pub(crate) fn generate() -> String {
+         }
+ 
+         if let Some(negated) = flag.name_negated() {
+-            let dash_name = format!("--{}", negated);
++            let dash_name = format!("--{negated}");
+             flags.push_str("\n      ");
+             flags.push_str(
+                 &TEMPLATE_FLAG
+diff --git a/crates/core/flags/defs.rs b/crates/core/flags/defs.rs
+index 9a196c491b746587a76c7704e9e1c433dcb9d067..eb59e33f11d169ff4637d0902820513c93dd187f 100644
+--- a/crates/core/flags/defs.rs
++++ b/crates/core/flags/defs.rs
+@@ -835,7 +835,7 @@ provided multiple times. Settings are applied iteratively. Pre-existing color
+ labels are limited to one of eight choices: \fBred\fP, \fBblue\fP, \fBgreen\fP,
+ \fBcyan\fP, \fBmagenta\fP, \fByellow\fP, \fBwhite\fP and \fBblack\fP. Styles
+ are limited to \fBnobold\fP, \fBbold\fP, \fBnointense\fP, \fBintense\fP,
+-\fBnounderline\fP or \fBunderline\fP.
++\fBnounderline\fP, \fBunderline\fP, \fBnoitalic\fP or \fBitalic\fP.
+ .sp
+ The format of the flag is
+ \fB{\fP\fItype\fP\fB}:{\fP\fIattribute\fP\fB}:{\fP\fIvalue\fP\fB}\fP.
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index df09dcedae4df7474ec9f00fa3b3ed011c99dcc8..53490a6d9d808e337a59c1a4c02e0488e217045d 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -517,7 +517,7 @@ impl HiArgs {
+     /// When this returns false, it is impossible for ripgrep to ever report
+     /// a match.
+     pub(crate) fn matches_possible(&self) -> bool {
+-        if self.patterns.patterns.is_empty() {
++        if self.patterns.patterns.is_empty() && !self.invert_match {
+             return false;
+         }
+         if self.max_count == Some(0) {
+@@ -589,6 +589,7 @@ impl HiArgs {
+             .pretty(false)
+             .max_matches(self.max_count)
+             .always_begin_end(false)
++            .replacement(self.replace.clone().map(|r| r.into()))
+             .build(wtr)
+     }
+ 
+diff --git a/crates/core/main.rs b/crates/core/main.rs
+index 64f35cebb5ca7b0e35d66d3e1b4c669403429f26..46aac2624f0fb511b49769a260ab580ade742108 100644
+--- a/crates/core/main.rs
++++ b/crates/core/main.rs
+@@ -37,7 +37,7 @@ mod search;
+ // i686.
+ #[cfg(all(target_env = "musl", target_pointer_width = "64"))]
+ #[global_allocator]
+-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
++static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+ 
+ /// Then, as it was, then again it will be.
+ fn main() -> ExitCode {
+@@ -468,7 +468,7 @@ fn print_stats<W: Write>(
+ {bytes_printed} bytes printed
+ {bytes_searched} bytes searched
+ {search_time:0.6} seconds spent searching
+-{process_time:0.6} seconds
++{process_time:0.6} seconds total
+ ",
+             matches = stats.matches(),
+             lines = stats.matched_lines(),
+diff --git a/crates/core/messages.rs b/crates/core/messages.rs
+index ba8b9adc578206efd512ce426c7e8bbcb61e0a1b..333e7076ce7d741277ec7e38996fd632e64f5062 100644
+--- a/crates/core/messages.rs
++++ b/crates/core/messages.rs
+@@ -99,19 +99,19 @@ macro_rules! ignore_message {
+ 
+ /// Returns true if and only if messages should be shown.
+ pub(crate) fn messages() -> bool {
+-    MESSAGES.load(Ordering::SeqCst)
++    MESSAGES.load(Ordering::Relaxed)
+ }
+ 
+ /// Set whether messages should be shown or not.
+ ///
+ /// By default, they are not shown.
+ pub(crate) fn set_messages(yes: bool) {
+-    MESSAGES.store(yes, Ordering::SeqCst)
++    MESSAGES.store(yes, Ordering::Relaxed)
+ }
+ 
+ /// Returns true if and only if "ignore" related messages should be shown.
+ pub(crate) fn ignore_messages() -> bool {
+-    IGNORE_MESSAGES.load(Ordering::SeqCst)
++    IGNORE_MESSAGES.load(Ordering::Relaxed)
+ }
+ 
+ /// Set whether "ignore" related messages should be shown or not.
+@@ -122,12 +122,12 @@ pub(crate) fn ignore_messages() -> bool {
+ /// `messages` is disabled, then "ignore" messages are never shown, regardless
+ /// of this setting.
+ pub(crate) fn set_ignore_messages(yes: bool) {
+-    IGNORE_MESSAGES.store(yes, Ordering::SeqCst)
++    IGNORE_MESSAGES.store(yes, Ordering::Relaxed)
+ }
+ 
+ /// Returns true if and only if ripgrep came across a non-fatal error.
+ pub(crate) fn errored() -> bool {
+-    ERRORED.load(Ordering::SeqCst)
++    ERRORED.load(Ordering::Relaxed)
+ }
+ 
+ /// Indicate that ripgrep has come across a non-fatal error.
+@@ -135,5 +135,5 @@ pub(crate) fn errored() -> bool {
+ /// Callers should not use this directly. Instead, it is called automatically
+ /// via the `err_message` macro.
+ pub(crate) fn set_errored() {
+-    ERRORED.store(true, Ordering::SeqCst);
++    ERRORED.store(true, Ordering::Relaxed);
+ }
+diff --git a/crates/core/search.rs b/crates/core/search.rs
+index 672734254dc4322cb001bfb11de358e5cd307ae4..d03433f6f85a67835a9f45d3ffb67f08793f1bf1 100644
+--- a/crates/core/search.rs
++++ b/crates/core/search.rs
+@@ -307,15 +307,14 @@ impl<W: WriteColor> SearchWorker<W> {
+             io::Error::new(
+                 io::ErrorKind::Other,
+                 format!(
+-                    "preprocessor command could not start: '{:?}': {}",
+-                    cmd, err,
++                    "preprocessor command could not start: '{cmd:?}': {err}",
+                 ),
+             )
+         })?;
+         let result = self.search_reader(path, &mut rdr).map_err(|err| {
+             io::Error::new(
+                 io::ErrorKind::Other,
+-                format!("preprocessor command failed: '{:?}': {}", cmd, err),
++                format!("preprocessor command failed: '{cmd:?}': {err}"),
+             )
+         });
+         let close_result = rdr.close();
+diff --git a/crates/globset/Cargo.toml b/crates/globset/Cargo.toml
+index 08601759033fc7306842b9c4569b1b765db51749..afcdb4df0c4986a5b6b91cca73e02767f302819f 100644
+--- a/crates/globset/Cargo.toml
++++ b/crates/globset/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "globset"
+-version = "0.4.15"  #:version
++version = "0.4.16"  #:version
+ authors = ["Andrew Gallant <jamslam@gmail.com>"]
+ description = """
+ Cross platform single glob and glob set matching. Glob set matching is the
+@@ -21,6 +21,7 @@ bench = false
+ 
+ [dependencies]
+ aho-corasick = "1.1.1"
++arbitrary = { version = "1.3.2", optional = true, features = ["derive"] }
+ bstr = { version = "1.6.2", default-features = false, features = ["std"] }
+ log = { version = "0.4.20", optional = true }
+ serde = { version = "1.0.188", optional = true }
+@@ -41,6 +42,7 @@ serde_json = "1.0.107"
+ 
+ [features]
+ default = ["log"]
++arbitrary = ["dep:arbitrary"]
+ # DEPRECATED. It is a no-op. SIMD is done automatically through runtime
+ # dispatch.
+ simd-accel = []
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index c25e3f22227d855bc839523c471b30444c6d65f9..378f3f4a257a5d60887534c55f749afda287a2e2 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -71,7 +71,8 @@ impl MatchStrategy {
+ ///
+ /// It cannot be used directly to match file paths, but it can be converted
+ /// to a regular expression string or a matcher.
+-#[derive(Clone, Debug, Eq)]
++#[derive(Clone, Eq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct Glob {
+     glob: String,
+     re: String,
+@@ -92,6 +93,21 @@ impl std::hash::Hash for Glob {
+     }
+ }
+ 
++impl std::fmt::Debug for Glob {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        if f.alternate() {
++            f.debug_struct("Glob")
++                .field("glob", &self.glob)
++                .field("re", &self.re)
++                .field("opts", &self.opts)
++                .field("tokens", &self.tokens)
++                .finish()
++        } else {
++            f.debug_tuple("Glob").field(&self.glob).finish()
++        }
++    }
++}
++
+ impl std::fmt::Display for Glob {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         self.glob.fmt(f)
+@@ -194,6 +210,7 @@ pub struct GlobBuilder<'a> {
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ struct GlobOptions {
+     /// Whether to match case insensitively.
+     case_insensitive: bool,
+@@ -220,6 +237,7 @@ impl GlobOptions {
+ }
+ 
+ #[derive(Clone, Debug, Default, Eq, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ struct Tokens(Vec<Token>);
+ 
+ impl std::ops::Deref for Tokens {
+@@ -236,6 +254,7 @@ impl std::ops::DerefMut for Tokens {
+ }
+ 
+ #[derive(Clone, Debug, Eq, PartialEq)]
++#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ enum Token {
+     Literal(char),
+     Any,
+@@ -564,25 +583,26 @@ impl<'a> GlobBuilder<'a> {
+     pub fn build(&self) -> Result<Glob, Error> {
+         let mut p = Parser {
+             glob: &self.glob,
+-            stack: vec![Tokens::default()],
++            alternates_stack: Vec::new(),
++            branches: vec![Tokens::default()],
+             chars: self.glob.chars().peekable(),
+             prev: None,
+             cur: None,
+             opts: &self.opts,
+         };
+         p.parse()?;
+-        if p.stack.is_empty() {
+-            Err(Error {
+-                glob: Some(self.glob.to_string()),
+-                kind: ErrorKind::UnopenedAlternates,
+-            })
+-        } else if p.stack.len() > 1 {
++        if p.branches.is_empty() {
++            // OK because of how the the branches/alternate_stack are managed.
++            // If we end up here, then there *must* be a bug in the parser
++            // somewhere.
++            unreachable!()
++        } else if p.branches.len() > 1 {
+             Err(Error {
+                 glob: Some(self.glob.to_string()),
+                 kind: ErrorKind::UnclosedAlternates,
+             })
+         } else {
+-            let tokens = p.stack.pop().unwrap();
++            let tokens = p.branches.pop().unwrap();
+             Ok(Glob {
+                 glob: self.glob.to_string(),
+                 re: tokens.to_regex_with(&self.opts),
+@@ -757,7 +777,11 @@ fn bytes_to_escaped_literal(bs: &[u8]) -> String {
+ 
+ struct Parser<'a> {
+     glob: &'a str,
+-    stack: Vec<Tokens>,
++    // Marks the index in `stack` where the alternation started.
++    alternates_stack: Vec<usize>,
++    // The set of active alternation branches being parsed.
++    // Tokens are added to the end of the last one.
++    branches: Vec<Tokens>,
+     chars: std::iter::Peekable<std::str::Chars<'a>>,
+     prev: Option<char>,
+     cur: Option<char>,
+@@ -786,36 +810,37 @@ impl<'a> Parser<'a> {
+     }
+ 
+     fn push_alternate(&mut self) -> Result<(), Error> {
+-        if self.stack.len() > 1 {
+-            return Err(self.error(ErrorKind::NestedAlternates));
+-        }
+-        Ok(self.stack.push(Tokens::default()))
++        self.alternates_stack.push(self.branches.len());
++        self.branches.push(Tokens::default());
++        Ok(())
+     }
+ 
+     fn pop_alternate(&mut self) -> Result<(), Error> {
+-        let mut alts = vec![];
+-        while self.stack.len() >= 2 {
+-            alts.push(self.stack.pop().unwrap());
+-        }
+-        self.push_token(Token::Alternates(alts))
++        let Some(start) = self.alternates_stack.pop() else {
++            return Err(self.error(ErrorKind::UnopenedAlternates));
++        };
++        assert!(start <= self.branches.len());
++        let alts = Token::Alternates(self.branches.drain(start..).collect());
++        self.push_token(alts)?;
++        Ok(())
+     }
+ 
+     fn push_token(&mut self, tok: Token) -> Result<(), Error> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+             return Ok(pat.push(tok));
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn pop_token(&mut self) -> Result<Token, Error> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+             return Ok(pat.pop().unwrap());
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn have_tokens(&self) -> Result<bool, Error> {
+-        match self.stack.last() {
++        match self.branches.last() {
+             None => Err(self.error(ErrorKind::UnopenedAlternates)),
+             Some(ref pat) => Ok(!pat.is_empty()),
+         }
+@@ -824,11 +849,11 @@ impl<'a> Parser<'a> {
+     fn parse_comma(&mut self) -> Result<(), Error> {
+         // If we aren't inside a group alternation, then don't
+         // treat commas specially. Otherwise, we need to start
+-        // a new alternate.
+-        if self.stack.len() <= 1 {
++        // a new alternate branch.
++        if self.alternates_stack.is_empty() {
+             self.push_token(Token::Literal(','))
+         } else {
+-            Ok(self.stack.push(Tokens::default()))
++            Ok(self.branches.push(Tokens::default()))
+         }
+     }
+ 
+@@ -865,7 +890,7 @@ impl<'a> Parser<'a> {
+         }
+ 
+         if !prev.map(is_separator).unwrap_or(false) {
+-            if self.stack.len() <= 1
++            if self.branches.len() <= 1
+                 || (prev != Some(',') && prev != Some('{'))
+             {
+                 self.push_token(Token::ZeroOrMore)?;
+@@ -878,7 +903,7 @@ impl<'a> Parser<'a> {
+                 assert!(self.bump().is_none());
+                 true
+             }
+-            Some(',') | Some('}') if self.stack.len() >= 2 => true,
++            Some(',') | Some('}') if self.branches.len() >= 2 => true,
+             Some(c) if is_separator(c) => {
+                 assert!(self.bump().map(is_separator).unwrap_or(false));
+                 false
+@@ -1206,6 +1231,10 @@ mod tests {
+     syntaxerr!(err_unclosed4, "[!]", ErrorKind::UnclosedClass);
+     syntaxerr!(err_range1, "[z-a]", ErrorKind::InvalidRange('z', 'a'));
+     syntaxerr!(err_range2, "[z--]", ErrorKind::InvalidRange('z', '-'));
++    syntaxerr!(err_alt1, "{a,b", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt2, "{a,{b,c}", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt3, "a,b}", ErrorKind::UnopenedAlternates);
++    syntaxerr!(err_alt4, "{a,b}}", ErrorKind::UnopenedAlternates);
+ 
+     const CASEI: Options =
+         Options { casei: Some(true), litsep: None, bsesc: None, ealtre: None };
+@@ -1226,6 +1255,8 @@ mod tests {
+         ealtre: Some(true),
+     };
+ 
++    toregex!(re_empty, "", "^$");
++
+     toregex!(re_casei, "a", "(?i)^a$", &CASEI);
+ 
+     toregex!(re_slash1, "?", r"^[^/]$", SLASHLIT);
+@@ -1265,7 +1296,9 @@ mod tests {
+     toregex!(re32, "/a**", r"^/a.*.*$");
+     toregex!(re33, "/**a", r"^/.*.*a$");
+     toregex!(re34, "/a**b", r"^/a.*.*b$");
+-    toregex!(re35, "{a,b}", r"^(?:b|a)$");
++    toregex!(re35, "{a,b}", r"^(?:a|b)$");
++    toregex!(re36, "{a,{b,c}}", r"^(?:a|(?:b|c))$");
++    toregex!(re37, "{{a,b},{c,d}}", r"^(?:(?:a|b)|(?:c|d))$");
+ 
+     matches!(match1, "a", "a");
+     matches!(match2, "a*b", "a_b");
+@@ -1353,6 +1386,9 @@ mod tests {
+     matches!(matchalt14, "foo{,.txt}", "foo.txt");
+     nmatches!(matchalt15, "foo{,.txt}", "foo");
+     matches!(matchalt16, "foo{,.txt}", "foo", EALTRE);
++    matches!(matchalt17, "{a,b{c,d}}", "bc");
++    matches!(matchalt18, "{a,b{c,d}}", "bd");
++    matches!(matchalt19, "{a,b{c,d}}", "a");
+ 
+     matches!(matchslash1, "abc/def", "abc/def", SLASHLIT);
+     #[cfg(unix)]
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index b1fc696af2c634ce983254d81eb7712cf06e6db3..c3f53001a8208445abcc25946db2c26d29adc957 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -94,6 +94,19 @@ Standard Unix-style glob syntax is supported:
+ 
+ A `GlobBuilder` can be used to prevent wildcards from matching path separators,
+ or to enable case insensitive matching.
++
++# Crate Features
++
++This crate includes optional features that can be enabled if necessary.
++These features are not required but may be useful depending on the use case.
++
++The following features are available:
++
++* **arbitrary** -
++  Enabling this feature introduces a public dependency on the
++  [`arbitrary`](https://crates.io/crates/arbitrary)
++  crate. Namely, it implements the `Arbitrary` trait from that crate for the
++  [`Glob`] type. This feature is disabled by default.
+ */
+ 
+ #![deny(missing_docs)]
+@@ -150,6 +163,7 @@ pub struct Error {
+ 
+ /// The kind of error that can occur when parsing a glob pattern.
+ #[derive(Clone, Debug, Eq, PartialEq)]
++#[non_exhaustive]
+ pub enum ErrorKind {
+     /// **DEPRECATED**.
+     ///
+@@ -169,20 +183,16 @@ pub enum ErrorKind {
+     UnopenedAlternates,
+     /// Occurs when a `{` is found without a matching `}`.
+     UnclosedAlternates,
+-    /// Occurs when an alternating group is nested inside another alternating
+-    /// group, e.g., `{{a,b},{c,d}}`.
++    /// **DEPRECATED**.
++    ///
++    /// This error used to occur when an alternating group was nested inside
++    /// another alternating group, e.g., `{{a,b},{c,d}}`. However, this is now
++    /// supported and as such this error cannot occur.
+     NestedAlternates,
+     /// Occurs when an unescaped '\' is found at the end of a glob.
+     DanglingEscape,
+     /// An error associated with parsing or compiling a regex.
+     Regex(String),
+-    /// Hints that destructuring should not be exhaustive.
+-    ///
+-    /// This enum may grow additional variants, so this makes sure clients
+-    /// don't count on exhaustive matching. (Otherwise, adding a new variant
+-    /// could break existing code.)
+-    #[doc(hidden)]
+-    __Nonexhaustive,
+ }
+ 
+ impl std::error::Error for Error {
+@@ -226,7 +236,6 @@ impl ErrorKind {
+             }
+             ErrorKind::DanglingEscape => "dangling '\\'",
+             ErrorKind::Regex(ref err) => err,
+-            ErrorKind::__Nonexhaustive => unreachable!(),
+         }
+     }
+ }
+@@ -255,7 +264,6 @@ impl std::fmt::Display for ErrorKind {
+             ErrorKind::InvalidRange(s, e) => {
+                 write!(f, "invalid range; '{}' > '{}'", s, e)
+             }
+-            ErrorKind::__Nonexhaustive => unreachable!(),
+         }
+     }
+ }
+@@ -351,6 +359,43 @@ impl GlobSet {
+         false
+     }
+ 
++    /// Returns true if all globs in this set match the path given.
++    ///
++    /// This will return true if the set of globs is empty, as in that case all
++    /// `0` of the globs will match.
++    ///
++    /// ```
++    /// use globset::{Glob, GlobSetBuilder};
++    ///
++    /// let mut builder = GlobSetBuilder::new();
++    /// builder.add(Glob::new("src/*").unwrap());
++    /// builder.add(Glob::new("**/*.rs").unwrap());
++    /// let set = builder.build().unwrap();
++    ///
++    /// assert!(set.matches_all("src/foo.rs"));
++    /// assert!(!set.matches_all("src/bar.c"));
++    /// assert!(!set.matches_all("test.rs"));
++    /// ```
++    pub fn matches_all<P: AsRef<Path>>(&self, path: P) -> bool {
++        self.matches_all_candidate(&Candidate::new(path.as_ref()))
++    }
++
++    /// Returns ture if all globs in this set match the path given.
++    ///
++    /// This takes a Candidate as input, which can be used to amortize the cost
++    /// of peparing a path for matching.
++    ///
++    /// This will return true if the set of globs is empty, as in that case all
++    /// `0` of the globs will match.
++    pub fn matches_all_candidate(&self, path: &Candidate<'_>) -> bool {
++        for strat in &self.strats {
++            if !strat.is_match(path) {
++                return false;
++            }
++        }
++        true
++    }
++
+     /// Returns the sequence number of every glob pattern that matches the
+     /// given path.
+     pub fn matches<P: AsRef<Path>>(&self, path: P) -> Vec<usize> {
+@@ -461,20 +506,33 @@ impl GlobSet {
+             required_exts.0.len(),
+             regexes.literals.len()
+         );
+-        Ok(GlobSet {
+-            len: pats.len(),
+-            strats: vec![
+-                GlobSetMatchStrategy::Extension(exts),
+-                GlobSetMatchStrategy::BasenameLiteral(base_lits),
+-                GlobSetMatchStrategy::Literal(lits),
+-                GlobSetMatchStrategy::Suffix(suffixes.suffix()),
+-                GlobSetMatchStrategy::Prefix(prefixes.prefix()),
+-                GlobSetMatchStrategy::RequiredExtension(
+-                    required_exts.build()?,
+-                ),
+-                GlobSetMatchStrategy::Regex(regexes.regex_set()?),
+-            ],
+-        })
++        let mut strats = Vec::with_capacity(7);
++        // Only add strategies that are populated
++        if !exts.0.is_empty() {
++            strats.push(GlobSetMatchStrategy::Extension(exts));
++        }
++        if !base_lits.0.is_empty() {
++            strats.push(GlobSetMatchStrategy::BasenameLiteral(base_lits));
++        }
++        if !lits.0.is_empty() {
++            strats.push(GlobSetMatchStrategy::Literal(lits));
++        }
++        if !suffixes.is_empty() {
++            strats.push(GlobSetMatchStrategy::Suffix(suffixes.suffix()));
++        }
++        if !prefixes.is_empty() {
++            strats.push(GlobSetMatchStrategy::Prefix(prefixes.prefix()));
++        }
++        if !required_exts.0.is_empty() {
++            strats.push(GlobSetMatchStrategy::RequiredExtension(
++                required_exts.build()?,
++            ));
++        }
++        if !regexes.is_empty() {
++            strats.push(GlobSetMatchStrategy::Regex(regexes.regex_set()?));
++        }
++
++        Ok(GlobSet { len: pats.len(), strats })
+     }
+ }
+ 
+@@ -892,6 +950,10 @@ impl MultiStrategyBuilder {
+             patset: Arc::new(Pool::new(create)),
+         })
+     }
++
++    fn is_empty(&self) -> bool {
++        self.literals.is_empty()
++    }
+ }
+ 
+ #[derive(Clone, Debug)]
+@@ -928,13 +990,26 @@ impl RequiredExtensionStrategyBuilder {
+ ///
+ /// The escaping works by surrounding meta-characters with brackets. For
+ /// example, `*` becomes `[*]`.
++///
++/// # Example
++///
++/// ```
++/// use globset::escape;
++///
++/// assert_eq!(escape("foo*bar"), "foo[*]bar");
++/// assert_eq!(escape("foo?bar"), "foo[?]bar");
++/// assert_eq!(escape("foo[bar"), "foo[[]bar");
++/// assert_eq!(escape("foo]bar"), "foo[]]bar");
++/// assert_eq!(escape("foo{bar"), "foo[{]bar");
++/// assert_eq!(escape("foo}bar"), "foo[}]bar");
++/// ```
+ pub fn escape(s: &str) -> String {
+     let mut escaped = String::with_capacity(s.len());
+     for c in s.chars() {
+         match c {
+             // note that ! does not need escaping because it is only special
+             // inside brackets
+-            '?' | '*' | '[' | ']' => {
++            '?' | '*' | '[' | ']' | '{' | '}' => {
+                 escaped.push('[');
+                 escaped.push(c);
+                 escaped.push(']');
+@@ -979,6 +1054,7 @@ mod tests {
+         let set = GlobSetBuilder::new().build().unwrap();
+         assert!(!set.is_match(""));
+         assert!(!set.is_match("a"));
++        assert!(set.matches_all("a"));
+     }
+ 
+     #[test]
+@@ -1019,4 +1095,16 @@ mod tests {
+         let matches = set.matches("nada");
+         assert_eq!(0, matches.len());
+     }
++
++    #[test]
++    fn debug() {
++        let mut builder = GlobSetBuilder::new();
++        builder.add(Glob::new("*foo*").unwrap());
++        builder.add(Glob::new("*bar*").unwrap());
++        builder.add(Glob::new("*quux*").unwrap());
++        assert_eq!(
++            format!("{builder:?}"),
++            "GlobSetBuilder { pats: [Glob(\"*foo*\"), Glob(\"*bar*\"), Glob(\"*quux*\")] }",
++        );
++    }
+ }
+diff --git a/crates/ignore/Cargo.toml b/crates/ignore/Cargo.toml
+index 4e1c0544f28623d2af73074489bb1c5518bafc07..e0ff47fbb07bb65a08a63fc643da654fb17d6169 100644
+--- a/crates/ignore/Cargo.toml
++++ b/crates/ignore/Cargo.toml
+@@ -36,7 +36,7 @@ version = "0.1.2"
+ 
+ [dev-dependencies]
+ bstr = { version = "1.6.2", default-features = false, features = ["std"] }
+-crossbeam-channel = "0.5.8"
++crossbeam-channel = "0.5.15"
+ 
+ [features]
+ # DEPRECATED. It is a no-op. SIMD is done automatically through runtime
+diff --git a/crates/ignore/src/default_types.rs b/crates/ignore/src/default_types.rs
+index 2cf8ad80794ba8118df50a9efba9e697f53a2551..fb24c78292f0ed29369bfef276fa2ee9bb406cd7 100644
+--- a/crates/ignore/src/default_types.rs
++++ b/crates/ignore/src/default_types.rs
+@@ -27,7 +27,7 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+     (&["bat", "batch"], &["*.bat"]),
+     (&["bazel"], &[
+         "*.bazel", "*.bzl", "*.BUILD", "*.bazelrc", "BUILD", "MODULE.bazel",
+-        "WORKSPACE", "WORKSPACE.bazel",
++        "WORKSPACE", "WORKSPACE.bazel", "WORKSPACE.bzlmod",
+     ]),
+     (&["bitbake"], &["*.bb", "*.bbappend", "*.bbclass", "*.conf", "*.inc"]),
+     (&["brotli"], &["*.br"]),
+@@ -159,6 +159,7 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+         "[Gg][Nn][Uu]makefile", "[Mm]akefile",
+         "[Gg][Nn][Uu]makefile.am", "[Mm]akefile.am",
+         "[Gg][Nn][Uu]makefile.in", "[Mm]akefile.in",
++        "Makefile.*",
+         "*.mk", "*.mak"
+     ]),
+     (&["mako"], &["*.mako", "*.mao"]),
+@@ -181,7 +182,7 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+     (&["motoko"], &["*.mo"]),
+     (&["msbuild"], &[
+         "*.csproj", "*.fsproj", "*.vcxproj", "*.proj", "*.props", "*.targets",
+-        "*.sln",
++        "*.sln", "*.slnf"
+     ]),
+     (&["nim"], &["*.nim", "*.nimf", "*.nimble", "*.nims"]),
+     (&["nix"], &["*.nix"]),
+@@ -227,11 +228,12 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+         // Idiomatic files
+         "config.ru", "Gemfile", ".irbrc", "Rakefile",
+         // Extensions
+-        "*.gemspec", "*.rb", "*.rbw"
++        "*.gemspec", "*.rb", "*.rbw", "*.rake"
+     ]),
+     (&["rust"], &["*.rs"]),
+     (&["sass"], &["*.sass", "*.scss"]),
+     (&["scala"], &["*.scala", "*.sbt"]),
++    (&["seed7"], &["*.sd7", "*.s7i"]),
+     (&["sh"], &[
+         // Portable/misc. init files
+         ".login", ".logout", ".profile", "profile",
+@@ -265,7 +267,7 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+     (&["sql"], &["*.sql", "*.psql"]),
+     (&["stylus"], &["*.styl"]),
+     (&["sv"], &["*.v", "*.vg", "*.sv", "*.svh", "*.h"]),
+-    (&["svelte"], &["*.svelte"]),
++    (&["svelte"], &["*.svelte", "*.svelte.ts"]),
+     (&["svg"], &["*.svg"]),
+     (&["swift"], &["*.swift"]),
+     (&["swig"], &["*.def", "*.i"]),
+@@ -290,6 +292,7 @@ pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+     (&["twig"], &["*.twig"]),
+     (&["txt"], &["*.txt"]),
+     (&["typoscript"], &["*.typoscript", "*.ts"]),
++    (&["typst"], &["*.typ"]),
+     (&["usd"], &["*.usd", "*.usda", "*.usdc"]),
+     (&["v"], &["*.v", "*.vsh"]),
+     (&["vala"], &["*.vala"]),
+diff --git a/crates/ignore/src/dir.rs b/crates/ignore/src/dir.rs
+index b302943ab5a210f2ddad2a77c1611106a6f52165..2aa5ba87cb0a04784470e87002a8f61cba902e08 100644
+--- a/crates/ignore/src/dir.rs
++++ b/crates/ignore/src/dir.rs
+@@ -212,7 +212,7 @@ impl Ignore {
+             igtmp.absolute_base = Some(absolute_base.clone());
+             igtmp.has_git =
+                 if self.0.opts.require_git && self.0.opts.git_ignore {
+-                    parent.join(".git").exists()
++                    parent.join(".git").exists() || parent.join(".jj").exists()
+                 } else {
+                     false
+                 };
+@@ -251,7 +251,7 @@ impl Ignore {
+         } else {
+             None
+         };
+-        let has_git = git_type.map(|_| true).unwrap_or(false);
++        let has_git = git_type.is_some() || dir.join(".jj").exists();
+ 
+         let mut errs = PartialErrorBuilder::default();
+         let custom_ig_matcher = if self.0.custom_ignore_filenames.is_empty() {
+@@ -290,6 +290,7 @@ impl Ignore {
+             errs.maybe_push(err);
+             m
+         };
++
+         let gi_exclude_matcher = if !self.0.opts.git_exclude {
+             Gitignore::empty()
+         } else {
+@@ -461,21 +462,23 @@ impl Ignore {
+                 // off of `path`. Overall, this seems a little ham-fisted, but
+                 // it does fix a nasty bug. It should do fine until we overhaul
+                 // this crate.
+-                let dirpath = self.0.dir.as_path();
+-                let path_prefix = match strip_prefix("./", dirpath) {
+-                    None => dirpath,
+-                    Some(stripped_dot_slash) => stripped_dot_slash,
+-                };
+-                let path = match strip_prefix(path_prefix, path) {
+-                    None => abs_parent_path.join(path),
+-                    Some(p) => {
+-                        let p = match strip_prefix("/", p) {
+-                            None => p,
+-                            Some(p) => p,
+-                        };
+-                        abs_parent_path.join(p)
+-                    }
+-                };
++                let path = abs_parent_path.join(
++                    self.parents()
++                        .take_while(|ig| !ig.0.is_absolute_parent)
++                        .last()
++                        .map_or(path, |ig| {
++                            strip_if_is_prefix(
++                                "/",
++                                strip_if_is_prefix(
++                                    strip_if_is_prefix(
++                                        "./",
++                                        ig.0.dir.as_path(),
++                                    ),
++                                    path,
++                                ),
++                            )
++                        }),
++                );
+ 
+                 for ig in
+                     self.parents().skip_while(|ig| !ig.0.is_absolute_parent)
+@@ -874,6 +877,15 @@ fn resolve_git_commondir(
+     Ok(commondir_abs)
+ }
+ 
++/// Strips `prefix` from `path` if it's a prefix, otherwise returns `path`
++/// unchanged.
++fn strip_if_is_prefix<'a, P: AsRef<Path> + ?Sized>(
++    prefix: &'a P,
++    path: &'a Path,
++) -> &'a Path {
++    strip_prefix(prefix, path).map_or(path, |p| p)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{io::Write, path::Path};
+@@ -943,6 +955,19 @@ mod tests {
+         assert!(ig.matched("baz", false).is_none());
+     }
+ 
++    #[test]
++    fn gitignore_with_jj() {
++        let td = tmpdir();
++        mkdirp(td.path().join(".jj"));
++        wfile(td.path().join(".gitignore"), "foo\n!bar");
++
++        let (ig, err) = IgnoreBuilder::new().build().add_child(td.path());
++        assert!(err.is_none());
++        assert!(ig.matched("foo", false).is_ignore());
++        assert!(ig.matched("bar", false).is_whitelist());
++        assert!(ig.matched("baz", false).is_none());
++    }
++
+     #[test]
+     fn gitignore_no_git() {
+         let td = tmpdir();
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index 19a347cdbe2b0680b9e0320631d5ac824f148100..eeb51b821f5a970c1c3fe193168ac2432569cec6 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -402,6 +402,12 @@ impl GitignoreBuilder {
+                     break;
+                 }
+             };
++
++            // Match Git's handling of .gitignore files that begin with the Unicode BOM
++            const UTF8_BOM: &str = "\u{feff}";
++            let line =
++                if i == 0 { line.trim_start_matches(UTF8_BOM) } else { &line };
++
+             if let Err(err) = self.add_line(Some(path.to_path_buf()), &line) {
+                 errs.push(err.tagged(path, lineno));
+             }
+diff --git a/crates/ignore/src/lib.rs b/crates/ignore/src/lib.rs
+index a5d5ca30bb2cb76966601d2d0c940089693f15c2..74c96edd943e8831125d1b076dc2a7a780e38c6c 100644
+--- a/crates/ignore/src/lib.rs
++++ b/crates/ignore/src/lib.rs
+@@ -527,7 +527,7 @@ mod tests {
+ 
+             let tmpdir = env::temp_dir();
+             for _ in 0..TRIES {
+-                let count = COUNTER.fetch_add(1, Ordering::SeqCst);
++                let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+                 let path = tmpdir.join("rust-ignore").join(count.to_string());
+                 if path.is_dir() {
+                     continue;
+diff --git a/crates/ignore/src/walk.rs b/crates/ignore/src/walk.rs
+index d6ea9c2172b38926abd9e54f61de8ff1a9766995..448e599e43d2d730380a80b07149e4b6f56afd35 100644
+--- a/crates/ignore/src/walk.rs
++++ b/crates/ignore/src/walk.rs
+@@ -1305,7 +1305,7 @@ impl WalkParallel {
+ 
+     fn threads(&self) -> usize {
+         if self.threads == 0 {
+-            2
++            std::thread::available_parallelism().map_or(1, |n| n.get()).min(12)
+         } else {
+             self.threads
+         }
+@@ -1420,8 +1420,11 @@ impl Stack {
+                 stealers: stealers.clone(),
+             })
+             .collect();
+-        // Distribute the initial messages.
++        // Distribute the initial messages, reverse the order to cancel out
++        // the other reversal caused by the inherent LIFO processing of the
++        // per-thread stacks which are filled here.
+         init.into_iter()
++            .rev()
+             .zip(stacks.iter().cycle())
+             .for_each(|(m, s)| s.push(m));
+         stacks
+diff --git a/crates/matcher/src/lib.rs b/crates/matcher/src/lib.rs
+index 40cbff5d9bc626e84bdeafd070581e49a6a851bb..25afb06663a634091f850b5d2dc3baae8dce24fe 100644
+--- a/crates/matcher/src/lib.rs
++++ b/crates/matcher/src/lib.rs
+@@ -389,6 +389,15 @@ pub trait Captures {
+     /// for the overall match.
+     fn get(&self, i: usize) -> Option<Match>;
+ 
++    /// Return the overall match for the capture.
++    ///
++    /// This returns the match for index `0`. That is it is equivalent to
++    /// `get(0).unwrap()`
++    #[inline]
++    fn as_match(&self) -> Match {
++        self.get(0).unwrap()
++    }
++
+     /// Returns true if and only if these captures are empty. This occurs
+     /// when `len` is `0`.
+     ///
+diff --git a/crates/pcre2/src/matcher.rs b/crates/pcre2/src/matcher.rs
+index 56c9356d8f84a87c637cf65af951148cb160e451..9a6710c0d0051bf892f5722e21786d4f8af2c32e 100644
+--- a/crates/pcre2/src/matcher.rs
++++ b/crates/pcre2/src/matcher.rs
+@@ -55,7 +55,12 @@ impl RegexMatcherBuilder {
+                 format!("(?:{})", p.as_ref())
+             });
+         }
+-        let mut singlepat = pats.join("|");
++        let mut singlepat = if patterns.is_empty() {
++            // A way to spell a pattern that can never match anything.
++            r"[^\S\s]".to_string()
++        } else {
++            pats.join("|")
++        };
+         if self.case_smart && !has_uppercase_literal(&singlepat) {
+             builder.caseless(true);
+         }
+diff --git a/crates/printer/src/color.rs b/crates/printer/src/color.rs
+index 164cac7511dd4db8eb4b734ef932ec9acd773773..7d5870500e0b5fb07e79dbdd94fd7bda8f021a1b 100644
+--- a/crates/printer/src/color.rs
++++ b/crates/printer/src/color.rs
+@@ -65,7 +65,7 @@ impl std::fmt::Display for ColorError {
+                 f,
+                 "unrecognized style attribute '{}'. Choose from: \
+                  nobold, bold, nointense, intense, nounderline, \
+-                 underline.",
++                 underline, noitalic, italic.",
+                 name,
+             ),
+             ColorError::InvalidFormat(ref original) => write!(
+@@ -121,7 +121,7 @@ pub struct ColorSpecs {
+ /// `0x`.
+ ///
+ /// Valid style instructions are `nobold`, `bold`, `intense`, `nointense`,
+-/// `underline`, `nounderline`.
++/// `underline`, `nounderline`, `italic`, `noitalic`.
+ ///
+ /// ## Example
+ ///
+@@ -201,6 +201,8 @@ enum Style {
+     NoIntense,
+     Underline,
+     NoUnderline,
++    Italic,
++    NoItalic,
+ }
+ 
+ impl ColorSpecs {
+@@ -286,6 +288,12 @@ impl SpecValue {
+                 Style::NoUnderline => {
+                     cspec.set_underline(false);
+                 }
++                Style::Italic => {
++                    cspec.set_italic(true);
++                }
++                Style::NoItalic => {
++                    cspec.set_italic(false);
++                }
+             },
+         }
+     }
+@@ -370,6 +378,8 @@ impl std::str::FromStr for Style {
+             "nointense" => Ok(Style::NoIntense),
+             "underline" => Ok(Style::Underline),
+             "nounderline" => Ok(Style::NoUnderline),
++            "italic" => Ok(Style::Italic),
++            "noitalic" => Ok(Style::NoItalic),
+             _ => Err(ColorError::UnrecognizedStyle(s.to_string())),
+         }
+     }
+diff --git a/crates/printer/src/hyperlink.rs b/crates/printer/src/hyperlink.rs
+index ec1fd9211fcd0cc8256030625dbf02fe0d6e348c..95742997f5e56ad229ff4f8f4131b9fe67c2e193 100644
+--- a/crates/printer/src/hyperlink.rs
++++ b/crates/printer/src/hyperlink.rs
+@@ -702,16 +702,20 @@ impl HyperlinkPath {
+     /// Returns a hyperlink path from an OS path.
+     #[cfg(windows)]
+     pub(crate) fn from_path(original_path: &Path) -> Option<HyperlinkPath> {
+-        // On Windows, Path::canonicalize returns the result of
+-        // GetFinalPathNameByHandleW with VOLUME_NAME_DOS,
+-        // which produces paths such as the following:
++        // On Windows, we use `std::path::absolute` instead of `Path::canonicalize`
++        // as it can be much faster since it does not touch the file system.
++        // It wraps the [`GetFullPathNameW`][1] API, except for verbatim paths
++        // (those which start with `\\?\`, see [the documentation][2] for details).
++        //
++        // Here, we strip any verbatim path prefixes since we cannot use them
++        // in hyperlinks anyway. This can only happen if the user explicitly
++        // supplies a verbatim path as input, which already needs to be absolute:
+         //
+         //   \\?\C:\dir\file.txt           (local path)
+         //   \\?\UNC\server\dir\file.txt   (network share)
+         //
+-        // The \\?\ prefix comes from VOLUME_NAME_DOS and is constant.
+-        // It is followed either by the drive letter, or by UNC\
+-        // (universal naming convention), which denotes a network share.
++        // The `\\?\` prefix is constant for verbatim paths, and can be followed
++        // by `UNC\` (universal naming convention), which denotes a network share.
+         //
+         // Given that the default URL format on Windows is file://{path}
+         // we need to return the following from this function:
+@@ -750,18 +754,19 @@ impl HyperlinkPath {
+         //
+         // It doesn't parse any other number of slashes in "file//server" as a
+         // network path.
++        //
++        // [1]: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfullpathnamew
++        // [2]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+ 
+         const WIN32_NAMESPACE_PREFIX: &str = r"\\?\";
+         const UNC_PREFIX: &str = r"UNC\";
+ 
+-        // As for Unix, we canonicalize the path to make sure we have an
+-        // absolute path.
+-        let path = match original_path.canonicalize() {
++        let path = match std::path::absolute(original_path) {
+             Ok(path) => path,
+             Err(err) => {
+                 log::debug!(
+                     "hyperlink creation for {:?} failed, error occurred \
+-                     during path canonicalization: {}",
++                     during conversion to absolute path: {}",
+                     original_path,
+                     err,
+                 );
+@@ -784,24 +789,20 @@ impl HyperlinkPath {
+                 return None;
+             }
+         };
+-        // As the comment above says, we expect all canonicalized paths to
+-        // begin with a \\?\. If it doesn't, then something weird is happening
+-        // and we should just give up.
+-        if !string.starts_with(WIN32_NAMESPACE_PREFIX) {
+-            log::debug!(
+-                "hyperlink creation for {:?} failed, canonicalization \
+-                 returned {:?}, which does not start with \\\\?\\",
+-                original_path,
+-                path,
+-            );
+-            return None;
+-        }
+-        string = &string[WIN32_NAMESPACE_PREFIX.len()..];
+ 
+-        // And as above, drop the UNC prefix too, but keep the leading slash.
+-        if string.starts_with(UNC_PREFIX) {
+-            string = &string[(UNC_PREFIX.len() - 1)..];
++        // Strip verbatim path prefixes (see the comment above for details).
++        if string.starts_with(WIN32_NAMESPACE_PREFIX) {
++            string = &string[WIN32_NAMESPACE_PREFIX.len()..];
++
++            // Drop the UNC prefix if there is one, but keep the leading slash.
++            if string.starts_with(UNC_PREFIX) {
++                string = &string[(UNC_PREFIX.len() - 1)..];
++            }
++        } else if string.starts_with(r"\\") || string.starts_with(r"//") {
++            // Drop one of the two leading slashes of network paths, it will be added back.
++            string = &string[1..];
+         }
++
+         // Finally, add a leading slash. In the local file case, this turns
+         // C:\foo\bar into /C:\foo\bar (and then percent encoding turns it into
+         // /C:/foo/bar). In the network share case, this turns \share\foo\bar
+@@ -1006,4 +1007,33 @@ mod tests {
+             err(InvalidVariable("bar{{".to_string())),
+         );
+     }
++
++    #[test]
++    #[cfg(windows)]
++    fn convert_to_hyperlink_path() {
++        let convert = |path| {
++            String::from_utf8(
++                HyperlinkPath::from_path(Path::new(path)).unwrap().0,
++            )
++            .unwrap()
++        };
++
++        assert_eq!(convert(r"C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"C:\foo\bar\..\other\baz.txt"),
++            "/C:/foo/other/baz.txt"
++        );
++
++        assert_eq!(convert(r"\\server\dir\file.txt"), "//server/dir/file.txt");
++        assert_eq!(
++            convert(r"\\server\dir\foo\..\other\file.txt"),
++            "//server/dir/other/file.txt"
++        );
++
++        assert_eq!(convert(r"\\?\C:\dir\file.txt"), "/C:/dir/file.txt");
++        assert_eq!(
++            convert(r"\\?\UNC\server\dir\file.txt"),
++            "//server/dir/file.txt"
++        );
++    }
+ }
+diff --git a/crates/printer/src/json.rs b/crates/printer/src/json.rs
+index 82ad94dedec3cc3dde5e5b79baeb2abafd86a250..ab0b5e167f72fd2fd3d39a255fe5ea52349984df 100644
+--- a/crates/printer/src/json.rs
++++ b/crates/printer/src/json.rs
+@@ -1,6 +1,7 @@
+ use std::{
+     io::{self, Write},
+     path::Path,
++    sync::Arc,
+     time::Instant,
+ };
+ 
+@@ -13,7 +14,8 @@ use {
+ };
+ 
+ use crate::{
+-    counter::CounterWriter, jsont, stats::Stats, util::find_iter_at_in_context,
++    counter::CounterWriter, jsont, stats::Stats,
++    util::find_iter_at_in_context, util::Replacer,
+ };
+ 
+ /// The configuration for the JSON printer.
+@@ -26,11 +28,17 @@ struct Config {
+     pretty: bool,
+     max_matches: Option<u64>,
+     always_begin_end: bool,
++    replacement: Arc<Option<Vec<u8>>>,
+ }
+ 
+ impl Default for Config {
+     fn default() -> Config {
+-        Config { pretty: false, max_matches: None, always_begin_end: false }
++        Config {
++            pretty: false,
++            max_matches: None,
++            always_begin_end: false,
++            replacement: Arc::new(None),
++        }
+     }
+ }
+ 
+@@ -98,6 +106,24 @@ impl JSONBuilder {
+         self.config.always_begin_end = yes;
+         self
+     }
++
++    /// Set the bytes that will be used to replace each occurrence of a match
++    /// found.
++    ///
++    /// The replacement bytes given may include references to capturing groups,
++    /// which may either be in index form (e.g., `$2`) or can reference named
++    /// capturing groups if present in the original pattern (e.g., `$foo`).
++    ///
++    /// For documentation on the full format, please see the `Capture` trait's
++    /// `interpolate` method in the
++    /// [grep-printer](https://docs.rs/grep-printer) crate.
++    pub fn replacement(
++        &mut self,
++        replacement: Option<Vec<u8>>,
++    ) -> &mut JSONBuilder {
++        self.config.replacement = Arc::new(replacement);
++        self
++    }
+ }
+ 
+ /// The JSON printer, which emits results in a JSON lines format.
+@@ -256,7 +282,8 @@ impl JSONBuilder {
+ ///   encoded, then the byte offsets correspond to the data after base64
+ ///   decoding.) The `submatch` objects are guaranteed to be sorted by their
+ ///   starting offsets. Note that it is possible for this array to be empty,
+-///   for example, when searching reports inverted matches.
++///   for example, when searching reports inverted matches. If the configuration
++///   specifies a replacement, the resulting replacement text is also present.
+ ///
+ /// #### Message: **context**
+ ///
+@@ -286,7 +313,9 @@ impl JSONBuilder {
+ ///   decoding.) The `submatch` objects are guaranteed to be sorted by
+ ///   their starting offsets. Note that it is possible for this array to be
+ ///   non-empty, for example, when searching reports inverted matches such that
+-///   the original matcher could match things in the contextual lines.
++///   the original matcher could match things in the contextual lines. If the
++///   configuration specifies a replacemement, the resulting replacement text
++///   is also present.
+ ///
+ /// #### Object: **submatch**
+ ///
+@@ -308,6 +337,10 @@ impl JSONBuilder {
+ ///   the `lines` field in the
+ ///   [`match`](#message-match) or [`context`](#message-context)
+ ///   messages.
++/// * **replacement** (optional) - An
++///   [arbitrary data object](#object-arbitrary-data) corresponding to the
++///   replacement text for this submatch, if the configuration specifies
++///   a replacement.
+ ///
+ /// #### Object: **stats**
+ ///
+@@ -447,6 +480,23 @@ impl JSONBuilder {
+ ///   }
+ /// }
+ /// ```
++/// and here's what a match type item would looks like if a replacement text
++/// of 'Moriarity' was given as a parameter:
++/// ```json
++/// {
++///   "type": "match",
++///   "data": {
++///     "path": {"text": "/home/andrew/sherlock"},
++///     "lines": {"text": "For the Doctor Watsons of this world, as opposed to the Sherlock\n"},
++///     "line_number": 1,
++///     "absolute_offset": 0,
++///     "submatches": [
++///       {"match": {"text": "Watson"}, "replacement": {"text": "Moriarity"}, "start": 15, "end": 21}
++///     ]
++///   }
++/// }
++/// ```
++
+ #[derive(Clone, Debug)]
+ pub struct JSON<W> {
+     config: Config,
+@@ -471,6 +521,7 @@ impl<W: io::Write> JSON<W> {
+     ) -> JSONSink<'static, 's, M, W> {
+         JSONSink {
+             matcher,
++            replacer: Replacer::new(),
+             json: self,
+             path: None,
+             start_time: Instant::now(),
+@@ -497,6 +548,7 @@ impl<W: io::Write> JSON<W> {
+     {
+         JSONSink {
+             matcher,
++            replacer: Replacer::new(),
+             json: self,
+             path: Some(path.as_ref()),
+             start_time: Instant::now(),
+@@ -559,6 +611,7 @@ impl<W> JSON<W> {
+ #[derive(Debug)]
+ pub struct JSONSink<'p, 's, M: Matcher, W> {
+     matcher: M,
++    replacer: Replacer<M>,
+     json: &'s mut JSON<W>,
+     path: Option<&'p Path>,
+     start_time: Instant,
+@@ -643,6 +696,31 @@ impl<'p, 's, M: Matcher, W: io::Write> JSONSink<'p, 's, M, W> {
+         Ok(())
+     }
+ 
++    /// If the configuration specifies a replacement, then this executes the
++    /// replacement, lazily allocating memory if necessary.
++    ///
++    /// To access the result of a replacement, use `replacer.replacement()`.
++    fn replace(
++        &mut self,
++        searcher: &Searcher,
++        bytes: &[u8],
++        range: std::ops::Range<usize>,
++    ) -> io::Result<()> {
++        self.replacer.clear();
++        if self.json.config.replacement.is_some() {
++            let replacement =
++                (*self.json.config.replacement).as_ref().map(|r| &*r).unwrap();
++            self.replacer.replace_all(
++                searcher,
++                &self.matcher,
++                bytes,
++                range,
++                replacement,
++            )?;
++        }
++        Ok(())
++    }
++
+     /// Returns true if this printer should quit.
+     ///
+     /// This implements the logic for handling quitting after seeing a certain
+@@ -711,10 +789,15 @@ impl<'p, 's, M: Matcher, W: io::Write> Sink for JSONSink<'p, 's, M, W> {
+             mat.buffer(),
+             mat.bytes_range_in_buffer(),
+         )?;
++        self.replace(searcher, mat.buffer(), mat.bytes_range_in_buffer())?;
+         self.stats.add_matches(self.json.matches.len() as u64);
+         self.stats.add_matched_lines(mat.lines().count() as u64);
+ 
+-        let submatches = SubMatches::new(mat.bytes(), &self.json.matches);
++        let submatches = SubMatches::new(
++            mat.bytes(),
++            &self.json.matches,
++            self.replacer.replacement(),
++        );
+         let msg = jsont::Message::Match(jsont::Match {
+             path: self.path,
+             lines: mat.bytes(),
+@@ -740,7 +823,12 @@ impl<'p, 's, M: Matcher, W: io::Write> Sink for JSONSink<'p, 's, M, W> {
+         }
+         let submatches = if searcher.invert_match() {
+             self.record_matches(searcher, ctx.bytes(), 0..ctx.bytes().len())?;
+-            SubMatches::new(ctx.bytes(), &self.json.matches)
++            self.replace(searcher, ctx.bytes(), 0..ctx.bytes().len())?;
++            SubMatches::new(
++                ctx.bytes(),
++                &self.json.matches,
++                self.replacer.replacement(),
++            )
+         } else {
+             SubMatches::empty()
+         };
+@@ -831,19 +919,27 @@ enum SubMatches<'a> {
+ impl<'a> SubMatches<'a> {
+     /// Create a new set of match ranges from a set of matches and the
+     /// corresponding bytes that those matches apply to.
+-    fn new(bytes: &'a [u8], matches: &[Match]) -> SubMatches<'a> {
++    fn new(
++        bytes: &'a [u8],
++        matches: &[Match],
++        replacement: Option<(&'a [u8], &'a [Match])>,
++    ) -> SubMatches<'a> {
+         if matches.len() == 1 {
+             let mat = matches[0];
+             SubMatches::Small([jsont::SubMatch {
+                 m: &bytes[mat],
++                replacement: replacement
++                    .map(|(rbuf, rmatches)| &rbuf[rmatches[0]]),
+                 start: mat.start(),
+                 end: mat.end(),
+             }])
+         } else {
+             let mut match_ranges = vec![];
+-            for &mat in matches {
++            for (i, &mat) in matches.iter().enumerate() {
+                 match_ranges.push(jsont::SubMatch {
+                     m: &bytes[mat],
++                    replacement: replacement
++                        .map(|(rbuf, rmatches)| &rbuf[rmatches[i]]),
+                     start: mat.start(),
+                     end: mat.end(),
+                 });
+diff --git a/crates/printer/src/jsont.rs b/crates/printer/src/jsont.rs
+index 4d0cf944a53565a8152fcb0fc270f613baa5fd51..1548c3a88c3515e3716fe4f6b7a3babea8096b3d 100644
+--- a/crates/printer/src/jsont.rs
++++ b/crates/printer/src/jsont.rs
+@@ -135,6 +135,7 @@ impl<'a> serde::Serialize for Context<'a> {
+ 
+ pub(crate) struct SubMatch<'a> {
+     pub(crate) m: &'a [u8],
++    pub(crate) replacement: Option<&'a [u8]>,
+     pub(crate) start: usize,
+     pub(crate) end: usize,
+ }
+@@ -148,6 +149,9 @@ impl<'a> serde::Serialize for SubMatch<'a> {
+ 
+         let mut state = s.serialize_struct("SubMatch", 3)?;
+         state.serialize_field("match", &Data::from_bytes(self.m))?;
++        if let Some(r) = self.replacement {
++            state.serialize_field("replacement", &Data::from_bytes(r))?;
++        }
+         state.serialize_field("start", &self.start)?;
+         state.serialize_field("end", &self.end)?;
+         state.end()
+diff --git a/crates/searcher/src/line_buffer.rs b/crates/searcher/src/line_buffer.rs
+index e73c650468d965a3cc42f016072c479ab259e4fa..2a7ff09f704098a1e1a487aecbe595dc8ce3b41a 100644
+--- a/crates/searcher/src/line_buffer.rs
++++ b/crates/searcher/src/line_buffer.rs
+@@ -538,6 +538,11 @@ fn replace_bytes(
+     while let Some(i) = bytes.find_byte(src) {
+         bytes[i] = replacement;
+         bytes = &mut bytes[i + 1..];
++
++        // To search for adjacent `src` bytes we use a different strategy.
++        // Since binary data tends to have long runs of NUL terminators,
++        // it is faster to compare one-byte-at-a-time than to stop and start
++        // memchr (through `find_byte`) for every byte in a sequence.
+         while bytes.get(0) == Some(&src) {
+             bytes[0] = replacement;
+             bytes = &mut bytes[1..];
+@@ -577,6 +582,9 @@ and exhibited clearly, with a label attached.\
+ 
+     #[test]
+     fn replace() {
++        assert_eq!(replace_str("", b'b', b'z'), (s(""), None));
++        assert_eq!(replace_str("a", b'a', b'a'), (s("a"), None));
++        assert_eq!(replace_str("a", b'b', b'z'), (s("a"), None));
+         assert_eq!(replace_str("abc", b'b', b'z'), (s("azc"), Some(1)));
+         assert_eq!(replace_str("abb", b'b', b'z'), (s("azz"), Some(1)));
+         assert_eq!(replace_str("aba", b'a', b'z'), (s("zbz"), Some(0)));
+diff --git a/crates/searcher/src/searcher/mod.rs b/crates/searcher/src/searcher/mod.rs
+index deda17e5bdbbd936310b3b494c4dd6741e8798eb..c7d3b1d1d16f9201fc29970aa0ae20ebb25f9d5e 100644
+--- a/crates/searcher/src/searcher/mod.rs
++++ b/crates/searcher/src/searcher/mod.rs
+@@ -1004,6 +1004,7 @@ fn slice_has_bom(slice: &[u8]) -> bool {
+         None => return false,
+         Some((enc, _)) => enc,
+     };
++    log::trace!("found byte-order mark (BOM) for encoding {enc:?}");
+     [encoding_rs::UTF_16LE, encoding_rs::UTF_16BE, encoding_rs::UTF_8]
+         .contains(&enc)
+ }

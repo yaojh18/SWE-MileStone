@@ -1,0 +1,2546 @@
+diff --git a/sklearn/_build_utils/version.py b/sklearn/_build_utils/version.py
+index 49a3cfb82bebd6148f5642b75bd97582274a2481..124c6cc3a0cdcd345b5fc7c1c5490cbcf69e677d 100644
+--- a/sklearn/_build_utils/version.py
++++ b/sklearn/_build_utils/version.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ """Extract version number from __init__.py"""
+ 
+ import os
+diff --git a/sklearn/_min_dependencies.py b/sklearn/_min_dependencies.py
+index 12e7a1bf3bf9f0a02d3282205830db477680aba3..f15705cd3cc69045d308b107c51961a87a6d5613 100644
+--- a/sklearn/_min_dependencies.py
++++ b/sklearn/_min_dependencies.py
+@@ -21,7 +21,7 @@ dependent_packages = {
+     "joblib": (JOBLIB_MIN_VERSION, "install"),
+     "threadpoolctl": (THREADPOOLCTL_MIN_VERSION, "install"),
+     "cython": (CYTHON_MIN_VERSION, "build"),
+-    "meson-python": ("0.15.0", "build"),
++    "meson-python": ("0.16.0", "build"),
+     "matplotlib": ("3.3.4", "benchmark, docs, examples, tests"),
+     "scikit-image": ("0.17.2", "docs, examples, tests"),
+     "pandas": ("1.1.5", "benchmark, docs, examples, tests"),
+diff --git a/sklearn/calibration.py b/sklearn/calibration.py
+index bc5ed634a3be416c0684b833fd9f0442477e1afb..609f051ab1626eff994d3ff502da0baf30215994 100644
+--- a/sklearn/calibration.py
++++ b/sklearn/calibration.py
+@@ -24,7 +24,7 @@ from .base import (
+     clone,
+ )
+ from .isotonic import IsotonicRegression
+-from .model_selection import check_cv, cross_val_predict
++from .model_selection import LeaveOneOut, check_cv, cross_val_predict
+ from .preprocessing import LabelEncoder, label_binarize
+ from .svm import LinearSVC
+ from .utils import (
+@@ -390,6 +390,13 @@ class CalibratedClassifierCV(ClassifierMixin, MetaEstimatorMixin, BaseEstimator)
+                     "cross-validation but provided less than "
+                     f"{n_folds} examples for at least one class."
+                 )
++            if isinstance(self.cv, LeaveOneOut):
++                raise ValueError(
++                    "LeaveOneOut cross-validation does not allow"
++                    "all classes to be present in test splits. "
++                    "Please use a cross-validation generator that allows "
++                    "all classes to appear in every test and train split."
++                )
+             cv = check_cv(self.cv, y, classifier=True)
+ 
+             if self.ensemble:
+diff --git a/sklearn/cluster/_agglomerative.py b/sklearn/cluster/_agglomerative.py
+index 4ee8cf426cb6f3717f5542991e59d32bef75dea4..19acc966643424a139c50b12ed4317aff3dc42cf 100644
+--- a/sklearn/cluster/_agglomerative.py
++++ b/sklearn/cluster/_agglomerative.py
+@@ -801,10 +801,6 @@ class AgglomerativeClustering(ClusterMixin, BaseEstimator):
+ 
+         .. versionadded:: 1.2
+ 
+-        .. deprecated:: 1.4
+-           `metric=None` is deprecated in 1.4 and will be removed in 1.6.
+-           Let `metric` be the default value (i.e. `"euclidean"`) instead.
+-
+     memory : str or object with the joblib.Memory interface, default=None
+         Used to cache the output of the computation of the tree.
+         By default, no caching is done. If a string is given, it is the
+@@ -933,7 +929,6 @@ class AgglomerativeClustering(ClusterMixin, BaseEstimator):
+         "metric": [
+             StrOptions(set(_VALID_METRICS) | {"precomputed"}),
+             callable,
+-            Hidden(None),
+         ],
+         "memory": [str, HasMethods("cache"), None],
+         "connectivity": ["array-like", "sparse matrix", callable, None],
+@@ -1002,20 +997,6 @@ class AgglomerativeClustering(ClusterMixin, BaseEstimator):
+         """
+         memory = check_memory(self.memory)
+ 
+-        # TODO(1.6): remove in 1.6
+-        if self.metric is None:
+-            warnings.warn(
+-                (
+-                    "`metric=None` is deprecated in version 1.4 and will be removed in "
+-                    "version 1.6. Let `metric` be the default value "
+-                    "(i.e. `'euclidean'`) instead."
+-                ),
+-                FutureWarning,
+-            )
+-            self._metric = "euclidean"
+-        else:
+-            self._metric = self.metric
+-
+         if not ((self.n_clusters is None) ^ (self.distance_threshold is None)):
+             raise ValueError(
+                 "Exactly one of n_clusters and "
+@@ -1028,9 +1009,9 @@ class AgglomerativeClustering(ClusterMixin, BaseEstimator):
+                 "compute_full_tree must be True if distance_threshold is set."
+             )
+ 
+-        if self.linkage == "ward" and self._metric != "euclidean":
++        if self.linkage == "ward" and self.metric != "euclidean":
+             raise ValueError(
+-                f"{self._metric} was provided as metric. Ward can only "
++                f"{self.metric} was provided as metric. Ward can only "
+                 "work with euclidean distances."
+             )
+ 
+@@ -1064,7 +1045,7 @@ class AgglomerativeClustering(ClusterMixin, BaseEstimator):
+         kwargs = {}
+         if self.linkage != "ward":
+             kwargs["linkage"] = self.linkage
+-            kwargs["affinity"] = self._metric
++            kwargs["affinity"] = self.metric
+ 
+         distance_threshold = self.distance_threshold
+ 
+diff --git a/sklearn/cluster/_hdbscan/_linkage.pyx b/sklearn/cluster/_hdbscan/_linkage.pyx
+index 0a54d62ae41296c3d90b1af2a3386c6041144736..1293bdde39c20e1c08498072768ee3397cc8cd5d 100644
+--- a/sklearn/cluster/_hdbscan/_linkage.pyx
++++ b/sklearn/cluster/_hdbscan/_linkage.pyx
+@@ -74,8 +74,8 @@ cpdef cnp.ndarray[MST_edge_t, ndim=1, mode='c'] mst_from_mutual_reachability(
+     Returns
+     -------
+     mst : ndarray of shape (n_samples - 1,), dtype=MST_edge_dtype
+-        The MST representation of the mutual-reahability graph. The MST is
+-        represented as a collecteion of edges.
++        The MST representation of the mutual-reachability graph. The MST is
++        represented as a collection of edges.
+     """
+     cdef:
+         # Note: we utilize ndarray's over memory-views to make use of numpy
+@@ -136,8 +136,8 @@ cpdef cnp.ndarray[MST_edge_t, ndim=1, mode='c'] mst_from_data_matrix(
+     Returns
+     -------
+     mst : ndarray of shape (n_samples - 1,), dtype=MST_edge_dtype
+-        The MST representation of the mutual-reahability graph. The MST is
+-        represented as a collecteion of edges.
++        The MST representation of the mutual-reachability graph. The MST is
++        represented as a collection of edges.
+     """
+ 
+     cdef:
+@@ -163,6 +163,8 @@ cpdef cnp.ndarray[MST_edge_t, ndim=1, mode='c'] mst_from_data_matrix(
+ 
+     current_node = 0
+ 
++    # The following loop dynamically updates minimum reachability node-by-node,
++    # avoiding unnecessary computation where possible.
+     for i in range(0, n_samples - 1):
+ 
+         in_tree[current_node] = 1
+@@ -194,25 +196,27 @@ cpdef cnp.ndarray[MST_edge_t, ndim=1, mode='c'] mst_from_data_matrix(
+                 next_node_core_dist,
+                 pair_distance
+             )
+-            if mutual_reachability_distance > next_node_min_reach:
+-                if next_node_min_reach < new_reachability:
+-                    new_reachability = next_node_min_reach
+-                    source_node = next_node_source
+-                    new_node = j
+-                continue
+ 
++            # If MRD(i, j) is smaller than node j's min_reachability, we update
++            # node j's min_reachability for future reference.
+             if mutual_reachability_distance < next_node_min_reach:
+                 min_reachability[j] = mutual_reachability_distance
+                 current_sources[j] = current_node
++
++                # If MRD(i, j) is also smaller than node i's current
++                # min_reachability, we update and set their edge as the current
++                # MST edge candidate.
+                 if mutual_reachability_distance < new_reachability:
+                     new_reachability = mutual_reachability_distance
+                     source_node = current_node
+                     new_node = j
+-            else:
+-                if next_node_min_reach < new_reachability:
+-                    new_reachability = next_node_min_reach
+-                    source_node = next_node_source
+-                    new_node = j
++
++            # If the node j is closer to another node already in the tree, we
++            # make their edge the current MST candidate edge.
++            elif next_node_min_reach < new_reachability:
++                new_reachability = next_node_min_reach
++                source_node = next_node_source
++                new_node = j
+ 
+         mst[i].current_node = source_node
+         mst[i].next_node = new_node
+@@ -227,8 +231,8 @@ cpdef cnp.ndarray[HIERARCHY_t, ndim=1, mode="c"] make_single_linkage(const MST_e
+     Parameters
+     ----------
+     mst : ndarray of shape (n_samples - 1,), dtype=MST_edge_dtype
+-        The MST representation of the mutual-reahability graph. The MST is
+-        represented as a collecteion of edges.
++        The MST representation of the mutual-reachability graph. The MST is
++        represented as a collection of edges.
+ 
+     Returns
+     -------
+diff --git a/sklearn/cluster/_hdbscan/_reachability.pyx b/sklearn/cluster/_hdbscan/_reachability.pyx
+index 7c37b795cbd14e012b81797a59b9acaaf0435b6b..a56a834724889183bb08aceaeee019749049be25 100644
+--- a/sklearn/cluster/_hdbscan/_reachability.pyx
++++ b/sklearn/cluster/_hdbscan/_reachability.pyx
+@@ -124,7 +124,7 @@ def _dense_mutual_reachability_graph(
+     """
+     cdef:
+         intp_t i, j, n_samples = distance_matrix.shape[0]
+-        floating mutual_reachibility_distance
++        floating mutual_reachability_distance
+         floating[::1] core_distances
+ 
+     # We assume that the distance matrix is symmetric. We choose to sort every
+@@ -141,12 +141,12 @@ def _dense_mutual_reachability_graph(
+         # _openmp_effective_n_threads
+         for i in range(n_samples):
+             for j in range(n_samples):
+-                mutual_reachibility_distance = max(
++                mutual_reachability_distance = max(
+                     core_distances[i],
+                     core_distances[j],
+                     distance_matrix[i, j],
+                 )
+-                distance_matrix[i, j] = mutual_reachibility_distance
++                distance_matrix[i, j] = mutual_reachability_distance
+ 
+ 
+ def _sparse_mutual_reachability_graph(
+@@ -179,7 +179,7 @@ def _sparse_mutual_reachability_graph(
+     """
+     cdef:
+         integral i, col_ind, row_ind
+-        floating mutual_reachibility_distance
++        floating mutual_reachability_distance
+         floating[:] core_distances
+         floating[:] row_data
+ 
+@@ -203,10 +203,10 @@ def _sparse_mutual_reachability_graph(
+         for row_ind in range(n_samples):
+             for i in range(indptr[row_ind], indptr[row_ind + 1]):
+                 col_ind = indices[i]
+-                mutual_reachibility_distance = max(
++                mutual_reachability_distance = max(
+                     core_distances[row_ind], core_distances[col_ind], data[i]
+                 )
+-                if isfinite(mutual_reachibility_distance):
+-                    data[i] = mutual_reachibility_distance
++                if isfinite(mutual_reachability_distance):
++                    data[i] = mutual_reachability_distance
+                 elif max_distance > 0:
+                     data[i] = max_distance
+diff --git a/sklearn/cluster/_hdbscan/_tree.pyx b/sklearn/cluster/_hdbscan/_tree.pyx
+index 2ac8743ec707ffde65928f565ddc82f063866934..67ab0dbec695056396122ff783e3d335b6b28f89 100644
+--- a/sklearn/cluster/_hdbscan/_tree.pyx
++++ b/sklearn/cluster/_hdbscan/_tree.pyx
+@@ -184,7 +184,7 @@ cpdef cnp.ndarray[CONDENSED_t, ndim=1, mode='c'] _condense_tree(
+             left_count = 1
+ 
+         if right >= n_samples:
+-            right_count = <cnp.intp_t> hierarchy[right - n_samples].cluster_size
++            right_count = hierarchy[right - n_samples].cluster_size
+         else:
+             right_count = 1
+ 
+diff --git a/sklearn/cluster/_hdbscan/hdbscan.py b/sklearn/cluster/_hdbscan/hdbscan.py
+index 9933318313cc80cbbcc17fab6a93e18c8100ef9a..d59e7ee2cefeaf69424c884a127d30bf6ccabb24 100644
+--- a/sklearn/cluster/_hdbscan/hdbscan.py
++++ b/sklearn/cluster/_hdbscan/hdbscan.py
+@@ -485,14 +485,6 @@ class HDBSCAN(ClusterMixin, BaseEstimator):
+         :class:`~sklearn.neighbors.BallTree`, then it resolves to use the
+         `"brute"` algorithm.
+ 
+-        .. deprecated:: 1.4
+-           The `'kdtree'` option was deprecated in version 1.4,
+-           and will be renamed to `'kd_tree'` in 1.6.
+-
+-        .. deprecated:: 1.4
+-           The `'balltree'` option was deprecated in version 1.4,
+-           and will be renamed to `'ball_tree'` in 1.6.
+-
+     leaf_size : int, default=40
+         Leaf size for trees responsible for fast nearest neighbour queries when
+         a KDTree or a BallTree are used as core-distance algorithms. A large
+@@ -654,13 +646,7 @@ class HDBSCAN(ClusterMixin, BaseEstimator):
+         ],
+         "metric_params": [dict, None],
+         "alpha": [Interval(Real, left=0, right=None, closed="neither")],
+-        # TODO(1.6): Remove "kdtree" and "balltree"  option
+-        "algorithm": [
+-            StrOptions(
+-                {"auto", "brute", "kd_tree", "ball_tree", "kdtree", "balltree"},
+-                deprecated={"kdtree", "balltree"},
+-            ),
+-        ],
++        "algorithm": [StrOptions({"auto", "brute", "kd_tree", "ball_tree"})],
+         "leaf_size": [Interval(Integral, left=1, right=None, closed="left")],
+         "n_jobs": [Integral, None],
+         "cluster_selection_method": [StrOptions({"eom", "leaf"})],
+@@ -794,30 +780,6 @@ class HDBSCAN(ClusterMixin, BaseEstimator):
+                 f" samples in X ({X.shape[0]})"
+             )
+ 
+-        # TODO(1.6): Remove
+-        if self.algorithm == "kdtree":
+-            warn(
+-                (
+-                    "`algorithm='kdtree'`has been deprecated in 1.4 and will be renamed"
+-                    " to'kd_tree'`in 1.6. To keep the past behaviour, set"
+-                    " `algorithm='kd_tree'`."
+-                ),
+-                FutureWarning,
+-            )
+-            self.algorithm = "kd_tree"
+-
+-        # TODO(1.6): Remove
+-        if self.algorithm == "balltree":
+-            warn(
+-                (
+-                    "`algorithm='balltree'`has been deprecated in 1.4 and will be"
+-                    " renamed to'ball_tree'`in 1.6. To keep the past behaviour, set"
+-                    " `algorithm='ball_tree'`."
+-                ),
+-                FutureWarning,
+-            )
+-            self.algorithm = "ball_tree"
+-
+         mst_func = None
+         kwargs = dict(
+             X=X,
+diff --git a/sklearn/compose/_target.py b/sklearn/compose/_target.py
+index 5db954bb75e5d3f621305ba785b02624167f4889..db53eb9be9e6530874f861201bb9743d5b9fcf11 100644
+--- a/sklearn/compose/_target.py
++++ b/sklearn/compose/_target.py
+@@ -7,12 +7,18 @@ import numpy as np
+ 
+ from ..base import BaseEstimator, RegressorMixin, _fit_context, clone
+ from ..exceptions import NotFittedError
++from ..linear_model import LinearRegression
+ from ..preprocessing import FunctionTransformer
+-from ..utils import _safe_indexing, check_array
++from ..utils import Bunch, _safe_indexing, check_array
++from ..utils._metadata_requests import (
++    MetadataRouter,
++    MethodMapping,
++    _routing_enabled,
++    process_routing,
++)
+ from ..utils._param_validation import HasMethods
+ from ..utils._tags import _safe_tags
+ from ..utils.metadata_routing import (
+-    _raise_for_unsupported_routing,
+     _RoutingNotSupportedMixin,
+ )
+ from ..utils.validation import check_is_fitted
+@@ -192,6 +198,10 @@ class TransformedTargetRegressor(
+                 validate=True,
+                 check_inverse=self.check_inverse,
+             )
++            # We are transforming the target here and not the features, so we set the
++            # output of FunctionTransformer() to be a numpy array (default) and to not
++            # depend on the global configuration:
++            self.transformer_.set_output(transform="default")
+         # XXX: sample_weight is not currently passed to the
+         # transformer. However, if transformer starts using sample_weight, the
+         # code should be modified accordingly. At the time to consider the
+@@ -229,15 +239,25 @@ class TransformedTargetRegressor(
+             Target values.
+ 
+         **fit_params : dict
+-            Parameters passed to the `fit` method of the underlying
+-            regressor.
++            - If `enable_metadata_routing=False` (default):
++
++                Parameters directly passed to the `fit` method of the
++                underlying regressor.
++
++            - If `enable_metadata_routing=True`:
++
++                Parameters safely routed to the `fit` method of the
++                underlying regressor.
++
++                .. versionchanged:: 1.6
++                    See :ref:`Metadata Routing User Guide <metadata_routing>` for
++                    more details.
+ 
+         Returns
+         -------
+         self : object
+             Fitted estimator.
+         """
+-        _raise_for_unsupported_routing(self, "fit", **fit_params)
+         if y is None:
+             raise ValueError(
+                 f"This {self.__class__.__name__} estimator "
+@@ -273,14 +293,13 @@ class TransformedTargetRegressor(
+         if y_trans.ndim == 2 and y_trans.shape[1] == 1:
+             y_trans = y_trans.squeeze(axis=1)
+ 
+-        if self.regressor is None:
+-            from ..linear_model import LinearRegression
+-
+-            self.regressor_ = LinearRegression()
++        self.regressor_ = self._get_regressor(get_clone=True)
++        if _routing_enabled():
++            routed_params = process_routing(self, "fit", **fit_params)
+         else:
+-            self.regressor_ = clone(self.regressor)
++            routed_params = Bunch(regressor=Bunch(fit=fit_params))
+ 
+-        self.regressor_.fit(X, y_trans, **fit_params)
++        self.regressor_.fit(X, y_trans, **routed_params.regressor.fit)
+ 
+         if hasattr(self.regressor_, "feature_names_in_"):
+             self.feature_names_in_ = self.regressor_.feature_names_in_
+@@ -299,8 +318,19 @@ class TransformedTargetRegressor(
+             Samples.
+ 
+         **predict_params : dict of str -> object
+-            Parameters passed to the `predict` method of the underlying
+-            regressor.
++            - If `enable_metadata_routing=False` (default):
++
++                Parameters directly passed to the `predict` method of the
++                underlying regressor.
++
++            - If `enable_metadata_routing=True`:
++
++                Parameters safely routed to the `predict` method of the
++                underlying regressor.
++
++                .. versionchanged:: 1.6
++                    See :ref:`Metadata Routing User Guide <metadata_routing>`
++                    for more details.
+ 
+         Returns
+         -------
+@@ -308,7 +338,12 @@ class TransformedTargetRegressor(
+             Predicted values.
+         """
+         check_is_fitted(self)
+-        pred = self.regressor_.predict(X, **predict_params)
++        if _routing_enabled():
++            routed_params = process_routing(self, "predict", **predict_params)
++        else:
++            routed_params = Bunch(regressor=Bunch(predict=predict_params))
++
++        pred = self.regressor_.predict(X, **routed_params.regressor.predict)
+         if pred.ndim == 1:
+             pred_trans = self.transformer_.inverse_transform(pred.reshape(-1, 1))
+         else:
+@@ -323,11 +358,7 @@ class TransformedTargetRegressor(
+         return pred_trans
+ 
+     def _more_tags(self):
+-        regressor = self.regressor
+-        if regressor is None:
+-            from ..linear_model import LinearRegression
+-
+-            regressor = LinearRegression()
++        regressor = self._get_regressor()
+ 
+         return {
+             "poor_score": True,
+@@ -349,3 +380,31 @@ class TransformedTargetRegressor(
+             ) from nfe
+ 
+         return self.regressor_.n_features_in_
++
++    def get_metadata_routing(self):
++        """Get metadata routing of this object.
++
++        Please check :ref:`User Guide <metadata_routing>` on how the routing
++        mechanism works.
++
++        .. versionadded:: 1.6
++
++        Returns
++        -------
++        routing : MetadataRouter
++            A :class:`~sklearn.utils.metadata_routing.MetadataRouter` encapsulating
++            routing information.
++        """
++        router = MetadataRouter(owner=self.__class__.__name__).add(
++            regressor=self._get_regressor(),
++            method_mapping=MethodMapping()
++            .add(caller="fit", callee="fit")
++            .add(caller="predict", callee="predict"),
++        )
++        return router
++
++    def _get_regressor(self, get_clone=False):
++        if self.regressor is None:
++            return LinearRegression()
++
++        return clone(self.regressor) if get_clone else self.regressor
+diff --git a/sklearn/decomposition/_dict_learning.py b/sklearn/decomposition/_dict_learning.py
+index f20d9bf42f52f6f7e31c4c594674b139d08db97b..4a0d65ad2777964181cf43087e3e50afccb0d6ff 100644
+--- a/sklearn/decomposition/_dict_learning.py
++++ b/sklearn/decomposition/_dict_learning.py
+@@ -7,7 +7,6 @@ import itertools
+ import sys
+ import time
+ from numbers import Integral, Real
+-from warnings import warn
+ 
+ import numpy as np
+ from joblib import effective_n_jobs
+@@ -21,7 +20,7 @@ from ..base import (
+ )
+ from ..linear_model import Lars, Lasso, LassoLars, orthogonal_mp_gram
+ from ..utils import check_array, check_random_state, gen_batches, gen_even_slices
+-from ..utils._param_validation import Hidden, Interval, StrOptions, validate_params
++from ..utils._param_validation import Interval, StrOptions, validate_params
+ from ..utils.extmath import randomized_svd, row_norms, svd_flip
+ from ..utils.parallel import Parallel, delayed
+ from ..utils.validation import check_is_fitted
+@@ -729,10 +728,6 @@ def dict_learning_online(
+ 
+         .. versionadded:: 1.1
+ 
+-        .. deprecated:: 1.4
+-           `max_iter=None` is deprecated in 1.4 and will be removed in 1.6.
+-           Use the default value (i.e. `100`) instead.
+-
+     return_code : bool, default=True
+         Whether to also return the code U or just the dictionary `V`.
+ 
+@@ -857,17 +852,6 @@ def dict_learning_online(
+     >>> np.mean(np.sum((X_hat - X) ** 2, axis=1) / np.sum(X ** 2, axis=1))
+     0.05...
+     """
+-    # TODO(1.6): remove in 1.6
+-    if max_iter is None:
+-        warn(
+-            (
+-                "`max_iter=None` is deprecated in version 1.4 and will be removed in "
+-                "version 1.6. Use the default value (i.e. `100`) instead."
+-            ),
+-            FutureWarning,
+-        )
+-        max_iter = 100
+-
+     transform_algorithm = "lasso_" + method
+ 
+     est = MiniBatchDictionaryLearning(
+@@ -1744,10 +1728,6 @@ class MiniBatchDictionaryLearning(_BaseSparseCoding, BaseEstimator):
+ 
+         .. versionadded:: 1.1
+ 
+-        .. deprecated:: 1.4
+-           `max_iter=None` is deprecated in 1.4 and will be removed in 1.6.
+-           Use the default value (i.e. `1_000`) instead.
+-
+     fit_algorithm : {'lars', 'cd'}, default='lars'
+         The algorithm used:
+ 
+@@ -1928,7 +1908,7 @@ class MiniBatchDictionaryLearning(_BaseSparseCoding, BaseEstimator):
+     _parameter_constraints: dict = {
+         "n_components": [Interval(Integral, 1, None, closed="left"), None],
+         "alpha": [Interval(Real, 0, None, closed="left")],
+-        "max_iter": [Interval(Integral, 0, None, closed="left"), Hidden(None)],
++        "max_iter": [Interval(Integral, 0, None, closed="left")],
+         "fit_algorithm": [StrOptions({"cd", "lars"})],
+         "n_jobs": [None, Integral],
+         "batch_size": [Interval(Integral, 1, None, closed="left")],
+@@ -2204,19 +2184,6 @@ class MiniBatchDictionaryLearning(_BaseSparseCoding, BaseEstimator):
+         )
+         self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+ 
+-        # TODO(1.6): remove in 1.6
+-        if self.max_iter is None:
+-            warn(
+-                (
+-                    "`max_iter=None` is deprecated in version 1.4 and will be removed"
+-                    " in version 1.6. Use the default value (i.e. `1_000`) instead."
+-                ),
+-                FutureWarning,
+-            )
+-            max_iter = 1_000
+-        else:
+-            max_iter = self.max_iter
+-
+         # Attributes to monitor the convergence
+         self._ewa_cost = None
+         self._ewa_cost_min = None
+@@ -2225,7 +2192,7 @@ class MiniBatchDictionaryLearning(_BaseSparseCoding, BaseEstimator):
+         batches = gen_batches(n_samples, self._batch_size)
+         batches = itertools.cycle(batches)
+         n_steps_per_iter = int(np.ceil(n_samples / self._batch_size))
+-        n_steps = max_iter * n_steps_per_iter
++        n_steps = self.max_iter * n_steps_per_iter
+ 
+         i = -1  # to allow max_iter = 0
+ 
+diff --git a/sklearn/decomposition/_incremental_pca.py b/sklearn/decomposition/_incremental_pca.py
+index fea5b952a262aed339500cc0fd4a0399d4f7edf8..d6c8d1729c18c372dfe155b98e0709f0e2eba4f4 100644
+--- a/sklearn/decomposition/_incremental_pca.py
++++ b/sklearn/decomposition/_incremental_pca.py
+@@ -294,11 +294,11 @@ class IncrementalPCA(_BasePCA):
+                 "more rows than columns for IncrementalPCA "
+                 "processing" % (self.n_components, n_features)
+             )
+-        elif not self.n_components <= n_samples:
++        elif self.n_components > n_samples and first_pass:
+             raise ValueError(
+-                "n_components=%r must be less or equal to "
+-                "the batch number of samples "
+-                "%d." % (self.n_components, n_samples)
++                f"n_components={self.n_components} must be less or equal to "
++                f"the batch number of samples {n_samples} for the first "
++                "partial_fit call."
+             )
+         else:
+             self.n_components_ = self.n_components
+diff --git a/sklearn/decomposition/_lda.py b/sklearn/decomposition/_lda.py
+index 4f91483a468a9f85e44a631b8803d1965ebdf6de..6e0b8908637f3ce626c03644849f8e1d375ab469 100644
+--- a/sklearn/decomposition/_lda.py
++++ b/sklearn/decomposition/_lda.py
+@@ -722,7 +722,7 @@ class LatentDirichletAllocation(
+ 
+         return doc_topic_distr
+ 
+-    def transform(self, X):
++    def transform(self, X, *, normalize=True):
+         """Transform data X according to the fitted model.
+ 
+            .. versionchanged:: 0.18
+@@ -733,6 +733,9 @@ class LatentDirichletAllocation(
+         X : {array-like, sparse matrix} of shape (n_samples, n_features)
+             Document word matrix.
+ 
++        normalize : bool, default=True
++            Whether to normalize the document topic distribution.
++
+         Returns
+         -------
+         doc_topic_distr : ndarray of shape (n_samples, n_components)
+@@ -743,9 +746,35 @@ class LatentDirichletAllocation(
+             X, reset_n_features=False, whom="LatentDirichletAllocation.transform"
+         )
+         doc_topic_distr = self._unnormalized_transform(X)
+-        doc_topic_distr /= doc_topic_distr.sum(axis=1)[:, np.newaxis]
++        if normalize:
++            doc_topic_distr /= doc_topic_distr.sum(axis=1)[:, np.newaxis]
+         return doc_topic_distr
+ 
++    def fit_transform(self, X, y=None, *, normalize=True):
++        """
++        Fit to data, then transform it.
++
++        Fits transformer to `X` and `y` and returns a transformed version of `X`.
++
++        Parameters
++        ----------
++        X : array-like of shape (n_samples, n_features)
++            Input samples.
++
++        y :  array-like of shape (n_samples,) or (n_samples, n_outputs), \
++                default=None
++            Target values (None for unsupervised transformations).
++
++        normalize : bool, default=True
++            Whether to normalize the document topic distribution in `transform`.
++
++        Returns
++        -------
++        X_new : ndarray array of shape (n_samples, n_features_new)
++            Transformed array.
++        """
++        return self.fit(X, y).transform(X, normalize=normalize)
++
+     def _approx_bound(self, X, doc_topic_distr, sub_sampling):
+         """Estimate the variational bound.
+ 
+diff --git a/sklearn/decomposition/_sparse_pca.py b/sklearn/decomposition/_sparse_pca.py
+index b33cbf03f8eed6c912a60d2160a576d148c35f9c..f87289c418c71cf065c180d108690619812ae853 100644
+--- a/sklearn/decomposition/_sparse_pca.py
++++ b/sklearn/decomposition/_sparse_pca.py
+@@ -15,7 +15,7 @@ from ..base import (
+ )
+ from ..linear_model import ridge_regression
+ from ..utils import check_random_state
+-from ..utils._param_validation import Hidden, Interval, StrOptions
++from ..utils._param_validation import Interval, StrOptions
+ from ..utils.extmath import svd_flip
+ from ..utils.validation import check_array, check_is_fitted
+ from ._dict_learning import MiniBatchDictionaryLearning, dict_learning
+@@ -368,10 +368,6 @@ class MiniBatchSparsePCA(_BaseSparsePCA):
+ 
+         .. versionadded:: 1.2
+ 
+-        .. deprecated:: 1.4
+-           `max_iter=None` is deprecated in 1.4 and will be removed in 1.6.
+-           Use the default value (i.e. `100`) instead.
+-
+     callback : callable, default=None
+         Callable that gets invoked every five iterations.
+ 
+@@ -478,7 +474,7 @@ class MiniBatchSparsePCA(_BaseSparsePCA):
+ 
+     _parameter_constraints: dict = {
+         **_BaseSparsePCA._parameter_constraints,
+-        "max_iter": [Interval(Integral, 0, None, closed="left"), Hidden(None)],
++        "max_iter": [Interval(Integral, 0, None, closed="left")],
+         "callback": [None, callable],
+         "batch_size": [Interval(Integral, 1, None, closed="left")],
+         "shuffle": ["boolean"],
+diff --git a/sklearn/discriminant_analysis.py b/sklearn/discriminant_analysis.py
+index bd0afafea9fd3cd116c9cd162f35cc6c8b1a9c7d..caad2de01b13532a6bf05fc8f577d8479fb72377 100644
+--- a/sklearn/discriminant_analysis.py
++++ b/sklearn/discriminant_analysis.py
+@@ -795,11 +795,11 @@ class QuadraticDiscriminantAnalysis(ClassifierMixin, BaseEstimator):
+         .. versionadded:: 0.17
+ 
+     tol : float, default=1.0e-4
+-        Absolute threshold for a singular value to be considered significant,
+-        used to estimate the rank of `Xk` where `Xk` is the centered matrix
+-        of samples in class k. This parameter does not affect the
+-        predictions. It only controls a warning that is raised when features
+-        are considered to be colinear.
++        Absolute threshold for the covariance matrix to be considered rank
++        deficient after applying some regularization (see `reg_param`) to each
++        `Sk` where `Sk` represents covariance matrix for k-th class. This
++        parameter does not affect the predictions. It controls when a warning
++        is raised if the covariance matrix is not full rank.
+ 
+         .. versionadded:: 0.17
+ 
+@@ -938,11 +938,16 @@ class QuadraticDiscriminantAnalysis(ClassifierMixin, BaseEstimator):
+             Xgc = Xg - meang
+             # Xgc = U * S * V.T
+             _, S, Vt = np.linalg.svd(Xgc, full_matrices=False)
+-            rank = np.sum(S > self.tol)
+-            if rank < n_features:
+-                warnings.warn("Variables are collinear")
+             S2 = (S**2) / (len(Xg) - 1)
+             S2 = ((1 - self.reg_param) * S2) + self.reg_param
++            rank = np.sum(S2 > self.tol)
++            if rank < n_features:
++                warnings.warn(
++                    f"The covariance matrix of class {ind} is not full rank. "
++                    "Increasing the value of parameter `reg_param` might help"
++                    " reducing the collinearity.",
++                    linalg.LinAlgWarning,
++                )
+             if self.store_covariance or store_covariance:
+                 # cov = V * (S^2 / (n-1)) * V.T
+                 cov.append(np.dot(S2 * Vt.T, Vt))
+diff --git a/sklearn/ensemble/_base.py b/sklearn/ensemble/_base.py
+index 414309bb1e13398e27366aceb47e90fb4112710a..289c7c9b46f4aa69c910aef8e176897f02405cbd 100644
+--- a/sklearn/ensemble/_base.py
++++ b/sklearn/ensemble/_base.py
+@@ -21,7 +21,7 @@ def _fit_single_estimator(
+     estimator, X, y, fit_params, message_clsname=None, message=None
+ ):
+     """Private function used to fit an estimator within a job."""
+-    # TODO(SLEP6): remove if condition for unrouted sample_weight when metadata
++    # TODO(SLEP6): remove if-condition for unrouted sample_weight when metadata
+     # routing can't be disabled.
+     if not _routing_enabled() and "sample_weight" in fit_params:
+         try:
+diff --git a/sklearn/ensemble/_hist_gradient_boosting/binning.py b/sklearn/ensemble/_hist_gradient_boosting/binning.py
+index d23f6e7b00a82c9994c40c8b48d77531c3dbe6c2..07a0651f8edc4155301a9f2eaf38938fa417d2c0 100644
+--- a/sklearn/ensemble/_hist_gradient_boosting/binning.py
++++ b/sklearn/ensemble/_hist_gradient_boosting/binning.py
+@@ -7,6 +7,7 @@ approximately the same number of samples.
+ """
+ 
+ # Author: Nicolas Hug
++import concurrent.futures
+ 
+ import numpy as np
+ 
+@@ -226,22 +227,31 @@ class _BinMapper(TransformerMixin, BaseEstimator):
+ 
+         self.missing_values_bin_idx_ = self.n_bins - 1
+ 
+-        self.bin_thresholds_ = []
+-        n_bins_non_missing = []
++        self.bin_thresholds_ = [None] * n_features
++        n_bins_non_missing = [None] * n_features
++
++        with concurrent.futures.ThreadPoolExecutor(
++            max_workers=self.n_threads
++        ) as executor:
++            future_to_f_idx = {
++                executor.submit(_find_binning_thresholds, X[:, f_idx], max_bins): f_idx
++                for f_idx in range(n_features)
++                if not self.is_categorical_[f_idx]
++            }
++            for future in concurrent.futures.as_completed(future_to_f_idx):
++                f_idx = future_to_f_idx[future]
++                self.bin_thresholds_[f_idx] = future.result()
++                n_bins_non_missing[f_idx] = self.bin_thresholds_[f_idx].shape[0] + 1
+ 
+         for f_idx in range(n_features):
+-            if not self.is_categorical_[f_idx]:
+-                thresholds = _find_binning_thresholds(X[:, f_idx], max_bins)
+-                n_bins_non_missing.append(thresholds.shape[0] + 1)
+-            else:
++            if self.is_categorical_[f_idx]:
+                 # Since categories are assumed to be encoded in
+                 # [0, n_cats] and since n_cats <= max_bins,
+                 # the thresholds *are* the unique categorical values. This will
+                 # lead to the correct mapping in transform()
+                 thresholds = known_categories[f_idx]
+-                n_bins_non_missing.append(thresholds.shape[0])
+-
+-            self.bin_thresholds_.append(thresholds)
++                n_bins_non_missing[f_idx] = thresholds.shape[0]
++                self.bin_thresholds_[f_idx] = thresholds
+ 
+         self.n_bins_non_missing_ = np.array(n_bins_non_missing, dtype=np.uint32)
+         return self
+diff --git a/sklearn/ensemble/_stacking.py b/sklearn/ensemble/_stacking.py
+index 3c5f5a527a8192c549cb0ff5b52007b17c16f5ae..646cc1d57a38efe69796ca48daeb6ade64362039 100644
+--- a/sklearn/ensemble/_stacking.py
++++ b/sklearn/ensemble/_stacking.py
+@@ -27,8 +27,11 @@ from ..utils import Bunch
+ from ..utils._estimator_html_repr import _VisualBlock
+ from ..utils._param_validation import HasMethods, StrOptions
+ from ..utils.metadata_routing import (
+-    _raise_for_unsupported_routing,
+-    _RoutingNotSupportedMixin,
++    MetadataRouter,
++    MethodMapping,
++    _raise_for_params,
++    _routing_enabled,
++    process_routing,
+ )
+ from ..utils.metaestimators import available_if
+ from ..utils.multiclass import check_classification_targets, type_of_target
+@@ -36,6 +39,7 @@ from ..utils.parallel import Parallel, delayed
+ from ..utils.validation import (
+     _check_feature_names_in,
+     _check_response_method,
++    _deprecate_positional_args,
+     check_is_fitted,
+     column_or_1d,
+ )
+@@ -171,7 +175,7 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+         # estimators in Stacking*.estimators are not validated yet
+         prefer_skip_nested_validation=False
+     )
+-    def fit(self, X, y, sample_weight=None):
++    def fit(self, X, y, **fit_params):
+         """Fit the estimators.
+ 
+         Parameters
+@@ -183,14 +187,13 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+         y : array-like of shape (n_samples,)
+             Target values.
+ 
+-        sample_weight : array-like of shape (n_samples,) or default=None
+-            Sample weights. If None, then samples are equally weighted.
+-            Note that this is supported only if all underlying estimators
+-            support sample weights.
++        **fit_params : dict
++            Dict of metadata, potentially containing sample_weight as a
++            key-value pair. If sample_weight is not present, then samples are
++            equally weighted. Note that sample_weight is supported only if all
++            underlying estimators support sample weights.
+ 
+-            .. versionchanged:: 0.23
+-               when not None, `sample_weight` is passed to all underlying
+-               estimators
++            .. versionadded:: 1.6
+ 
+         Returns
+         -------
+@@ -201,16 +204,19 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+         names, all_estimators = self._validate_estimators()
+         self._validate_final_estimator()
+ 
+-        # FIXME: when adding support for metadata routing in Stacking*.
+-        # This is a hotfix to make StackingClassifier and StackingRegressor
+-        # pass the tests despite not supporting metadata routing but sharing
+-        # the same base class with VotingClassifier and VotingRegressor.
+-        fit_params = dict()
+-        if sample_weight is not None:
+-            fit_params["sample_weight"] = sample_weight
+-
+         stack_method = [self.stack_method] * len(all_estimators)
+ 
++        if _routing_enabled():
++            routed_params = process_routing(self, "fit", **fit_params)
++        else:
++            routed_params = Bunch()
++            for name in names:
++                routed_params[name] = Bunch(fit={})
++                if "sample_weight" in fit_params:
++                    routed_params[name].fit["sample_weight"] = fit_params[
++                        "sample_weight"
++                    ]
++
+         if self.cv == "prefit":
+             self.estimators_ = []
+             for estimator in all_estimators:
+@@ -222,8 +228,10 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+             # base estimators will be used in transform, predict, and
+             # predict_proba. They are exposed publicly.
+             self.estimators_ = Parallel(n_jobs=self.n_jobs)(
+-                delayed(_fit_single_estimator)(clone(est), X, y, fit_params)
+-                for est in all_estimators
++                delayed(_fit_single_estimator)(
++                    clone(est), X, y, routed_params[name]["fit"]
++                )
++                for name, est in zip(names, all_estimators)
+                 if est != "drop"
+             )
+ 
+@@ -269,10 +277,10 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+                     cv=deepcopy(cv),
+                     method=meth,
+                     n_jobs=self.n_jobs,
+-                    params=fit_params,
++                    params=routed_params[name]["fit"],
+                     verbose=self.verbose,
+                 )
+-                for est, meth in zip(all_estimators, self.stack_method_)
++                for name, est, meth in zip(names, all_estimators, self.stack_method_)
+                 if est != "drop"
+             )
+ 
+@@ -370,7 +378,7 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+             Parameters to the `predict` called by the `final_estimator`. Note
+             that this may be used to return uncertainties from some estimators
+             with `return_std` or `return_cov`. Be aware that it will only
+-            accounts for uncertainty in the final estimator.
++            account for uncertainty in the final estimator.
+ 
+         Returns
+         -------
+@@ -392,8 +400,43 @@ class _BaseStacking(TransformerMixin, _BaseHeterogeneousEnsemble, metaclass=ABCM
+         )
+         return _VisualBlock("serial", (parallel, final_block), dash_wrapped=False)
+ 
++    def get_metadata_routing(self):
++        """Get metadata routing of this object.
++
++        Please check :ref:`User Guide <metadata_routing>` on how the routing
++        mechanism works.
++
++        .. versionadded:: 1.6
++
++        Returns
++        -------
++        routing : MetadataRouter
++            A :class:`~sklearn.utils.metadata_routing.MetadataRouter` encapsulating
++            routing information.
++        """
++        router = MetadataRouter(owner=self.__class__.__name__)
++
++        # `self.estimators` is a list of (name, est) tuples
++        for name, estimator in self.estimators:
++            router.add(
++                **{name: estimator},
++                method_mapping=MethodMapping().add(callee="fit", caller="fit"),
++            )
++
++        try:
++            final_estimator_ = self.final_estimator_
++        except AttributeError:
++            final_estimator_ = self.final_estimator
++
++        router.add(
++            final_estimator_=final_estimator_,
++            method_mapping=MethodMapping().add(caller="predict", callee="predict"),
++        )
++
++        return router
++
+ 
+-class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacking):
++class StackingClassifier(ClassifierMixin, _BaseStacking):
+     """Stack of estimators with a final classifier.
+ 
+     Stacked generalization consists in stacking the output of individual
+@@ -528,7 +571,7 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+     -----
+     When `predict_proba` is used by each estimator (i.e. most of the time for
+     `stack_method='auto'` or specifically for `stack_method='predict_proba'`),
+-    The first column predicted by each estimator will be dropped in the case
++    the first column predicted by each estimator will be dropped in the case
+     of a binary classification problem. Indeed, both feature will be perfectly
+     collinear.
+ 
+@@ -629,7 +672,11 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+ 
+         return names, estimators
+ 
+-    def fit(self, X, y, sample_weight=None):
++    # TODO(1.7): remove `sample_weight` from the signature after deprecation
++    # cycle; pop it from `fit_params` before the `_raise_for_params` check and
++    # reinsert afterwards, for backwards compatibility
++    @_deprecate_positional_args(version="1.7")
++    def fit(self, X, y, *, sample_weight=None, **fit_params):
+         """Fit the estimators.
+ 
+         Parameters
+@@ -649,12 +696,22 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+             Note that this is supported only if all underlying estimators
+             support sample weights.
+ 
++        **fit_params : dict
++            Parameters to pass to the underlying estimators.
++
++            .. versionadded:: 1.6
++
++                Only available if `enable_metadata_routing=True`, which can be
++                set by using ``sklearn.set_config(enable_metadata_routing=True)``.
++                See :ref:`Metadata Routing User Guide <metadata_routing>` for
++                more details.
++
+         Returns
+         -------
+         self : object
+             Returns a fitted instance of estimator.
+         """
+-        _raise_for_unsupported_routing(self, "fit", sample_weight=sample_weight)
++        _raise_for_params(fit_params, self, "fit")
+         check_classification_targets(y)
+         if type_of_target(y) == "multilabel-indicator":
+             self._label_encoder = [LabelEncoder().fit(yk) for yk in y.T]
+@@ -669,7 +726,10 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+             self._label_encoder = LabelEncoder().fit(y)
+             self.classes_ = self._label_encoder.classes_
+             y_encoded = self._label_encoder.transform(y)
+-        return super().fit(X, y_encoded, sample_weight)
++
++        if sample_weight is not None:
++            fit_params["sample_weight"] = sample_weight
++        return super().fit(X, y_encoded, **fit_params)
+ 
+     @available_if(_estimator_has("predict"))
+     def predict(self, X, **predict_params):
+@@ -685,14 +745,33 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+             Parameters to the `predict` called by the `final_estimator`. Note
+             that this may be used to return uncertainties from some estimators
+             with `return_std` or `return_cov`. Be aware that it will only
+-            accounts for uncertainty in the final estimator.
++            account for uncertainty in the final estimator.
++
++            - If `enable_metadata_routing=False` (default):
++              Parameters directly passed to the `predict` method of the
++              `final_estimator`.
++
++            - If `enable_metadata_routing=True`: Parameters safely routed to
++              the `predict` method of the `final_estimator`. See :ref:`Metadata
++              Routing User Guide <metadata_routing>` for more details.
++
++            .. versionchanged:: 1.6
++                `**predict_params` can be routed via metadata routing API.
+ 
+         Returns
+         -------
+         y_pred : ndarray of shape (n_samples,) or (n_samples, n_output)
+             Predicted targets.
+         """
+-        y_pred = super().predict(X, **predict_params)
++        if _routing_enabled():
++            routed_params = process_routing(self, "predict", **predict_params)
++        else:
++            # TODO(SLEP6): remove when metadata routing cannot be disabled.
++            routed_params = Bunch()
++            routed_params.final_estimator_ = Bunch(predict={})
++            routed_params.final_estimator_.predict = predict_params
++
++        y_pred = super().predict(X, **routed_params.final_estimator_["predict"])
+         if isinstance(self._label_encoder, list):
+             # Handle the multilabel-indicator case
+             y_pred = np.array(
+@@ -775,7 +854,7 @@ class StackingClassifier(_RoutingNotSupportedMixin, ClassifierMixin, _BaseStacki
+         return super()._sk_visual_block_with_final_estimator(final_estimator)
+ 
+ 
+-class StackingRegressor(_RoutingNotSupportedMixin, RegressorMixin, _BaseStacking):
++class StackingRegressor(RegressorMixin, _BaseStacking):
+     """Stack of estimators with a final regressor.
+ 
+     Stacked generalization consists in stacking the output of individual
+@@ -944,7 +1023,11 @@ class StackingRegressor(_RoutingNotSupportedMixin, RegressorMixin, _BaseStacking
+                 )
+             )
+ 
+-    def fit(self, X, y, sample_weight=None):
++    # TODO(1.7): remove `sample_weight` from the signature after deprecation
++    # cycle; pop it from `fit_params` before the `_raise_for_params` check and
++    # reinsert afterwards, for backwards compatibility
++    @_deprecate_positional_args(version="1.7")
++    def fit(self, X, y, *, sample_weight=None, **fit_params):
+         """Fit the estimators.
+ 
+         Parameters
+@@ -961,14 +1044,26 @@ class StackingRegressor(_RoutingNotSupportedMixin, RegressorMixin, _BaseStacking
+             Note that this is supported only if all underlying estimators
+             support sample weights.
+ 
++        **fit_params : dict
++            Parameters to pass to the underlying estimators.
++
++            .. versionadded:: 1.6
++
++                Only available if `enable_metadata_routing=True`, which can be
++                set by using ``sklearn.set_config(enable_metadata_routing=True)``.
++                See :ref:`Metadata Routing User Guide <metadata_routing>` for
++                more details.
++
+         Returns
+         -------
+         self : object
+             Returns a fitted instance.
+         """
+-        _raise_for_unsupported_routing(self, "fit", sample_weight=sample_weight)
++        _raise_for_params(fit_params, self, "fit")
+         y = column_or_1d(y, warn=True)
+-        return super().fit(X, y, sample_weight)
++        if sample_weight is not None:
++            fit_params["sample_weight"] = sample_weight
++        return super().fit(X, y, **fit_params)
+ 
+     def transform(self, X):
+         """Return the predictions for X for each estimator.
+@@ -986,7 +1081,11 @@ class StackingRegressor(_RoutingNotSupportedMixin, RegressorMixin, _BaseStacking
+         """
+         return self._transform(X)
+ 
+-    def fit_transform(self, X, y, sample_weight=None):
++    # TODO(1.7): remove `sample_weight` from the signature after deprecation
++    # cycle; pop it from `fit_params` before the `_raise_for_params` check and
++    # reinsert afterwards, for backwards compatibility
++    @_deprecate_positional_args(version="1.7")
++    def fit_transform(self, X, y, *, sample_weight=None, **fit_params):
+         """Fit the estimators and return the predictions for X for each estimator.
+ 
+         Parameters
+@@ -1003,12 +1102,69 @@ class StackingRegressor(_RoutingNotSupportedMixin, RegressorMixin, _BaseStacking
+             Note that this is supported only if all underlying estimators
+             support sample weights.
+ 
++        **fit_params : dict
++            Parameters to pass to the underlying estimators.
++
++            .. versionadded:: 1.6
++
++                Only available if `enable_metadata_routing=True`, which can be
++                set by using ``sklearn.set_config(enable_metadata_routing=True)``.
++                See :ref:`Metadata Routing User Guide <metadata_routing>` for
++                more details.
++
+         Returns
+         -------
+         y_preds : ndarray of shape (n_samples, n_estimators)
+             Prediction outputs for each estimator.
+         """
+-        return super().fit_transform(X, y, sample_weight=sample_weight)
++        _raise_for_params(fit_params, self, "fit")
++        if sample_weight is not None:
++            fit_params["sample_weight"] = sample_weight
++        return super().fit_transform(X, y, **fit_params)
++
++    @available_if(_estimator_has("predict"))
++    def predict(self, X, **predict_params):
++        """Predict target for X.
++
++        Parameters
++        ----------
++        X : {array-like, sparse matrix} of shape (n_samples, n_features)
++            Training vectors, where `n_samples` is the number of samples and
++            `n_features` is the number of features.
++
++        **predict_params : dict of str -> obj
++            Parameters to the `predict` called by the `final_estimator`. Note
++            that this may be used to return uncertainties from some estimators
++            with `return_std` or `return_cov`. Be aware that it will only
++            account for uncertainty in the final estimator.
++
++            - If `enable_metadata_routing=False` (default):
++              Parameters directly passed to the `predict` method of the
++              `final_estimator`.
++
++            - If `enable_metadata_routing=True`: Parameters safely routed to
++              the `predict` method of the `final_estimator`. See :ref:`Metadata
++              Routing User Guide <metadata_routing>` for more details.
++
++            .. versionchanged:: 1.6
++                `**predict_params` can be routed via metadata routing API.
++
++        Returns
++        -------
++        y_pred : ndarray of shape (n_samples,) or (n_samples, n_output)
++            Predicted targets.
++        """
++        if _routing_enabled():
++            routed_params = process_routing(self, "predict", **predict_params)
++        else:
++            # TODO(SLEP6): remove when metadata routing cannot be disabled.
++            routed_params = Bunch()
++            routed_params.final_estimator_ = Bunch(predict={})
++            routed_params.final_estimator_.predict = predict_params
++
++        y_pred = super().predict(X, **routed_params.final_estimator_["predict"])
++
++        return y_pred
+ 
+     def _sk_visual_block_(self):
+         # If final_estimator's default changes then this should be
+diff --git a/sklearn/ensemble/_weight_boosting.py b/sklearn/ensemble/_weight_boosting.py
+index 36844430e497e493effca00ddb6dc7c9225e7275..3ad8884bc4a06cd70bb4869bd8273f05f80374b9 100644
+--- a/sklearn/ensemble/_weight_boosting.py
++++ b/sklearn/ensemble/_weight_boosting.py
+@@ -24,7 +24,6 @@ from abc import ABCMeta, abstractmethod
+ from numbers import Integral, Real
+ 
+ import numpy as np
+-from scipy.special import xlogy
+ 
+ from ..base import (
+     ClassifierMixin,
+@@ -36,7 +35,7 @@ from ..base import (
+ from ..metrics import accuracy_score, r2_score
+ from ..tree import DecisionTreeClassifier, DecisionTreeRegressor
+ from ..utils import _safe_indexing, check_random_state
+-from ..utils._param_validation import HasMethods, Interval, StrOptions
++from ..utils._param_validation import HasMethods, Hidden, Interval, StrOptions
+ from ..utils.extmath import softmax, stable_cumsum
+ from ..utils.metadata_routing import (
+     _raise_for_unsupported_routing,
+@@ -372,16 +371,12 @@ class AdaBoostClassifier(
+         a trade-off between the `learning_rate` and `n_estimators` parameters.
+         Values must be in the range `(0.0, inf)`.
+ 
+-    algorithm : {'SAMME', 'SAMME.R'}, default='SAMME.R'
+-        If 'SAMME.R' then use the SAMME.R real boosting algorithm.
+-        ``estimator`` must support calculation of class probabilities.
+-        If 'SAMME' then use the SAMME discrete boosting algorithm.
+-        The SAMME.R algorithm typically converges faster than SAMME,
+-        achieving a lower test error with fewer boosting iterations.
++    algorithm : {'SAMME'}, default='SAMME'
++        Use the SAMME discrete boosting algorithm.
+ 
+-        .. deprecated:: 1.4
+-            `"SAMME.R"` is deprecated and will be removed in version 1.6.
+-            '"SAMME"' will become the default.
++        .. deprecated:: 1.6
++            `algorithm` is deprecated and will be removed in version 1.8. This
++            estimator only implements the 'SAMME' algorithm.
+ 
+     random_state : int, RandomState instance or None, default=None
+         Controls the random seed given at each `estimator` at each
+@@ -467,9 +462,9 @@ class AdaBoostClassifier(
+     >>> X, y = make_classification(n_samples=1000, n_features=4,
+     ...                            n_informative=2, n_redundant=0,
+     ...                            random_state=0, shuffle=False)
+-    >>> clf = AdaBoostClassifier(n_estimators=100, algorithm="SAMME", random_state=0)
++    >>> clf = AdaBoostClassifier(n_estimators=100, random_state=0)
+     >>> clf.fit(X, y)
+-    AdaBoostClassifier(algorithm='SAMME', n_estimators=100, random_state=0)
++    AdaBoostClassifier(n_estimators=100, random_state=0)
+     >>> clf.predict([[0, 0, 0, 0]])
+     array([1])
+     >>> clf.score(X, y)
+@@ -480,23 +475,19 @@ class AdaBoostClassifier(
+     :ref:`sphx_glr_auto_examples_ensemble_plot_adaboost_multiclass.py`.
+     """
+ 
+-    # TODO(1.6): Modify _parameter_constraints for "algorithm" to only check
+-    # for "SAMME"
++    # TODO(1.8): remove "algorithm" entry
+     _parameter_constraints: dict = {
+         **BaseWeightBoosting._parameter_constraints,
+-        "algorithm": [
+-            StrOptions({"SAMME", "SAMME.R"}),
+-        ],
++        "algorithm": [StrOptions({"SAMME"}), Hidden(StrOptions({"deprecated"}))],
+     }
+ 
+-    # TODO(1.6): Change default "algorithm" value to "SAMME"
+     def __init__(
+         self,
+         estimator=None,
+         *,
+         n_estimators=50,
+         learning_rate=1.0,
+-        algorithm="SAMME.R",
++        algorithm="deprecated",
+         random_state=None,
+     ):
+         super().__init__(
+@@ -512,43 +503,23 @@ class AdaBoostClassifier(
+         """Check the estimator and set the estimator_ attribute."""
+         super()._validate_estimator(default=DecisionTreeClassifier(max_depth=1))
+ 
+-        # TODO(1.6): Remove, as "SAMME.R" value for "algorithm" param will be
+-        # removed in 1.6
+-        # SAMME-R requires predict_proba-enabled base estimators
+-        if self.algorithm != "SAMME":
++        if self.algorithm != "deprecated":
+             warnings.warn(
+-                (
+-                    "The SAMME.R algorithm (the default) is deprecated and will be"
+-                    " removed in 1.6. Use the SAMME algorithm to circumvent this"
+-                    " warning."
+-                ),
++                "The parameter 'algorithm' is deprecated in 1.6 and has no effect. "
++                "It will be removed in version 1.8.",
+                 FutureWarning,
+             )
+-            if not hasattr(self.estimator_, "predict_proba"):
+-                raise TypeError(
+-                    "AdaBoostClassifier with algorithm='SAMME.R' requires "
+-                    "that the weak learner supports the calculation of class "
+-                    "probabilities with a predict_proba method.\n"
+-                    "Please change the base estimator or set "
+-                    "algorithm='SAMME' instead."
+-                )
+ 
+         if not has_fit_parameter(self.estimator_, "sample_weight"):
+             raise ValueError(
+                 f"{self.estimator.__class__.__name__} doesn't support sample_weight."
+             )
+ 
+-    # TODO(1.6): Redefine the scope of the `_boost` and `_boost_discrete`
+-    # functions to be the same since SAMME will be the default value for the
+-    # "algorithm" parameter in version 1.6. Thus, a distinguishing function is
+-    # no longer needed. (Or adjust code here, if another algorithm, shall be
+-    # used instead of SAMME.R.)
+     def _boost(self, iboost, X, y, sample_weight, random_state):
+         """Implement a single boost.
+ 
+-        Perform a single boost according to the real multi-class SAMME.R
+-        algorithm or to the discrete SAMME algorithm and return the updated
+-        sample weights.
++        Perform a single boost according to the discrete SAMME algorithm and return the
++        updated sample weights.
+ 
+         Parameters
+         ----------
+@@ -582,75 +553,6 @@ class AdaBoostClassifier(
+             The classification error for the current boost.
+             If None then boosting has terminated early.
+         """
+-        if self.algorithm == "SAMME.R":
+-            return self._boost_real(iboost, X, y, sample_weight, random_state)
+-
+-        else:  # elif self.algorithm == "SAMME":
+-            return self._boost_discrete(iboost, X, y, sample_weight, random_state)
+-
+-    # TODO(1.6): Remove function. The `_boost_real` function won't be used any
+-    # longer, because the SAMME.R algorithm will be deprecated in 1.6.
+-    def _boost_real(self, iboost, X, y, sample_weight, random_state):
+-        """Implement a single boost using the SAMME.R real algorithm."""
+-        estimator = self._make_estimator(random_state=random_state)
+-
+-        estimator.fit(X, y, sample_weight=sample_weight)
+-
+-        y_predict_proba = estimator.predict_proba(X)
+-
+-        if iboost == 0:
+-            self.classes_ = getattr(estimator, "classes_", None)
+-            self.n_classes_ = len(self.classes_)
+-
+-        y_predict = self.classes_.take(np.argmax(y_predict_proba, axis=1), axis=0)
+-
+-        # Instances incorrectly classified
+-        incorrect = y_predict != y
+-
+-        # Error fraction
+-        estimator_error = np.mean(np.average(incorrect, weights=sample_weight, axis=0))
+-
+-        # Stop if classification is perfect
+-        if estimator_error <= 0:
+-            return sample_weight, 1.0, 0.0
+-
+-        # Construct y coding as described in Zhu et al [2]:
+-        #
+-        #    y_k = 1 if c == k else -1 / (K - 1)
+-        #
+-        # where K == n_classes_ and c, k in [0, K) are indices along the second
+-        # axis of the y coding with c being the index corresponding to the true
+-        # class label.
+-        n_classes = self.n_classes_
+-        classes = self.classes_
+-        y_codes = np.array([-1.0 / (n_classes - 1), 1.0])
+-        y_coding = y_codes.take(classes == y[:, np.newaxis])
+-
+-        # Displace zero probabilities so the log is defined.
+-        # Also fix negative elements which may occur with
+-        # negative sample weights.
+-        proba = y_predict_proba  # alias for readability
+-        np.clip(proba, np.finfo(proba.dtype).eps, None, out=proba)
+-
+-        # Boost weight using multi-class AdaBoost SAMME.R alg
+-        estimator_weight = (
+-            -1.0
+-            * self.learning_rate
+-            * ((n_classes - 1.0) / n_classes)
+-            * xlogy(y_coding, y_predict_proba).sum(axis=1)
+-        )
+-
+-        # Only boost the weights if it will fit again
+-        if not iboost == self.n_estimators - 1:
+-            # Only boost positive weights
+-            sample_weight *= np.exp(
+-                estimator_weight * ((sample_weight > 0) | (estimator_weight < 0))
+-            )
+-
+-        return sample_weight, 1.0, estimator_error
+-
+-    def _boost_discrete(self, iboost, X, y, sample_weight, random_state):
+-        """Implement a single boost using the SAMME discrete algorithm."""
+         estimator = self._make_estimator(random_state=random_state)
+ 
+         estimator.fit(X, y, sample_weight=sample_weight)
+@@ -782,21 +684,17 @@ class AdaBoostClassifier(
+         n_classes = self.n_classes_
+         classes = self.classes_[:, np.newaxis]
+ 
+-        # TODO(1.6): Remove, because "algorithm" param will be deprecated in 1.6
+-        if self.algorithm == "SAMME.R":
+-            # The weights are all 1. for SAMME.R
+-            pred = sum(
+-                _samme_proba(estimator, n_classes, X) for estimator in self.estimators_
+-            )
+-        else:  # self.algorithm == "SAMME"
+-            pred = sum(
+-                np.where(
+-                    (estimator.predict(X) == classes).T,
+-                    w,
+-                    -1 / (n_classes - 1) * w,
+-                )
+-                for estimator, w in zip(self.estimators_, self.estimator_weights_)
++        if n_classes == 1:
++            return np.zeros_like(X, shape=(X.shape[0], 1))
++
++        pred = sum(
++            np.where(
++                (estimator.predict(X) == classes).T,
++                w,
++                -1 / (n_classes - 1) * w,
+             )
++            for estimator, w in zip(self.estimators_, self.estimator_weights_)
++        )
+ 
+         pred /= self.estimator_weights_.sum()
+         if n_classes == 2:
+@@ -837,17 +735,11 @@ class AdaBoostClassifier(
+         for weight, estimator in zip(self.estimator_weights_, self.estimators_):
+             norm += weight
+ 
+-            # TODO(1.6): Remove, because "algorithm" param will be deprecated in
+-            # 1.6
+-            if self.algorithm == "SAMME.R":
+-                # The weights are all 1. for SAMME.R
+-                current_pred = _samme_proba(estimator, n_classes, X)
+-            else:  # elif self.algorithm == "SAMME":
+-                current_pred = np.where(
+-                    (estimator.predict(X) == classes).T,
+-                    weight,
+-                    -1 / (n_classes - 1) * weight,
+-                )
++            current_pred = np.where(
++                (estimator.predict(X) == classes).T,
++                weight,
++                -1 / (n_classes - 1) * weight,
++            )
+ 
+             if pred is None:
+                 pred = current_pred
+diff --git a/sklearn/feature_extraction/text.py b/sklearn/feature_extraction/text.py
+index ff536fa94d98368003675723c911205e323bf50d..2d68b2f6e0a2ee1ee17c6a2bcf9b7e5f0090aa96 100644
+--- a/sklearn/feature_extraction/text.py
++++ b/sklearn/feature_extraction/text.py
+@@ -1656,8 +1656,13 @@ class TfidfTransformer(
+ 
+             # log+1 instead of log makes sure terms with zero idf don't get
+             # suppressed entirely.
++            # Force the dtype of `idf_` to be the same as `df`. In NumPy < 2, the dtype
++            # was depending on the value of `n_samples`.
++            self.idf_ = np.full_like(df, fill_value=n_samples, dtype=dtype)
++            self.idf_ /= df
+             # `np.log` preserves the dtype of `df` and thus `dtype`.
+-            self.idf_ = np.log(n_samples / df) + 1.0
++            np.log(self.idf_, out=self.idf_)
++            self.idf_ += 1.0
+ 
+         return self
+ 
+diff --git a/sklearn/impute/_knn.py b/sklearn/impute/_knn.py
+index 6ba6e49f4273506335db4aea9930e06faefdf555..b1ddc3ae412f8a0f7b97af76d7e612999ebbfb9a 100644
+--- a/sklearn/impute/_knn.py
++++ b/sklearn/impute/_knn.py
+@@ -194,6 +194,9 @@ class KNNImputer(_BaseImputer):
+         # fill nans with zeros
+         if weight_matrix is not None:
+             weight_matrix[np.isnan(weight_matrix)] = 0.0
++        else:
++            weight_matrix = np.ones_like(donors_dist)
++            weight_matrix[np.isnan(donors_dist)] = 0.0
+ 
+         # Retrieve donor values and calculate kNN average
+         donors = fit_X_col.take(donors_idx)
+diff --git a/sklearn/linear_model/_logistic.py b/sklearn/linear_model/_logistic.py
+index 055ccc1c6a202ce897604c258f41f0c3f7e483fe..789ea5938d93bfbbb0e6e8d80c8ff8a22ff571b2 100644
+--- a/sklearn/linear_model/_logistic.py
++++ b/sklearn/linear_model/_logistic.py
+@@ -741,9 +741,11 @@ def _log_reg_scoring_path(
+     y_train = y[train]
+     y_test = y[test]
+ 
++    sw_train, sw_test = None, None
+     if sample_weight is not None:
+         sample_weight = _check_sample_weight(sample_weight, X)
+-        sample_weight = sample_weight[train]
++        sw_train = sample_weight[train]
++        sw_test = sample_weight[test]
+ 
+     coefs, Cs, n_iter = _logistic_regression_path(
+         X_train,
+@@ -764,7 +766,7 @@ def _log_reg_scoring_path(
+         random_state=random_state,
+         check_input=False,
+         max_squared_sum=max_squared_sum,
+-        sample_weight=sample_weight,
++        sample_weight=sw_train,
+     )
+ 
+     log_reg = LogisticRegression(solver=solver, multi_class=multi_class)
+@@ -798,12 +800,11 @@ def _log_reg_scoring_path(
+             log_reg.intercept_ = 0.0
+ 
+         if scoring is None:
+-            scores.append(log_reg.score(X_test, y_test))
++            scores.append(log_reg.score(X_test, y_test, sample_weight=sw_test))
+         else:
+             score_params = score_params or {}
+             score_params = _check_method_params(X=X, params=score_params, indices=test)
+             scores.append(scoring(log_reg, X_test, y_test, **score_params))
+-
+     return coefs, Cs, np.array(scores), n_iter
+ 
+ 
+diff --git a/sklearn/linear_model/_ridge.py b/sklearn/linear_model/_ridge.py
+index ae0cd4ff22e3912b49292885fec35118643ed3f4..9a389c1ce49ac308aaecd4af6f10dd3933d74be7 100644
+--- a/sklearn/linear_model/_ridge.py
++++ b/sklearn/linear_model/_ridge.py
+@@ -2098,6 +2098,7 @@ class _RidgeGCV(LinearModel):
+ 
+         self.alphas = np.asarray(self.alphas)
+ 
++        unscaled_y = y
+         X, y, X_offset, y_offset, X_scale = _preprocess_data(
+             X,
+             y,
+@@ -2147,13 +2148,21 @@ class _RidgeGCV(LinearModel):
+                     self.cv_results_[:, i] = squared_errors.ravel()
+             else:
+                 predictions = y - (c / G_inverse_diag)
++                # Rescale predictions back to original scale
++                if sample_weight is not None:  # avoid the unecessary division by ones
++                    if predictions.ndim > 1:
++                        predictions /= sqrt_sw[:, None]
++                    else:
++                        predictions /= sqrt_sw
++                predictions += y_offset
++
+                 if self.store_cv_results:
+                     self.cv_results_[:, i] = predictions.ravel()
+ 
+                 score_params = score_params or {}
+                 alpha_score = self._score(
+                     predictions=predictions,
+-                    y=y,
++                    y=unscaled_y,
+                     n_y=n_y,
+                     scorer=scorer,
+                     score_params=score_params,
+diff --git a/sklearn/manifold/_mds.py b/sklearn/manifold/_mds.py
+index f57ce6c4c8d2c17a001aa8bacc9cdaeee52c1ce4..17eefde44a91367868d18ff6939542139b78e4df 100644
+--- a/sklearn/manifold/_mds.py
++++ b/sklearn/manifold/_mds.py
+@@ -524,8 +524,11 @@ class MDS(BaseEstimator):
+     >>> X_transformed.shape
+     (100, 2)
+ 
+-    For a more detailed example of usage, see:
+-    :ref:`sphx_glr_auto_examples_manifold_plot_mds.py`
++    For a more detailed example of usage, see
++    :ref:`sphx_glr_auto_examples_manifold_plot_mds.py`.
++
++    For a comparison of manifold learning techniques, see
++    :ref:`sphx_glr_auto_examples_manifold_plot_compare_methods.py`.
+     """
+ 
+     _parameter_constraints: dict = {
+diff --git a/sklearn/metrics/_classification.py b/sklearn/metrics/_classification.py
+index b9e679e1c3353a3323d014a511b2c4b4a2ed0c65..f9481c9cebdc4273808162f95a134cf49e7b9a18 100644
+--- a/sklearn/metrics/_classification.py
++++ b/sklearn/metrics/_classification.py
+@@ -142,10 +142,16 @@ def _check_targets(y_true, y_pred):
+         "y_pred": ["array-like", "sparse matrix"],
+         "normalize": ["boolean"],
+         "sample_weight": ["array-like", None],
++        "zero_division": [
++            Options(Real, {0.0, 1.0, np.nan}),
++            StrOptions({"warn"}),
++        ],
+     },
+     prefer_skip_nested_validation=True,
+ )
+-def accuracy_score(y_true, y_pred, *, normalize=True, sample_weight=None):
++def accuracy_score(
++    y_true, y_pred, *, normalize=True, sample_weight=None, zero_division="warn"
++):
+     """Accuracy classification score.
+ 
+     In multilabel classification, this function computes subset accuracy:
+@@ -169,6 +175,13 @@ def accuracy_score(y_true, y_pred, *, normalize=True, sample_weight=None):
+     sample_weight : array-like of shape (n_samples,), default=None
+         Sample weights.
+ 
++    zero_division : {"warn", 0.0, 1.0, np.nan}, default="warn"
++        Sets the value to return when there is a zero division,
++        e.g. when `y_true` and `y_pred` are empty.
++        If set to "warn", returns 0.0 input, but a warning is also raised.
++
++        versionadded:: 1.6
++
+     Returns
+     -------
+     score : float or int
+@@ -209,6 +222,16 @@ def accuracy_score(y_true, y_pred, *, normalize=True, sample_weight=None):
+     # Compute accuracy for each possible representation
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     check_consistent_length(y_true, y_pred, sample_weight)
++
++    if _num_samples(y_true) == 0:
++        if zero_division == "warn":
++            msg = (
++                "accuracy() is ill-defined and set to 0.0. Use the `zero_division` "
++                "param to control this behavior."
++            )
++            warnings.warn(msg, UndefinedMetricWarning)
++        return _check_zero_division(zero_division)
++
+     if y_type.startswith("multilabel"):
+         differing_labels = count_nonzero(y_true - y_pred, axis=1)
+         score = differing_labels == 0
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+index 883dac0b503f9df2e35ecd4b096cb6c5a707d69f..530a3ba262afa0cc6e0bd344ef46613044566c8a 100644
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -1303,7 +1303,7 @@ class LeaveOneGroupOut(GroupsConsumerMixin, BaseCrossValidator):
+ 
+     Provides train/test indices to split data such that each training set is
+     comprised of all samples except ones belonging to one specific group.
+-    Arbitrary domain specific group information is provided an array integers
++    Arbitrary domain specific group information is provided as an array of integers
+     that encodes the group of each sample.
+ 
+     For instance the groups could be the year of collection of the samples
+diff --git a/sklearn/model_selection/_validation.py b/sklearn/model_selection/_validation.py
+index 95e29484f6b142ef81e098b1ee0aa2107929c470..7e1e219df0b18ac49437381adb2015bc732ac702 100644
+--- a/sklearn/model_selection/_validation.py
++++ b/sklearn/model_selection/_validation.py
+@@ -55,21 +55,22 @@ __all__ = [
+ ]
+ 
+ 
+-def _check_params_groups_deprecation(fit_params, params, groups):
++def _check_params_groups_deprecation(fit_params, params, groups, version):
+     """A helper function to check deprecations on `groups` and `fit_params`.
+ 
+-    To be removed when set_config(enable_metadata_routing=False) is not possible.
++    # TODO(SLEP6): To be removed when set_config(enable_metadata_routing=False) is not
++    # possible.
+     """
+     if params is not None and fit_params is not None:
+         raise ValueError(
+             "`params` and `fit_params` cannot both be provided. Pass parameters "
+             "via `params`. `fit_params` is deprecated and will be removed in "
+-            "version 1.6."
++            f"version {version}."
+         )
+     elif fit_params is not None:
+         warnings.warn(
+             (
+-                "`fit_params` is deprecated and will be removed in version 1.6. "
++                "`fit_params` is deprecated and will be removed in version {version}. "
+                 "Pass parameters via `params` instead."
+             ),
+             FutureWarning,
+@@ -343,7 +344,7 @@ def cross_validate(
+     >>> print(scores['train_r2'])
+     [0.28009951 0.3908844  0.22784907]
+     """
+-    params = _check_params_groups_deprecation(fit_params, params, groups)
++    params = _check_params_groups_deprecation(fit_params, params, groups, "1.6")
+ 
+     X, y = indexable(X, y)
+ 
+@@ -599,10 +600,8 @@ def cross_val_score(
+             ``cross_val_score(..., params={'groups': groups})``.
+ 
+     scoring : str or callable, default=None
+-        A str (see model evaluation documentation) or
+-        a scorer callable object / function with signature
+-        ``scorer(estimator, X, y)`` which should return only
+-        a single value.
++        A str (see :ref:`scoring_parameter`) or a scorer callable object / function with
++        signature ``scorer(estimator, X, y)`` which should return only a single value.
+ 
+         Similar to :func:`cross_validate`
+         but only a single metric is permitted.
+@@ -1210,7 +1209,7 @@ def cross_val_predict(
+     >>> lasso = linear_model.Lasso()
+     >>> y_pred = cross_val_predict(lasso, X, y, cv=3)
+     """
+-    params = _check_params_groups_deprecation(fit_params, params, groups)
++    params = _check_params_groups_deprecation(fit_params, params, groups, "1.6")
+     X, y = indexable(X, y)
+ 
+     if _routing_enabled():
+@@ -1722,6 +1721,7 @@ def _shuffle(y, groups, random_state):
+         "error_score": [StrOptions({"raise"}), Real],
+         "return_times": ["boolean"],
+         "fit_params": [dict, None],
++        "params": [dict, None],
+     },
+     prefer_skip_nested_validation=False,  # estimator is not validated yet
+ )
+@@ -1743,6 +1743,7 @@ def learning_curve(
+     error_score=np.nan,
+     return_times=False,
+     fit_params=None,
++    params=None,
+ ):
+     """Learning curve.
+ 
+@@ -1777,6 +1778,13 @@ def learning_curve(
+         train/test set. Only used in conjunction with a "Group" :term:`cv`
+         instance (e.g., :class:`GroupKFold`).
+ 
++        .. versionchanged:: 1.6
++            ``groups`` can only be passed if metadata routing is not enabled
++            via ``sklearn.set_config(enable_metadata_routing=True)``. When routing
++            is enabled, pass ``groups`` alongside other metadata via the ``params``
++            argument instead. E.g.:
++            ``learning_curve(..., params={'groups': groups})``.
++
+     train_sizes : array-like of shape (n_ticks,), \
+             default=np.linspace(0.1, 1.0, 5)
+         Relative or absolute numbers of training examples that will be used to
+@@ -1784,7 +1792,7 @@ def learning_curve(
+         fraction of the maximum size of the training set (that is determined
+         by the selected validation method), i.e. it has to be within (0, 1].
+         Otherwise it is interpreted as absolute sizes of the training sets.
+-        Note that for classification the number of samples usually have to
++        Note that for classification the number of samples usually has to
+         be big enough to contain at least one sample from each class.
+ 
+     cv : int, cross-validation generator or an iterable, default=None
+@@ -1808,9 +1816,8 @@ def learning_curve(
+             ``cv`` default value if None changed from 3-fold to 5-fold.
+ 
+     scoring : str or callable, default=None
+-        A str (see model evaluation documentation) or
+-        a scorer callable object / function with signature
+-        ``scorer(estimator, X, y)``.
++        A str (see :ref:`scoring_parameter`) or a scorer callable object / function with
++        signature ``scorer(estimator, X, y)``.
+ 
+     exploit_incremental_learning : bool, default=False
+         If the estimator supports incremental learning, this will be
+@@ -1853,7 +1860,22 @@ def learning_curve(
+     fit_params : dict, default=None
+         Parameters to pass to the fit method of the estimator.
+ 
+-        .. versionadded:: 0.24
++        .. deprecated:: 1.6
++            This parameter is deprecated and will be removed in version 1.6. Use
++            ``params`` instead.
++
++    params : dict, default=None
++        Parameters to pass to the `fit` method of the estimator and to the scorer.
++
++            - If `enable_metadata_routing=False` (default):
++              Parameters directly passed to the `fit` method of the estimator.
++
++            - If `enable_metadata_routing=True`:
++              Parameters safely routed to the `fit` method of the estimator.
++              See :ref:`Metadata Routing User Guide <metadata_routing>` for more
++              details.
++
++            .. versionadded:: 1.6
+ 
+     Returns
+     -------
+@@ -1907,14 +1929,69 @@ def learning_curve(
+             "An estimator must support the partial_fit interface "
+             "to exploit incremental learning"
+         )
++
++    params = _check_params_groups_deprecation(fit_params, params, groups, "1.8")
++
+     X, y, groups = indexable(X, y, groups)
+ 
+     cv = check_cv(cv, y, classifier=is_classifier(estimator))
+-    # Store it as list as we will be iterating over the list multiple times
+-    cv_iter = list(cv.split(X, y, groups))
+ 
+     scorer = check_scoring(estimator, scoring=scoring)
+ 
++    if _routing_enabled():
++        router = (
++            MetadataRouter(owner="learning_curve")
++            .add(
++                estimator=estimator,
++                # TODO(SLEP6): also pass metadata to the predict method for
++                # scoring?
++                method_mapping=MethodMapping()
++                .add(caller="fit", callee="fit")
++                .add(caller="fit", callee="partial_fit"),
++            )
++            .add(
++                splitter=cv,
++                method_mapping=MethodMapping().add(caller="fit", callee="split"),
++            )
++            .add(
++                scorer=scorer,
++                method_mapping=MethodMapping().add(caller="fit", callee="score"),
++            )
++        )
++
++        try:
++            routed_params = process_routing(router, "fit", **params)
++        except UnsetMetadataPassedError as e:
++            # The default exception would mention `fit` since in the above
++            # `process_routing` code, we pass `fit` as the caller. However,
++            # the user is not calling `fit` directly, so we change the message
++            # to make it more suitable for this case.
++            unrequested_params = sorted(e.unrequested_params)
++            raise UnsetMetadataPassedError(
++                message=(
++                    f"{unrequested_params} are passed to `learning_curve` but are not"
++                    " explicitly set as requested or not requested for learning_curve's"
++                    f" estimator: {estimator.__class__.__name__}. Call"
++                    " `.set_fit_request({{metadata}}=True)` on the estimator for"
++                    f" each metadata in {unrequested_params} that you"
++                    " want to use and `metadata=False` for not using it. See the"
++                    " Metadata Routing User guide"
++                    " <https://scikit-learn.org/stable/metadata_routing.html> for more"
++                    " information."
++                ),
++                unrequested_params=e.unrequested_params,
++                routed_params=e.routed_params,
++            )
++
++    else:
++        routed_params = Bunch()
++        routed_params.estimator = Bunch(fit=params, partial_fit=params)
++        routed_params.splitter = Bunch(split={"groups": groups})
++        routed_params.scorer = Bunch(score={})
++
++    # Store cv as list as we will be iterating over the list multiple times
++    cv_iter = list(cv.split(X, y, **routed_params.splitter.split))
++
+     n_max_training_samples = len(cv_iter[0][0])
+     # Because the lengths of folds can be significantly different, it is
+     # not guaranteed that we use all of the available training data when we
+@@ -1944,7 +2021,8 @@ def learning_curve(
+                 scorer,
+                 return_times,
+                 error_score=error_score,
+-                fit_params=fit_params,
++                fit_params=routed_params.estimator.partial_fit,
++                score_params=routed_params.scorer.score,
+             )
+             for train, test in cv_iter
+         )
+@@ -1965,9 +2043,8 @@ def learning_curve(
+                 test=test,
+                 verbose=verbose,
+                 parameters=None,
+-                fit_params=fit_params,
+-                # TODO(SLEP6): support score params here
+-                score_params=None,
++                fit_params=routed_params.estimator.fit,
++                score_params=routed_params.scorer.score,
+                 return_train_score=True,
+                 error_score=error_score,
+                 return_times=return_times,
+@@ -2073,6 +2150,7 @@ def _incremental_fit_estimator(
+     return_times,
+     error_score,
+     fit_params,
++    score_params,
+ ):
+     """Train estimator on training subsets incrementally and compute scores."""
+     train_scores, test_scores, fit_times, score_times = [], [], [], []
+@@ -2083,6 +2161,9 @@ def _incremental_fit_estimator(
+         partial_fit_func = partial(estimator.partial_fit, **fit_params)
+     else:
+         partial_fit_func = partial(estimator.partial_fit, classes=classes, **fit_params)
++    score_params = score_params if score_params is not None else {}
++    score_params_train = _check_method_params(X, params=score_params, indices=train)
++    score_params_test = _check_method_params(X, params=score_params, indices=test)
+ 
+     for n_train_samples, partial_train in partitions:
+         train_subset = train[:n_train_samples]
+@@ -2099,14 +2180,13 @@ def _incremental_fit_estimator(
+ 
+         start_score = time.time()
+ 
+-        # TODO(SLEP6): support score params in the following two calls
+         test_scores.append(
+             _score(
+                 estimator,
+                 X_test,
+                 y_test,
+                 scorer,
+-                score_params=None,
++                score_params=score_params_test,
+                 error_score=error_score,
+             )
+         )
+@@ -2116,7 +2196,7 @@ def _incremental_fit_estimator(
+                 X_train,
+                 y_train,
+                 scorer,
+-                score_params=None,
++                score_params=score_params_train,
+                 error_score=error_score,
+             )
+         )
+@@ -2224,9 +2304,8 @@ def validation_curve(
+             ``cv`` default value if None changed from 3-fold to 5-fold.
+ 
+     scoring : str or callable, default=None
+-        A str (see model evaluation documentation) or
+-        a scorer callable object / function with signature
+-        ``scorer(estimator, X, y)``.
++        A str (see :ref:`scoring_parameter`) or a scorer callable object / function with
++        signature ``scorer(estimator, X, y)``.
+ 
+     n_jobs : int, default=None
+         Number of jobs to run in parallel. Training the estimator and computing
+diff --git a/sklearn/neighbors/_nca.py b/sklearn/neighbors/_nca.py
+index 8e2bf87f7182c88b32e2f87f32752145d26df1d7..f9756137eff24520313be02434b16c225e736642 100644
+--- a/sklearn/neighbors/_nca.py
++++ b/sklearn/neighbors/_nca.py
+@@ -56,8 +56,8 @@ class NeighborhoodComponentsAnalysis(
+ 
+         - `'auto'`
+             Depending on `n_components`, the most reasonable initialization
+-            will be chosen. If `n_components <= n_classes` we use `'lda'`, as
+-            it uses labels information. If not, but
++            is chosen. If `n_components <= min(n_features, n_classes - 1)`
++            we use `'lda'`, as it uses labels information. If not, but
+             `n_components < min(n_features, n_samples)`, we use `'pca'`, as
+             it projects data in meaningful directions (those of higher
+             variance). Otherwise, we just use `'identity'`.
+diff --git a/sklearn/preprocessing/_data.py b/sklearn/preprocessing/_data.py
+index 6d369a76fa9b2f1d6909ac306f7bbcdb9c1548db..98d4116954a163df28eddf54b335b58a64561f9d 100644
+--- a/sklearn/preprocessing/_data.py
++++ b/sklearn/preprocessing/_data.py
+@@ -7,7 +7,7 @@ from numbers import Integral, Real
+ 
+ import numpy as np
+ from scipy import optimize, sparse, stats
+-from scipy.special import boxcox
++from scipy.special import boxcox, inv_boxcox
+ 
+ from ..base import (
+     BaseEstimator,
+@@ -3352,7 +3352,7 @@ class PowerTransformer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             X = self._scaler.inverse_transform(X)
+ 
+         inv_fun = {
+-            "box-cox": self._box_cox_inverse_tranform,
++            "box-cox": inv_boxcox,
+             "yeo-johnson": self._yeo_johnson_inverse_transform,
+         }[self.method]
+         for i, lmbda in enumerate(self.lambdas_):
+@@ -3361,17 +3361,6 @@ class PowerTransformer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+ 
+         return X
+ 
+-    def _box_cox_inverse_tranform(self, x, lmbda):
+-        """Return inverse-transformed input x following Box-Cox inverse
+-        transform with parameter lambda.
+-        """
+-        if lmbda == 0:
+-            x_inv = np.exp(x)
+-        else:
+-            x_inv = (x * lmbda + 1) ** (1 / lmbda)
+-
+-        return x_inv
+-
+     def _yeo_johnson_inverse_transform(self, x, lmbda):
+         """Return inverse-transformed input x following Yeo-Johnson inverse
+         transform with parameter lambda.
+diff --git a/sklearn/preprocessing/_function_transformer.py b/sklearn/preprocessing/_function_transformer.py
+index c49684d0ebfbcd564c3a782ddcf153514e52d7c8..72884a3366c5d933d6dce0b6c52605fc8aa24280 100644
+--- a/sklearn/preprocessing/_function_transformer.py
++++ b/sklearn/preprocessing/_function_transformer.py
+@@ -1,8 +1,10 @@
+ import warnings
++from functools import partial
+ 
+ import numpy as np
+ 
+ from ..base import BaseEstimator, TransformerMixin, _fit_context
++from ..utils._estimator_html_repr import _VisualBlock
+ from ..utils._param_validation import StrOptions
+ from ..utils._set_output import (
+     _get_adapter_from_container,
+@@ -414,3 +416,21 @@ class FunctionTransformer(TransformerMixin, BaseEstimator):
+ 
+         self._sklearn_output_config["transform"] = transform
+         return self
++
++    def _get_function_name(self):
++        """Get the name display of the `func` used in HTML representation."""
++        if hasattr(self.func, "__name__"):
++            return self.func.__name__
++        if isinstance(self.func, partial):
++            return self.func.func.__name__
++        return f"{self.func.__class__.__name__}(...)"
++
++    def _sk_visual_block_(self):
++        return _VisualBlock(
++            "single",
++            self,
++            names=self._get_function_name(),
++            name_details=str(self),
++            name_caption="FunctionTransformer",
++            doc_link_label="FunctionTransformer",
++        )
+diff --git a/sklearn/tree/_classes.py b/sklearn/tree/_classes.py
+index 675b58f48a2f4c383dd1de08046f91830275aba7..fc5e6a2e25b52ef490758745857078027988d83b 100644
+--- a/sklearn/tree/_classes.py
++++ b/sklearn/tree/_classes.py
+@@ -1686,6 +1686,16 @@ class ExtraTreeClassifier(DecisionTreeClassifier):
+             monotonic_cst=monotonic_cst,
+         )
+ 
++    def _more_tags(self):
++        # XXX: nan is only supported for dense arrays, but we set this for the
++        # common test to pass, specifically: check_estimators_nan_inf
++        allow_nan = self.splitter == "random" and self.criterion in {
++            "gini",
++            "log_loss",
++            "entropy",
++        }
++        return {"multilabel": True, "allow_nan": allow_nan}
++
+ 
+ class ExtraTreeRegressor(DecisionTreeRegressor):
+     """An extremely randomized tree regressor.
+@@ -1929,3 +1939,13 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
+             ccp_alpha=ccp_alpha,
+             monotonic_cst=monotonic_cst,
+         )
++
++    def _more_tags(self):
++        # XXX: nan is only supported for dense arrays, but we set this for the
++        # common test to pass, specifically: check_estimators_nan_inf
++        allow_nan = self.splitter == "random" and self.criterion in {
++            "squared_error",
++            "friedman_mse",
++            "poisson",
++        }
++        return {"allow_nan": allow_nan}
+diff --git a/sklearn/tree/_export.py b/sklearn/tree/_export.py
+index ae863a6b997e6a0f9b7dc40b8437a1a9eb321d27..9558d342e6621b9d741a136ddf600a85ce66e812 100644
+--- a/sklearn/tree/_export.py
++++ b/sklearn/tree/_export.py
+@@ -259,7 +259,12 @@ class _BaseTreeExporter:
+             self.colors["rgb"] = _color_brew(tree.n_classes[0])
+             if tree.n_outputs != 1:
+                 # Find max and min impurities for multi-output
+-                self.colors["bounds"] = (np.min(-tree.impurity), np.max(-tree.impurity))
++                # The next line uses -max(impurity) instead of min(-impurity)
++                # and -min(impurity) instead of max(-impurity) on purpose, in
++                # order to avoid what looks like an issue with SIMD on non
++                # memory aligned arrays on 32bit OS. For more details see
++                # https://github.com/scikit-learn/scikit-learn/issues/27506.
++                self.colors["bounds"] = (-np.max(tree.impurity), -np.min(tree.impurity))
+             elif tree.n_classes[0] == 1 and len(np.unique(tree.value)) != 1:
+                 # Find max and min values in leaf nodes for regression
+                 self.colors["bounds"] = (np.min(tree.value), np.max(tree.value))
+@@ -302,6 +307,7 @@ class _BaseTreeExporter:
+             # Always write node decision criteria, except for leaves
+             if self.feature_names is not None:
+                 feature = self.feature_names[tree.feature[node_id]]
++                feature = self.str_escape(feature)
+             else:
+                 feature = "x%s%s%s" % (
+                     characters[1],
+@@ -377,6 +383,7 @@ class _BaseTreeExporter:
+                 node_string += "class = "
+             if self.class_names is not True:
+                 class_name = self.class_names[np.argmax(value)]
++                class_name = self.str_escape(class_name)
+             else:
+                 class_name = "y%s%s%s" % (
+                     characters[1],
+@@ -391,6 +398,9 @@ class _BaseTreeExporter:
+ 
+         return node_string + characters[5]
+ 
++    def str_escape(self, string):
++        return string
++
+ 
+ class _DOTTreeExporter(_BaseTreeExporter):
+     def __init__(
+@@ -565,6 +575,10 @@ class _DOTTreeExporter(_BaseTreeExporter):
+                 # Add edge to parent
+                 self.out_file.write("%d -> %d ;\n" % (parent, node_id))
+ 
++    def str_escape(self, string):
++        # override default escaping for graphviz
++        return string.replace('"', r"\"")
++
+ 
+ class _MPLTreeExporter(_BaseTreeExporter):
+     def __init__(
+diff --git a/sklearn/tree/_splitter.pyx b/sklearn/tree/_splitter.pyx
+index 1601c8af8f55858020224d33798f869e293baf5e..6be286bf097c4e6bfc904cc4113eefcd49ddc5cc 100644
+--- a/sklearn/tree/_splitter.pyx
++++ b/sklearn/tree/_splitter.pyx
+@@ -286,14 +286,15 @@ cdef inline int node_split_best(
+     Criterion criterion,
+     SplitRecord* split,
+     ParentInfo* parent_record,
+-    bint with_monotonic_cst,
+-    const int8_t[:] monotonic_cst,
+ ) except -1 nogil:
+     """Find the best split on node samples[start:end]
+ 
+     Returns -1 in case of failure to allocate memory (and raise MemoryError)
+     or 0 otherwise.
+     """
++    cdef const int8_t[:] monotonic_cst = splitter.monotonic_cst
++    cdef bint with_monotonic_cst = splitter.with_monotonic_cst
++
+     # Find the best split
+     cdef intp_t start = splitter.start
+     cdef intp_t end = splitter.end
+@@ -667,14 +668,15 @@ cdef inline int node_split_random(
+     Criterion criterion,
+     SplitRecord* split,
+     ParentInfo* parent_record,
+-    bint with_monotonic_cst,
+-    const int8_t[:] monotonic_cst,
+ ) except -1 nogil:
+     """Find the best random split on node samples[start:end]
+ 
+     Returns -1 in case of failure to allocate memory (and raise MemoryError)
+     or 0 otherwise.
+     """
++    cdef const int8_t[:] monotonic_cst = splitter.monotonic_cst
++    cdef bint with_monotonic_cst = splitter.with_monotonic_cst
++
+     # Draw random splits and pick the best
+     cdef intp_t start = splitter.start
+     cdef intp_t end = splitter.end
+@@ -1512,8 +1514,6 @@ cdef class BestSplitter(Splitter):
+             self.criterion,
+             split,
+             parent_record,
+-            self.with_monotonic_cst,
+-            self.monotonic_cst,
+         )
+ 
+ cdef class BestSparseSplitter(Splitter):
+@@ -1542,8 +1542,6 @@ cdef class BestSparseSplitter(Splitter):
+             self.criterion,
+             split,
+             parent_record,
+-            self.with_monotonic_cst,
+-            self.monotonic_cst,
+         )
+ 
+ cdef class RandomSplitter(Splitter):
+@@ -1572,8 +1570,6 @@ cdef class RandomSplitter(Splitter):
+             self.criterion,
+             split,
+             parent_record,
+-            self.with_monotonic_cst,
+-            self.monotonic_cst,
+         )
+ 
+ cdef class RandomSparseSplitter(Splitter):
+@@ -1601,6 +1597,4 @@ cdef class RandomSparseSplitter(Splitter):
+             self.criterion,
+             split,
+             parent_record,
+-            self.with_monotonic_cst,
+-            self.monotonic_cst,
+         )
+diff --git a/sklearn/tree/_tree.pyx b/sklearn/tree/_tree.pyx
+index 162b029b14f4c44e34835d145e7d8742dd04c400..1dfacbf0687673b33439f0e336dc140b29bd123a 100644
+--- a/sklearn/tree/_tree.pyx
++++ b/sklearn/tree/_tree.pyx
+@@ -11,6 +11,7 @@ from libc.math cimport isnan
+ from libcpp.vector cimport vector
+ from libcpp.algorithm cimport pop_heap
+ from libcpp.algorithm cimport push_heap
++from libcpp.stack cimport stack
+ from libcpp cimport bool
+ 
+ import struct
+@@ -32,15 +33,6 @@ cdef extern from "numpy/arrayobject.h":
+                                 void* data, int flags, object obj)
+     int PyArray_SetBaseObject(cnp.ndarray arr, PyObject* obj)
+ 
+-cdef extern from "<stack>" namespace "std" nogil:
+-    cdef cppclass stack[T]:
+-        ctypedef T value_type
+-        stack() except +
+-        bint empty()
+-        void pop()
+-        void push(T&) except +  # Raise c++ exception for bad_alloc -> MemoryError
+-        T& top()
+-
+ # =============================================================================
+ # Types and constants
+ # =============================================================================
+diff --git a/sklearn/utils/_estimator_html_repr.css b/sklearn/utils/_estimator_html_repr.css
+index 3f29c70eddefc51c25d30d4f5472e3b848d60632..0a8c277845cb14d269bccdbb0a6fd10b4a20c584 100644
+--- a/sklearn/utils/_estimator_html_repr.css
++++ b/sklearn/utils/_estimator_html_repr.css
+@@ -1,6 +1,7 @@
+ #$id {
+   /* Definition of color scheme common for light and dark mode */
+-  --sklearn-color-text: black;
++  --sklearn-color-text: #000;
++  --sklearn-color-text-muted: #666;
+   --sklearn-color-line: gray;
+   /* Definition of color scheme for unfitted estimators */
+   --sklearn-color-unfitted-level-0: #fff5e6;
+@@ -145,12 +146,21 @@ clickable and can be expanded/collapsed.
+ /* Toggleable label */
+ #$id label.sk-toggleable__label {
+   cursor: pointer;
+-  display: block;
++  display: flex;
+   width: 100%;
+   margin-bottom: 0;
+   padding: 0.5em;
+   box-sizing: border-box;
+   text-align: center;
++  align-items: start;
++  justify-content: space-between;
++  gap: 0.5em;
++}
++
++#$id label.sk-toggleable__label .caption {
++  font-size: 0.6rem;
++  font-weight: lighter;
++  color: var(--sklearn-color-text-muted);
+ }
+ 
+ #$id label.sk-toggleable__label-arrow:before {
+@@ -303,7 +313,8 @@ a:visited.sk-estimator-doc-link {
+   height: 1em;
+   width: 1em;
+   text-decoration: none !important;
+-  margin-left: 1ex;
++  margin-left: 0.5em;
++  text-align: center;
+   /* unfitted */
+   border: var(--sklearn-color-unfitted-level-1) 1pt solid;
+   color: var(--sklearn-color-unfitted-level-1);
+diff --git a/sklearn/utils/_estimator_html_repr.py b/sklearn/utils/_estimator_html_repr.py
+index 31f3a2b213e0126fc5282a3abb6312091e6c94e6..ec4d6e86f7596e9fc5788e6a5d1722fef6954416 100644
+--- a/sklearn/utils/_estimator_html_repr.py
++++ b/sklearn/utils/_estimator_html_repr.py
+@@ -54,17 +54,36 @@ class _VisualBlock:
+         If kind == 'single', then `name_details` is a single string
+         corresponding to the single estimator.
+ 
++    name_caption : str, default=None
++        The caption below the name. `None` stands for no caption.
++        Only active when kind == 'single'.
++
++    doc_link_label : str, default=None
++        The label for the documentation link. If provided, the label would be
++        "Documentation for {doc_link_label}". Otherwise it will look for `names`.
++        Only active when kind == 'single'.
++
+     dash_wrapped : bool, default=True
+         If true, wrapped HTML element will be wrapped with a dashed border.
+         Only active when kind != 'single'.
+     """
+ 
+     def __init__(
+-        self, kind, estimators, *, names=None, name_details=None, dash_wrapped=True
++        self,
++        kind,
++        estimators,
++        *,
++        names=None,
++        name_details=None,
++        name_caption=None,
++        doc_link_label=None,
++        dash_wrapped=True,
+     ):
+         self.kind = kind
+         self.estimators = estimators
+         self.dash_wrapped = dash_wrapped
++        self.name_caption = name_caption
++        self.doc_link_label = doc_link_label
+ 
+         if self.kind in ("parallel", "serial"):
+             if names is None:
+@@ -83,6 +102,8 @@ def _write_label_html(
+     out,
+     name,
+     name_details,
++    name_caption=None,
++    doc_link_label=None,
+     outer_class="sk-label-container",
+     inner_class="sk-label",
+     checked=False,
+@@ -104,6 +125,11 @@ def _write_label_html(
+         The details to show as content in the dropdown part of the toggleable label. It
+         can contain information such as non-default parameters or column information for
+         `ColumnTransformer`.
++    name_caption : str, default=None
++        The caption below the name. If `None`, no caption will be created.
++    doc_link_label : str, default=None
++        The label for the documentation link. If provided, the label would be
++        "Documentation for {doc_link_label}". Otherwise it will look for `name`.
+     outer_class : {"sk-label-container", "sk-item"}, default="sk-label-container"
+         The CSS class for the outer container.
+     inner_class : {"sk-label", "sk-estimator"}, default="sk-label"
+@@ -123,9 +149,6 @@ def _write_label_html(
+         The HTML representation to show the fitted information in the diagram. An empty
+         string means that no information is shown.
+     """
+-    # we need to add some padding to the left of the label to be sure it is centered
+-    padding_label = "&nbsp;" if is_fitted_icon else ""  # add padding for the "i" char
+-
+     out.write(
+         f'<div class="{outer_class}"><div'
+         f' class="{inner_class} {is_fitted_css_class} sk-toggleable">'
+@@ -134,31 +157,42 @@ def _write_label_html(
+ 
+     if name_details is not None:
+         name_details = html.escape(str(name_details))
+-        label_class = (
+-            f"sk-toggleable__label {is_fitted_css_class} sk-toggleable__label-arrow"
+-        )
+-
+         checked_str = "checked" if checked else ""
+         est_id = _ESTIMATOR_ID_COUNTER.get_id()
+ 
+         if doc_link:
+             doc_label = "<span>Online documentation</span>"
+-            if name is not None:
++            if doc_link_label is not None:
++                doc_label = f"<span>Documentation for {doc_link_label}</span>"
++            elif name is not None:
+                 doc_label = f"<span>Documentation for {name}</span>"
+             doc_link = (
+                 f'<a class="sk-estimator-doc-link {is_fitted_css_class}"'
+                 f' rel="noreferrer" target="_blank" href="{doc_link}">?{doc_label}</a>'
+             )
+-            padding_label += "&nbsp;"  # add additional padding for the "?" char
++
++        name_caption_div = (
++            ""
++            if name_caption is None
++            else f'<div class="caption">{html.escape(name_caption)}</div>'
++        )
++        name_caption_div = f"<div><div>{name}</div>{name_caption_div}</div>"
++        links_div = (
++            f"<div>{doc_link}{is_fitted_icon}</div>"
++            if doc_link or is_fitted_icon
++            else ""
++        )
++
++        label_html = (
++            f'<label for="{est_id}" class="sk-toggleable__label {is_fitted_css_class} '
++            f'sk-toggleable__label-arrow">{name_caption_div}{links_div}</label>'
++        )
+ 
+         fmt_str = (
+-            '<input class="sk-toggleable__control sk-hidden--visually"'
+-            f' id="{est_id}" '
+-            f'type="checkbox" {checked_str}><label for="{est_id}" '
+-            f'class="{label_class} {is_fitted_css_class}">{padding_label}{name}'
+-            f"{doc_link}{is_fitted_icon}</label><div "
+-            f'class="sk-toggleable__content {is_fitted_css_class}">'
+-            f"<pre>{name_details}</pre></div> "
++            f'<input class="sk-toggleable__control sk-hidden--visually" id="{est_id}" '
++            f'type="checkbox" {checked_str}>{label_html}<div '
++            f'class="sk-toggleable__content {is_fitted_css_class}"><pre>{name_details}'
++            "</pre></div> "
+         )
+         out.write(fmt_str)
+     else:
+@@ -306,6 +340,8 @@ def _write_estimator_html(
+             out,
+             est_block.names,
+             est_block.name_details,
++            est_block.name_caption,
++            est_block.doc_link_label,
+             outer_class="sk-item",
+             inner_class="sk-estimator",
+             checked=first_call,
+diff --git a/sklearn/utils/_metadata_requests.py b/sklearn/utils/_metadata_requests.py
+index 1c57850a7791b0739c9a45ba833e640cab966edc..a558ed8e0abfed8f4561b17301f43e38e5df2843 100644
+--- a/sklearn/utils/_metadata_requests.py
++++ b/sklearn/utils/_metadata_requests.py
+@@ -999,8 +999,9 @@ class MetadataRouter:
+     def route_params(self, *, caller, params):
+         """Return the input parameters requested by child objects.
+ 
+-        The output of this method is a bunch, which includes the metadata for all
+-        methods of each child object that is used in the router's `caller` method.
++        The output of this method is a :class:`~sklearn.utils.Bunch`, which includes the
++        metadata for all methods of each child object that is used in the router's
++        `caller` method.
+ 
+         If the router is also a consumer, it also checks for warnings of
+         `self`'s/consumer's requested metadata.
+diff --git a/sklearn/utils/arrayfuncs.pyx b/sklearn/utils/arrayfuncs.pyx
+index 3462fd69a95fbf29047310c7d7cf90ec4c59bf95..2cf98e0f5cc3ee697282a14cbc56ad030a655c25 100644
+--- a/sklearn/utils/arrayfuncs.pyx
++++ b/sklearn/utils/arrayfuncs.pyx
+@@ -13,6 +13,7 @@ ctypedef fused real_numeric:
+     short
+     int
+     long
++    long long
+     float
+     double
+ 
+diff --git a/sklearn/utils/deprecation.py b/sklearn/utils/deprecation.py
+index a3225597701c7a41b0e7ea6ad3cee4201f1b9f38..f72f8b8124f28739349eda5f4a098e21a6407f82 100644
+--- a/sklearn/utils/deprecation.py
++++ b/sklearn/utils/deprecation.py
+@@ -97,7 +97,7 @@ class deprecated:
+         msg = self.extra
+ 
+         @property
+-        @functools.wraps(prop)
++        @functools.wraps(prop.fget)
+         def wrapped(*args, **kwargs):
+             warnings.warn(msg, category=FutureWarning)
+             return prop.fget(*args, **kwargs)
+diff --git a/sklearn/utils/extmath.py b/sklearn/utils/extmath.py
+index 717bbed76513be463514256394d5575ffbd06285..9a7f19dc759f7f69bb87b29a01ce8532dfea8aec 100644
+--- a/sklearn/utils/extmath.py
++++ b/sklearn/utils/extmath.py
+@@ -11,7 +11,6 @@ import numpy as np
+ from scipy import linalg, sparse
+ 
+ from ..utils._param_validation import Interval, StrOptions, validate_params
+-from ..utils.deprecation import deprecated
+ from ._array_api import _is_numpy_namespace, device, get_namespace
+ from .sparsefuncs_fast import csr_row_norms
+ from .validation import check_array, check_random_state
+@@ -899,46 +898,6 @@ def svd_flip(u, v, u_based_decision=True):
+     return u, v
+ 
+ 
+-# TODO(1.6): remove
+-@deprecated(  # type: ignore
+-    "The function `log_logistic` is deprecated and will be removed in 1.6. "
+-    "Use `-np.logaddexp(0, -x)` instead."
+-)
+-def log_logistic(X, out=None):
+-    """Compute the log of the logistic function, ``log(1 / (1 + e ** -x))``.
+-
+-    This implementation is numerically stable and uses `-np.logaddexp(0, -x)`.
+-
+-    For the ordinary logistic function, use ``scipy.special.expit``.
+-
+-    Parameters
+-    ----------
+-    X : array-like of shape (M, N) or (M,)
+-        Argument to the logistic function.
+-
+-    out : array-like of shape (M, N) or (M,), default=None
+-        Preallocated output array.
+-
+-    Returns
+-    -------
+-    out : ndarray of shape (M, N) or (M,)
+-        Log of the logistic function evaluated at every point in x.
+-
+-    Notes
+-    -----
+-    See the blog post describing this implementation:
+-    http://fa.bianp.net/blog/2013/numerical-optimizers-for-logistic-regression/
+-    """
+-    X = check_array(X, dtype=np.float64, ensure_2d=False)
+-
+-    if out is None:
+-        out = np.empty_like(X)
+-
+-    np.logaddexp(0, -X, out=out)
+-    out *= -1
+-    return out
+-
+-
+ def softmax(X, copy=True):
+     """
+     Calculate the softmax function.
+diff --git a/sklearn/utils/validation.py b/sklearn/utils/validation.py
+index 2c971025c05c0e6e2550344041a979cb8c44f63c..1e226ae9738493882074a674d31fe6f597271b08 100644
+--- a/sklearn/utils/validation.py
++++ b/sklearn/utils/validation.py
+@@ -89,7 +89,7 @@ def _assert_all_finite(
+ ):
+     """Like assert_all_finite, but only for ndarray."""
+ 
+-    xp, _ = get_namespace(X)
++    xp, is_array_api = get_namespace(X)
+ 
+     if _get_config()["assume_finite"]:
+         return
+@@ -97,7 +97,7 @@ def _assert_all_finite(
+     X = xp.asarray(X)
+ 
+     # for object dtype data, we only check for NaNs (GH-13254)
+-    if X.dtype == np.dtype("object") and not allow_nan:
++    if not is_array_api and X.dtype == np.dtype("object") and not allow_nan:
+         if _object_dtype_isnan(X).any():
+             raise ValueError("Input contains NaN")
+ 
+@@ -479,7 +479,7 @@ def indexable(*iterables):
+ 
+     Checks consistent length, passes through None, and ensures that everything
+     can be indexed by converting sparse matrices to csr and converting
+-    non-interable objects to arrays.
++    non-iterable objects to arrays.
+ 
+     Parameters
+     ----------

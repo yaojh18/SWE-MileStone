@@ -1,0 +1,608 @@
+diff --git a/sklearn/metrics/_regression.py b/sklearn/metrics/_regression.py
+index b5605f18803abe0c7466bbcbc0055a97db746bd0..5172f6555bcffee48ae9c2ae899b887e61c4c4c4 100644
+--- a/sklearn/metrics/_regression.py
++++ b/sklearn/metrics/_regression.py
+@@ -189,7 +189,7 @@ def mean_absolute_error(
+ 
+     Returns
+     -------
+-    loss : float or ndarray of floats
++    loss : float or array of floats
+         If multioutput is 'raw_values', then mean absolute error is returned
+         for each output separately.
+         If multioutput is 'uniform_average' or an ndarray of weights, then the
+@@ -213,11 +213,19 @@ def mean_absolute_error(
+     >>> mean_absolute_error(y_true, y_pred, multioutput=[0.3, 0.7])
+     0.85...
+     """
+-    y_type, y_true, y_pred, multioutput = _check_reg_targets(
+-        y_true, y_pred, multioutput
++    input_arrays = [y_true, y_pred, sample_weight, multioutput]
++    xp, _ = get_namespace(*input_arrays)
++
++    dtype = _find_matching_floating_dtype(y_true, y_pred, sample_weight, xp=xp)
++
++    _, y_true, y_pred, multioutput = _check_reg_targets(
++        y_true, y_pred, multioutput, dtype=dtype, xp=xp
+     )
+     check_consistent_length(y_true, y_pred, sample_weight)
+-    output_errors = np.average(np.abs(y_pred - y_true), weights=sample_weight, axis=0)
++
++    output_errors = _average(
++        xp.abs(y_pred - y_true), weights=sample_weight, axis=0, xp=xp
++    )
+     if isinstance(multioutput, str):
+         if multioutput == "raw_values":
+             return output_errors
+@@ -225,7 +233,15 @@ def mean_absolute_error(
+             # pass None as weights to np.average: uniform mean
+             multioutput = None
+ 
+-    return np.average(output_errors, weights=multioutput)
++    # Average across the outputs (if needed).
++    mean_absolute_error = _average(output_errors, weights=multioutput)
++
++    # Since `y_pred.ndim <= 2` and `y_true.ndim <= 2`, the second call to _average
++    # should always return a scalar array that we convert to a Python float to
++    # consistently return the same eager evaluated value, irrespective of the
++    # Array API implementation.
++    assert mean_absolute_error.shape == ()
++    return float(mean_absolute_error)
+ 
+ 
+ @validate_params(
+@@ -467,7 +483,7 @@ def mean_squared_error(
+ 
+     Returns
+     -------
+-    loss : float or ndarray of floats
++    loss : float or array of floats
+         A non-negative floating point value (the best value is 0.0), or an
+         array of floating point values, one for each individual target.
+ 
+@@ -503,11 +519,14 @@ def mean_squared_error(
+                 y_true, y_pred, sample_weight=sample_weight, multioutput=multioutput
+             )
+ 
++    xp, _ = get_namespace(y_true, y_pred, sample_weight, multioutput)
++    dtype = _find_matching_floating_dtype(y_true, y_pred, xp=xp)
++
+     y_type, y_true, y_pred, multioutput = _check_reg_targets(
+-        y_true, y_pred, multioutput
++        y_true, y_pred, multioutput, dtype=dtype, xp=xp
+     )
+     check_consistent_length(y_true, y_pred, sample_weight)
+-    output_errors = np.average((y_true - y_pred) ** 2, axis=0, weights=sample_weight)
++    output_errors = _average((y_true - y_pred) ** 2, axis=0, weights=sample_weight)
+ 
+     if isinstance(multioutput, str):
+         if multioutput == "raw_values":
+@@ -516,7 +535,10 @@ def mean_squared_error(
+             # pass None as weights to np.average: uniform mean
+             multioutput = None
+ 
+-    return np.average(output_errors, weights=multioutput)
++    # See comment in mean_absolute_error
++    mean_squared_error = _average(output_errors, weights=multioutput)
++    assert mean_squared_error.shape == ()
++    return float(mean_squared_error)
+ 
+ 
+ @validate_params(
+@@ -1276,13 +1298,14 @@ def max_error(y_true, y_pred):
+ 
+ def _mean_tweedie_deviance(y_true, y_pred, sample_weight, power):
+     """Mean Tweedie deviance regression loss."""
++    xp, _ = get_namespace(y_true, y_pred)
+     p = power
+     if p < 0:
+         # 'Extreme stable', y any real number, y_pred > 0
+         dev = 2 * (
+-            np.power(np.maximum(y_true, 0), 2 - p) / ((1 - p) * (2 - p))
+-            - y_true * np.power(y_pred, 1 - p) / (1 - p)
+-            + np.power(y_pred, 2 - p) / (2 - p)
++            xp.pow(xp.where(y_true > 0, y_true, 0), 2 - p) / ((1 - p) * (2 - p))
++            - y_true * xp.pow(y_pred, 1 - p) / (1 - p)
++            + xp.pow(y_pred, 2 - p) / (2 - p)
+         )
+     elif p == 0:
+         # Normal distribution, y and y_pred any real number
+@@ -1292,15 +1315,14 @@ def _mean_tweedie_deviance(y_true, y_pred, sample_weight, power):
+         dev = 2 * (xlogy(y_true, y_true / y_pred) - y_true + y_pred)
+     elif p == 2:
+         # Gamma distribution
+-        dev = 2 * (np.log(y_pred / y_true) + y_true / y_pred - 1)
++        dev = 2 * (xp.log(y_pred / y_true) + y_true / y_pred - 1)
+     else:
+         dev = 2 * (
+-            np.power(y_true, 2 - p) / ((1 - p) * (2 - p))
+-            - y_true * np.power(y_pred, 1 - p) / (1 - p)
+-            + np.power(y_pred, 2 - p) / (2 - p)
++            xp.pow(y_true, 2 - p) / ((1 - p) * (2 - p))
++            - y_true * xp.pow(y_pred, 1 - p) / (1 - p)
++            + xp.pow(y_pred, 2 - p) / (2 - p)
+         )
+-
+-    return np.average(dev, weights=sample_weight)
++    return float(_average(dev, weights=sample_weight))
+ 
+ 
+ @validate_params(
+@@ -1363,8 +1385,9 @@ def mean_tweedie_deviance(y_true, y_pred, *, sample_weight=None, power=0):
+     >>> mean_tweedie_deviance(y_true, y_pred, power=1)
+     1.4260...
+     """
++    xp, _ = get_namespace(y_true, y_pred)
+     y_type, y_true, y_pred, _ = _check_reg_targets(
+-        y_true, y_pred, None, dtype=[np.float64, np.float32]
++        y_true, y_pred, None, dtype=[xp.float64, xp.float32]
+     )
+     if y_type == "continuous-multioutput":
+         raise ValueError("Multioutput not supported in mean_tweedie_deviance")
+@@ -1575,8 +1598,10 @@ def d2_tweedie_score(y_true, y_pred, *, sample_weight=None, power=0):
+     >>> d2_tweedie_score(y_true, y_true, power=2)
+     1.0
+     """
++    xp, _ = get_namespace(y_true, y_pred)
++
+     y_type, y_true, y_pred, _ = _check_reg_targets(
+-        y_true, y_pred, None, dtype=[np.float64, np.float32]
++        y_true, y_pred, None, dtype=[xp.float64, xp.float32], xp=xp
+     )
+     if y_type == "continuous-multioutput":
+         raise ValueError("Multioutput not supported in d2_tweedie_score")
+@@ -1586,12 +1611,12 @@ def d2_tweedie_score(y_true, y_pred, *, sample_weight=None, power=0):
+         warnings.warn(msg, UndefinedMetricWarning)
+         return float("nan")
+ 
+-    y_true, y_pred = np.squeeze(y_true), np.squeeze(y_pred)
++    y_true, y_pred = xp.squeeze(y_true, axis=1), xp.squeeze(y_pred, axis=1)
+     numerator = mean_tweedie_deviance(
+         y_true, y_pred, sample_weight=sample_weight, power=power
+     )
+ 
+-    y_avg = np.average(y_true, weights=sample_weight)
++    y_avg = _average(y_true, weights=sample_weight, xp=xp)
+     denominator = _mean_tweedie_deviance(
+         y_true, y_avg, sample_weight=sample_weight, power=power
+     )
+diff --git a/sklearn/metrics/pairwise.py b/sklearn/metrics/pairwise.py
+index d30c1775823a5eecf065f4d63d8a8ab7edf51477..ff158825cc0f9cf6c2b87e7905923e512794913e 100644
+--- a/sklearn/metrics/pairwise.py
++++ b/sklearn/metrics/pairwise.py
+@@ -25,6 +25,11 @@ from ..utils import (
+     gen_batches,
+     gen_even_slices,
+ )
++from ..utils._array_api import (
++    _find_matching_floating_dtype,
++    _is_numpy_namespace,
++    get_namespace,
++)
+ from ..utils._chunking import get_chunk_n_rows
+ from ..utils._mask import _get_mask
+ from ..utils._missing import is_scalar_nan
+@@ -154,7 +159,11 @@ def check_pairwise_arrays(
+         An array equal to Y if Y was not None, guaranteed to be a numpy array.
+         If Y was None, safe_Y will be a pointer to X.
+     """
+-    X, Y, dtype_float = _return_float_dtype(X, Y)
++    xp, _ = get_namespace(X, Y)
++    if any([issparse(X), issparse(Y)]) or _is_numpy_namespace(xp):
++        X, Y, dtype_float = _return_float_dtype(X, Y)
++    else:
++        dtype_float = _find_matching_floating_dtype(X, Y, xp=xp)
+ 
+     estimator = "check_pairwise_arrays"
+     if dtype == "infer_float":
+diff --git a/sklearn/preprocessing/_label.py b/sklearn/preprocessing/_label.py
+index 301dc19bb198597cbf95a608fefb25701d9c6652..ecf0c400a2c2f933c1be840c761ff1f291db37c5 100644
+--- a/sklearn/preprocessing/_label.py
++++ b/sklearn/preprocessing/_label.py
+@@ -17,6 +17,7 @@ import scipy.sparse as sp
+ 
+ from ..base import BaseEstimator, TransformerMixin, _fit_context
+ from ..utils import column_or_1d
++from ..utils._array_api import _setdiff1d, device, get_namespace
+ from ..utils._encode import _encode, _unique
+ from ..utils._param_validation import Interval, validate_params
+ from ..utils.multiclass import type_of_target, unique_labels
+@@ -129,10 +130,11 @@ class LabelEncoder(TransformerMixin, BaseEstimator, auto_wrap_output_keys=None):
+             Labels as normalized encodings.
+         """
+         check_is_fitted(self)
++        xp, _ = get_namespace(y)
+         y = column_or_1d(y, dtype=self.classes_.dtype, warn=True)
+         # transform of empty array is empty array
+         if _num_samples(y) == 0:
+-            return np.array([])
++            return xp.asarray([])
+ 
+         return _encode(y, uniques=self.classes_)
+ 
+@@ -141,7 +143,7 @@ class LabelEncoder(TransformerMixin, BaseEstimator, auto_wrap_output_keys=None):
+ 
+         Parameters
+         ----------
+-        y : ndarray of shape (n_samples,)
++        y : array-like of shape (n_samples,)
+             Target values.
+ 
+         Returns
+@@ -150,19 +152,24 @@ class LabelEncoder(TransformerMixin, BaseEstimator, auto_wrap_output_keys=None):
+             Original encoding.
+         """
+         check_is_fitted(self)
++        xp, _ = get_namespace(y)
+         y = column_or_1d(y, warn=True)
+         # inverse transform of empty array is empty array
+         if _num_samples(y) == 0:
+-            return np.array([])
++            return xp.asarray([])
+ 
+-        diff = np.setdiff1d(y, np.arange(len(self.classes_)))
+-        if len(diff):
++        diff = _setdiff1d(
++            ar1=y,
++            ar2=xp.arange(self.classes_.shape[0], device=device(y)),
++            xp=xp,
++        )
++        if diff.shape[0]:
+             raise ValueError("y contains previously unseen labels: %s" % str(diff))
+-        y = np.asarray(y)
+-        return self.classes_[y]
++        y = xp.asarray(y)
++        return xp.take(self.classes_, y, axis=0)
+ 
+     def _more_tags(self):
+-        return {"X_types": ["1dlabels"]}
++        return {"X_types": ["1dlabels"], "array_api_support": True}
+ 
+ 
+ class LabelBinarizer(TransformerMixin, BaseEstimator, auto_wrap_output_keys=None):
+diff --git a/sklearn/utils/_array_api.py b/sklearn/utils/_array_api.py
+index 7c3fd12ad4dee0dc6ec7930382e03b31985fcb2c..7bf9183c8077268b3d83415f9b7d7b03c16458b0 100644
+--- a/sklearn/utils/_array_api.py
++++ b/sklearn/utils/_array_api.py
+@@ -406,6 +406,11 @@ class _NumPyAPIWrapper:
+     def unique_values(self, x):
+         return numpy.unique(x)
+ 
++    def unique_all(self, x):
++        return numpy.unique(
++            x, return_index=True, return_inverse=True, return_counts=True
++        )
++
+     def concat(self, arrays, *, axis=None):
+         return numpy.concatenate(arrays, axis=axis)
+ 
+@@ -427,6 +432,9 @@ class _NumPyAPIWrapper:
+     def isdtype(self, dtype, kind):
+         return isdtype(dtype, kind, xp=self)
+ 
++    def pow(self, x1, x2):
++        return numpy.power(x1, x2)
++
+ 
+ _NUMPY_API_WRAPPER_INSTANCE = _NumPyAPIWrapper()
+ 
+@@ -560,10 +568,15 @@ def get_namespace_and_device(*array_list, remove_none=True, remove_types=(str,))
+ 
+     skip_remove_kwargs = dict(remove_none=False, remove_types=[])
+ 
+-    return (
+-        *get_namespace(*array_list, **skip_remove_kwargs),
+-        device(*array_list, **skip_remove_kwargs),
+-    )
++    xp, is_array_api = get_namespace(*array_list, **skip_remove_kwargs)
++    if is_array_api:
++        return (
++            xp,
++            is_array_api,
++            device(*array_list, **skip_remove_kwargs),
++        )
++    else:
++        return xp, False, None
+ 
+ 
+ def _expit(X, xp=None):
+@@ -836,3 +849,121 @@ def indexing_dtype(xp):
+     # TODO: once sufficiently adopted, we might want to instead rely on the
+     # newer inspection API: https://github.com/data-apis/array-api/issues/640
+     return xp.asarray(0).dtype
++
++
++def _searchsorted(xp, a, v, *, side="left", sorter=None):
++    # Temporary workaround needed as long as searchsorted is not widely
++    # adopted by implementers of the Array API spec. This is a quite
++    # recent addition to the spec:
++    # https://data-apis.org/array-api/latest/API_specification/generated/array_api.searchsorted.html # noqa
++    if hasattr(xp, "searchsorted"):
++        return xp.searchsorted(a, v, side=side, sorter=sorter)
++
++    a_np = _convert_to_numpy(a, xp=xp)
++    v_np = _convert_to_numpy(v, xp=xp)
++    indices = numpy.searchsorted(a_np, v_np, side=side, sorter=sorter)
++    return xp.asarray(indices, device=device(a))
++
++
++def _setdiff1d(ar1, ar2, xp, assume_unique=False):
++    """Find the set difference of two arrays.
++
++    Return the unique values in `ar1` that are not in `ar2`.
++    """
++    if _is_numpy_namespace(xp):
++        return xp.asarray(
++            numpy.setdiff1d(
++                ar1=ar1,
++                ar2=ar2,
++                assume_unique=assume_unique,
++            )
++        )
++
++    if assume_unique:
++        ar1 = xp.reshape(ar1, (-1,))
++    else:
++        ar1 = xp.unique_values(ar1)
++        ar2 = xp.unique_values(ar2)
++    return ar1[_in1d(ar1=ar1, ar2=ar2, xp=xp, assume_unique=True, invert=True)]
++
++
++def _isin(element, test_elements, xp, assume_unique=False, invert=False):
++    """Calculates ``element in test_elements``, broadcasting over `element`
++    only.
++
++    Returns a boolean array of the same shape as `element` that is True
++    where an element of `element` is in `test_elements` and False otherwise.
++    """
++    if _is_numpy_namespace(xp):
++        return xp.asarray(
++            numpy.isin(
++                element=element,
++                test_elements=test_elements,
++                assume_unique=assume_unique,
++                invert=invert,
++            )
++        )
++
++    original_element_shape = element.shape
++    element = xp.reshape(element, (-1,))
++    test_elements = xp.reshape(test_elements, (-1,))
++    return xp.reshape(
++        _in1d(
++            ar1=element,
++            ar2=test_elements,
++            xp=xp,
++            assume_unique=assume_unique,
++            invert=invert,
++        ),
++        original_element_shape,
++    )
++
++
++# Note: This is a helper for the functions `_isin` and
++# `_setdiff1d`. It is not meant to be called directly.
++def _in1d(ar1, ar2, xp, assume_unique=False, invert=False):
++    """Checks whether each element of an array is also present in a
++    second array.
++
++    Returns a boolean array the same length as `ar1` that is True
++    where an element of `ar1` is in `ar2` and False otherwise.
++
++    This function has been adapted using the original implementation
++    present in numpy:
++    https://github.com/numpy/numpy/blob/v1.26.0/numpy/lib/arraysetops.py#L524-L758
++    """
++    xp, _ = get_namespace(ar1, ar2, xp=xp)
++
++    # This code is run to make the code significantly faster
++    if ar2.shape[0] < 10 * ar1.shape[0] ** 0.145:
++        if invert:
++            mask = xp.ones(ar1.shape[0], dtype=xp.bool, device=device(ar1))
++            for a in ar2:
++                mask &= ar1 != a
++        else:
++            mask = xp.zeros(ar1.shape[0], dtype=xp.bool, device=device(ar1))
++            for a in ar2:
++                mask |= ar1 == a
++        return mask
++
++    if not assume_unique:
++        ar1, rev_idx = xp.unique_inverse(ar1)
++        ar2 = xp.unique_values(ar2)
++
++    ar = xp.concat((ar1, ar2))
++    device_ = device(ar)
++    # We need this to be a stable sort.
++    order = xp.argsort(ar, stable=True)
++    reverse_order = xp.argsort(order, stable=True)
++    sar = xp.take(ar, order, axis=0)
++    if invert:
++        bool_ar = sar[1:] != sar[:-1]
++    else:
++        bool_ar = sar[1:] == sar[:-1]
++    flag = xp.concat((bool_ar, xp.asarray([invert], device=device_)))
++    ret = xp.take(flag, reverse_order, axis=0)
++
++    if assume_unique:
++        return ret[: ar1.shape[0]]
++    else:
++        return xp.take(ret, rev_idx, axis=0)
+diff --git a/sklearn/utils/_encode.py b/sklearn/utils/_encode.py
+index a468af43f857da0a7df25cf124b9ad9c0175f87a..3fd4d45f522e6ef7b2df33ad4b65807b8aaa3fac 100644
+--- a/sklearn/utils/_encode.py
++++ b/sklearn/utils/_encode.py
+@@ -4,6 +4,13 @@ from typing import NamedTuple
+ 
+ import numpy as np
+ 
++from ._array_api import (
++    _isin,
++    _searchsorted,
++    _setdiff1d,
++    device,
++    get_namespace,
++)
+ from ._missing import is_scalar_nan
+ 
+ 
+@@ -51,31 +58,29 @@ def _unique(values, *, return_inverse=False, return_counts=False):
+ def _unique_np(values, return_inverse=False, return_counts=False):
+     """Helper function to find unique values for numpy arrays that correctly
+     accounts for nans. See `_unique` documentation for details."""
+-    uniques = np.unique(
+-        values, return_inverse=return_inverse, return_counts=return_counts
+-    )
++    xp, _ = get_namespace(values)
+ 
+     inverse, counts = None, None
+ 
+-    if return_counts:
+-        *uniques, counts = uniques
+-
+-    if return_inverse:
+-        *uniques, inverse = uniques
+-
+-    if return_counts or return_inverse:
+-        uniques = uniques[0]
++    if return_inverse and return_counts:
++        uniques, _, inverse, counts = xp.unique_all(values)
++    elif return_inverse:
++        uniques, inverse = xp.unique_inverse(values)
++    elif return_counts:
++        uniques, counts = xp.unique_counts(values)
++    else:
++        uniques = xp.unique_values(values)
+ 
+     # np.unique will have duplicate missing values at the end of `uniques`
+     # here we clip the nans and remove it from uniques
+     if uniques.size and is_scalar_nan(uniques[-1]):
+-        nan_idx = np.searchsorted(uniques, np.nan)
++        nan_idx = _searchsorted(xp, uniques, xp.nan)
+         uniques = uniques[: nan_idx + 1]
+         if return_inverse:
+             inverse[inverse > nan_idx] = nan_idx
+ 
+         if return_counts:
+-            counts[nan_idx] = np.sum(counts[nan_idx:])
++            counts[nan_idx] = xp.sum(counts[nan_idx:])
+             counts = counts[: nan_idx + 1]
+ 
+     ret = (uniques,)
+@@ -161,8 +166,9 @@ class _nandict(dict):
+ 
+ def _map_to_integer(values, uniques):
+     """Map values based on its position in uniques."""
++    xp, _ = get_namespace(values, uniques)
+     table = _nandict({val: i for i, val in enumerate(uniques)})
+-    return np.array([table[v] for v in values])
++    return xp.asarray([table[v] for v in values], device=device(values))
+ 
+ 
+ def _unique_python(values, *, return_inverse, return_counts):
+@@ -220,7 +226,8 @@ def _encode(values, *, uniques, check_unknown=True):
+     encoded : ndarray
+         Encoded values
+     """
+-    if values.dtype.kind in "OUS":
++    xp, _ = get_namespace(values, uniques)
++    if not xp.isdtype(values.dtype, "numeric"):
+         try:
+             return _map_to_integer(values, uniques)
+         except KeyError as e:
+@@ -230,7 +237,7 @@ def _encode(values, *, uniques, check_unknown=True):
+             diff = _check_unknown(values, uniques)
+             if diff:
+                 raise ValueError(f"y contains previously unseen labels: {str(diff)}")
+-        return np.searchsorted(uniques, values)
++        return _searchsorted(xp, uniques, values)
+ 
+ 
+ def _check_unknown(values, known_values, return_mask=False):
+@@ -258,9 +265,10 @@ def _check_unknown(values, known_values, return_mask=False):
+         Additionally returned if ``return_mask=True``.
+ 
+     """
++    xp, _ = get_namespace(values, known_values)
+     valid_mask = None
+ 
+-    if values.dtype.kind in "OUS":
++    if not xp.isdtype(values.dtype, "numeric"):
+         values_set = set(values)
+         values_set, missing_in_values = _extract_missing(values_set)
+ 
+@@ -282,9 +290,9 @@ def _check_unknown(values, known_values, return_mask=False):
+ 
+         if return_mask:
+             if diff or nan_in_diff or none_in_diff:
+-                valid_mask = np.array([is_valid(value) for value in values])
++                valid_mask = xp.array([is_valid(value) for value in values])
+             else:
+-                valid_mask = np.ones(len(values), dtype=bool)
++                valid_mask = xp.ones(len(values), dtype=xp.bool)
+ 
+         diff = list(diff)
+         if none_in_diff:
+@@ -292,21 +300,21 @@ def _check_unknown(values, known_values, return_mask=False):
+         if nan_in_diff:
+             diff.append(np.nan)
+     else:
+-        unique_values = np.unique(values)
+-        diff = np.setdiff1d(unique_values, known_values, assume_unique=True)
++        unique_values = xp.unique_values(values)
++        diff = _setdiff1d(unique_values, known_values, xp, assume_unique=True)
+         if return_mask:
+             if diff.size:
+-                valid_mask = np.isin(values, known_values)
++                valid_mask = _isin(values, known_values, xp)
+             else:
+-                valid_mask = np.ones(len(values), dtype=bool)
++                valid_mask = xp.ones(len(values), dtype=xp.bool)
+ 
+         # check for nans in the known_values
+-        if np.isnan(known_values).any():
+-            diff_is_nan = np.isnan(diff)
+-            if diff_is_nan.any():
++        if xp.any(xp.isnan(known_values)):
++            diff_is_nan = xp.isnan(diff)
++            if xp.any(diff_is_nan):
+                 # removes nan from valid_mask
+                 if diff.size and return_mask:
+-                    is_nan = np.isnan(values)
++                    is_nan = xp.isnan(values)
+                     valid_mask[is_nan] = 1
+ 
+                 # remove nan from diff
+diff --git a/sklearn/utils/tests/test_array_api.py b/sklearn/utils/tests/test_array_api.py
+index 27c2bce0fa37efb63b0d717f9ec1d8c6941ca49a..25913e7f548465cf7d925c5c005a0a1a7417ecaf 100644
+--- a/sklearn/utils/tests/test_array_api.py
++++ b/sklearn/utils/tests/test_array_api.py
+@@ -15,6 +15,7 @@ from sklearn.utils._array_api import (
+     _convert_to_numpy,
+     _estimator_with_converted_arrays,
+     _is_numpy_namespace,
++    _isin,
+     _nanmax,
+     _nanmin,
+     _NumPyAPIWrapper,
+@@ -26,12 +27,6 @@ from sklearn.utils._array_api import (
+     supported_float_dtypes,
+     yield_namespace_device_dtype_combinations,
+ )
+-
+-# [ENV-PATCH] Conditional import for _isin - may not exist in all versions
+-try:
+-    from sklearn.utils._array_api import _isin
+-except ImportError:
+-    _isin = None
+ from sklearn.utils._testing import (
+     _array_api_for_tests,
+     assert_array_equal,
+@@ -519,7 +514,6 @@ def test_indexing_dtype(namespace, _device, _dtype):
+ )
+ @pytest.mark.parametrize("invert", [True, False])
+ @pytest.mark.parametrize("assume_unique", [True, False])
+-@pytest.mark.skipif(_isin is None, reason="[ENV-PATCH] _isin not available in this version")
+ @pytest.mark.parametrize("element_size", [6, 10, 14])
+ @pytest.mark.parametrize("int_dtype", ["int16", "int32", "int64", "uint8"])
+ def test_isin(

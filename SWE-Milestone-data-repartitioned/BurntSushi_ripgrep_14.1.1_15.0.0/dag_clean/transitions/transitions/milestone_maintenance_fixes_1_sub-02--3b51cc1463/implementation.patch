@@ -1,0 +1,448 @@
+diff --git a/crates/core/flags/complete/fish.rs b/crates/core/flags/complete/fish.rs
+index f8f7133bc7fa1c10273b7b2ef913b99617bfc649..8952cdd3820cb2aef1ad3d92ab4c146f33d34e19 100644
+--- a/crates/core/flags/complete/fish.rs
++++ b/crates/core/flags/complete/fish.rs
+@@ -6,11 +6,15 @@ use crate::flags::{defs::FLAGS, CompletionType};
+ 
+ const TEMPLATE: &'static str = "complete -c rg !SHORT! -l !LONG! -d '!DOC!'";
+ const TEMPLATE_NEGATED: &'static str =
+-    "complete -c rg -l !NEGATED! -n '__fish_contains_opt !SHORT! !LONG!' -d '!DOC!'\n";
++    "complete -c rg -l !NEGATED! -n '__rg_contains_opt !LONG! !SHORT!' -d '!DOC!'\n";
+ 
+ /// Generate completions for Fish.
++///
++/// Reference: <https://fishshell.com/docs/current/completions.html>
+ pub(crate) fn generate() -> String {
+     let mut out = String::new();
++    out.push_str(include_str!("prelude.fish"));
++    out.push('\n');
+     for flag in FLAGS.iter() {
+         let short = match flag.name_short() {
+             None => "".to_string(),
+@@ -55,6 +59,10 @@ pub(crate) fn generate() -> String {
+         out.push_str(&completion);
+ 
+         if let Some(negated) = flag.name_negated() {
++            let short = match flag.name_short() {
++                None => "".to_string(),
++                Some(byte) => char::from(byte).to_string(),
++            };
+             out.push_str(
+                 &TEMPLATE_NEGATED
+                     .replace("!NEGATED!", &negated)
+diff --git a/crates/core/flags/defs.rs b/crates/core/flags/defs.rs
+index 9a196c491b746587a76c7704e9e1c433dcb9d067..eb59e33f11d169ff4637d0902820513c93dd187f 100644
+--- a/crates/core/flags/defs.rs
++++ b/crates/core/flags/defs.rs
+@@ -835,7 +835,7 @@ provided multiple times. Settings are applied iteratively. Pre-existing color
+ labels are limited to one of eight choices: \fBred\fP, \fBblue\fP, \fBgreen\fP,
+ \fBcyan\fP, \fBmagenta\fP, \fByellow\fP, \fBwhite\fP and \fBblack\fP. Styles
+ are limited to \fBnobold\fP, \fBbold\fP, \fBnointense\fP, \fBintense\fP,
+-\fBnounderline\fP or \fBunderline\fP.
++\fBnounderline\fP, \fBunderline\fP, \fBnoitalic\fP or \fBitalic\fP.
+ .sp
+ The format of the flag is
+ \fB{\fP\fItype\fP\fB}:{\fP\fIattribute\fP\fB}:{\fP\fIvalue\fP\fB}\fP.
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index f7e67b17dde7e1e1464ef5f3c1fe7d9b894673ad..e5136bfb2c5f30c19e01ec75611d95554daa8088 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -517,7 +517,7 @@ impl HiArgs {
+     /// When this returns false, it is impossible for ripgrep to ever report
+     /// a match.
+     pub(crate) fn matches_possible(&self) -> bool {
+-        if self.patterns.patterns.is_empty() {
++        if self.patterns.patterns.is_empty() && !self.invert_match {
+             return false;
+         }
+         if self.max_count == Some(0) {
+diff --git a/crates/core/main.rs b/crates/core/main.rs
+index 64f35cebb5ca7b0e35d66d3e1b4c669403429f26..bcafefe0a7273fc4acd0af8309d8989f74859924 100644
+--- a/crates/core/main.rs
++++ b/crates/core/main.rs
+@@ -468,7 +468,7 @@ fn print_stats<W: Write>(
+ {bytes_printed} bytes printed
+ {bytes_searched} bytes searched
+ {search_time:0.6} seconds spent searching
+-{process_time:0.6} seconds
++{process_time:0.6} seconds total
+ ",
+             matches = stats.matches(),
+             lines = stats.matched_lines(),
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index b1fc696af2c634ce983254d81eb7712cf06e6db3..7dcea73dd68473a9d66cf436799ee83c33a90f14 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -314,7 +314,7 @@ impl GlobSet {
+ 
+     /// Create an empty `GlobSet`. An empty set matches nothing.
+     #[inline]
+-    pub fn empty() -> GlobSet {
++    pub const fn empty() -> GlobSet {
+         GlobSet { len: 0, strats: vec![] }
+     }
+ 
+@@ -928,13 +928,26 @@ impl RequiredExtensionStrategyBuilder {
+ ///
+ /// The escaping works by surrounding meta-characters with brackets. For
+ /// example, `*` becomes `[*]`.
++///
++/// # Example
++///
++/// ```
++/// use globset::escape;
++///
++/// assert_eq!(escape("foo*bar"), "foo[*]bar");
++/// assert_eq!(escape("foo?bar"), "foo[?]bar");
++/// assert_eq!(escape("foo[bar"), "foo[[]bar");
++/// assert_eq!(escape("foo]bar"), "foo[]]bar");
++/// assert_eq!(escape("foo{bar"), "foo[{]bar");
++/// assert_eq!(escape("foo}bar"), "foo[}]bar");
++/// ```
+ pub fn escape(s: &str) -> String {
+     let mut escaped = String::with_capacity(s.len());
+     for c in s.chars() {
+         match c {
+             // note that ! does not need escaping because it is only special
+             // inside brackets
+-            '?' | '*' | '[' | ']' => {
++            '?' | '*' | '[' | ']' | '{' | '}' => {
+                 escaped.push('[');
+                 escaped.push(c);
+                 escaped.push(']');
+diff --git a/crates/globset/src/pathutil.rs b/crates/globset/src/pathutil.rs
+index 8488e74f2f5ecac8a3abf142cacc6a24866c2ae4..861f61b87b3a6fd721d0113eea33f61ab7074ef9 100644
+--- a/crates/globset/src/pathutil.rs
++++ b/crates/globset/src/pathutil.rs
+@@ -4,21 +4,25 @@ use bstr::{ByteSlice, ByteVec};
+ 
+ /// The final component of the path, if it is a normal file.
+ ///
+-/// If the path terminates in `.`, `..`, or consists solely of a root of
+-/// prefix, file_name will return None.
++/// If the path terminates in `..`, or consists solely of a root of prefix,
++/// file_name will return `None`.
+ pub(crate) fn file_name<'a>(path: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
+-    if path.last_byte().map_or(true, |b| b == b'.') {
++    if path.is_empty() {
+         return None;
+     }
+     let last_slash = path.rfind_byte(b'/').map(|i| i + 1).unwrap_or(0);
+-    Some(match *path {
++    let got = match *path {
+         Cow::Borrowed(path) => Cow::Borrowed(&path[last_slash..]),
+         Cow::Owned(ref path) => {
+             let mut path = path.clone();
+             path.drain_bytes(..last_slash);
+             Cow::Owned(path)
+         }
+-    })
++    };
++    if got == &b".."[..] {
++        return None;
++    }
++    Some(got)
+ }
+ 
+ /// Return a file extension given a path's file name.
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index 19a347cdbe2b0680b9e0320631d5ac824f148100..eeb51b821f5a970c1c3fe193168ac2432569cec6 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -402,6 +402,12 @@ impl GitignoreBuilder {
+                     break;
+                 }
+             };
++
++            // Match Git's handling of .gitignore files that begin with the Unicode BOM
++            const UTF8_BOM: &str = "\u{feff}";
++            let line =
++                if i == 0 { line.trim_start_matches(UTF8_BOM) } else { &line };
++
+             if let Err(err) = self.add_line(Some(path.to_path_buf()), &line) {
+                 errs.push(err.tagged(path, lineno));
+             }
+diff --git a/crates/ignore/src/walk.rs b/crates/ignore/src/walk.rs
+index d6ea9c2172b38926abd9e54f61de8ff1a9766995..72fc9a5ccc51575d150ccf3fac92ea03b057a7c4 100644
+--- a/crates/ignore/src/walk.rs
++++ b/crates/ignore/src/walk.rs
+@@ -1305,7 +1305,7 @@ impl WalkParallel {
+ 
+     fn threads(&self) -> usize {
+         if self.threads == 0 {
+-            2
++            std::thread::available_parallelism().map_or(1, |n| n.get()).min(12)
+         } else {
+             self.threads
+         }
+diff --git a/crates/pcre2/src/matcher.rs b/crates/pcre2/src/matcher.rs
+index 56c9356d8f84a87c637cf65af951148cb160e451..9a6710c0d0051bf892f5722e21786d4f8af2c32e 100644
+--- a/crates/pcre2/src/matcher.rs
++++ b/crates/pcre2/src/matcher.rs
+@@ -55,7 +55,12 @@ impl RegexMatcherBuilder {
+                 format!("(?:{})", p.as_ref())
+             });
+         }
+-        let mut singlepat = pats.join("|");
++        let mut singlepat = if patterns.is_empty() {
++            // A way to spell a pattern that can never match anything.
++            r"[^\S\s]".to_string()
++        } else {
++            pats.join("|")
++        };
+         if self.case_smart && !has_uppercase_literal(&singlepat) {
+             builder.caseless(true);
+         }
+diff --git a/crates/printer/src/color.rs b/crates/printer/src/color.rs
+index 164cac7511dd4db8eb4b734ef932ec9acd773773..7d5870500e0b5fb07e79dbdd94fd7bda8f021a1b 100644
+--- a/crates/printer/src/color.rs
++++ b/crates/printer/src/color.rs
+@@ -65,7 +65,7 @@ impl std::fmt::Display for ColorError {
+                 f,
+                 "unrecognized style attribute '{}'. Choose from: \
+                  nobold, bold, nointense, intense, nounderline, \
+-                 underline.",
++                 underline, noitalic, italic.",
+                 name,
+             ),
+             ColorError::InvalidFormat(ref original) => write!(
+@@ -121,7 +121,7 @@ pub struct ColorSpecs {
+ /// `0x`.
+ ///
+ /// Valid style instructions are `nobold`, `bold`, `intense`, `nointense`,
+-/// `underline`, `nounderline`.
++/// `underline`, `nounderline`, `italic`, `noitalic`.
+ ///
+ /// ## Example
+ ///
+@@ -201,6 +201,8 @@ enum Style {
+     NoIntense,
+     Underline,
+     NoUnderline,
++    Italic,
++    NoItalic,
+ }
+ 
+ impl ColorSpecs {
+@@ -286,6 +288,12 @@ impl SpecValue {
+                 Style::NoUnderline => {
+                     cspec.set_underline(false);
+                 }
++                Style::Italic => {
++                    cspec.set_italic(true);
++                }
++                Style::NoItalic => {
++                    cspec.set_italic(false);
++                }
+             },
+         }
+     }
+@@ -370,6 +378,8 @@ impl std::str::FromStr for Style {
+             "nointense" => Ok(Style::NoIntense),
+             "underline" => Ok(Style::Underline),
+             "nounderline" => Ok(Style::NoUnderline),
++            "italic" => Ok(Style::Italic),
++            "noitalic" => Ok(Style::NoItalic),
+             _ => Err(ColorError::UnrecognizedStyle(s.to_string())),
+         }
+     }
+diff --git a/crates/printer/src/json.rs b/crates/printer/src/json.rs
+index 82ad94dedec3cc3dde5e5b79baeb2abafd86a250..328ee756d5be29dacbbce367c2f1a8ffab49d6e3 100644
+--- a/crates/printer/src/json.rs
++++ b/crates/printer/src/json.rs
+@@ -794,10 +794,6 @@ impl<'p, 's, M: Matcher, W: io::Write> Sink for JSONSink<'p, 's, M, W> {
+         _searcher: &Searcher,
+         finish: &SinkFinish,
+     ) -> Result<(), io::Error> {
+-        if !self.begin_printed {
+-            return Ok(());
+-        }
+-
+         self.binary_byte_offset = finish.binary_byte_offset();
+         self.stats.add_elapsed(self.start_time.elapsed());
+         self.stats.add_searches(1);
+@@ -807,6 +803,9 @@ impl<'p, 's, M: Matcher, W: io::Write> Sink for JSONSink<'p, 's, M, W> {
+         self.stats.add_bytes_searched(finish.byte_count());
+         self.stats.add_bytes_printed(self.json.wtr.count());
+ 
++        if !self.begin_printed {
++            return Ok(());
++        }
+         let msg = jsont::Message::End(jsont::End {
+             path: self.path,
+             binary_offset: finish.binary_byte_offset(),
+diff --git a/crates/printer/src/summary.rs b/crates/printer/src/summary.rs
+index 275419d4cff868022db505b6fbfd454adedb2333..30e7977fd810b6b2cf48247048a6ed77258b2cf8 100644
+--- a/crates/printer/src/summary.rs
++++ b/crates/printer/src/summary.rs
+@@ -672,7 +672,11 @@ impl<'p, 's, M: Matcher, W: WriteColor> Sink for SummarySink<'p, 's, M, W> {
+                     true
+                 },
+             )?;
+-            count
++            // Because of `find_iter_at_in_context` being a giant
++            // kludge internally, it's possible that it won't find
++            // *any* matches even though we clearly know that there is
++            // at least one. So make sure we record at least one here.
++            count.max(1)
+         };
+         if is_multi_line {
+             self.match_count += sink_match_count;
+diff --git a/crates/printer/src/util.rs b/crates/printer/src/util.rs
+index 825f81c18d416b415ad855bfb805e1b76d99cda5..faaa92b7361a7e138718ee1281b28ea2d8f30bec 100644
+--- a/crates/printer/src/util.rs
++++ b/crates/printer/src/util.rs
+@@ -59,19 +59,24 @@ impl<M: Matcher> Replacer<M> {
+         // See the giant comment in 'find_iter_at_in_context' below for why we
+         // do this dance.
+         let is_multi_line = searcher.multi_line_with_matcher(&matcher);
+-        if is_multi_line {
++        // Get the line_terminator that was removed (if any) so we can add it
++        // back.
++        let line_terminator = if is_multi_line {
+             if haystack[range.end..].len() >= MAX_LOOK_AHEAD {
+                 haystack = &haystack[..range.end + MAX_LOOK_AHEAD];
+             }
++            &[]
+         } else {
+             // When searching a single line, we should remove the line
+             // terminator. Otherwise, it's possible for the regex (via
+             // look-around) to observe the line terminator and not match
+             // because of it.
+             let mut m = Match::new(0, range.end);
+-            trim_line_terminator(searcher, haystack, &mut m);
++            let line_terminator =
++                trim_line_terminator(searcher, haystack, &mut m);
+             haystack = &haystack[..m.end()];
+-        }
++            line_terminator
++        };
+         {
+             let &mut Space { ref mut dst, ref mut caps, ref mut matches } =
+                 self.allocate(matcher)?;
+@@ -81,6 +86,7 @@ impl<M: Matcher> Replacer<M> {
+             replace_with_captures_in_context(
+                 matcher,
+                 haystack,
++                line_terminator,
+                 range.clone(),
+                 caps,
+                 dst,
+@@ -508,6 +514,8 @@ where
+         // Otherwise, it's possible for the regex (via look-around) to observe
+         // the line terminator and not match because of it.
+         let mut m = Match::new(0, range.end);
++        // No need to rember the line terminator as we aren't doing a replace
++        // here.
+         trim_line_terminator(searcher, bytes, &mut m);
+         bytes = &bytes[..m.end()];
+     }
+@@ -523,19 +531,23 @@ where
+ 
+ /// Given a buf and some bounds, if there is a line terminator at the end of
+ /// the given bounds in buf, then the bounds are trimmed to remove the line
+-/// terminator.
+-pub(crate) fn trim_line_terminator(
++/// terminator, returning the slice of the removed line terminator (if any).
++pub(crate) fn trim_line_terminator<'b>(
+     searcher: &Searcher,
+-    buf: &[u8],
++    buf: &'b [u8],
+     line: &mut Match,
+-) {
++) -> &'b [u8] {
+     let lineterm = searcher.line_terminator();
+     if lineterm.is_suffix(&buf[*line]) {
+         let mut end = line.end() - 1;
+         if lineterm.is_crlf() && end > 0 && buf.get(end - 1) == Some(&b'\r') {
+             end -= 1;
+         }
++        let orig_end = line.end();
+         *line = line.with_end(end);
++        &buf[end..orig_end]
++    } else {
++        &[]
+     }
+ }
+ 
+@@ -545,6 +557,7 @@ pub(crate) fn trim_line_terminator(
+ fn replace_with_captures_in_context<M, F>(
+     matcher: M,
+     bytes: &[u8],
++    line_terminator: &[u8],
+     range: std::ops::Range<usize>,
+     caps: &mut M::Captures,
+     dst: &mut Vec<u8>,
+@@ -564,8 +577,14 @@ where
+         last_match = m.end();
+         append(caps, dst)
+     })?;
+-    let end = std::cmp::min(bytes.len(), range.end);
++    let end = if last_match > range.end {
++        bytes.len()
++    } else {
++        std::cmp::min(bytes.len(), range.end)
++    };
+     dst.extend(&bytes[last_match..end]);
++    // Add back any line terminator.
++    dst.extend(line_terminator);
+     Ok(())
+ }
+ 
+diff --git a/crates/searcher/src/line_buffer.rs b/crates/searcher/src/line_buffer.rs
+index cdcf1136b8ebe09080695c5ef77bd35be7d9f2ab..2a7ff09f704098a1e1a487aecbe595dc8ce3b41a 100644
+--- a/crates/searcher/src/line_buffer.rs
++++ b/crates/searcher/src/line_buffer.rs
+@@ -538,6 +538,11 @@ fn replace_bytes(
+     while let Some(i) = bytes.find_byte(src) {
+         bytes[i] = replacement;
+         bytes = &mut bytes[i + 1..];
++
++        // To search for adjacent `src` bytes we use a different strategy.
++        // Since binary data tends to have long runs of NUL terminators,
++        // it is faster to compare one-byte-at-a-time than to stop and start
++        // memchr (through `find_byte`) for every byte in a sequence.
+         while bytes.get(0) == Some(&src) {
+             bytes[0] = replacement;
+             bytes = &mut bytes[1..];
+diff --git a/crates/searcher/src/searcher/glue.rs b/crates/searcher/src/searcher/glue.rs
+index 006afad34c021ad665dad36251cccb947832cc70..5db57019b5e17a848373f20fea320fe22b80a64c 100644
+--- a/crates/searcher/src/searcher/glue.rs
++++ b/crates/searcher/src/searcher/glue.rs
+@@ -37,7 +37,11 @@ where
+ 
+     pub(crate) fn run(mut self) -> Result<(), S::Error> {
+         if self.core.begin()? {
+-            while self.fill()? && self.core.match_by_line(self.rdr.buffer())? {
++            while self.fill()? {
++                if !self.core.match_by_line(self.rdr.buffer())? {
++                    self.consume_remaining();
++                    break;
++                }
+             }
+         }
+         self.core.finish(
+@@ -46,6 +50,11 @@ where
+         )
+     }
+ 
++    fn consume_remaining(&mut self) {
++        let consumed = self.core.pos();
++        self.rdr.consume(consumed);
++    }
++
+     fn fill(&mut self) -> Result<bool, S::Error> {
+         assert!(self.rdr.buffer()[self.core.pos()..].is_empty());
+ 
+diff --git a/crates/searcher/src/searcher/mod.rs b/crates/searcher/src/searcher/mod.rs
+index deda17e5bdbbd936310b3b494c4dd6741e8798eb..c7d3b1d1d16f9201fc29970aa0ae20ebb25f9d5e 100644
+--- a/crates/searcher/src/searcher/mod.rs
++++ b/crates/searcher/src/searcher/mod.rs
+@@ -1004,6 +1004,7 @@ fn slice_has_bom(slice: &[u8]) -> bool {
+         None => return false,
+         Some((enc, _)) => enc,
+     };
++    log::trace!("found byte-order mark (BOM) for encoding {enc:?}");
+     [encoding_rs::UTF_16LE, encoding_rs::UTF_16BE, encoding_rs::UTF_8]
+         .contains(&enc)
+ }

@@ -1,0 +1,2342 @@
+diff --git a/sklearn/cluster/tests/test_birch.py b/sklearn/cluster/tests/test_birch.py
+index fc1c702d1f462b877ea70dcaa43667bdf446b589..bc87934adaecdb507126097e2de945c677587bee 100644
+--- a/sklearn/cluster/tests/test_birch.py
++++ b/sklearn/cluster/tests/test_birch.py
+@@ -240,3 +240,11 @@ def test_both_subclusters_updated():
+ 
+     # no error
+     Birch(branching_factor=5, threshold=1e-5, n_clusters=None).fit(X)
++
++
++# TODO(1.8): Remove
++def test_birch_copy_deprecated():
++    X, _ = make_blobs(n_samples=80, n_features=4, random_state=0)
++    brc = Birch(n_clusters=4, copy=True)
++    with pytest.warns(FutureWarning, match="`copy` was deprecated"):
++        brc.fit(X)
+diff --git a/sklearn/cluster/tests/test_hierarchical.py b/sklearn/cluster/tests/test_hierarchical.py
+index 0a139bf3c45715124369da9fbb65e6779ff7f7e5..a36e5537a3636846330f02b84537be248c887855 100644
+--- a/sklearn/cluster/tests/test_hierarchical.py
++++ b/sklearn/cluster/tests/test_hierarchical.py
+@@ -3,9 +3,8 @@ Several basic tests for hierarchical clustering procedures
+ 
+ """
+ 
+-# Authors: Vincent Michel, 2010, Gael Varoquaux 2012,
+-#          Matteo Visconti di Oleggio Castello 2014
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ import itertools
+ import shutil
+ from functools import partial
+diff --git a/sklearn/cluster/tests/test_k_means.py b/sklearn/cluster/tests/test_k_means.py
+index c3a41a65de6325c2dab30221be7582a5951d805e..0ab602d32d1330fe738ce7a24cd4b4c68cdf9c15 100644
+--- a/sklearn/cluster/tests/test_k_means.py
++++ b/sklearn/cluster/tests/test_k_means.py
+@@ -8,7 +8,6 @@ import numpy as np
+ import pytest
+ from scipy import sparse as sp
+ 
+-from sklearn import _threadpool_controller
+ from sklearn.base import clone
+ from sklearn.cluster import KMeans, MiniBatchKMeans, k_means, kmeans_plusplus
+ from sklearn.cluster._k_means_common import (
+@@ -33,6 +32,7 @@ from sklearn.utils._testing import (
+ )
+ from sklearn.utils.extmath import row_norms
+ from sklearn.utils.fixes import CSR_CONTAINERS
++from sklearn.utils.parallel import _get_threadpool_controller
+ 
+ # non centered, sparse centers to check the
+ centers = np.array(
+@@ -437,21 +437,24 @@ def test_minibatch_sensible_reassign(global_random_seed):
+         n_clusters=20, batch_size=10, random_state=global_random_seed, init="random"
+     ).fit(zeroed_X)
+     # there should not be too many exact zero cluster centers
+-    assert km.cluster_centers_.any(axis=1).sum() > 10
++    num_non_zero_clusters = km.cluster_centers_.any(axis=1).sum()
++    assert num_non_zero_clusters > 9, f"{num_non_zero_clusters=} is too small"
+ 
+     # do the same with batch-size > X.shape[0] (regression test)
+     km = MiniBatchKMeans(
+         n_clusters=20, batch_size=200, random_state=global_random_seed, init="random"
+     ).fit(zeroed_X)
+     # there should not be too many exact zero cluster centers
+-    assert km.cluster_centers_.any(axis=1).sum() > 10
++    num_non_zero_clusters = km.cluster_centers_.any(axis=1).sum()
++    assert num_non_zero_clusters > 9, f"{num_non_zero_clusters=} is too small"
+ 
+     # do the same with partial_fit API
+     km = MiniBatchKMeans(n_clusters=20, random_state=global_random_seed, init="random")
+     for i in range(100):
+         km.partial_fit(zeroed_X)
+     # there should not be too many exact zero cluster centers
+-    assert km.cluster_centers_.any(axis=1).sum() > 10
++    num_non_zero_clusters = km.cluster_centers_.any(axis=1).sum()
++    assert num_non_zero_clusters > 9, f"{num_non_zero_clusters=} is too small"
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -968,13 +971,13 @@ def test_result_equal_in_diff_n_threads(Estimator, global_random_seed):
+     rnd = np.random.RandomState(global_random_seed)
+     X = rnd.normal(size=(50, 10))
+ 
+-    with _threadpool_controller.limit(limits=1, user_api="openmp"):
++    with _get_threadpool_controller().limit(limits=1, user_api="openmp"):
+         result_1 = (
+             Estimator(n_clusters=n_clusters, random_state=global_random_seed)
+             .fit(X)
+             .labels_
+         )
+-    with _threadpool_controller.limit(limits=2, user_api="openmp"):
++    with _get_threadpool_controller().limit(limits=2, user_api="openmp"):
+         result_2 = (
+             Estimator(n_clusters=n_clusters, random_state=global_random_seed)
+             .fit(X)
+diff --git a/sklearn/cluster/tests/test_optics.py b/sklearn/cluster/tests/test_optics.py
+index e2140cf0f8b2c13c2c269860012fc36da61238b6..9c1c13a9e12e03fa04a56dc33b42181d4f69c75c 100644
+--- a/sklearn/cluster/tests/test_optics.py
++++ b/sklearn/cluster/tests/test_optics.py
+@@ -1,6 +1,5 @@
+-# Authors: Shane Grigsby <refuge@rocktalus.com>
+-#          Adrin Jalali <adrin.jalali@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ import warnings
+ 
+ import numpy as np
+diff --git a/sklearn/compose/tests/test_column_transformer.py b/sklearn/compose/tests/test_column_transformer.py
+index fb64e5c191d48e85a6346c58c9484f2b89608c78..0f187b78405f842450587bbe660eece79d6b5b50 100644
+--- a/sklearn/compose/tests/test_column_transformer.py
++++ b/sklearn/compose/tests/test_column_transformer.py
+@@ -2640,7 +2640,7 @@ def test_metadata_routing_for_column_transformer(method):
+     )
+ 
+     if method == "transform":
+-        trs.fit(X, y)
++        trs.fit(X, y, sample_weight=sample_weight, metadata=metadata)
+         trs.transform(X, sample_weight=sample_weight, metadata=metadata)
+     else:
+         getattr(trs, method)(X, y, sample_weight=sample_weight, metadata=metadata)
+@@ -2648,7 +2648,11 @@ def test_metadata_routing_for_column_transformer(method):
+     assert len(registry)
+     for _trs in registry:
+         check_recorded_metadata(
+-            obj=_trs, method=method, sample_weight=sample_weight, metadata=metadata
++            obj=_trs,
++            method=method,
++            parent=method,
++            sample_weight=sample_weight,
++            metadata=metadata,
+         )
+ 
+ 
+diff --git a/sklearn/conftest.py b/sklearn/conftest.py
+index 203c524561fdd66a18cc68f8f5bf646a6ac0cefb..8dff8ac5ebf1629572727b535831a05f92872f70 100644
+--- a/sklearn/conftest.py
++++ b/sklearn/conftest.py
+@@ -26,7 +26,6 @@ from sklearn.datasets import (
+     fetch_rcv1,
+     fetch_species_distributions,
+ )
+-from sklearn.tests import random_seed
+ from sklearn.utils._testing import get_pytest_filterwarning_lines
+ from sklearn.utils.fixes import (
+     _IS_32BIT,
+@@ -265,6 +264,51 @@ def pyplot():
+     pyplot.close("all")
+ 
+ 
++def pytest_generate_tests(metafunc):
++    """Parametrization of global_random_seed fixture
++
++    based on the SKLEARN_TESTS_GLOBAL_RANDOM_SEED environment variable.
++
++    The goal of this fixture is to prevent tests that use it to be sensitive
++    to a specific seed value while still being deterministic by default.
++
++    See the documentation for the SKLEARN_TESTS_GLOBAL_RANDOM_SEED
++    variable for instructions on how to use this fixture.
++
++    https://scikit-learn.org/dev/computing/parallelism.html#sklearn-tests-global-random-seed
++
++    """
++    # When using pytest-xdist this function is called in the xdist workers.
++    # We rely on SKLEARN_TESTS_GLOBAL_RANDOM_SEED environment variable which is
++    # set in before running pytest and is available in xdist workers since they
++    # are subprocesses.
++    RANDOM_SEED_RANGE = list(range(100))  # All seeds in [0, 99] should be valid.
++    random_seed_var = environ.get("SKLEARN_TESTS_GLOBAL_RANDOM_SEED")
++
++    default_random_seeds = [42]
++
++    if random_seed_var is None:
++        random_seeds = default_random_seeds
++    elif random_seed_var == "all":
++        random_seeds = RANDOM_SEED_RANGE
++    else:
++        if "-" in random_seed_var:
++            start, stop = random_seed_var.split("-")
++            random_seeds = list(range(int(start), int(stop) + 1))
++        else:
++            random_seeds = [int(random_seed_var)]
++
++        if min(random_seeds) < 0 or max(random_seeds) > 99:
++            raise ValueError(
++                "The value(s) of the environment variable "
++                "SKLEARN_TESTS_GLOBAL_RANDOM_SEED must be in the range [0, 99] "
++                f"(or 'all'), got: {random_seed_var}"
++            )
++
++    if "global_random_seed" in metafunc.fixturenames:
++        metafunc.parametrize("global_random_seed", random_seeds)
++
++
+ def pytest_configure(config):
+     # Use matplotlib agg backend during the tests including doctests
+     try:
+@@ -282,10 +326,6 @@ def pytest_configure(config):
+         allowed_parallelism = max(allowed_parallelism // int(xdist_worker_count), 1)
+     threadpool_limits(allowed_parallelism)
+ 
+-    # Register global_random_seed plugin if it is not already registered
+-    if not config.pluginmanager.hasplugin("sklearn.tests.random_seed"):
+-        config.pluginmanager.register(random_seed)
+-
+     if environ.get("SKLEARN_WARNINGS_AS_ERRORS", "0") != "0":
+         # This seems like the only way to programmatically change the config
+         # filterwarnings. This was suggested in
+diff --git a/sklearn/covariance/tests/test_covariance.py b/sklearn/covariance/tests/test_covariance.py
+index ef4bd63149d60624d113a5659248a904fa4679e1..9c55012c158e19df20e4c4770867fc19398213d0 100644
+--- a/sklearn/covariance/tests/test_covariance.py
++++ b/sklearn/covariance/tests/test_covariance.py
+@@ -1,8 +1,5 @@
+-# Author: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-#         Gael Varoquaux <gael.varoquaux@normalesup.org>
+-#         Virgile Fritsch <virgile.fritsch@inria.fr>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/covariance/tests/test_robust_covariance.py b/sklearn/covariance/tests/test_robust_covariance.py
+index 44dcdbbbf824934a8f31bc832a389d90f396c6d6..ebeb2c6e5aa6bf6f2316792b6cb5ba1c330d47bc 100644
+--- a/sklearn/covariance/tests/test_robust_covariance.py
++++ b/sklearn/covariance/tests/test_robust_covariance.py
+@@ -1,8 +1,5 @@
+-# Author: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-#         Gael Varoquaux <gael.varoquaux@normalesup.org>
+-#         Virgile Fritsch <virgile.fritsch@inria.fr>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import itertools
+ 
+diff --git a/sklearn/decomposition/tests/test_factor_analysis.py b/sklearn/decomposition/tests/test_factor_analysis.py
+index 2ff14f8d71722463e4cd4f8c815c957ffd7ba9f0..76af7f8181598652bb96029331f33deaa905f1a6 100644
+--- a/sklearn/decomposition/tests/test_factor_analysis.py
++++ b/sklearn/decomposition/tests/test_factor_analysis.py
+@@ -1,6 +1,5 @@
+-# Author: Christian Osendorfer <osendorf@gmail.com>
+-#         Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-# License: BSD3
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from itertools import combinations
+ 
+@@ -19,9 +18,9 @@ from sklearn.utils._testing import (
+ 
+ # Ignore warnings from switching to more power iterations in randomized_svd
+ @ignore_warnings
+-def test_factor_analysis():
++def test_factor_analysis(global_random_seed):
+     # Test FactorAnalysis ability to recover the data covariance structure
+-    rng = np.random.RandomState(0)
++    rng = np.random.RandomState(global_random_seed)
+     n_samples, n_features, n_components = 20, 5, 3
+ 
+     # Some random settings for the generative model
+@@ -57,7 +56,7 @@ def test_factor_analysis():
+         # Model Covariance
+         mcov = fa.get_covariance()
+         diff = np.sum(np.abs(scov - mcov)) / W.size
+-        assert diff < 0.1, "Mean absolute difference is %f" % diff
++        assert diff < 0.2, "Mean absolute difference is %f" % diff
+         fa = FactorAnalysis(
+             n_components=n_components, noise_variance_init=np.ones(n_features)
+         )
+diff --git a/sklearn/decomposition/tests/test_sparse_pca.py b/sklearn/decomposition/tests/test_sparse_pca.py
+index 532d8dbd5e82f62c8a7d9810b00f0d2ef88b1988..a8be5979d4aff0b849c936c2528bc86e2dc65458 100644
+--- a/sklearn/decomposition/tests/test_sparse_pca.py
++++ b/sklearn/decomposition/tests/test_sparse_pca.py
+@@ -1,5 +1,5 @@
+-# Author: Vlad Niculae
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import sys
+ 
+diff --git a/sklearn/ensemble/tests/test_bagging.py b/sklearn/ensemble/tests/test_bagging.py
+index da855a568b402b48aaeb7a0171b6eeaf946f4d51..e0558917c59bace232fc7df3362631a73c1e8383 100644
+--- a/sklearn/ensemble/tests/test_bagging.py
++++ b/sklearn/ensemble/tests/test_bagging.py
+@@ -2,8 +2,8 @@
+ Testing for the bagging ensemble module (sklearn.ensemble.bagging).
+ """
+ 
+-# Author: Gilles Louppe
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ from itertools import cycle, product
+ 
+ import joblib
+diff --git a/sklearn/ensemble/tests/test_base.py b/sklearn/ensemble/tests/test_base.py
+index aa06edc19e756fa4bb7915071dd5ab911431db10..95a852b8a7cc50e3b4440461e7ed5f5facde3e69 100644
+--- a/sklearn/ensemble/tests/test_base.py
++++ b/sklearn/ensemble/tests/test_base.py
+@@ -2,8 +2,8 @@
+ Testing for the base module (sklearn.ensemble.base).
+ """
+ 
+-# Authors: Gilles Louppe
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from collections import OrderedDict
+ 
+diff --git a/sklearn/ensemble/tests/test_forest.py b/sklearn/ensemble/tests/test_forest.py
+index 2468f8fc5b590aa3b7aa3211002a1af11e2ea8bb..14cd904521c3df93f0bbb6cf5e80a4972d7cfe11 100644
+--- a/sklearn/ensemble/tests/test_forest.py
++++ b/sklearn/ensemble/tests/test_forest.py
+@@ -2,11 +2,8 @@
+ Testing for the forest module (sklearn.ensemble.forest).
+ """
+ 
+-# Authors: Gilles Louppe,
+-#          Brian Holt,
+-#          Andreas Mueller,
+-#          Arnaud Joly
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import itertools
+ import math
+diff --git a/sklearn/ensemble/tests/test_iforest.py b/sklearn/ensemble/tests/test_iforest.py
+index 22dcc92906a6b12dbb2aaea06193347fad5b02a5..19e34bbf51808931fd29b650a527ac0bc668dd9c 100644
+--- a/sklearn/ensemble/tests/test_iforest.py
++++ b/sklearn/ensemble/tests/test_iforest.py
+@@ -2,15 +2,15 @@
+ Testing for Isolation Forest algorithm (sklearn.ensemble.iforest).
+ """
+ 
+-# Authors: Nicolas Goix <nicolas.goix@telecom-paristech.fr>
+-#          Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import warnings
+ from unittest.mock import Mock, patch
+ 
+ import numpy as np
+ import pytest
++from joblib import parallel_backend
+ 
+ from sklearn.datasets import load_diabetes, load_iris, make_classification
+ from sklearn.ensemble import IsolationForest
+@@ -361,3 +361,33 @@ def test_iforest_sparse_input_float_contamination(sparse_container):
+ 
+     X_decision = iforest.decision_function(X)
+     assert (X_decision < 0).sum() / X.shape[0] == pytest.approx(contamination)
++
++
++@pytest.mark.parametrize("n_jobs", [1, 2])
++@pytest.mark.parametrize("contamination", [0.25, "auto"])
++def test_iforest_predict_parallel(global_random_seed, contamination, n_jobs):
++    """Check that `IsolationForest.predict` is parallelized."""
++    # toy sample (the last two samples are outliers)
++    X = [[-2, -1], [-1, -1], [-1, -2], [1, 1], [1, 2], [2, 1], [7, 4], [-5, 9]]
++
++    # Test IsolationForest
++    clf = IsolationForest(
++        random_state=global_random_seed, contamination=contamination, n_jobs=None
++    )
++    clf.fit(X)
++    decision_func = -clf.decision_function(X)
++    pred = clf.predict(X)
++
++    # assert detect outliers:
++    assert np.min(decision_func[-2:]) > np.max(decision_func[:-2])
++    assert_array_equal(pred, 6 * [1] + 2 * [-1])
++
++    clf_parallel = IsolationForest(
++        random_state=global_random_seed, contamination=contamination, n_jobs=-1
++    )
++    clf_parallel.fit(X)
++    with parallel_backend("threading", n_jobs=n_jobs):
++        pred_paralell = clf_parallel.predict(X)
++
++    # assert the same results as non-parallel
++    assert_array_equal(pred, pred_paralell)
+diff --git a/sklearn/ensemble/tests/test_stacking.py b/sklearn/ensemble/tests/test_stacking.py
+index 1c038cd469216e34ef8beb1d994266d13c5cb0a7..1f4f23b51d540290d23b13cc2589bef3d6dff739 100644
+--- a/sklearn/ensemble/tests/test_stacking.py
++++ b/sklearn/ensemble/tests/test_stacking.py
+@@ -1,7 +1,7 @@
+ """Test the stacking classifier and regressor."""
+ 
+-# Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ from unittest.mock import Mock
+@@ -973,13 +973,21 @@ def test_metadata_routing_for_stacking_estimators(Estimator, Child, prop, prop_v
+         assert len(registry)
+         for sub_est in registry:
+             check_recorded_metadata(
+-                obj=sub_est, method="fit", split_params=(prop), **{prop: prop_value}
++                obj=sub_est,
++                method="fit",
++                parent="fit",
++                split_params=(prop),
++                **{prop: prop_value},
+             )
+     # access final_estimator:
+     registry = est.final_estimator_.registry
+     assert len(registry)
+     check_recorded_metadata(
+-        obj=registry[-1], method="predict", split_params=(prop), **{prop: prop_value}
++        obj=registry[-1],
++        method="predict",
++        parent="predict",
++        split_params=(prop),
++        **{prop: prop_value},
+     )
+ 
+ 
+diff --git a/sklearn/ensemble/tests/test_voting.py b/sklearn/ensemble/tests/test_voting.py
+index 4b2c365752b72779c2f1f98bc6cdaffff1ec0625..3800925fa17d0540c7891ee3e53100179e35301a 100644
+--- a/sklearn/ensemble/tests/test_voting.py
++++ b/sklearn/ensemble/tests/test_voting.py
+@@ -759,7 +759,7 @@ def test_metadata_routing_for_voting_estimators(Estimator, Child, prop):
+         registry = estimator[1].registry
+         assert len(registry)
+         for sub_est in registry:
+-            check_recorded_metadata(obj=sub_est, method="fit", **kwargs)
++            check_recorded_metadata(obj=sub_est, method="fit", parent="fit", **kwargs)
+ 
+ 
+ @pytest.mark.usefixtures("enable_slep006")
+diff --git a/sklearn/feature_extraction/tests/test_dict_vectorizer.py b/sklearn/feature_extraction/tests/test_dict_vectorizer.py
+index e9784d68d7199c7e40ad70d304c14ba8c66b04a9..7a539942d1e469ffac7eed1f22787f268edfd422 100644
+--- a/sklearn/feature_extraction/tests/test_dict_vectorizer.py
++++ b/sklearn/feature_extraction/tests/test_dict_vectorizer.py
+@@ -1,6 +1,5 @@
+-# Authors: Lars Buitinck
+-#          Dan Blanchard <dblanchard@ets.org>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from random import Random
+ 
+diff --git a/sklearn/feature_extraction/tests/test_image.py b/sklearn/feature_extraction/tests/test_image.py
+index 375652c848db66996f24d4d8c52d009659e8b16b..2edf1a22d676a66b55c373d0a585fea20979ae7d 100644
+--- a/sklearn/feature_extraction/tests/test_image.py
++++ b/sklearn/feature_extraction/tests/test_image.py
+@@ -1,6 +1,5 @@
+-# Authors: Emmanuelle Gouillart <emmanuelle.gouillart@normalesup.org>
+-#          Gael Varoquaux <gael.varoquaux@normalesup.org>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/gaussian_process/tests/test_gpc.py b/sklearn/gaussian_process/tests/test_gpc.py
+index bd8bd39e1cc011ac6f3bbb5566c7990853336f83..3ce2229f9e80fc7db811ed9feeb19b870adcfd97 100644
+--- a/sklearn/gaussian_process/tests/test_gpc.py
++++ b/sklearn/gaussian_process/tests/test_gpc.py
+@@ -1,7 +1,7 @@
+ """Testing for Gaussian process classification"""
+ 
+-# Author: Jan Hendrik Metzen <jhm@informatik.uni-bremen.de>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import warnings
+ 
+diff --git a/sklearn/gaussian_process/tests/test_gpr.py b/sklearn/gaussian_process/tests/test_gpr.py
+index e280827926d28d0234e56597b22c6465f8a1029e..f49ed71231ad9db5891a0417f99ec5dd4fbf6f51 100644
+--- a/sklearn/gaussian_process/tests/test_gpr.py
++++ b/sklearn/gaussian_process/tests/test_gpr.py
+@@ -1,8 +1,7 @@
+ """Testing for Gaussian process regression"""
+ 
+-# Author: Jan Hendrik Metzen <jhm@informatik.uni-bremen.de>
+-# Modified by: Pete Green <p.l.green@liverpool.ac.uk>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ import sys
+diff --git a/sklearn/gaussian_process/tests/test_kernels.py b/sklearn/gaussian_process/tests/test_kernels.py
+index 8733f94c94e06b2b2d205200cf5e08eb2fe20a22..3b9a0114542eccedf055804e662de816378a3316 100644
+--- a/sklearn/gaussian_process/tests/test_kernels.py
++++ b/sklearn/gaussian_process/tests/test_kernels.py
+@@ -1,7 +1,7 @@
+ """Testing for kernels for Gaussian processes."""
+ 
+-# Author: Jan Hendrik Metzen <jhm@informatik.uni-bremen.de>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from inspect import signature
+ 
+diff --git a/sklearn/linear_model/tests/test_base.py b/sklearn/linear_model/tests/test_base.py
+index 7c9f734dcf5b587c72e6549ca2c437e8b2c0bab2..05b77121132284423e60c24e794f74afc97578f5 100644
+--- a/sklearn/linear_model/tests/test_base.py
++++ b/sklearn/linear_model/tests/test_base.py
+@@ -1,8 +1,5 @@
+-# Author: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-#         Fabian Pedregosa <fabian.pedregosa@inria.fr>
+-#         Maria Telenczuk <https://github.com/maikia>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import warnings
+ 
+diff --git a/sklearn/linear_model/tests/test_bayes.py b/sklearn/linear_model/tests/test_bayes.py
+index 48fa42b81dfd03cfb684e79645eee58a9f8953e7..6fae1536582c88fcdfe4cd5ce9c1f0ee3af0b5c7 100644
+--- a/sklearn/linear_model/tests/test_bayes.py
++++ b/sklearn/linear_model/tests/test_bayes.py
+@@ -1,7 +1,5 @@
+-# Author: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-#         Fabian Pedregosa <fabian.pedregosa@inria.fr>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from math import log
+ 
+diff --git a/sklearn/linear_model/tests/test_common.py b/sklearn/linear_model/tests/test_common.py
+index ff9d7aad146f3db6d838203ec56a3f4a0bbb6eb8..6aa7c737983ac24bb33a047b04f09afd345c4f04 100644
+--- a/sklearn/linear_model/tests/test_common.py
++++ b/sklearn/linear_model/tests/test_common.py
+@@ -1,4 +1,4 @@
+-# License: BSD 3 clause
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import inspect
+ 
+diff --git a/sklearn/linear_model/tests/test_coordinate_descent.py b/sklearn/linear_model/tests/test_coordinate_descent.py
+index edc75b7d9dcda28d40500cbb82354ced70b83854..6e2b35a5590cb08dc59b29a14c15c0312d29e8dc 100644
+--- a/sklearn/linear_model/tests/test_coordinate_descent.py
++++ b/sklearn/linear_model/tests/test_coordinate_descent.py
+@@ -1,6 +1,5 @@
+-# Authors: Olivier Grisel <olivier.grisel@ensta.org>
+-#          Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import warnings
+ from copy import deepcopy
+diff --git a/sklearn/linear_model/tests/test_huber.py b/sklearn/linear_model/tests/test_huber.py
+index 3856d74464f0b31851095d5298c91b8cf79fd9fc..9c0c7d213ee27a9d3d2ee8030f638dfe7a1325c7 100644
+--- a/sklearn/linear_model/tests/test_huber.py
++++ b/sklearn/linear_model/tests/test_huber.py
+@@ -1,5 +1,5 @@
+-# Authors: Manoj Kumar mks542@nyu.edu
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/linear_model/tests/test_omp.py b/sklearn/linear_model/tests/test_omp.py
+index 53b806a552a63e0d1cc47782a7a8fc87abe903d1..cfdffe581e034ac33378bbd36e4dc64025fbcfcd 100644
+--- a/sklearn/linear_model/tests/test_omp.py
++++ b/sklearn/linear_model/tests/test_omp.py
+@@ -1,5 +1,5 @@
+-# Author: Vlad Niculae
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ 
+ import numpy as np
+diff --git a/sklearn/linear_model/tests/test_quantile.py b/sklearn/linear_model/tests/test_quantile.py
+index 53c1e1f071dcb11792163003bb3a3f3a290bb0aa..971c849dfac1d9a6d2cec0c6277e37e024956e1d 100644
+--- a/sklearn/linear_model/tests/test_quantile.py
++++ b/sklearn/linear_model/tests/test_quantile.py
+@@ -1,6 +1,5 @@
+-# Authors: David Dale <dale.david@mail.ru>
+-#          Christian Lorentzen <lorentzen.ch@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/linear_model/tests/test_sag.py b/sklearn/linear_model/tests/test_sag.py
+index a51d1406559ff1da21c2827f5a1b62e71257bff4..1690dbce78104e24c8eff186a5173412adabce1b 100644
+--- a/sklearn/linear_model/tests/test_sag.py
++++ b/sklearn/linear_model/tests/test_sag.py
+@@ -1,7 +1,5 @@
+-# Authors: Danny Sullivan <dbsullivan23@gmail.com>
+-#          Tom Dupre la Tour <tom.dupre-la-tour@m4x.org>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import math
+ import re
+diff --git a/sklearn/linear_model/tests/test_sgd.py b/sklearn/linear_model/tests/test_sgd.py
+index 46e153c5cf1ecfa2f021509cd6121c28983e7903..795a0e62f37f879d9e1a476a03a55de144823209 100644
+--- a/sklearn/linear_model/tests/test_sgd.py
++++ b/sklearn/linear_model/tests/test_sgd.py
+@@ -2216,19 +2216,6 @@ def test_sgd_numerical_consistency(SGDEstimator):
+     assert_allclose(sgd_64.coef_, sgd_32.coef_)
+ 
+ 
+-# TODO(1.6): remove
+-@pytest.mark.parametrize("Estimator", [SGDClassifier, SGDOneClassSVM])
+-def test_loss_attribute_deprecation(Estimator):
+-    # Check that we raise the proper deprecation warning if accessing
+-    # `loss_function_`.
+-    X = np.array([[1, 2], [3, 4]])
+-    y = np.array([1, 0])
+-    est = Estimator().fit(X, y)
+-
+-    with pytest.warns(FutureWarning, match="`loss_function_` was deprecated"):
+-        est.loss_function_
+-
+-
+ # TODO(1.7): remove
+ @pytest.mark.parametrize("Estimator", [SGDClassifier, SGDRegressor, SGDOneClassSVM])
+ def test_passive_aggressive_deprecated_average(Estimator):
+diff --git a/sklearn/linear_model/tests/test_theil_sen.py b/sklearn/linear_model/tests/test_theil_sen.py
+index f72c18c24a8098463553de5c5cf49d6fe0a21dc2..b59ad639f1dcc3441a0e3a579ebe7f2c70ed8be8 100644
+--- a/sklearn/linear_model/tests/test_theil_sen.py
++++ b/sklearn/linear_model/tests/test_theil_sen.py
+@@ -2,8 +2,8 @@
+ Testing for Theil-Sen module (sklearn.linear_model.theil_sen)
+ """
+ 
+-# Author: Florian Wilhelm <florian.wilhelm@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ import os
+ import re
+ import sys
+diff --git a/sklearn/metrics/cluster/tests/test_supervised.py b/sklearn/metrics/cluster/tests/test_supervised.py
+index dfaa58ff62c018f40be4a069b4fad47e9c9aa396..077dca0854a01ea6444763e1335fca3936f10b7d 100644
+--- a/sklearn/metrics/cluster/tests/test_supervised.py
++++ b/sklearn/metrics/cluster/tests/test_supervised.py
+@@ -4,6 +4,7 @@ import numpy as np
+ import pytest
+ from numpy.testing import assert_allclose, assert_array_almost_equal, assert_array_equal
+ 
++from sklearn.base import config_context
+ from sklearn.metrics.cluster import (
+     adjusted_mutual_info_score,
+     adjusted_rand_score,
+@@ -22,7 +23,8 @@ from sklearn.metrics.cluster import (
+ )
+ from sklearn.metrics.cluster._supervised import _generalized_average, check_clusterings
+ from sklearn.utils import assert_all_finite
+-from sklearn.utils._testing import assert_almost_equal
++from sklearn.utils._array_api import yield_namespace_device_dtype_combinations
++from sklearn.utils._testing import _array_api_for_tests, assert_almost_equal
+ 
+ score_funcs = [
+     adjusted_rand_score,
+@@ -254,12 +256,25 @@ def test_int_overflow_mutual_info_fowlkes_mallows_score():
+ 
+ 
+ def test_entropy():
+-    ent = entropy([0, 0, 42.0])
+-    assert_almost_equal(ent, 0.6365141, 5)
++    assert_almost_equal(entropy([0, 0, 42.0]), 0.6365141, 5)
+     assert_almost_equal(entropy([]), 1)
+     assert entropy([1, 1, 1, 1]) == 0
+ 
+ 
++@pytest.mark.parametrize(
++    "array_namespace, device, dtype_name", yield_namespace_device_dtype_combinations()
++)
++def test_entropy_array_api(array_namespace, device, dtype_name):
++    xp = _array_api_for_tests(array_namespace, device)
++    float_labels = xp.asarray(np.asarray([0, 0, 42.0], dtype=dtype_name), device=device)
++    empty_int32_labels = xp.asarray([], dtype=xp.int32, device=device)
++    int_labels = xp.asarray([1, 1, 1, 1], device=device)
++    with config_context(array_api_dispatch=True):
++        assert entropy(float_labels) == pytest.approx(0.6365141, abs=1e-5)
++        assert entropy(empty_int32_labels) == 1
++        assert entropy(int_labels) == 0
++
++
+ def test_contingency_matrix():
+     labels_a = np.array([1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3])
+     labels_b = np.array([1, 1, 1, 1, 2, 1, 2, 2, 2, 2, 3, 1, 3, 3, 3, 2, 2])
+diff --git a/sklearn/metrics/tests/test_classification.py b/sklearn/metrics/tests/test_classification.py
+index b87e76ba2fb42dde1d07c5fe6d563fd5b289fcda..aa612f73ef5c73d00fbaad0cd754b41e07787a58 100644
+--- a/sklearn/metrics/tests/test_classification.py
++++ b/sklearn/metrics/tests/test_classification.py
+@@ -810,6 +810,7 @@ def test_matthews_corrcoef_nan():
+         partial(fbeta_score, beta=1),
+         precision_score,
+         recall_score,
++        partial(cohen_kappa_score, labels=[0, 1]),
+     ],
+ )
+ def test_zero_division_nan_no_warning(metric, y_true, y_pred, zero_division):
+@@ -834,6 +835,7 @@ def test_zero_division_nan_no_warning(metric, y_true, y_pred, zero_division):
+         partial(fbeta_score, beta=1),
+         precision_score,
+         recall_score,
++        cohen_kappa_score,
+     ],
+ )
+ def test_zero_division_nan_warning(metric, y_true, y_pred):
+diff --git a/sklearn/metrics/tests/test_common.py b/sklearn/metrics/tests/test_common.py
+index f1c71fbaf04bf9793478b0dd85842d036da40af2..c247e5f87f7d3d70007cbee4c7f63b1428209a02 100644
+--- a/sklearn/metrics/tests/test_common.py
++++ b/sklearn/metrics/tests/test_common.py
+@@ -51,7 +51,12 @@ from sklearn.metrics import (
+     zero_one_loss,
+ )
+ from sklearn.metrics._base import _average_binary_score
+-from sklearn.metrics.pairwise import cosine_similarity
++from sklearn.metrics.pairwise import (
++    additive_chi2_kernel,
++    chi2_kernel,
++    cosine_similarity,
++    paired_cosine_distances,
++)
+ from sklearn.preprocessing import LabelBinarizer
+ from sklearn.utils import shuffle
+ from sklearn.utils._array_api import (
+@@ -1758,6 +1763,10 @@ def check_array_api_metric(
+             metric_kwargs["sample_weight"], device=device
+         )
+ 
++    multioutput = metric_kwargs.get("multioutput")
++    if isinstance(multioutput, np.ndarray):
++        metric_kwargs["multioutput"] = xp.asarray(multioutput, device=device)
++
+     with config_context(array_api_dispatch=True):
+         metric_xp = metric(a_xp, b_xp, **metric_kwargs)
+ 
+@@ -1826,9 +1835,11 @@ def check_array_api_multiclass_classification_metric(
+     )
+ 
+ 
+-def check_array_api_regression_metric(metric, array_namespace, device, dtype_name):
+-    y_true_np = np.array([2, 0, 1, 4], dtype=dtype_name)
+-    y_pred_np = np.array([0.5, 0.5, 2, 2], dtype=dtype_name)
++def check_array_api_multilabel_classification_metric(
++    metric, array_namespace, device, dtype_name
++):
++    y_true_np = np.array([[1, 1], [0, 1], [0, 0]], dtype=dtype_name)
++    y_pred_np = np.array([[1, 1], [1, 1], [1, 1]], dtype=dtype_name)
+ 
+     check_array_api_metric(
+         metric,
+@@ -1840,7 +1851,7 @@ def check_array_api_regression_metric(metric, array_namespace, device, dtype_nam
+         sample_weight=None,
+     )
+ 
+-    sample_weight = np.array([0.1, 2.0, 1.5, 0.5], dtype=dtype_name)
++    sample_weight = np.array([0.0, 0.1, 2.0], dtype=dtype_name)
+ 
+     check_array_api_metric(
+         metric,
+@@ -1853,11 +1864,47 @@ def check_array_api_regression_metric(metric, array_namespace, device, dtype_nam
+     )
+ 
+ 
++def check_array_api_regression_metric(metric, array_namespace, device, dtype_name):
++    y_true_np = np.array([2.0, 0.1, 1.0, 4.0], dtype=dtype_name)
++    y_pred_np = np.array([0.5, 0.5, 2, 2], dtype=dtype_name)
++
++    metric_kwargs = {}
++    metric_params = signature(metric).parameters
++
++    if "sample_weight" in metric_params:
++        metric_kwargs["sample_weight"] = None
++
++    check_array_api_metric(
++        metric,
++        array_namespace,
++        device,
++        dtype_name,
++        a_np=y_true_np,
++        b_np=y_pred_np,
++        **metric_kwargs,
++    )
++
++    if "sample_weight" in metric_params:
++        metric_kwargs["sample_weight"] = np.array(
++            [0.1, 2.0, 1.5, 0.5], dtype=dtype_name
++        )
++
++        check_array_api_metric(
++            metric,
++            array_namespace,
++            device,
++            dtype_name,
++            a_np=y_true_np,
++            b_np=y_pred_np,
++            **metric_kwargs,
++        )
++
++
+ def check_array_api_regression_metric_multioutput(
+     metric, array_namespace, device, dtype_name
+ ):
+-    y_true_np = np.array([[1, 3], [1, 2]], dtype=dtype_name)
+-    y_pred_np = np.array([[1, 4], [1, 1]], dtype=dtype_name)
++    y_true_np = np.array([[1, 3, 2], [1, 2, 2]], dtype=dtype_name)
++    y_pred_np = np.array([[1, 4, 4], [1, 1, 1]], dtype=dtype_name)
+ 
+     check_array_api_metric(
+         metric,
+@@ -1881,12 +1928,25 @@ def check_array_api_regression_metric_multioutput(
+         sample_weight=sample_weight,
+     )
+ 
++    check_array_api_metric(
++        metric,
++        array_namespace,
++        device,
++        dtype_name,
++        a_np=y_true_np,
++        b_np=y_pred_np,
++        multioutput=np.array([0.1, 0.3, 0.7], dtype=dtype_name),
++    )
+ 
+-def check_array_api_multioutput_regression_metric(
+-    metric, array_namespace, device, dtype_name
+-):
+-    metric = partial(metric, multioutput="raw_values")
+-    check_array_api_regression_metric(metric, array_namespace, device, dtype_name)
++    check_array_api_metric(
++        metric,
++        array_namespace,
++        device,
++        dtype_name,
++        a_np=y_true_np,
++        b_np=y_pred_np,
++        multioutput="raw_values",
++    )
+ 
+ 
+ def check_array_api_metric_pairwise(metric, array_namespace, device, dtype_name):
+@@ -1923,10 +1983,12 @@ array_api_metric_checkers = {
+     accuracy_score: [
+         check_array_api_binary_classification_metric,
+         check_array_api_multiclass_classification_metric,
++        check_array_api_multilabel_classification_metric,
+     ],
+     zero_one_loss: [
+         check_array_api_binary_classification_metric,
+         check_array_api_multiclass_classification_metric,
++        check_array_api_multilabel_classification_metric,
+     ],
+     mean_tweedie_deviance: [check_array_api_regression_metric],
+     r2_score: [
+@@ -1936,15 +1998,20 @@ array_api_metric_checkers = {
+     cosine_similarity: [check_array_api_metric_pairwise],
+     mean_absolute_error: [
+         check_array_api_regression_metric,
+-        check_array_api_multioutput_regression_metric,
++        check_array_api_regression_metric_multioutput,
+     ],
+     mean_squared_error: [
+         check_array_api_regression_metric,
+-        check_array_api_multioutput_regression_metric,
++        check_array_api_regression_metric_multioutput,
+     ],
+     d2_tweedie_score: [
+         check_array_api_regression_metric,
+     ],
++    paired_cosine_distances: [check_array_api_metric_pairwise],
++    additive_chi2_kernel: [check_array_api_metric_pairwise],
++    mean_gamma_deviance: [check_array_api_regression_metric],
++    max_error: [check_array_api_regression_metric],
++    chi2_kernel: [check_array_api_metric_pairwise],
+ }
+ 
+ 
+diff --git a/sklearn/metrics/tests/test_pairwise_distances_reduction.py b/sklearn/metrics/tests/test_pairwise_distances_reduction.py
+index 95dfa98178ee77000202909ee2ce6ff34bb7b3bf..af055a20917905497a3f9bb1a53616faf6d07645 100644
+--- a/sklearn/metrics/tests/test_pairwise_distances_reduction.py
++++ b/sklearn/metrics/tests/test_pairwise_distances_reduction.py
+@@ -7,7 +7,6 @@ import numpy as np
+ import pytest
+ from scipy.spatial.distance import cdist
+ 
+-from sklearn import _threadpool_controller
+ from sklearn.metrics import euclidean_distances, pairwise_distances
+ from sklearn.metrics._pairwise_distances_reduction import (
+     ArgKmin,
+@@ -23,6 +22,7 @@ from sklearn.utils._testing import (
+     create_memmap_backed_data,
+ )
+ from sklearn.utils.fixes import CSR_CONTAINERS
++from sklearn.utils.parallel import _get_threadpool_controller
+ 
+ # Common supported metric between scipy.spatial.distance.cdist
+ # and BaseDistanceReductionDispatcher.
+@@ -1200,7 +1200,7 @@ def test_n_threads_agnosticism(
+         **compute_parameters,
+     )
+ 
+-    with _threadpool_controller.limit(limits=1, user_api="openmp"):
++    with _get_threadpool_controller().limit(limits=1, user_api="openmp"):
+         dist, indices = Dispatcher.compute(
+             X,
+             Y,
+diff --git a/sklearn/mixture/tests/test_bayesian_mixture.py b/sklearn/mixture/tests/test_bayesian_mixture.py
+index 9c6eb4a86ea0d4e5988706e6e841fe5f5b992871..925cd2fdb615bf11b96eb7198c06e20e753b9662 100644
+--- a/sklearn/mixture/tests/test_bayesian_mixture.py
++++ b/sklearn/mixture/tests/test_bayesian_mixture.py
+@@ -1,6 +1,5 @@
+-# Author: Wei Xue <xuewei4d@gmail.com>
+-#         Thierry Guillemot <thierry.guillemot.work@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ import copy
+ 
+ import numpy as np
+diff --git a/sklearn/mixture/tests/test_gaussian_mixture.py b/sklearn/mixture/tests/test_gaussian_mixture.py
+index 19931634df32988fb5feb37c100b9981d0603bbf..5caead98cfa242c58fb15c9510b743d95b360311 100644
+--- a/sklearn/mixture/tests/test_gaussian_mixture.py
++++ b/sklearn/mixture/tests/test_gaussian_mixture.py
+@@ -1,6 +1,5 @@
+-# Author: Wei Xue <xuewei4d@gmail.com>
+-#         Thierry Guillemot <thierry.guillemot.work@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import copy
+ import itertools
+diff --git a/sklearn/mixture/tests/test_mixture.py b/sklearn/mixture/tests/test_mixture.py
+index f0ea3494f0e7d086968d3f9ff7eac0ecdcf51a96..9c98d150f06a8c7685d24c083e2ed2866f17c8ca 100644
+--- a/sklearn/mixture/tests/test_mixture.py
++++ b/sklearn/mixture/tests/test_mixture.py
+@@ -1,5 +1,5 @@
+-# Author: Guillaume Lemaitre <g.lemaitre58@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/model_selection/tests/test_search.py b/sklearn/model_selection/tests/test_search.py
+index 7beb0d73bd9935c20e2d1685f6165e1e1b5b26e3..77b99747dd4be808a43c4e3f9140624f340e2eee 100644
+--- a/sklearn/model_selection/tests/test_search.py
++++ b/sklearn/model_selection/tests/test_search.py
+@@ -23,6 +23,7 @@ from sklearn.datasets import (
+     make_classification,
+     make_multilabel_classification,
+ )
++from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+ from sklearn.dummy import DummyClassifier
+ from sklearn.ensemble import HistGradientBoostingClassifier
+ from sklearn.exceptions import FitFailedWarning
+@@ -60,12 +61,20 @@ from sklearn.model_selection import (
+     StratifiedShuffleSplit,
+     train_test_split,
+ )
+-from sklearn.model_selection._search import BaseSearchCV
++from sklearn.model_selection._search import (
++    BaseSearchCV,
++    _yield_masked_array_for_each_param,
++)
+ from sklearn.model_selection.tests.common import OneTimeSplitter
+ from sklearn.naive_bayes import ComplementNB
+ from sklearn.neighbors import KernelDensity, KNeighborsClassifier, LocalOutlierFactor
+-from sklearn.pipeline import Pipeline
+-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
++from sklearn.pipeline import Pipeline, make_pipeline
++from sklearn.preprocessing import (
++    OneHotEncoder,
++    OrdinalEncoder,
++    SplineTransformer,
++    StandardScaler,
++)
+ from sklearn.svm import SVC, LinearSVC
+ from sklearn.tests.metadata_routing_common import (
+     ConsumingScorer,
+@@ -73,11 +82,13 @@ from sklearn.tests.metadata_routing_common import (
+     check_recorded_metadata,
+ )
+ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
++from sklearn.utils._array_api import yield_namespace_device_dtype_combinations
+ from sklearn.utils._mocking import CheckingClassifier, MockDataFrame
+ from sklearn.utils._testing import (
+     MinimalClassifier,
+     MinimalRegressor,
+     MinimalTransformer,
++    _array_api_for_tests,
+     assert_allclose,
+     assert_almost_equal,
+     assert_array_almost_equal,
+@@ -2611,6 +2622,7 @@ def test_multi_metric_search_forwards_metadata(SearchCV, param_search):
+         check_recorded_metadata(
+             obj=_scorer,
+             method="score",
++            parent="_score",
+             split_params=("sample_weight", "metadata"),
+             sample_weight=score_weights,
+             metadata=score_metadata,
+@@ -2718,3 +2730,133 @@ def test_search_with_estimators_issue_29157():
+     grid_search = GridSearchCV(pipe, grid_params, cv=2)
+     grid_search.fit(X, y)
+     assert grid_search.cv_results_["param_enc__enc"].dtype == object
++
++
++def test_cv_results_multi_size_array():
++    """Check that GridSearchCV works with params that are arrays of different sizes.
++
++    Non-regression test for #29277.
++    """
++    n_features = 10
++    X, y = make_classification(n_features=10)
++
++    spline_reg_pipe = make_pipeline(
++        SplineTransformer(extrapolation="periodic"),
++        LogisticRegression(),
++    )
++
++    n_knots_list = [n_features * i for i in [10, 11, 12]]
++    knots_list = [
++        np.linspace(0, np.pi * 2, n_knots).reshape((-1, n_features))
++        for n_knots in n_knots_list
++    ]
++    spline_reg_pipe_cv = GridSearchCV(
++        estimator=spline_reg_pipe,
++        param_grid={
++            "splinetransformer__knots": knots_list,
++        },
++    )
++
++    spline_reg_pipe_cv.fit(X, y)
++    assert (
++        spline_reg_pipe_cv.cv_results_["param_splinetransformer__knots"].dtype == object
++    )
++
++
++@pytest.mark.parametrize(
++    "array_namespace, device, dtype", yield_namespace_device_dtype_combinations()
++)
++@pytest.mark.parametrize("SearchCV", [GridSearchCV, RandomizedSearchCV])
++def test_array_api_search_cv_classifier(SearchCV, array_namespace, device, dtype):
++    xp = _array_api_for_tests(array_namespace, device)
++
++    X = np.arange(100).reshape((10, 10))
++    X_np = X.astype(dtype)
++    X_xp = xp.asarray(X_np, device=device)
++
++    # y should always be an integer, no matter what `dtype` is
++    y_np = np.array([0] * 5 + [1] * 5)
++    y_xp = xp.asarray(y_np, device=device)
++
++    with config_context(array_api_dispatch=True):
++        searcher = SearchCV(
++            LinearDiscriminantAnalysis(),
++            {"tol": [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7]},
++            cv=2,
++        )
++        searcher.fit(X_xp, y_xp)
++        searcher.score(X_xp, y_xp)
++
++
++# Construct these outside the tests so that the same object is used
++# for both input and `expected`
++one_hot_encoder = OneHotEncoder()
++ordinal_encoder = OrdinalEncoder()
++
++# If we construct this directly via `MaskedArray`, the list of tuples
++# gets auto-converted to a 2D array.
++ma_with_tuples = np.ma.MaskedArray(np.empty(2), mask=True, dtype=object)
++ma_with_tuples[0] = (1, 2)
++ma_with_tuples[1] = (3, 4)
++
++
++@pytest.mark.parametrize(
++    ("candidate_params", "expected"),
++    [
++        pytest.param(
++            [{"foo": 1}, {"foo": 2}],
++            [
++                ("param_foo", np.ma.MaskedArray(np.array([1, 2]))),
++            ],
++            id="simple numeric, single param",
++        ),
++        pytest.param(
++            [{"foo": 1, "bar": 3}, {"foo": 2, "bar": 4}, {"foo": 3}],
++            [
++                ("param_foo", np.ma.MaskedArray(np.array([1, 2, 3]))),
++                (
++                    "param_bar",
++                    np.ma.MaskedArray(np.array([3, 4, 0]), mask=[False, False, True]),
++                ),
++            ],
++            id="simple numeric, one param is missing in one round",
++        ),
++        pytest.param(
++            [{"foo": [[1], [2], [3]]}, {"foo": [[1], [2]]}],
++            [
++                (
++                    "param_foo",
++                    np.ma.MaskedArray([[[1], [2], [3]], [[1], [2]]], dtype=object),
++                ),
++            ],
++            id="lists of different lengths",
++        ),
++        pytest.param(
++            [{"foo": (1, 2)}, {"foo": (3, 4)}],
++            [
++                (
++                    "param_foo",
++                    ma_with_tuples,
++                ),
++            ],
++            id="lists tuples",
++        ),
++        pytest.param(
++            [{"foo": ordinal_encoder}, {"foo": one_hot_encoder}],
++            [
++                (
++                    "param_foo",
++                    np.ma.MaskedArray([ordinal_encoder, one_hot_encoder], dtype=object),
++                ),
++            ],
++            id="estimators",
++        ),
++    ],
++)
++def test_yield_masked_array_for_each_param(candidate_params, expected):
++    result = list(_yield_masked_array_for_each_param(candidate_params))
++    for (key, value), (expected_key, expected_value) in zip(result, expected):
++        assert key == expected_key
++        assert value.dtype == expected_value.dtype
++        np.testing.assert_array_equal(value, expected_value)
++        np.testing.assert_array_equal(value.mask, expected_value.mask)
+diff --git a/sklearn/model_selection/tests/test_validation.py b/sklearn/model_selection/tests/test_validation.py
+index 679c0052e3956237c6b80eb9501eaa6de30f87b3..d94d3f054bba24f40c0f6f67d11ed93018286033 100644
+--- a/sklearn/model_selection/tests/test_validation.py
++++ b/sklearn/model_selection/tests/test_validation.py
+@@ -2100,13 +2100,14 @@ def test_fit_and_score_failing():
+     failing_clf = FailingClassifier(FailingClassifier.FAILING_PARAMETER)
+     # dummy X data
+     X = np.arange(1, 10)
++    train, test = np.arange(0, 5), np.arange(5, 9)
+     fit_and_score_args = dict(
+         estimator=failing_clf,
+         X=X,
+         y=None,
+         scorer=dict(),
+-        train=None,
+-        test=None,
++        train=train,
++        test=test,
+         verbose=0,
+         parameters=None,
+         fit_params=None,
+@@ -2600,6 +2601,7 @@ def test_validation_functions_routing(func):
+         check_recorded_metadata(
+             obj=_scorer,
+             method="score",
++            parent=func.__name__,
+             split_params=("sample_weight", "metadata"),
+             sample_weight=score_weights,
+             metadata=score_metadata,
+@@ -2610,6 +2612,7 @@ def test_validation_functions_routing(func):
+         check_recorded_metadata(
+             obj=_splitter,
+             method="split",
++            parent=func.__name__,
+             groups=split_groups,
+             metadata=split_metadata,
+         )
+@@ -2619,6 +2622,7 @@ def test_validation_functions_routing(func):
+         check_recorded_metadata(
+             obj=_estimator,
+             method="fit",
++            parent=func.__name__,
+             split_params=("sample_weight", "metadata"),
+             sample_weight=fit_sample_weight,
+             metadata=fit_metadata,
+@@ -2656,6 +2660,7 @@ def test_learning_curve_exploit_incremental_learning_routing():
+         check_recorded_metadata(
+             obj=_estimator,
+             method="partial_fit",
++            parent="learning_curve",
+             split_params=("sample_weight", "metadata"),
+             sample_weight=fit_sample_weight,
+             metadata=fit_metadata,
+diff --git a/sklearn/neighbors/tests/test_lof.py b/sklearn/neighbors/tests/test_lof.py
+index 9b87b8ceeec402f2474f85914aec0236db37b8c0..140d0d9ba6dff1ba15acf54fe769cd526e832c3d 100644
+--- a/sklearn/neighbors/tests/test_lof.py
++++ b/sklearn/neighbors/tests/test_lof.py
+@@ -1,6 +1,5 @@
+-# Authors: Nicolas Goix <nicolas.goix@telecom-paristech.fr>
+-#          Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ from math import sqrt
+diff --git a/sklearn/neighbors/tests/test_nca.py b/sklearn/neighbors/tests/test_nca.py
+index a3eb5a8c6de1762efb989be40cb831551d982cd5..ebab78a3a39b0a5e058fb90dd29ecf835f98607f 100644
+--- a/sklearn/neighbors/tests/test_nca.py
++++ b/sklearn/neighbors/tests/test_nca.py
+@@ -2,9 +2,8 @@
+ Testing for Neighborhood Component Analysis module (sklearn.neighbors.nca)
+ """
+ 
+-# Authors: William de Vazelhes <wdevazelhes@gmail.com>
+-#          John Chiotellis <ioannis.chiotellis@in.tum.de>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ 
+diff --git a/sklearn/neighbors/tests/test_neighbors_tree.py b/sklearn/neighbors/tests/test_neighbors_tree.py
+index 4d8bac12f7423caadf1a392b5d42313f6a3f32f8..de19152e8b7f236d0a524f756ca9c40d48023edb 100644
+--- a/sklearn/neighbors/tests/test_neighbors_tree.py
++++ b/sklearn/neighbors/tests/test_neighbors_tree.py
+@@ -1,4 +1,4 @@
+-# License: BSD 3 clause
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import itertools
+ import pickle
+diff --git a/sklearn/neural_network/tests/test_mlp.py b/sklearn/neural_network/tests/test_mlp.py
+index 64ad4c5edc0196e6f315387bab91d72f50906b5d..2e2fddc66416321a4d16a1bb78600ad6c9e2248f 100644
+--- a/sklearn/neural_network/tests/test_mlp.py
++++ b/sklearn/neural_network/tests/test_mlp.py
+@@ -2,8 +2,8 @@
+ Testing for Multi-layer Perceptron module (sklearn.neural_network)
+ """
+ 
+-# Author: Issam H. Laradji
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ import sys
+diff --git a/sklearn/preprocessing/tests/test_data.py b/sklearn/preprocessing/tests/test_data.py
+index 3810e485ae3015e6e30e0bde6c6cac4c9f1e04de..5d254e491b40023e79718f69b9181cffa14302a7 100644
+--- a/sklearn/preprocessing/tests/test_data.py
++++ b/sklearn/preprocessing/tests/test_data.py
+@@ -1,8 +1,5 @@
+-# Authors:
+-#
+-#          Giorgio Patrini
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ import warnings
+diff --git a/sklearn/semi_supervised/tests/test_self_training.py b/sklearn/semi_supervised/tests/test_self_training.py
+index 2efeb32446f8927071d873dd6e586945fb73f6d8..29b8f1ac6e87c2ea56a21dbc54f60f504f3895d0 100644
+--- a/sklearn/semi_supervised/tests/test_self_training.py
++++ b/sklearn/semi_supervised/tests/test_self_training.py
+@@ -14,8 +14,8 @@ from sklearn.semi_supervised import SelfTrainingClassifier
+ from sklearn.svm import SVC
+ from sklearn.tree import DecisionTreeClassifier
+ 
+-# Author: Oliver Rausch <rauscho@ethz.ch>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ # load the iris dataset and randomly permute it
+ iris = load_iris()
+diff --git a/sklearn/tests/metadata_routing_common.py b/sklearn/tests/metadata_routing_common.py
+index 6fba2f037fd15f210cd208fb6ede1b8d8607dfe3..0af522f9f93425d461b6120cefb93aa87408a3e3 100644
+--- a/sklearn/tests/metadata_routing_common.py
++++ b/sklearn/tests/metadata_routing_common.py
+@@ -1,3 +1,5 @@
++import inspect
++from collections import defaultdict
+ from functools import partial
+ 
+ import numpy as np
+@@ -25,26 +27,29 @@ from sklearn.utils.metadata_routing import (
+ from sklearn.utils.multiclass import _check_partial_fit_first_call
+ 
+ 
+-def record_metadata(obj, method, record_default=True, **kwargs):
+-    """Utility function to store passed metadata to a method.
++def record_metadata(obj, record_default=True, **kwargs):
++    """Utility function to store passed metadata to a method of obj.
+ 
+     If record_default is False, kwargs whose values are "default" are skipped.
+     This is so that checks on keyword arguments whose default was not changed
+     are skipped.
+ 
+     """
++    stack = inspect.stack()
++    callee = stack[1].function
++    caller = stack[2].function
+     if not hasattr(obj, "_records"):
+-        obj._records = {}
++        obj._records = defaultdict(lambda: defaultdict(list))
+     if not record_default:
+         kwargs = {
+             key: val
+             for key, val in kwargs.items()
+             if not isinstance(val, str) or (val != "default")
+         }
+-    obj._records[method] = kwargs
++    obj._records[callee][caller].append(kwargs)
+ 
+ 
+-def check_recorded_metadata(obj, method, split_params=tuple(), **kwargs):
++def check_recorded_metadata(obj, method, parent, split_params=tuple(), **kwargs):
+     """Check whether the expected metadata is passed to the object's method.
+ 
+     Parameters
+@@ -52,28 +57,39 @@ def check_recorded_metadata(obj, method, split_params=tuple(), **kwargs):
+     obj : estimator object
+         sub-estimator to check routed params for
+     method : str
+-        sub-estimator's method where metadata is routed to
++        sub-estimator's method where metadata is routed to, or otherwise in
++        the context of metadata routing referred to as 'callee'
++    parent : str
++        the parent method which should have called `method`, or otherwise in
++        the context of metadata routing referred to as 'caller'
+     split_params : tuple, default=empty
+         specifies any parameters which are to be checked as being a subset
+         of the original values
+     **kwargs : dict
+         passed metadata
+     """
+-    records = getattr(obj, "_records", dict()).get(method, dict())
+-    assert set(kwargs.keys()) == set(
+-        records.keys()
+-    ), f"Expected {kwargs.keys()} vs {records.keys()}"
+-    for key, value in kwargs.items():
+-        recorded_value = records[key]
+-        # The following condition is used to check for any specified parameters
+-        # being a subset of the original values
+-        if key in split_params and recorded_value is not None:
+-            assert np.isin(recorded_value, value).all()
+-        else:
+-            if isinstance(recorded_value, np.ndarray):
+-                assert_array_equal(recorded_value, value)
++    all_records = (
++        getattr(obj, "_records", dict()).get(method, dict()).get(parent, list())
++    )
++    for record in all_records:
++        # first check that the names of the metadata passed are the same as
++        # expected. The names are stored as keys in `record`.
++        assert set(kwargs.keys()) == set(
++            record.keys()
++        ), f"Expected {kwargs.keys()} vs {record.keys()}"
++        for key, value in kwargs.items():
++            recorded_value = record[key]
++            # The following condition is used to check for any specified parameters
++            # being a subset of the original values
++            if key in split_params and recorded_value is not None:
++                assert np.isin(recorded_value, value).all()
+             else:
+-                assert recorded_value is value, f"Expected {recorded_value} vs {value}"
++                if isinstance(recorded_value, np.ndarray):
++                    assert_array_equal(recorded_value, value)
++                else:
++                    assert (
++                        recorded_value is value
++                    ), f"Expected {recorded_value} vs {value}. Method: {method}"
+ 
+ 
+ record_metadata_not_default = partial(record_metadata, record_default=False)
+@@ -151,7 +167,7 @@ class ConsumingRegressor(RegressorMixin, BaseEstimator):
+             self.registry.append(self)
+ 
+         record_metadata_not_default(
+-            self, "partial_fit", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return self
+ 
+@@ -160,19 +176,19 @@ class ConsumingRegressor(RegressorMixin, BaseEstimator):
+             self.registry.append(self)
+ 
+         record_metadata_not_default(
+-            self, "fit", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return self
+ 
+     def predict(self, X, y=None, sample_weight="default", metadata="default"):
+         record_metadata_not_default(
+-            self, "predict", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return np.zeros(shape=(len(X),))
+ 
+     def score(self, X, y, sample_weight="default", metadata="default"):
+         record_metadata_not_default(
+-            self, "score", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return 1
+ 
+@@ -240,7 +256,7 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+             self.registry.append(self)
+ 
+         record_metadata_not_default(
+-            self, "partial_fit", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         _check_partial_fit_first_call(self, classes)
+         return self
+@@ -250,7 +266,7 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+             self.registry.append(self)
+ 
+         record_metadata_not_default(
+-            self, "fit", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+ 
+         self.classes_ = np.unique(y)
+@@ -258,7 +274,7 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+ 
+     def predict(self, X, sample_weight="default", metadata="default"):
+         record_metadata_not_default(
+-            self, "predict", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         y_score = np.empty(shape=(len(X),), dtype="int8")
+         y_score[len(X) // 2 :] = 0
+@@ -267,7 +283,7 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+ 
+     def predict_proba(self, X, sample_weight="default", metadata="default"):
+         record_metadata_not_default(
+-            self, "predict_proba", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         y_proba = np.empty(shape=(len(X), 2))
+         y_proba[: len(X) // 2, :] = np.asarray([1.0, 0.0])
+@@ -279,13 +295,13 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+ 
+         # uncomment when needed
+         # record_metadata_not_default(
+-        #     self, "predict_log_proba", sample_weight=sample_weight, metadata=metadata
++        #     self, sample_weight=sample_weight, metadata=metadata
+         # )
+         # return np.zeros(shape=(len(X), 2))
+ 
+     def decision_function(self, X, sample_weight="default", metadata="default"):
+         record_metadata_not_default(
+-            self, "predict_proba", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         y_score = np.empty(shape=(len(X),))
+         y_score[len(X) // 2 :] = 0
+@@ -295,7 +311,7 @@ class ConsumingClassifier(ClassifierMixin, BaseEstimator):
+     # uncomment when needed
+     # def score(self, X, y, sample_weight="default", metadata="default"):
+     # record_metadata_not_default(
+-    #    self, "score", sample_weight=sample_weight, metadata=metadata
++    #    self, sample_weight=sample_weight, metadata=metadata
+     # )
+     # return 1
+ 
+@@ -315,38 +331,38 @@ class ConsumingTransformer(TransformerMixin, BaseEstimator):
+     def __init__(self, registry=None):
+         self.registry = registry
+ 
+-    def fit(self, X, y=None, sample_weight=None, metadata=None):
++    def fit(self, X, y=None, sample_weight="default", metadata="default"):
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+         record_metadata_not_default(
+-            self, "fit", sample_weight=sample_weight, metadata=metadata
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return self
+ 
+-    def transform(self, X, sample_weight=None, metadata=None):
+-        record_metadata(
+-            self, "transform", sample_weight=sample_weight, metadata=metadata
++    def transform(self, X, sample_weight="default", metadata="default"):
++        record_metadata_not_default(
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+-        return X
++        return X + 1
+ 
+-    def fit_transform(self, X, y, sample_weight=None, metadata=None):
++    def fit_transform(self, X, y, sample_weight="default", metadata="default"):
+         # implementing ``fit_transform`` is necessary since
+         # ``TransformerMixin.fit_transform`` doesn't route any metadata to
+         # ``transform``, while here we want ``transform`` to receive
+         # ``sample_weight`` and ``metadata``.
+-        record_metadata(
+-            self, "fit_transform", sample_weight=sample_weight, metadata=metadata
++        record_metadata_not_default(
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+         return self.fit(X, y, sample_weight=sample_weight, metadata=metadata).transform(
+             X, sample_weight=sample_weight, metadata=metadata
+         )
+ 
+     def inverse_transform(self, X, sample_weight=None, metadata=None):
+-        record_metadata(
+-            self, "inverse_transform", sample_weight=sample_weight, metadata=metadata
++        record_metadata_not_default(
++            self, sample_weight=sample_weight, metadata=metadata
+         )
+-        return X
++        return X - 1
+ 
+ 
+ class ConsumingNoFitTransformTransformer(BaseEstimator):
+@@ -361,14 +377,12 @@ class ConsumingNoFitTransformTransformer(BaseEstimator):
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+-        record_metadata(self, "fit", sample_weight=sample_weight, metadata=metadata)
++        record_metadata(self, sample_weight=sample_weight, metadata=metadata)
+ 
+         return self
+ 
+     def transform(self, X, sample_weight=None, metadata=None):
+-        record_metadata(
+-            self, "transform", sample_weight=sample_weight, metadata=metadata
+-        )
++        record_metadata(self, sample_weight=sample_weight, metadata=metadata)
+         return X
+ 
+ 
+@@ -383,7 +397,7 @@ class ConsumingScorer(_Scorer):
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+-        record_metadata_not_default(self, "score", **kwargs)
++        record_metadata_not_default(self, **kwargs)
+ 
+         sample_weight = kwargs.get("sample_weight", None)
+         return super()._score(method_caller, clf, X, y, sample_weight=sample_weight)
+@@ -397,7 +411,7 @@ class ConsumingSplitter(GroupsConsumerMixin, BaseCrossValidator):
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+-        record_metadata_not_default(self, "split", groups=groups, metadata=metadata)
++        record_metadata_not_default(self, groups=groups, metadata=metadata)
+ 
+         split_index = len(X) // 2
+         train_indices = list(range(0, split_index))
+@@ -445,7 +459,7 @@ class WeightedMetaRegressor(MetaEstimatorMixin, RegressorMixin, BaseEstimator):
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+-        record_metadata(self, "fit", sample_weight=sample_weight)
++        record_metadata(self, sample_weight=sample_weight)
+         params = process_routing(self, "fit", sample_weight=sample_weight, **fit_params)
+         self.estimator_ = clone(self.estimator).fit(X, y, **params.estimator.fit)
+         return self
+@@ -479,7 +493,7 @@ class WeightedMetaClassifier(MetaEstimatorMixin, ClassifierMixin, BaseEstimator)
+         if self.registry is not None:
+             self.registry.append(self)
+ 
+-        record_metadata(self, "fit", sample_weight=sample_weight)
++        record_metadata(self, sample_weight=sample_weight)
+         params = process_routing(self, "fit", sample_weight=sample_weight, **kwargs)
+         self.estimator_ = clone(self.estimator).fit(X, y, **params.estimator.fit)
+         return self
+diff --git a/sklearn/tests/random_seed.py b/sklearn/tests/random_seed.py
+deleted file mode 100644
+index ecda17e36d2bf2309a8708d06b5241965a262f39..0000000000000000000000000000000000000000
+--- a/sklearn/tests/random_seed.py
++++ /dev/null
+@@ -1,85 +0,0 @@
+-"""global_random_seed fixture
+-
+-The goal of this fixture is to prevent tests that use it to be sensitive
+-to a specific seed value while still being deterministic by default.
+-
+-See the documentation for the SKLEARN_TESTS_GLOBAL_RANDOM_SEED
+-variable for insrtuctions on how to use this fixture.
+-
+-https://scikit-learn.org/dev/computing/parallelism.html#sklearn-tests-global-random-seed
+-"""
+-
+-from os import environ
+-from random import Random
+-
+-import pytest
+-
+-
+-# Passes the main worker's random seeds to workers
+-class XDistHooks:
+-    def pytest_configure_node(self, node) -> None:
+-        random_seeds = node.config.getoption("random_seeds")
+-        node.workerinput["random_seeds"] = random_seeds
+-
+-
+-def pytest_configure(config):
+-    if config.pluginmanager.hasplugin("xdist"):
+-        config.pluginmanager.register(XDistHooks())
+-
+-    RANDOM_SEED_RANGE = list(range(100))  # All seeds in [0, 99] should be valid.
+-    random_seed_var = environ.get("SKLEARN_TESTS_GLOBAL_RANDOM_SEED")
+-    if hasattr(config, "workerinput") and "random_seeds" in config.workerinput:
+-        # Set worker random seed from seed generated from main process
+-        random_seeds = config.workerinput["random_seeds"]
+-    elif random_seed_var is None:
+-        # This is the way.
+-        random_seeds = [42]
+-    elif random_seed_var == "any":
+-        # Pick-up one seed at random in the range of admissible random seeds.
+-        random_seeds = [Random().choice(RANDOM_SEED_RANGE)]
+-    elif random_seed_var == "all":
+-        random_seeds = RANDOM_SEED_RANGE
+-    else:
+-        if "-" in random_seed_var:
+-            start, stop = random_seed_var.split("-")
+-            random_seeds = list(range(int(start), int(stop) + 1))
+-        else:
+-            random_seeds = [int(random_seed_var)]
+-
+-        if min(random_seeds) < 0 or max(random_seeds) > 99:
+-            raise ValueError(
+-                "The value(s) of the environment variable "
+-                "SKLEARN_TESTS_GLOBAL_RANDOM_SEED must be in the range [0, 99] "
+-                f"(or 'any' or 'all'), got: {random_seed_var}"
+-            )
+-    config.option.random_seeds = random_seeds
+-
+-    class GlobalRandomSeedPlugin:
+-        @pytest.fixture(params=random_seeds)
+-        def global_random_seed(self, request):
+-            """Fixture to ask for a random yet controllable random seed.
+-
+-            All tests that use this fixture accept the contract that they should
+-            deterministically pass for any seed value from 0 to 99 included.
+-
+-            See the documentation for the SKLEARN_TESTS_GLOBAL_RANDOM_SEED
+-            variable for insrtuctions on how to use this fixture.
+-
+-            https://scikit-learn.org/dev/computing/parallelism.html#sklearn-tests-global-random-seed
+-            """
+-            yield request.param
+-
+-    config.pluginmanager.register(GlobalRandomSeedPlugin())
+-
+-
+-def pytest_report_header(config):
+-    random_seed_var = environ.get("SKLEARN_TESTS_GLOBAL_RANDOM_SEED")
+-    if random_seed_var == "any":
+-        return [
+-            "To reproduce this test run, set the following environment variable:",
+-            f'    SKLEARN_TESTS_GLOBAL_RANDOM_SEED="{config.option.random_seeds[0]}"',
+-            (
+-                "See: https://scikit-learn.org/dev/computing/parallelism.html"
+-                "#sklearn-tests-global-random-seed"
+-            ),
+-        ]
+diff --git a/sklearn/tests/test_base.py b/sklearn/tests/test_base.py
+index b34de3facae13cb42137175c47d09ee3cd4a7b38..ab842e425456aab39fcb722d6a39d16e5abac9f6 100644
+--- a/sklearn/tests/test_base.py
++++ b/sklearn/tests/test_base.py
+@@ -1,5 +1,5 @@
+-# Author: Gael Varoquaux
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import pickle
+ import re
+@@ -18,14 +18,9 @@ from sklearn.base import (
+     TransformerMixin,
+     clone,
+     is_classifier,
++    is_clusterer,
+     is_regressor,
+ )
+-
+-# [ENV-PATCH] Conditional import for is_clusterer - may not exist in all versions
+-try:
+-    from sklearn.base import is_clusterer
+-except ImportError:
+-    is_clusterer = None
+ from sklearn.cluster import KMeans
+ from sklearn.decomposition import PCA
+ from sklearn.exceptions import InconsistentVersionWarning
+@@ -314,7 +309,6 @@ def test_is_regressor(estimator, expected_result):
+         (Pipeline([("svc_cv", GridSearchCV(SVC(), {"C": [0.1, 1]}))]), False),
+     ],
+ )
+-@pytest.mark.skipif(is_clusterer is None, reason="[ENV-PATCH] is_clusterer not available in this version")
+ def test_is_clusterer(estimator, expected_result):
+     assert is_clusterer(estimator) == expected_result
+ 
+diff --git a/sklearn/tests/test_calibration.py b/sklearn/tests/test_calibration.py
+index 833ef2ea7e558f1af14971d96a87f85184c29fb9..c2cbad4060fde3a8529e74ac8b4bbb93aa2adbee 100644
+--- a/sklearn/tests/test_calibration.py
++++ b/sklearn/tests/test_calibration.py
+@@ -1,5 +1,5 @@
+-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/tests/test_check_build.py b/sklearn/tests/test_check_build.py
+index 3c8e64e1ba906ebe3e395c9df0797d2c620c967a..baf72093354e19a2554ad0b29693c10f87d33a85 100644
+--- a/sklearn/tests/test_check_build.py
++++ b/sklearn/tests/test_check_build.py
+@@ -2,8 +2,8 @@
+ Smoke Test the check_build module
+ """
+ 
+-# Author: G Varoquaux
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import pytest
+ 
+diff --git a/sklearn/tests/test_common.py b/sklearn/tests/test_common.py
+index c2398ec9e38f0193b22cf15b4136468266da576d..47af38a563a7740800009443d7fe5be5ba875559 100644
+--- a/sklearn/tests/test_common.py
++++ b/sklearn/tests/test_common.py
+@@ -2,9 +2,8 @@
+ General tests for all estimators in sklearn.
+ """
+ 
+-# Authors: Andreas Mueller <amueller@ais.uni-bonn.de>
+-#          Gael Varoquaux gael.varoquaux@normalesup.org
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import os
+ import pkgutil
+@@ -80,6 +79,7 @@ from sklearn.utils.estimator_checks import (
+     check_get_feature_names_out_error,
+     check_global_output_transform_pandas,
+     check_global_set_output_transform_polars,
++    check_inplace_ensure_writeable,
+     check_n_features_in_after_fitting,
+     check_param_validation,
+     check_set_output_transform,
+@@ -177,6 +177,7 @@ def test_check_estimator_generate_only():
+ 
+ 
+ def test_setup_py_check():
++    pytest.importorskip("setuptools")
+     # Smoke test `python setup.py check` command run at the root of the
+     # scikit-learn source tree.
+     cwd = os.getcwd()
+@@ -330,7 +331,9 @@ def _generate_search_cv_instances():
+         extra_params = (
+             {"min_resources": "smallest"} if "min_resources" in init_params else {}
+         )
+-        search_cv = SearchCV(Estimator(), param_grid, cv=2, **extra_params)
++        search_cv = SearchCV(
++            Estimator(), param_grid, cv=2, error_score="raise", **extra_params
++        )
+         set_random_state(search_cv)
+         yield search_cv
+ 
+@@ -615,3 +618,31 @@ def test_set_output_transform_configured(estimator, check_func):
+     _set_checking_parameters(estimator)
+     with ignore_warnings(category=(FutureWarning)):
+         check_func(estimator.__class__.__name__, estimator)
++
++
++@pytest.mark.parametrize(
++    "estimator", _tested_estimators(), ids=_get_check_estimator_ids
++)
++def test_check_inplace_ensure_writeable(estimator):
++    name = estimator.__class__.__name__
++
++    if hasattr(estimator, "copy"):
++        estimator.set_params(copy=False)
++    elif hasattr(estimator, "copy_X"):
++        estimator.set_params(copy_X=False)
++    else:
++        raise SkipTest(f"{name} doesn't require writeable input.")
++
++    _set_checking_parameters(estimator)
++
++    # The following estimators can work inplace only with certain settings
++    if name == "HDBSCAN":
++        estimator.set_params(metric="precomputed", algorithm="brute")
++
++    if name == "PCA":
++        estimator.set_params(svd_solver="full")
++
++    if name == "KernelPCA":
++        estimator.set_params(kernel="precomputed")
++
++    check_inplace_ensure_writeable(name, estimator)
+diff --git a/sklearn/tests/test_docstring_parameters.py b/sklearn/tests/test_docstring_parameters.py
+index 4b606580230a3714b5a41edc4729814f59684580..420fbd8a8d7eaea0db8881aaf7c5dc50ea7ea35c 100644
+--- a/sklearn/tests/test_docstring_parameters.py
++++ b/sklearn/tests/test_docstring_parameters.py
+@@ -1,6 +1,5 @@
+-# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+-#          Raghav RV <rvraghav93@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import importlib
+ import inspect
+diff --git a/sklearn/tests/test_metadata_routing.py b/sklearn/tests/test_metadata_routing.py
+index 109c730bf0718334488ee42db03410ea3bc7805d..359432b35d5e006f2c934c768a3b3ed561cbfbb8 100644
+--- a/sklearn/tests/test_metadata_routing.py
++++ b/sklearn/tests/test_metadata_routing.py
+@@ -2,8 +2,8 @@
+ Metadata Routing Utility Tests
+ """
+ 
+-# Author: Adrin Jalali <adrin.jalali@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import re
+ 
+@@ -327,14 +327,16 @@ def test_simple_metadata_routing():
+     # and passing metadata to the consumer directly is fine regardless of its
+     # metadata_request values.
+     clf.fit(X, y, sample_weight=my_weights)
+-    check_recorded_metadata(clf.estimator_, "fit")
++    check_recorded_metadata(clf.estimator_, method="fit", parent="fit")
+ 
+     # Requesting a metadata will make the meta-estimator forward it correctly
+     clf = WeightedMetaClassifier(
+         estimator=ConsumingClassifier().set_fit_request(sample_weight=True)
+     )
+     clf.fit(X, y, sample_weight=my_weights)
+-    check_recorded_metadata(clf.estimator_, "fit", sample_weight=my_weights)
++    check_recorded_metadata(
++        clf.estimator_, method="fit", parent="fit", sample_weight=my_weights
++    )
+ 
+     # And requesting it with an alias
+     clf = WeightedMetaClassifier(
+@@ -343,7 +345,9 @@ def test_simple_metadata_routing():
+         )
+     )
+     clf.fit(X, y, alternative_weight=my_weights)
+-    check_recorded_metadata(clf.estimator_, "fit", sample_weight=my_weights)
++    check_recorded_metadata(
++        clf.estimator_, method="fit", parent="fit", sample_weight=my_weights
++    )
+ 
+ 
+ def test_nested_routing():
+@@ -367,17 +371,30 @@ def test_nested_routing():
+         X, y, metadata=my_groups, sample_weight=w1, outer_weights=w2, inner_weights=w3
+     )
+     check_recorded_metadata(
+-        pipeline.steps_[0].transformer_, "fit", metadata=my_groups, sample_weight=None
++        pipeline.steps_[0].transformer_,
++        method="fit",
++        parent="fit",
++        metadata=my_groups,
++    )
++    check_recorded_metadata(
++        pipeline.steps_[0].transformer_,
++        method="transform",
++        parent="fit",
++        sample_weight=w1,
++    )
++    check_recorded_metadata(
++        pipeline.steps_[1], method="fit", parent="fit", sample_weight=w2
+     )
+     check_recorded_metadata(
+-        pipeline.steps_[0].transformer_, "transform", sample_weight=w1, metadata=None
++        pipeline.steps_[1].estimator_, method="fit", parent="fit", sample_weight=w3
+     )
+-    check_recorded_metadata(pipeline.steps_[1], "fit", sample_weight=w2)
+-    check_recorded_metadata(pipeline.steps_[1].estimator_, "fit", sample_weight=w3)
+ 
+     pipeline.predict(X, sample_weight=w3)
+     check_recorded_metadata(
+-        pipeline.steps_[0].transformer_, "transform", sample_weight=w3, metadata=None
++        pipeline.steps_[0].transformer_,
++        method="transform",
++        parent="fit",
++        sample_weight=w3,
+     )
+ 
+ 
+diff --git a/sklearn/tests/test_metaestimators_metadata_routing.py b/sklearn/tests/test_metaestimators_metadata_routing.py
+index 8bfb7b0663c18c496e5b4ba24ff5d3071baa6574..cf2bb130267a3ecc4f24aa62fc472ebe1a215349 100644
+--- a/sklearn/tests/test_metaestimators_metadata_routing.py
++++ b/sklearn/tests/test_metaestimators_metadata_routing.py
+@@ -382,6 +382,14 @@ METAESTIMATORS: list = [
+         "cv_name": "cv",
+         "cv_routing_methods": ["fit"],
+     },
++    {
++        "metaestimator": TransformedTargetRegressor,
++        "estimator": "regressor",
++        "estimator_name": "regressor",
++        "X": X,
++        "y": y,
++        "estimator_routing_methods": ["fit", "predict"],
++    },
+ ]
+ """List containing all metaestimators to be tested and their settings
+ 
+@@ -427,7 +435,6 @@ UNSUPPORTED_ESTIMATORS = [
+     RFECV(ConsumingClassifier()),
+     SelfTrainingClassifier(ConsumingClassifier()),
+     SequentialFeatureSelector(ConsumingClassifier()),
+-    TransformedTargetRegressor(),
+ ]
+ 
+ 
+@@ -685,13 +692,7 @@ def test_setting_request_on_sub_estimator_removes_error(metaestimator):
+             )
+             if "fit" not in method_name:
+                 # fit before calling method
+-                set_requests(
+-                    estimator,
+-                    method_mapping=metaestimator.get("method_mapping", {}),
+-                    methods=["fit"],
+-                    metadata_name=key,
+-                )
+-                instance.fit(X, y, **method_kwargs, **extra_method_args)
++                instance.fit(X, y)
+             try:
+                 # `fit` and `partial_fit` accept y, others don't.
+                 method(X, y, **method_kwargs, **extra_method_args)
+@@ -701,17 +702,17 @@ def test_setting_request_on_sub_estimator_removes_error(metaestimator):
+             # sanity check that registry is not empty, or else the test passes
+             # trivially
+             assert registry
+-            if preserves_metadata is True:
+-                for estimator in registry:
+-                    check_recorded_metadata(estimator, method_name, **method_kwargs)
+-            elif preserves_metadata == "subset":
+-                for estimator in registry:
+-                    check_recorded_metadata(
+-                        estimator,
+-                        method_name,
+-                        split_params=method_kwargs.keys(),
+-                        **method_kwargs,
+-                    )
++            split_params = (
++                method_kwargs.keys() if preserves_metadata == "subset" else ()
++            )
++            for estimator in registry:
++                check_recorded_metadata(
++                    estimator,
++                    method=method_name,
++                    parent=method_name,
++                    split_params=split_params,
++                    **method_kwargs,
++                )
+ 
+ 
+ @pytest.mark.parametrize("metaestimator", METAESTIMATORS, ids=METAESTIMATOR_IDS)
+@@ -763,16 +764,22 @@ def test_metadata_is_routed_correctly_to_scorer(metaestimator):
+ 
+     cls = metaestimator["metaestimator"]
+     routing_methods = metaestimator["scorer_routing_methods"]
++    method_mapping = metaestimator.get("method_mapping", {})
+ 
+     for method_name in routing_methods:
+         kwargs, (estimator, _), (scorer, registry), (cv, _) = get_init_args(
+             metaestimator, sub_estimator_consumes=True
+         )
+-        if estimator:
+-            estimator.set_fit_request(sample_weight=True, metadata=True)
+         scorer.set_score_request(sample_weight=True)
+         if cv:
+             cv.set_split_request(groups=True, metadata=True)
++        if estimator is not None:
++            set_requests(
++                estimator,
++                method_mapping=method_mapping,
++                methods=[method_name],
++                metadata_name="sample_weight",
++            )
+         instance = cls(**kwargs)
+         method = getattr(instance, method_name)
+         method_kwargs = {"sample_weight": sample_weight}
+@@ -785,6 +792,7 @@ def test_metadata_is_routed_correctly_to_scorer(metaestimator):
+             check_recorded_metadata(
+                 obj=_scorer,
+                 method="score",
++                parent=method_name,
+                 split_params=("sample_weight",),
+                 **method_kwargs,
+             )
+@@ -819,4 +827,6 @@ def test_metadata_is_routed_correctly_to_splitter(metaestimator):
+         method(X_, y_, **method_kwargs)
+         assert registry
+         for _splitter in registry:
+-            check_recorded_metadata(obj=_splitter, method="split", **method_kwargs)
++            check_recorded_metadata(
++                obj=_splitter, method="split", parent=method_name, **method_kwargs
++            )
+diff --git a/sklearn/tests/test_pipeline.py b/sklearn/tests/test_pipeline.py
+index c7f0afe642a65ecec8145e14623bcf6764ef5fd2..273aa4e9d36e4de0309eabb1dac23631d8990e89 100644
+--- a/sklearn/tests/test_pipeline.py
++++ b/sklearn/tests/test_pipeline.py
+@@ -335,7 +335,8 @@ def test_pipeline_raise_set_params_error():
+     # expected error message
+     error_msg = re.escape(
+         "Invalid parameter 'fake' for estimator Pipeline(steps=[('cls',"
+-        " LinearRegression())]). Valid parameters are: ['memory', 'steps', 'verbose']."
++        " LinearRegression())]). Valid parameters are: ['memory', 'steps',"
++        " 'verbose']."
+     )
+     with pytest.raises(ValueError, match=error_msg):
+         pipe.set_params(fake="nope")
+@@ -1828,38 +1829,47 @@ class SimpleEstimator(BaseEstimator):
+     def fit_transform(self, X, y, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return X + 1
+ 
+     def fit_predict(self, X, y, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return np.ones(len(X))
+ 
+     def predict(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return np.ones(len(X))
+ 
+     def predict_proba(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return np.ones(len(X))
+ 
+     def predict_log_proba(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return np.zeros(len(X))
+ 
+     def decision_function(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return np.ones(len(X))
+ 
+     def score(self, X, y, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return 1
+ 
+     def transform(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return X + 1
+ 
+     def inverse_transform(self, X, sample_weight=None, prop=None):
+         assert sample_weight is not None
+         assert prop is not None
++        return X - 1
+ 
+ 
+ @pytest.mark.usefixtures("enable_slep006")
+@@ -1883,7 +1893,7 @@ def test_metadata_routing_for_pipeline(method):
+             getattr(est, f"set_{method}_request")(**kwarg)
+         return est
+ 
+-    X, y = [[1]], [1]
++    X, y = np.array([[1]]), np.array([1])
+     sample_weight, prop, metadata = [1], "a", "b"
+ 
+     # test that metadata is routed correctly for pipelines when requested
+@@ -1899,9 +1909,7 @@ def test_metadata_routing_for_pipeline(method):
+     pipeline = Pipeline([("trs", trs), ("estimator", est)])
+ 
+     if "fit" not in method:
+-        pipeline = pipeline.fit(
+-            [[1]], [1], sample_weight=sample_weight, prop=prop, metadata=metadata
+-        )
++        pipeline = pipeline.fit(X, y, sample_weight=sample_weight, prop=prop)
+ 
+     try:
+         getattr(pipeline, method)(
+@@ -1916,10 +1924,18 @@ def test_metadata_routing_for_pipeline(method):
+     # Make sure the transformer has received the metadata
+     # For the transformer, always only `fit` and `transform` are called.
+     check_recorded_metadata(
+-        obj=trs, method="fit", sample_weight=sample_weight, metadata=metadata
++        obj=trs,
++        method="fit",
++        parent="fit",
++        sample_weight=sample_weight,
++        metadata=metadata,
+     )
+     check_recorded_metadata(
+-        obj=trs, method="transform", sample_weight=sample_weight, metadata=metadata
++        obj=trs,
++        method="transform",
++        parent="transform",
++        sample_weight=sample_weight,
++        metadata=metadata,
+     )
+ 
+ 
+@@ -2074,6 +2090,7 @@ def test_feature_union_metadata_routing(transformer):
+             check_recorded_metadata(
+                 obj=sub_trans,
+                 method="fit",
++                parent="fit",
+                 **kwargs,
+             )
+ 
+diff --git a/sklearn/utils/tests/test_array_api.py b/sklearn/utils/tests/test_array_api.py
+index 27c2bce0fa37efb63b0d717f9ec1d8c6941ca49a..25913e7f548465cf7d925c5c005a0a1a7417ecaf 100644
+--- a/sklearn/utils/tests/test_array_api.py
++++ b/sklearn/utils/tests/test_array_api.py
+@@ -15,6 +15,7 @@ from sklearn.utils._array_api import (
+     _convert_to_numpy,
+     _estimator_with_converted_arrays,
+     _is_numpy_namespace,
++    _isin,
+     _nanmax,
+     _nanmin,
+     _NumPyAPIWrapper,
+@@ -26,12 +27,6 @@ from sklearn.utils._array_api import (
+     supported_float_dtypes,
+     yield_namespace_device_dtype_combinations,
+ )
+-
+-# [ENV-PATCH] Conditional import for _isin - may not exist in all versions
+-try:
+-    from sklearn.utils._array_api import _isin
+-except ImportError:
+-    _isin = None
+ from sklearn.utils._testing import (
+     _array_api_for_tests,
+     assert_array_equal,
+@@ -519,7 +514,6 @@ def test_indexing_dtype(namespace, _device, _dtype):
+ )
+ @pytest.mark.parametrize("invert", [True, False])
+ @pytest.mark.parametrize("assume_unique", [True, False])
+-@pytest.mark.skipif(_isin is None, reason="[ENV-PATCH] _isin not available in this version")
+ @pytest.mark.parametrize("element_size", [6, 10, 14])
+ @pytest.mark.parametrize("int_dtype", ["int16", "int32", "int64", "uint8"])
+ def test_isin(
+diff --git a/sklearn/utils/tests/test_cython_blas.py b/sklearn/utils/tests/test_cython_blas.py
+index e57bfc3ec5a9c58c8202ad06cf9ede7f65673788..89543a7ccd1db7b6479eaf1731a07f8ab3d55e7b 100644
+--- a/sklearn/utils/tests/test_cython_blas.py
++++ b/sklearn/utils/tests/test_cython_blas.py
+@@ -2,10 +2,8 @@ import numpy as np
+ import pytest
+ 
+ from sklearn.utils._cython_blas import (
+-    ColMajor,
+-    NoTrans,
+-    RowMajor,
+-    Trans,
++    BLAS_Order,
++    BLAS_Trans,
+     _asum_memview,
+     _axpy_memview,
+     _copy_memview,
+@@ -18,6 +16,11 @@ from sklearn.utils._cython_blas import (
+     _rotg_memview,
+     _scal_memview,
+ )
++# [ENV-PATCH] Aliases for enum values
++ColMajor = BLAS_Order.ColMajor
++RowMajor = BLAS_Order.RowMajor
++NoTrans = BLAS_Trans.NoTrans
++Trans = BLAS_Trans.Trans
+ from sklearn.utils._testing import assert_allclose
+ 
+ 
+diff --git a/sklearn/utils/tests/test_deprecation.py b/sklearn/utils/tests/test_deprecation.py
+index 4d04b48da2f0b799dcf4f801865dd2b375dea01b..468be71ced15728066aa921b11f7b797cf5b48d0 100644
+--- a/sklearn/utils/tests/test_deprecation.py
++++ b/sklearn/utils/tests/test_deprecation.py
+@@ -1,5 +1,5 @@
+-# Authors: Raghav RV <rvraghav93@gmail.com>
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ 
+ import pickle
+diff --git a/sklearn/utils/tests/test_extmath.py b/sklearn/utils/tests/test_extmath.py
+index 5ec962433d7c0fe79bd920096c3f477e12b94d2d..5b27a52d29ccf2899ec015dae8cd108dd1036c06 100644
+--- a/sklearn/utils/tests/test_extmath.py
++++ b/sklearn/utils/tests/test_extmath.py
+@@ -1,8 +1,5 @@
+-# Authors: Olivier Grisel <olivier.grisel@ensta.org>
+-#          Mathieu Blondel <mathieu@mblondel.org>
+-#          Denis Engemann <denis-alexander.engemann@inria.fr>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ import numpy as np
+ import pytest
+ from scipy import linalg, sparse
+diff --git a/sklearn/utils/tests/test_fixes.py b/sklearn/utils/tests/test_fixes.py
+index c312b8568c4c6f8a2957ed82bee34acc66e55c52..2aa370df705a31f6771a5b7cfa184ab901de5e0d 100644
+--- a/sklearn/utils/tests/test_fixes.py
++++ b/sklearn/utils/tests/test_fixes.py
+@@ -1,7 +1,5 @@
+-# Authors: Gael Varoquaux <gael.varoquaux@normalesup.org>
+-#          Justin Vincent
+-#          Lars Buitinck
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ import pytest
+diff --git a/sklearn/utils/tests/test_murmurhash.py b/sklearn/utils/tests/test_murmurhash.py
+index 18730302124f92a8557cb4abb3a16eb3260b9ca4..20721c6e98f524ff03db28e60909fb8979090e81 100644
+--- a/sklearn/utils/tests/test_murmurhash.py
++++ b/sklearn/utils/tests/test_murmurhash.py
+@@ -1,6 +1,5 @@
+-# Author: Olivier Grisel <olivier.grisel@ensta.org>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ import numpy as np
+ from numpy.testing import assert_array_almost_equal, assert_array_equal
+diff --git a/sklearn/utils/tests/test_seq_dataset.py b/sklearn/utils/tests/test_seq_dataset.py
+index 82864c6b97a08f2247c0b63c388e0f7929dae400..0e6f182e7c71bd57fb27c065e220dd03cf8f2dce 100644
+--- a/sklearn/utils/tests/test_seq_dataset.py
++++ b/sklearn/utils/tests/test_seq_dataset.py
+@@ -1,7 +1,5 @@
+-# Author: Tom Dupre la Tour
+-#         Joan Massich <mailsik@gmail.com>
+-#
+-# License: BSD 3 clause
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
+ 
+ from itertools import product
+ 
+diff --git a/sklearn/utils/tests/test_validation.py b/sklearn/utils/tests/test_validation.py
+index 92fff950e875e9866dd54a5d6cc773f0536631e8..5bde51ae514d97f5093c8cdb998c3057af4f92ca 100644
+--- a/sklearn/utils/tests/test_validation.py
++++ b/sklearn/utils/tests/test_validation.py
+@@ -46,6 +46,7 @@ from sklearn.utils._testing import (
+     assert_allclose_dense_sparse,
+     assert_array_equal,
+     assert_no_warnings,
++    create_memmap_backed_data,
+     ignore_warnings,
+     skip_if_array_api_compat_not_configured,
+ )
+@@ -2124,3 +2125,67 @@ def test__is_polars_df():
+             self.schema = ["a", "b"]
+ 
+     assert not _is_polars_df(LooksLikePolars())
++
++
++def test_check_array_writeable_np():
++    """Check the behavior of check_array when a writeable array is requested
++    without copy if possible, on numpy arrays.
++    """
++    X = np.random.uniform(size=(10, 10))
++
++    out = check_array(X, copy=False, force_writeable=True)
++    # X is already writeable, no copy is needed
++    assert np.may_share_memory(out, X)
++    assert out.flags.writeable
++
++    X.flags.writeable = False
++
++    out = check_array(X, copy=False, force_writeable=True)
++    # X is not writeable, a copy is made
++    assert not np.may_share_memory(out, X)
++    assert out.flags.writeable
++
++
++def test_check_array_writeable_mmap():
++    """Check the behavior of check_array when a writeable array is requested
++    without copy if possible, on a memory-map.
++
++    A common situation is when a meta-estimators run in parallel using multiprocessing
++    with joblib, which creates read-only memory-maps of large arrays.
++    """
++    X = np.random.uniform(size=(10, 10))
++
++    mmap = create_memmap_backed_data(X, mmap_mode="w+")
++    out = check_array(mmap, copy=False, force_writeable=True)
++    # mmap is already writeable, no copy is needed
++    assert np.may_share_memory(out, mmap)
++    assert out.flags.writeable
++
++    mmap = create_memmap_backed_data(X, mmap_mode="r")
++    out = check_array(mmap, copy=False, force_writeable=True)
++    # mmap is read-only, a copy is made
++    assert not np.may_share_memory(out, mmap)
++    assert out.flags.writeable
++
++
++def test_check_array_writeable_df():
++    """Check the behavior of check_array when a writeable array is requested
++    without copy if possible, on a dataframe.
++    """
++    pd = pytest.importorskip("pandas")
++
++    X = np.random.uniform(size=(10, 10))
++    df = pd.DataFrame(X, copy=False)
++
++    out = check_array(df, copy=False, force_writeable=True)
++    # df is backed by a writeable array, no copy is needed
++    assert np.may_share_memory(out, df)
++    assert out.flags.writeable
++
++    X.flags.writeable = False
++    df = pd.DataFrame(X, copy=False)
++
++    out = check_array(df, copy=False, force_writeable=True)
++    # df is backed by a read-only array, a copy is made
++    assert not np.may_share_memory(out, df)
++    assert out.flags.writeable

@@ -1,0 +1,354 @@
+diff --git a/ui/src/album/AlbumDatesField.test.jsx b/ui/src/album/AlbumDatesField.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9bcd4156791e91b5da00218a01477b6d4cbd8e4b
+--- /dev/null
++++ b/ui/src/album/AlbumDatesField.test.jsx
+@@ -0,0 +1,112 @@
++import { describe, test, expect, vi } from 'vitest'
++import { render } from '@testing-library/react'
++import { RecordContextProvider } from 'react-admin'
++import { AlbumDatesField } from './AlbumDatesField'
++import { formatRange } from '../common/index.js'
++
++// Mock the formatRange function
++vi.mock('../common/index.js', () => ({
++  formatRange: vi.fn(),
++}))
++
++describe('AlbumDatesField', () => {
++  test('renders nothing when yearRange is "0"', () => {
++    const record = {
++      maxYear: '0',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('0')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders nothing when releaseYear is "0"', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '0-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders only yearRange when releaseYear is undefined', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('renders both years when they are different', () => {
++    const record = {
++      maxYear: '2018',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2018')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('♫ 2018 · ○ 2020')
++  })
++
++  test('renders only yearRange when both years are the same', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('applies className when provided', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField className="test-class" />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toHaveClass('test-class')
++  })
++})
+diff --git a/ui/src/artist/ArtistActions.test.jsx b/ui/src/artist/ArtistActions.test.jsx
+index 90be284094ddc09c17fe2584a7c0f2b97f46baba..a11ee50e37f21a2de1480432558fd8078b3df84c 100644
+--- a/ui/src/artist/ArtistActions.test.jsx
++++ b/ui/src/artist/ArtistActions.test.jsx
+@@ -49,11 +49,21 @@ describe('ArtistActions', () => {
+     // Mock console.error to suppress error logging in tests
+     vi.spyOn(console, 'error').mockImplementation(() => {})
+ 
++    const songWithReplayGain = {
++      id: 'rec1',
++      replayGain: {
++        albumGain: -5,
++        albumPeak: 1,
++        trackGain: -6,
++        trackPeak: 0.8,
++      },
++    }
++
+     subsonic.getSimilarSongs2.mockResolvedValue({
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          similarSongs2: { song: [{ id: 'rec1' }] },
++          similarSongs2: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -61,7 +71,7 @@ describe('ArtistActions', () => {
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          topSongs: { song: [{ id: 'rec1' }] },
++          topSongs: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -93,6 +103,22 @@ describe('ArtistActions', () => {
+       )
+       expect(mockDispatch).toHaveBeenCalled()
+     })
++
++    it('maps replaygain info', async () => {
++      renderArtistActions()
++      clickActionButton('radio')
++
++      await waitFor(() =>
++        expect(subsonic.getSimilarSongs2).toHaveBeenCalledWith('ar1', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
+   })
+ 
+   describe('Play action', () => {
+@@ -106,6 +132,22 @@ describe('ArtistActions', () => {
+       expect(mockDispatch).toHaveBeenCalled()
+     })
+ 
++    it('maps replaygain info for top songs', async () => {
++      renderArtistActions()
++      clickActionButton('topSongs')
++
++      await waitFor(() =>
++        expect(subsonic.getTopSongs).toHaveBeenCalledWith('Artist', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
++
+     it('handles API rejection', async () => {
+       subsonic.getTopSongs.mockRejectedValue(new Error('Network error'))
+ 
+diff --git a/ui/src/common/SongContextMenu.test.jsx b/ui/src/common/SongContextMenu.test.jsx
+index ee6a358d853747aa9482eb8875d562af4c53872d..a30da859f722ecfb6edb4887773f9257914d968a 100644
+--- a/ui/src/common/SongContextMenu.test.jsx
++++ b/ui/src/common/SongContextMenu.test.jsx
+@@ -10,6 +10,8 @@ vi.mock('../dataProvider', () => ({
+ 
+ vi.mock('react-redux', () => ({ useDispatch: () => vi.fn() }))
+ 
++const getPlaylistsMock = vi.fn()
++
+ vi.mock('react-admin', async (importOriginal) => {
+   const actual = await importOriginal()
+   return {
+@@ -18,9 +20,7 @@ vi.mock('react-admin', async (importOriginal) => {
+       window.location.hash = `#${url}`
+     },
+     useDataProvider: () => ({
+-      getPlaylists: vi.fn().mockResolvedValue({
+-        data: [{ id: 'pl1', name: 'Pl 1' }],
+-      }),
++      getPlaylists: getPlaylistsMock,
+       inspect: vi.fn().mockResolvedValue({
+         data: { rawTags: {} },
+       }),
+@@ -32,6 +32,9 @@ describe('SongContextMenu', () => {
+   beforeEach(() => {
+     vi.clearAllMocks()
+     window.location.hash = ''
++    getPlaylistsMock.mockResolvedValue({
++      data: [{ id: 'pl1', name: 'Pl 1' }],
++    })
+   })
+ 
+   it('navigates to playlist when selected', async () => {
+@@ -79,4 +82,26 @@ describe('SongContextMenu', () => {
+ 
+     expect(mockOnClick).not.toHaveBeenCalled()
+   })
++
++  it('does nothing when "Show in Playlist" is disabled', async () => {
++    getPlaylistsMock.mockResolvedValue({ data: [] })
++    const mockOnClick = vi.fn()
++    render(
++      <TestContext>
++        <div onClick={mockOnClick}>
++          <SongContextMenu record={{ id: 'song1', size: 1 }} resource="song" />
++        </div>
++      </TestContext>,
++    )
++
++    fireEvent.click(screen.getAllByRole('button')[1])
++    await waitFor(() =>
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++
++    fireEvent.click(
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++    expect(mockOnClick).not.toHaveBeenCalled()
++  })
+ })
+diff --git a/ui/src/dialogs/SelectPlaylistInput.test.jsx b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+index 93a14b3251bb1d0a68548950bbf5110bfb1f4430..4ffcdf0b6ee185d75312d1eb7cbf600c5785ae83 100644
+--- a/ui/src/dialogs/SelectPlaylistInput.test.jsx
++++ b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+@@ -205,9 +205,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Find and click the remove button (translation key)
+-      const removeButton = screen.getByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButton = screen.getByText('×')
+       fireEvent.click(removeButton)
+ 
+       await waitFor(() => {
+@@ -480,9 +478,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Remove the first selected playlist via chip
+-      const removeButtons = screen.getAllByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButtons = screen.getAllByText('×')
+       fireEvent.click(removeButtons[0])
+ 
+       await waitFor(() => {
+diff --git a/ui/src/layout/ActivityPanel.test.jsx b/ui/src/layout/ActivityPanel.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c506fd08b09eecb23f189e7aacf46e99ae852c56
+--- /dev/null
++++ b/ui/src/layout/ActivityPanel.test.jsx
+@@ -0,0 +1,61 @@
++import React from 'react'
++import { render, screen, fireEvent } from '@testing-library/react'
++import { Provider } from 'react-redux'
++import { createStore, combineReducers } from 'redux'
++import { describe, it, beforeEach } from 'vitest'
++
++import ActivityPanel from './ActivityPanel'
++import { activityReducer } from '../reducers'
++import config from '../config'
++import subsonic from '../subsonic'
++
++vi.mock('../subsonic', () => ({
++  default: {
++    getScanStatus: vi.fn(() =>
++      Promise.resolve({
++        json: {
++          'subsonic-response': {
++            status: 'ok',
++            scanStatus: { error: 'Scan failed' },
++          },
++        },
++      }),
++    ),
++    startScan: vi.fn(),
++  },
++}))
++
++describe('<ActivityPanel />', () => {
++  let store
++
++  beforeEach(() => {
++    store = createStore(combineReducers({ activity: activityReducer }), {
++      activity: {
++        scanStatus: {
++          scanning: false,
++          folderCount: 0,
++          count: 0,
++          error: 'Scan failed',
++          elapsedTime: 0,
++        },
++        serverStart: { version: config.version, startTime: Date.now() },
++      },
++    })
++  })
++
++  it('clears the error icon after opening the panel', () => {
++    render(
++      <Provider store={store}>
++        <ActivityPanel />
++      </Provider>,
++    )
++
++    const button = screen.getByRole('button')
++    expect(screen.getByTestId('activity-error-icon')).toBeInTheDocument()
++
++    fireEvent.click(button)
++
++    expect(screen.getByTestId('activity-ok-icon')).toBeInTheDocument()
++    expect(screen.getByText('Scan failed')).toBeInTheDocument()
++  })
++})

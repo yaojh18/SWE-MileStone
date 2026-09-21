@@ -1,0 +1,131 @@
+diff --git a/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/MockNamingService.java b/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/MockNamingService.java
+index 7ce02a5fd3484941f2e065d861e3bb13248e8939..2f4f1faad075f7bb2506a828b9f80bafd7dfcb50 100644
+--- a/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/MockNamingService.java
++++ b/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/MockNamingService.java
+@@ -86,7 +86,8 @@ public class MockNamingService implements NamingService {
+     }
+ 
+     @Override
+-    public List<Instance> getAllInstances(String serviceName, String groupName, boolean subscribe) {
++    public List<Instance> getAllInstances(String serviceName, String groupName, boolean subscribe)
++            throws NacosException {
+         return null;
+     }
+ 
+diff --git a/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapperTest.java b/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapperTest.java
+index f55f9f138599a9bdf15a324264546536bd2c4d39..f6f1f17d7f0d8927c02aaac4dcef05e4e0571cf9 100644
+--- a/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapperTest.java
++++ b/dubbo-registry/dubbo-registry-nacos/src/test/java/org/apache/dubbo/registry/nacos/NacosNamingServiceWrapperTest.java
+@@ -661,7 +661,7 @@ class NacosNamingServiceWrapperTest {
+             public void registerInstance(String serviceName, String groupName, Instance instance) {}
+ 
+             @Override
+-            public List<Instance> getAllInstances(String serviceName, String groupName) {
++            public List<Instance> getAllInstances(String serviceName, String groupName, boolean subscribe) {
+                 return null;
+             }
+         };
+@@ -674,7 +674,7 @@ class NacosNamingServiceWrapperTest {
+             Assertions.fail(e);
+         }
+         try {
+-            nacosNamingServiceWrapper.getAllInstances("Test", "Test");
++            nacosNamingServiceWrapper.getAllInstancesWithoutSubscription("Test", "Test");
+         } catch (NacosException e) {
+             Assertions.fail(e);
+         }
+@@ -690,7 +690,8 @@ class NacosNamingServiceWrapperTest {
+             }
+ 
+             @Override
+-            public List<Instance> getAllInstances(String serviceName, String groupName) throws NacosException {
++            public List<Instance> getAllInstances(String serviceName, String groupName, boolean subscribe)
++                    throws NacosException {
+                 throw new NacosException();
+             }
+         };
+@@ -699,7 +700,9 @@ class NacosNamingServiceWrapperTest {
+                 new NacosNamingServiceWrapper(new NacosConnectionManager(namingService), 0, 0);
+         Assertions.assertThrows(
+                 NacosException.class, () -> nacosNamingServiceWrapper.registerInstance("Test", "Test", null));
+-        Assertions.assertThrows(NacosException.class, () -> nacosNamingServiceWrapper.getAllInstances("Test", "Test"));
++        Assertions.assertThrows(
++                NacosException.class,
++                () -> nacosNamingServiceWrapper.getAllInstancesWithoutSubscription("Test", "Test"));
+     }
+ 
+     @Test
+@@ -717,7 +720,8 @@ class NacosNamingServiceWrapperTest {
+             }
+ 
+             @Override
+-            public List<Instance> getAllInstances(String serviceName, String groupName) throws NacosException {
++            public List<Instance> getAllInstances(String serviceName, String groupName, boolean subscribe)
++                    throws NacosException {
+                 if (count2.incrementAndGet() < 10) {
+                     throw new NacosException();
+                 }
+@@ -735,9 +739,11 @@ class NacosNamingServiceWrapperTest {
+             Assertions.fail(e);
+         }
+ 
+-        Assertions.assertThrows(NacosException.class, () -> nacosNamingServiceWrapper.getAllInstances("Test", "Test"));
++        Assertions.assertThrows(
++                NacosException.class,
++                () -> nacosNamingServiceWrapper.getAllInstancesWithoutSubscription("Test", "Test"));
+         try {
+-            nacosNamingServiceWrapper.getAllInstances("Test", "Test");
++            nacosNamingServiceWrapper.getAllInstancesWithoutSubscription("Test", "Test");
+         } catch (NacosException e) {
+             Assertions.fail(e);
+         }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/TripleProtocolTest.java b/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/TripleProtocolTest.java
+index 7ea5f18cbeb7594ea2273dc4ba3d138985bf60db..a9c5c86bb904e665e5f6ae2fb202de64c6188acc 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/TripleProtocolTest.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/TripleProtocolTest.java
+@@ -17,6 +17,7 @@
+ package org.apache.dubbo.rpc.protocol.tri;
+ 
+ import org.apache.dubbo.common.URL;
++import org.apache.dubbo.common.extension.ExtensionLoader;
+ import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.common.utils.NetUtils;
+@@ -33,6 +34,7 @@ import org.apache.dubbo.rpc.model.ServiceMetadata;
+ import org.apache.dubbo.rpc.protocol.tri.support.IGreeter;
+ import org.apache.dubbo.rpc.protocol.tri.support.IGreeterImpl;
+ import org.apache.dubbo.rpc.protocol.tri.support.MockStreamObserver;
++import org.apache.dubbo.rpc.service.EchoService;
+ 
+ import java.util.concurrent.TimeUnit;
+ 
+@@ -40,6 +42,7 @@ import org.junit.jupiter.api.Assertions;
+ import org.junit.jupiter.api.Test;
+ 
+ import static org.apache.dubbo.rpc.protocol.tri.support.IGreeter.SERVER_MSG;
++import static org.junit.jupiter.api.Assertions.assertEquals;
+ 
+ class TripleProtocolTest {
+ 
+@@ -65,7 +68,8 @@ class TripleProtocolTest {
+         serviceRepository.registerProvider(providerModel);
+         providerUrl = providerUrl.setServiceModel(providerModel);
+ 
+-        Protocol protocol = new TripleProtocol(providerUrl.getOrDefaultFrameworkModel());
++        Protocol protocol = ExtensionLoader.getExtensionLoader(Protocol.class).getExtension("tri");
++
+         ProxyFactory proxy =
+                 applicationModel.getExtensionLoader(ProxyFactory.class).getAdaptiveExtension();
+         Invoker<IGreeter> invoker = proxy.getInvoker(serviceImpl, IGreeter.class, providerUrl);
+@@ -106,6 +110,11 @@ class TripleProtocolTest {
+         Assertions.assertEquals(REQUEST_MSG, serverOutboundMessageSubscriber.getOnNextData());
+         Assertions.assertTrue(serverOutboundMessageSubscriber.isOnCompleted());
+ 
++        EchoService echo = proxy.getProxy(protocol.refer(EchoService.class, consumerUrl));
++        assertEquals(echo.$echo("test"), "test");
++        assertEquals(echo.$echo("abcdefg"), "abcdefg");
++        assertEquals(echo.$echo(1234), 1234);
++
+         export.unexport();
+         protocol.destroy();
+         // resource recycle.

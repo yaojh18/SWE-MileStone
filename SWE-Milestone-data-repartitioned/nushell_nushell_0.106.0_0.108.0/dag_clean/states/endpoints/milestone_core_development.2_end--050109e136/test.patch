@@ -1,0 +1,390 @@
+diff --git a/benches/README.md b/benches/README.md
+index 93a13afe5095c92bd5db379b24e109ddd2d391b8..8e823b225cf22a560edbb4bc276a7fe8fe3895da 100644
+--- a/benches/README.md
++++ b/benches/README.md
+@@ -1,7 +1,13 @@
+-# Divan benchmarks
++# Tango benchmarks
+ 
+-These are benchmarks using [Divan](https://github.com/nvzqz/divan), a microbenchmarking tool for Rust.
++These are benchmarks using [tango](https://github.com/bazhenov/tango), a benchmark tool which pairs the executions of two versions of the given benchmarks. This claims to reduce the noise from other factors on the system and allow a more reliable comparison of two different implementation.
+ 
+-Run all benchmarks with `cargo bench`
++The easiest way to start is to run:
+ 
+-Or run individual benchmarks like `cargo bench -- <regex>` e.g. `cargo bench -- parse`
+\ No newline at end of file
++```nushell
++use toolkit.nu
++# To compare the current branch to main
++toolkit benchmark-compare
++# or to compare a target git-revision against a reference git-revision
++toolkit benchmark-compare <target> <reference>
++```
+diff --git a/benches/benchmarks.rs b/benches/benchmarks.rs
+index 1ffb4ccc92496402fd62a521cb30281aa5684ce9..6a2522135587b4112a0dd5fc66c31f6402c68ec4 100644
+--- a/benches/benchmarks.rs
++++ b/benches/benchmarks.rs
+@@ -139,6 +139,30 @@ fn bench_load_standard_lib() -> impl IntoBenchmarks {
+     })]
+ }
+ 
++/// Load all modules of standard library into the engine through a general `use`.
++fn bench_load_use_standard_lib() -> impl IntoBenchmarks {
++    [benchmark_fn("load_use_standard_lib", move |b| {
++        // We need additional commands like `format number` for the standard library
++        let engine = nu_cmd_extra::add_extra_command_context(setup_engine());
++        let commands = Spanned {
++            item: "use std".into(),
++            span: Span::unknown(),
++        };
++        b.iter(move || {
++            let mut engine = engine.clone();
++            let mut stack = Stack::new();
++            let _ = load_standard_library(&mut engine);
++            evaluate_commands(
++                &commands,
++                &mut engine,
++                &mut stack,
++                PipelineData::empty(),
++                Default::default(),
++            )
++        })
++    })]
++}
++
+ fn create_flat_record_string(n: usize) -> String {
+     let mut s = String::from("let record = { ");
+     for i in 0..n {
+@@ -437,6 +461,7 @@ fn decode_msgpack(row_cnt: usize, col_cnt: usize) -> impl IntoBenchmarks {
+ 
+ tango_benchmarks!(
+     bench_load_standard_lib(),
++    bench_load_use_standard_lib(),
+     // Data types
+     // Record
+     bench_record_create(1),
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index 2d5334a0b00328cfa9397e59b6dd6ad91f747076..45a76aa852cdcb62cb0d1485a0ac77efdc367314 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -199,7 +199,7 @@ pub fn merge_input(
+             engine_state,
+             stack,
+             &block,
+-            PipelineData::Value(Value::nothing(Span::unknown()), None),
++            PipelineData::value(Value::nothing(Span::unknown()), None),
+         )
+         .is_ok()
+     );
+diff --git a/crates/nu-command/tests/commands/export.rs b/crates/nu-command/tests/commands/export.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8bd168952cfa5dd1fca0882b060745e9039e09c
+--- /dev/null
++++ b/crates/nu-command/tests/commands/export.rs
+@@ -0,0 +1,26 @@
++use nu_test_support::nu;
++
++#[test]
++fn export_command_help() {
++    let actual = nu!("export -h");
++
++    assert!(
++        actual
++            .out
++            .contains("Export definitions or environment variables from a module")
++    );
++}
++
++#[test]
++fn export_command_unexpected() {
++    let actual = nu!("export foo");
++
++    assert!(actual.err.contains("unexpected export"));
++}
++
++#[test]
++fn export_alias_should_not_panic() {
++    let actual = nu!("export alias");
++
++    assert!(actual.err.contains("Missing"));
++}
+diff --git a/crates/nu-command/tests/commands/export_def.rs b/crates/nu-command/tests/commands/export_def.rs
+index 3f57610c6c2e91d5b6d84c53b8cba4f6f3b73602..41a35afb01c901f4add9659ad59ea88a0f1371e0 100644
+--- a/crates/nu-command/tests/commands/export_def.rs
++++ b/crates/nu-command/tests/commands/export_def.rs
+@@ -10,3 +10,14 @@ fn export_subcommands_help() {
+             .contains("Define a custom command and export it from a module")
+     );
+ }
++
++#[test]
++fn export_should_not_expose_arguments() {
++    // issue #16211
++    let actual = nu!(r#"
++            export def foo [bar: int] {}
++            scope variables
++        "#);
++
++    assert!(!actual.out.contains("bar"));
++}
+diff --git a/crates/nu-command/tests/commands/mod.rs b/crates/nu-command/tests/commands/mod.rs
+index 0d0fa8b1a18719e8f21247ef9febc4a1daa890f5..8482dbac4cfa9dfc5d9cbc5acd904e3aadc92063 100644
+--- a/crates/nu-command/tests/commands/mod.rs
++++ b/crates/nu-command/tests/commands/mod.rs
+@@ -32,6 +32,7 @@ mod empty;
+ mod error_make;
+ mod every;
+ mod exec;
++mod export;
+ mod export_def;
+ mod fill;
+ mod filter;
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index b398b39290f0c605c8dcf119e3309e5e29e1f8ce..34c3a722dd09707b9cfad6c05adbee342e882f99 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::ListStream(
++    let pipe = PipelineData::list_stream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::ByteStream(
++    let data = PipelineData::byte_stream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index 3547b986e74468687a2d853dde8585825b1dcffb..beba4ebd34ed76600d09b471fc0435f3c909bbb1 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -145,7 +145,7 @@ fn test_into_int_from_u32() -> Result<(), ShellError> {
+     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+         .eval_with(
+             "into int from u32",
+-            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
++            PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
+         )?
+         .into_value(Span::test_data())?;
+     assert_eq!(Value::test_int(42), result);
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 011607959a8fb30bdd3a378a9f079b8c4b7dde88..704c885347a54edacde0a1023ac10b116a5ee99d 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,6 +45,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -55,6 +56,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+     assert_eq!(
+@@ -65,6 +67,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ 
+@@ -78,6 +81,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ 
+@@ -91,6 +95,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            custom_completion: None,
+         })
+     );
+ }
+diff --git a/tests/overlays/mod.rs b/tests/overlays/mod.rs
+index b879409a74bb111836a2091fc69f13475fbd2292..6dc678acaa26ed474103b5ff8ef2af25453a3460 100644
+--- a/tests/overlays/mod.rs
++++ b/tests/overlays/mod.rs
+@@ -198,7 +198,7 @@ fn new_overlay_from_const_name() {
+     let inp = &[
+         "const mod = 'spam'",
+         "overlay new $mod",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -212,7 +212,7 @@ fn hide_overlay_from_const_name() {
+         "const mod = 'spam'",
+         "overlay new $mod",
+         "overlay hide $mod",
+-        "overlay list | str join ' '",
++        "overlay list | where active == true | get name | str join ' '",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -410,7 +410,7 @@ fn hide_overlay_scoped_env() {
+ 
+ #[test]
+ fn list_default_overlay() {
+-    let inp = &["overlay list | last"];
++    let inp = &["overlay list | last | get name"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -424,7 +424,7 @@ fn list_last_overlay() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -439,7 +439,7 @@ fn list_overlay_scoped() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "do { overlay list | last }",
++        "do { overlay list | last | get name }",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -695,7 +695,7 @@ fn reset_overrides() {
+ 
+ #[test]
+ fn overlay_new() {
+-    let inp = &["overlay new spam", "overlay list | last"];
++    let inp = &["overlay new spam", "overlay list | last | get name"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -1080,7 +1080,7 @@ fn overlay_use_find_scoped_module() {
+                     module spam { }
+ 
+                     overlay use spam
+-                    overlay list | last
++                    overlay list | last | get name
+                 }
+             ";
+ 
+@@ -1196,7 +1196,7 @@ fn overlay_trim_single_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use 'spam'",
+-        "overlay list | last ",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1227,7 +1227,7 @@ fn overlay_trim_double_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         r#"overlay use "spam" "#,
+-        "overlay list | last ",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1428,7 +1428,7 @@ fn alias_overlay_use_2() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam",
+         "spam b",
+-        "overlay list | get 1",
++        "overlay list | get 1.name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1447,7 +1447,7 @@ fn alias_overlay_use_3() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam b",
+         "b",
+-        "overlay list | get 1",
++        "overlay list | get 1.name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1465,7 +1465,7 @@ fn alias_overlay_new() {
+         "alias on = overlay new",
+         "on spam",
+         "on eggs",
+-        "overlay list | last",
++        "overlay list | last | get name",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index f532a74a4eb2b11a1cef30e6cbb9dbc494f85dea..2373c357c09084fcb9d3b9c4a04be8b9b6326d74 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -1036,3 +1036,9 @@ fn external_argument_with_subexpressions() -> TestResult {
+     run_test(r#"^echo ")('foo')(""#, ")('foo')(")?;
+     fail_test(r#"^echo foo( 'bar'"#, "Unexpected end of code")
+ }
++
++// https://github.com/nushell/nushell/issues/16332
++#[test]
++fn quote_escape_but_not_env_shorthand() -> TestResult {
++    run_test(r#""\"=foo""#, "\"=foo")
++}
+diff --git a/tests/shell/mod.rs b/tests/shell/mod.rs
+index 6f7d60aa587aed57f1ee7836a1f43e8dba87048e..c452e3d3a81360c383515cb6ccf95515908b7bd1 100644
+--- a/tests/shell/mod.rs
++++ b/tests/shell/mod.rs
+@@ -445,3 +445,20 @@ fn main_script_subcommand_help_uses_script_name2() {
+         assert!(!actual.err.contains("Usage: main foo"));
+     })
+ }
++
++#[test]
++fn script_file_not_found() {
++    let actual = nu!(r#"nu non-existent-script.nu foo bar"#);
++    assert!(
++        !actual.err.contains(".rs"),
++        "internal rust source was mentioned"
++    );
++    assert!(
++        actual.err.contains("non-existent-script.nu"),
++        "error did not include script name"
++    );
++    assert!(
++        actual.err.contains("commandline"),
++        "source file for the error was not commandline"
++    );
++}

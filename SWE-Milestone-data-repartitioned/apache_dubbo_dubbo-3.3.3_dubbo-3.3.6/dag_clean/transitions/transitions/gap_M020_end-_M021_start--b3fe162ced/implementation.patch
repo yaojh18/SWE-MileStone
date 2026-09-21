@@ -1,0 +1,542 @@
+diff --git a/.asf.yaml b/.asf.yaml
+index 4f41badc91d2e5b4215be992b8b2a49da192a894..db8c17d077dddb22cf7e99898243f6c9b5892983 100644
+--- a/.asf.yaml
++++ b/.asf.yaml
+@@ -37,15 +37,51 @@ github:
+     # Enable GitHub Discussions for community discussions
+     discussions: true
+   protected_branches:
+-    master: {}
+-    2.5.x: {}
+-    2.6.x: {}
+-    2.7.x: {}
+-    3.0: {}
+-    3.1: {}
+-    3.2: {}
+-    3.3: {}
+-    3.4: {}
++    master: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.5.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.6.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    2.7.x: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.0: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.1: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.2: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.3: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
++    3.4: 
++      required_pull_request_reviews:
++        dismiss_stale_reviews: true
++        require_last_push_approval: true
++        required_approving_review_count: 2
+   labels:
+     - java
+     - rpc
+diff --git a/.github/workflows/build-and-test-pr.yml b/.github/workflows/build-and-test-pr.yml
+index 1bd5e2e982472286917886501ffa3820d76e760f..921791f7666e8cb91496f4da2c3ffe9567406c06 100644
+--- a/.github/workflows/build-and-test-pr.yml
++++ b/.github/workflows/build-and-test-pr.yml
+@@ -207,10 +207,12 @@ jobs:
+ 
+   unit-test:
+     needs: [check-format, unit-test-prepare]
+-    name: "Unit Test On ubuntu-latest"
++    name: "Unit Test On ubuntu-latest Java: ${{ matrix.java }}"
+     runs-on: ubuntu-latest
+     strategy:
+       fail-fast: false
++      matrix:
++        java: [ 8, 11, 17, 21 ]
+     env:
+       DISABLE_FILE_SYSTEM_TEST: true
+       CURRENT_ROLE: ${{ matrix.case-role }}
+@@ -220,11 +222,11 @@ jobs:
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+-      - name: "Set up JDK 21"
++      - name: "Set up JDK ${{ matrix.java }}"
+         uses: actions/setup-java@v4
+         with:
+           distribution: 'zulu'
+-          java-version: 21
++          java-version: ${{ matrix.java }}
+       - name: "Set current date as env variable"
+         run: echo "TODAY=$(date +'%Y%m%d')" >> $GITHUB_ENV
+       - name: "Cache local maven repository"
+@@ -243,8 +245,15 @@ jobs:
+           key: zookeeper-${{ runner.os }}-${{ env.ZOOKEEPER_VERSION }}
+           restore-keys: |
+             zookeeper-${{ runner.os }}-
+-      - name: "Test with maven"
++      - name: "Test with maven on Java: 8"
++        timeout-minutes: 90
++        if: ${{ matrix.java == '8' }}
++        run: |
++          set -o pipefail
++          ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
++      - name: "Test with maven on Java: ${{ matrix.java }}"
+         timeout-minutes: 90
++        if: ${{ matrix.java != '8' }}
+         run: |
+           set -o pipefail
+           ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,jdk15ge-simple,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+@@ -256,13 +265,13 @@ jobs:
+         with:
+           token: ${{ secrets.CODECOV_TOKEN }}
+           verbose: true
+-          flags: unit-tests
++          flags: unit-tests-java${{ matrix.java }}
+         env:
+           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+       - name: "Upload surefire reports"
+         uses: actions/upload-artifact@v4
+         with:
+-          name: surefire-reports
++          name: surefire-reports-java${{ matrix.java }}
+           path: "**/target/surefire-reports/**"
+ 
+   samples-test-prepare:
+@@ -293,7 +302,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -334,7 +343,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash ./build-test-image.sh
++        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -365,7 +374,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -408,7 +417,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -449,7 +458,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash ./build-test-image.sh
++        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -480,7 +489,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -501,7 +510,7 @@ jobs:
+     needs: [check-format, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+@@ -551,7 +560,7 @@ jobs:
+     needs: [check-format, integration-test-result, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 17 ]
++        java: [ 8, 21 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+diff --git a/.github/workflows/build-and-test-scheduled-3.1.yml b/.github/workflows/build-and-test-scheduled-3.1.yml
+index d53f36a7db396964f70f629944b981a70fd4c3ae..29fffd081e69b088dff50e48a1b29fab1ed8a860 100644
+--- a/.github/workflows/build-and-test-scheduled-3.1.yml
++++ b/.github/workflows/build-and-test-scheduled-3.1.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.2.yml b/.github/workflows/build-and-test-scheduled-3.2.yml
+index 72d67ef65a1a9cd00efa8313abd5667b9e0a6ac0..514097e7796c16c7beaef02b690987a8c4c651e1 100644
+--- a/.github/workflows/build-and-test-scheduled-3.2.yml
++++ b/.github/workflows/build-and-test-scheduled-3.2.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.3.yml b/.github/workflows/build-and-test-scheduled-3.3.yml
+index 944cbfa9247576d1945f173a924a0540f07c6f5a..014b120a046aedcd1e5bcaeec0d3af68a3806cdb 100644
+--- a/.github/workflows/build-and-test-scheduled-3.3.yml
++++ b/.github/workflows/build-and-test-scheduled-3.3.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/release-test.yml b/.github/workflows/release-test.yml
+index e010b7e8335a17b05191bda8d00d9e82faa0e8b8..a579ba3727cfea46da6c97ef49c6970e87148b96 100644
+--- a/.github/workflows/release-test.yml
++++ b/.github/workflows/release-test.yml
+@@ -283,7 +283,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+@@ -383,7 +383,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash ./build-test-image.sh
++          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+diff --git a/README.md b/README.md
+index 56f43e9a6702c497d95f8df453be8e061373e529..3350b17742d80d8542d524baf57368702d1a0de2 100644
+--- a/README.md
++++ b/README.md
+@@ -73,7 +73,7 @@ Explore more through our hands-on tasks:
+ 
+ | Version  | JDK Support | Dependencies                                                                                          | Highlights                                                                                                     |
+ |----------|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+-| **3.3.2**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.2/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
++| **3.3.5**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.5/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
+ | **3.2.16** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.5/dubbo-dependencies-bom/pom.xml#L94) | ✅ Actively Maintained <br> ✅ Metrics & Tracing <br> ✅ Thread Pool Isolation <br> ✅ +30% Performance <br> ✅ Native Image Support |
+ | **3.1.11** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.11/dubbo-dependencies-bom/pom.xml#L90) | ⚠️ Stable, but Not Actively Maintained                                                                         |
+ 
+diff --git a/dubbo-config/dubbo-config-api/pom.xml b/dubbo-config/dubbo-config-api/pom.xml
+index 1cb5cd76e84e10eac06a6ab4dbfa86487d3306ca..02e09b5bc30e016846c4d7ef1f68c5d2dcb5c038 100644
+--- a/dubbo-config/dubbo-config-api/pom.xml
++++ b/dubbo-config/dubbo-config-api/pom.xml
+@@ -237,7 +237,7 @@
+     <dependency>
+       <groupId>org.testcontainers</groupId>
+       <artifactId>testcontainers</artifactId>
+-      <version>1.20.4</version>
++      <version>1.21.0</version>
+       <scope>test</scope>
+     </dependency>
+ 
+diff --git a/dubbo-config/dubbo-config-spring/pom.xml b/dubbo-config/dubbo-config-spring/pom.xml
+index d8448dc76fd5e0be18b0a56342f901b500dc01cc..66dec4a716d2a57692538fa0d37feb03a029608d 100644
+--- a/dubbo-config/dubbo-config-spring/pom.xml
++++ b/dubbo-config/dubbo-config-spring/pom.xml
+@@ -69,7 +69,7 @@
+     <dependency>
+       <groupId>org.aspectj</groupId>
+       <artifactId>aspectjweaver</artifactId>
+-      <version>1.9.22.1</version>
++      <version>1.9.24</version>
+       <scope>test</scope>
+     </dependency>
+     <dependency>
+diff --git a/dubbo-configcenter/dubbo-configcenter-apollo/pom.xml b/dubbo-configcenter/dubbo-configcenter-apollo/pom.xml
+index 166af65d6f866943f330576ec407adf42ca773c2..77190003383160a1d2de309b1429f923c31eb02d 100644
+--- a/dubbo-configcenter/dubbo-configcenter-apollo/pom.xml
++++ b/dubbo-configcenter/dubbo-configcenter-apollo/pom.xml
+@@ -30,7 +30,7 @@
+   <description>The Apollo implementation of the configcenter api</description>
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
+-    <apollo_mock_server_version>2.3.0</apollo_mock_server_version>
++    <apollo_mock_server_version>2.4.0</apollo_mock_server_version>
+   </properties>
+ 
+   <dependencies>
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779..1075b795dcd02c1e428dac78f53b79fb294c7560 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -90,6 +90,7 @@
+   <build>
+     <plugins>
+       <plugin>
++        <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+         <version>${maven_os_plugin_version}</version>
+@@ -112,5 +113,13 @@
+         </configuration>
+       </plugin>
+     </plugins>
++    <extensions>
++      <!-- add os-maven-plugin to extensions for `mvn install` -->
++      <extension>
++        <groupId>kr.motd.maven</groupId>
++        <artifactId>os-maven-plugin</artifactId>
++        <version>${maven_os_plugin_version}</version>
++      </extension>
++    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index dd4c5021abdeacda6a5e1422ffd1a9a2077efaa7..a1ab6004d0e3fbd9c56ec020f8cd2e5fa7a24cb4 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -95,8 +95,7 @@
+     <javassist_version>3.30.2-GA</javassist_version>
+     <byte-buddy_version>1.17.5</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+-    <netty4_version>4.2.1.Final</netty4_version>
+-    <netty_http3_version>0.0.29.Final</netty_http3_version>
++    <netty4_version>4.2.2.Final</netty4_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+@@ -105,7 +104,7 @@
+     <curator_version>5.8.0</curator_version>
+     <curator_test_version>2.12.0</curator_test_version>
+     <hessian_version>4.0.66</hessian_version>
+-    <protobuf-java_version>3.25.7</protobuf-java_version>
++    <protobuf-java_version>3.25.8</protobuf-java_version>
+     <jsr305_version>3.0.2</jsr305_version>
+     <javax_annotation-api_version>1.3.2</javax_annotation-api_version>
+     <servlet_version>3.1.0</servlet_version>
+@@ -122,11 +121,11 @@
+     <snakeyaml_version>2.4</snakeyaml_version>
+     <commons_lang3_version>3.17.0</commons_lang3_version>
+     <envoy_api_version>0.1.35</envoy_api_version>
+-    <micrometer.version>1.15.0</micrometer.version>
++    <micrometer.version>1.15.1</micrometer.version>
+     <opentelemetry.version>1.50.0</opentelemetry.version>
+-    <zipkin-reporter.version>3.5.0</zipkin-reporter.version>
++    <zipkin-reporter.version>3.5.1</zipkin-reporter.version>
+     <zipkin.version>3.5.1</zipkin.version>
+-    <micrometer-tracing.version>1.5.0</micrometer-tracing.version>
++    <micrometer-tracing.version>1.5.1</micrometer-tracing.version>
+     <t_digest.version>3.3</t_digest.version>
+     <prometheus_client.version>0.16.0</prometheus_client.version>
+     <reactive.version>1.0.4</reactive.version>
+@@ -141,7 +140,7 @@
+     <nacos_version>2.5.1</nacos_version>
+     <sentinel.version>1.8.8</sentinel.version>
+     <seata.version>1.8.0</seata.version>
+-    <grpc.version>1.72.0</grpc.version>
++    <grpc.version>1.73.0</grpc.version>
+     <grpc_contrib_verdion>0.8.1</grpc_contrib_verdion>
+     <jprotoc_version>1.2.2</jprotoc_version>
+     <mustache_version>0.9.14</mustache_version>
+@@ -154,11 +153,11 @@
+     <log4j2_version>2.24.3</log4j2_version>
+     <commons_io_version>2.19.0</commons_io_version>
+     <commons-codec_version>1.18.0</commons-codec_version>
+-    <groovy_version>4.0.26</groovy_version>
++    <groovy_version>4.0.27</groovy_version>
+ 
+     <!-- Test libs -->
+     <junit_jupiter_version>5.12.2</junit_jupiter_version>
+-    <junit_platform_version>1.12.2</junit_platform_version>
++    <junit_platform_version>1.13.1</junit_platform_version>
+     <awaitility_version>4.3.0</awaitility_version>
+     <hamcrest_version>2.2</hamcrest_version>
+     <cglib_version>2.2.2</cglib_version>
+@@ -180,7 +179,7 @@
+     <portlet_version>2.0</portlet_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+     <commons_compress_version>1.27.1</commons_compress_version>
+-    <spotless-maven-plugin.version>2.44.4</spotless-maven-plugin.version>
++    <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
+     <spotless.action>check</spotless.action>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+@@ -300,11 +299,6 @@
+         <artifactId>netty-all</artifactId>
+         <version>${netty4_version}</version>
+       </dependency>
+-      <dependency>
+-        <groupId>io.netty.incubator</groupId>
+-        <artifactId>netty-incubator-codec-http3</artifactId>
+-        <version>${netty_http3_version}</version>
+-      </dependency>
+       <dependency>
+         <groupId>org.javassist</groupId>
+         <artifactId>javassist</artifactId>
+diff --git a/dubbo-plugin/dubbo-rest-openapi/pom.xml b/dubbo-plugin/dubbo-rest-openapi/pom.xml
+index 60ebc45eaba965ed872700a965598db34e83ec46..b8d1f7b57b88f5e915ea833382b3f67bea2bdc07 100644
+--- a/dubbo-plugin/dubbo-rest-openapi/pom.xml
++++ b/dubbo-plugin/dubbo-rest-openapi/pom.xml
+@@ -27,8 +27,8 @@
+   <artifactId>dubbo-rest-openapi</artifactId>
+ 
+   <properties>
+-    <swagger-annotations.version>2.2.27</swagger-annotations.version>
+-    <swagger-ui.version>5.18.2</swagger-ui.version>
++    <swagger-annotations.version>2.2.32</swagger-annotations.version>
++    <swagger-ui.version>5.22.0</swagger-ui.version>
+     <redoc.version>2.2.0</redoc.version>
+     <webjars-locator.version>1.0.1</webjars-locator.version>
+     <therapi.version>0.15.0</therapi.version>
+@@ -54,7 +54,7 @@
+     <dependency>
+       <groupId>org.webjars</groupId>
+       <artifactId>redoc</artifactId>
+-      <version>2.1.5</version>
++      <version>2.3.0</version>
+     </dependency>
+     <dependency>
+       <groupId>org.webjars</groupId>
+diff --git a/dubbo-remoting/dubbo-remoting-zookeeper-curator5/pom.xml b/dubbo-remoting/dubbo-remoting-zookeeper-curator5/pom.xml
+index 5556f236b5691a292e919e9110ddc14ae538823d..4cd43e9e9d46dd510ffbf6614d8c08018c40d5e4 100644
+--- a/dubbo-remoting/dubbo-remoting-zookeeper-curator5/pom.xml
++++ b/dubbo-remoting/dubbo-remoting-zookeeper-curator5/pom.xml
+@@ -30,7 +30,7 @@
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
+     <zookeeper_version>3.7.2</zookeeper_version>
+-    <curator5_version>5.7.1</curator5_version>
++    <curator5_version>5.8.0</curator5_version>
+   </properties>
+   <dependencies>
+     <dependency>
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 4d511307d427448cec8d3b04c71a67a763f44d6e..28a86e7b62272991e0be5eae2a001d1975b2c2f5 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -60,8 +60,6 @@ public class WelcomeLogoApplicationListener implements ApplicationListener<Appli
+ 
+         if (logger.isInfoEnabled()) {
+             logger.info(bannerText);
+-        } else {
+-            System.out.print(bannerText);
+         }
+ 
+         // mark processed to be true
+diff --git a/dubbo-test/dubbo-test-check/pom.xml b/dubbo-test/dubbo-test-check/pom.xml
+index 3a7fd3df9db3599202b27260164c8e4c1a7a481b..5951f0066e303e550c1a5af5cfcb9aae467441ab 100644
+--- a/dubbo-test/dubbo-test-check/pom.xml
++++ b/dubbo-test/dubbo-test-check/pom.xml
+@@ -32,7 +32,7 @@
+     <zookeeper.version>3.7.2</zookeeper.version>
+     <curator5.version>4.2.0</curator5.version>
+     <commons.compress.version>1.27.1</commons.compress.version>
+-    <commons.exec.version>1.4.0</commons.exec.version>
++    <commons.exec.version>1.5.0</commons.exec.version>
+     <async.http.client.version>2.12.4</async.http.client.version>
+   </properties>
+ 
+diff --git a/pom.xml b/pom.xml
+index cccad376abe44f02cdb6f03c5680a513c9fd132f..d0df68f2b9af4d3071d4dce788a7c22e1264e62c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -157,19 +157,20 @@
+     <build_helper_maven_plugin_version>3.6.0</build_helper_maven_plugin_version>
+     <maven_jacoco_version>0.8.13</maven_jacoco_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+-    <maven_enforce_version>3.5.0</maven_enforce_version>
++    <maven_enforce_version>3.6.0</maven_enforce_version>
+     <maven_antrun_version>3.1.0</maven_antrun_version>
+     <maven_os_plugin_version>1.7.1</maven_os_plugin_version>
+     <maven_protobuf_plugin_version>0.6.1</maven_protobuf_plugin_version>
+     <maven_gmavenplus_version>3.0.2</maven_gmavenplus_version>
+ 
+     <!-- For unify spring boot 3 version -->
+-    <spring-6.version>6.2.7</spring-6.version>
++    <spring-6.version>6.2.8</spring-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+-    <grpc_version>1.54.0</grpc_version>
+-    <spotless-maven-plugin.version>2.44.4</spotless-maven-plugin.version>
++    <!-- grpc_version should be same as grpc.version at dubbo-dependencies-bom -->
++    <grpc_version>1.73.0</grpc_version>
++    <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+     <revision>3.3.6-SNAPSHOT</revision>

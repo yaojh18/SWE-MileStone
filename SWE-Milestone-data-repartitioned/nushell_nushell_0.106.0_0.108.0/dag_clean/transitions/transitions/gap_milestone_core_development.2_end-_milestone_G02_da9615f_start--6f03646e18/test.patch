@@ -1,0 +1,1319 @@
+diff --git a/benches/README.md b/benches/README.md
+index 8e823b225cf22a560edbb4bc276a7fe8fe3895da..93a13afe5095c92bd5db379b24e109ddd2d391b8 100644
+--- a/benches/README.md
++++ b/benches/README.md
+@@ -1,13 +1,7 @@
+-# Tango benchmarks
++# Divan benchmarks
+ 
+-These are benchmarks using [tango](https://github.com/bazhenov/tango), a benchmark tool which pairs the executions of two versions of the given benchmarks. This claims to reduce the noise from other factors on the system and allow a more reliable comparison of two different implementation.
++These are benchmarks using [Divan](https://github.com/nvzqz/divan), a microbenchmarking tool for Rust.
+ 
+-The easiest way to start is to run:
++Run all benchmarks with `cargo bench`
+ 
+-```nushell
+-use toolkit.nu
+-# To compare the current branch to main
+-toolkit benchmark-compare
+-# or to compare a target git-revision against a reference git-revision
+-toolkit benchmark-compare <target> <reference>
+-```
++Or run individual benchmarks like `cargo bench -- <regex>` e.g. `cargo bench -- parse`
+\ No newline at end of file
+diff --git a/benches/benchmarks.rs b/benches/benchmarks.rs
+index 6a2522135587b4112a0dd5fc66c31f6402c68ec4..1ffb4ccc92496402fd62a521cb30281aa5684ce9 100644
+--- a/benches/benchmarks.rs
++++ b/benches/benchmarks.rs
+@@ -139,30 +139,6 @@ fn bench_load_standard_lib() -> impl IntoBenchmarks {
+     })]
+ }
+ 
+-/// Load all modules of standard library into the engine through a general `use`.
+-fn bench_load_use_standard_lib() -> impl IntoBenchmarks {
+-    [benchmark_fn("load_use_standard_lib", move |b| {
+-        // We need additional commands like `format number` for the standard library
+-        let engine = nu_cmd_extra::add_extra_command_context(setup_engine());
+-        let commands = Spanned {
+-            item: "use std".into(),
+-            span: Span::unknown(),
+-        };
+-        b.iter(move || {
+-            let mut engine = engine.clone();
+-            let mut stack = Stack::new();
+-            let _ = load_standard_library(&mut engine);
+-            evaluate_commands(
+-                &commands,
+-                &mut engine,
+-                &mut stack,
+-                PipelineData::empty(),
+-                Default::default(),
+-            )
+-        })
+-    })]
+-}
+-
+ fn create_flat_record_string(n: usize) -> String {
+     let mut s = String::from("let record = { ");
+     for i in 0..n {
+@@ -461,7 +437,6 @@ fn decode_msgpack(row_cnt: usize, col_cnt: usize) -> impl IntoBenchmarks {
+ 
+ tango_benchmarks!(
+     bench_load_standard_lib(),
+-    bench_load_use_standard_lib(),
+     // Data types
+     // Record
+     bench_record_create(1),
+diff --git a/crates/nu-cli/tests/completions/mod.rs b/crates/nu-cli/tests/completions/mod.rs
+index 727a72087aa79b965a55c61ff59448708e157576..9090e055371ba0b518cbdddcc539ff5fab523d02 100644
+--- a/crates/nu-cli/tests/completions/mod.rs
++++ b/crates/nu-cli/tests/completions/mod.rs
+@@ -1563,7 +1563,9 @@ fn flag_completions() {
+     let mut completer = NuCompleter::new(Arc::new(engine), Arc::new(stack));
+     // Test completions for the 'ls' flags
+     let suggestions = completer.complete("ls -", 4);
++
+     assert_eq!(18, suggestions.len());
++
+     let expected: Vec<_> = vec![
+         "--all",
+         "--directory",
+@@ -1584,12 +1586,9 @@ fn flag_completions() {
+         "-s",
+         "-t",
+     ];
++
+     // Match results
+     match_suggestions(&expected, &suggestions);
+-
+-    // https://github.com/nushell/nushell/issues/16375
+-    let suggestions = completer.complete("table -", 7);
+-    assert_eq!(20, suggestions.len());
+ }
+ 
+ #[test]
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index 45a76aa852cdcb62cb0d1485a0ac77efdc367314..2d5334a0b00328cfa9397e59b6dd6ad91f747076 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -199,7 +199,7 @@ pub fn merge_input(
+             engine_state,
+             stack,
+             &block,
+-            PipelineData::value(Value::nothing(Span::unknown()), None),
++            PipelineData::Value(Value::nothing(Span::unknown()), None),
+         )
+         .is_ok()
+     );
+diff --git a/crates/nu-cmd-extra/src/example_test.rs b/crates/nu-cmd-extra/src/example_test.rs
+index c6d9b761a0e081b1f221f206bfa7c49f550ec447..ac3ca92653e79da429e2ecd52a391fabd3812fe8 100644
+--- a/crates/nu-cmd-extra/src/example_test.rs
++++ b/crates/nu-cmd-extra/src/example_test.rs
+@@ -3,12 +3,7 @@ use nu_protocol::engine::Command;
+ 
+ #[cfg(test)]
+ pub fn test_examples(cmd: impl Command + 'static) {
+-    test_examples::test_examples(cmd, &[]);
+-}
+-
+-#[cfg(test)]
+-pub fn test_examples_with_commands(cmd: impl Command + 'static, commands: &[&dyn Command]) {
+-    test_examples::test_examples(cmd, commands);
++    test_examples::test_examples(cmd);
+ }
+ 
+ #[cfg(test)]
+@@ -26,10 +21,10 @@ mod test_examples {
+     };
+     use std::collections::HashSet;
+ 
+-    pub fn test_examples(cmd: impl Command + 'static, commands: &[&dyn Command]) {
++    pub fn test_examples(cmd: impl Command + 'static) {
+         let examples = cmd.examples();
+         let signature = cmd.signature();
+-        let mut engine_state = make_engine_state(cmd.clone_box(), commands);
++        let mut engine_state = make_engine_state(cmd.clone_box());
+ 
+         let cwd = std::env::current_dir().expect("Could not get current working directory.");
+ 
+@@ -43,7 +38,7 @@ mod test_examples {
+                 check_example_input_and_output_types_match_command_signature(
+                     &example,
+                     &cwd,
+-                    &mut make_engine_state(cmd.clone_box(), commands),
++                    &mut make_engine_state(cmd.clone_box()),
+                     &signature.input_output_types,
+                     signature.operates_on_cell_paths(),
+                 ),
+@@ -62,7 +57,7 @@ mod test_examples {
+         );
+     }
+ 
+-    fn make_engine_state(cmd: Box<dyn Command>, commands: &[&dyn Command]) -> Box<EngineState> {
++    fn make_engine_state(cmd: Box<dyn Command>) -> Box<EngineState> {
+         let mut engine_state = Box::new(EngineState::new());
+ 
+         let delta = {
+@@ -74,10 +69,6 @@ mod test_examples {
+             working_set.add_decl(Box::new(nu_cmd_lang::If));
+             working_set.add_decl(Box::new(nu_command::MathRound));
+ 
+-            for command in commands {
+-                working_set.add_decl(command.clone_box());
+-            }
+-
+             // Adding the command that is being tested to the working set
+             working_set.add_decl(cmd);
+             working_set.render()
+diff --git a/crates/nu-command/tests/commands/database/into_sqlite.rs b/crates/nu-command/tests/commands/database/into_sqlite.rs
+index bc2725ae7b8d6f3b899dd965a27a7877a2de173a..7065e0811c8957b45a204fb016f6ed7451adbb7f 100644
+--- a/crates/nu-command/tests/commands/database/into_sqlite.rs
++++ b/crates/nu-command/tests/commands/database/into_sqlite.rs
+@@ -495,16 +495,3 @@ fn insert_test_rows(dirs: &Dirs, nu_table: &str, sql_query: Option<&str>, expect
+ 
+     assert_eq!(expected, actual_rows);
+ }
+-
+-#[test]
+-fn test_auto_conversion() {
+-    Playground::setup("sqlite json auto conversion", |_, playground| {
+-        let raw = "{a_record:{foo:bar,baz:quux},a_list:[1,2,3],a_table:[[a,b];[0,1],[2,3]]}";
+-        nu!(cwd: playground.cwd(), "{} | into sqlite filename.db -t my_table", raw);
+-        let outcome = nu!(
+-            cwd: playground.cwd(),
+-            "open filename.db | get my_table.0 | to nuon --raw"
+-        );
+-        assert_eq!(outcome.out, raw);
+-    });
+-}
+diff --git a/crates/nu-command/tests/commands/each.rs b/crates/nu-command/tests/commands/each.rs
+index b03ffe590c4bd7f66012ffc205bea5f18ede8746..b3c04af0a4df04a1ab6bf1140de266aa5de6a848 100644
+--- a/crates/nu-command/tests/commands/each.rs
++++ b/crates/nu-command/tests/commands/each.rs
+@@ -63,10 +63,3 @@ fn errors_in_nested_each_show() {
+     let actual = nu!("[[1,2]] | each {|x| $x | each {|y| error make {msg: \"oh noes\"} } }");
+     assert!(actual.err.contains("oh noes"))
+ }
+-
+-#[test]
+-fn each_noop_on_single_null() {
+-    let actual = nu!("null | each { \"test\" } | describe");
+-
+-    assert_eq!(actual.out, "nothing");
+-}
+diff --git a/crates/nu-command/tests/commands/export.rs b/crates/nu-command/tests/commands/export.rs
+deleted file mode 100644
+index c8bd168952cfa5dd1fca0882b060745e9039e09c..0000000000000000000000000000000000000000
+--- a/crates/nu-command/tests/commands/export.rs
++++ /dev/null
+@@ -1,26 +0,0 @@
+-use nu_test_support::nu;
+-
+-#[test]
+-fn export_command_help() {
+-    let actual = nu!("export -h");
+-
+-    assert!(
+-        actual
+-            .out
+-            .contains("Export definitions or environment variables from a module")
+-    );
+-}
+-
+-#[test]
+-fn export_command_unexpected() {
+-    let actual = nu!("export foo");
+-
+-    assert!(actual.err.contains("unexpected export"));
+-}
+-
+-#[test]
+-fn export_alias_should_not_panic() {
+-    let actual = nu!("export alias");
+-
+-    assert!(actual.err.contains("Missing"));
+-}
+diff --git a/crates/nu-command/tests/commands/export_def.rs b/crates/nu-command/tests/commands/export_def.rs
+index 41a35afb01c901f4add9659ad59ea88a0f1371e0..3f57610c6c2e91d5b6d84c53b8cba4f6f3b73602 100644
+--- a/crates/nu-command/tests/commands/export_def.rs
++++ b/crates/nu-command/tests/commands/export_def.rs
+@@ -10,14 +10,3 @@ fn export_subcommands_help() {
+             .contains("Define a custom command and export it from a module")
+     );
+ }
+-
+-#[test]
+-fn export_should_not_expose_arguments() {
+-    // issue #16211
+-    let actual = nu!(r#"
+-            export def foo [bar: int] {}
+-            scope variables
+-        "#);
+-
+-    assert!(!actual.out.contains("bar"));
+-}
+diff --git a/crates/nu-command/tests/commands/find.rs b/crates/nu-command/tests/commands/find.rs
+index 2448e3ac0c0bd8fe5bf2373082fc99da8b9bee69..547fab65bf0886abb490f1bb5115142be070aeed 100644
+--- a/crates/nu-command/tests/commands/find.rs
++++ b/crates/nu-command/tests/commands/find.rs
+@@ -26,11 +26,10 @@ fn find_with_list_search_with_char() {
+ 
+ #[test]
+ fn find_with_bytestream_search_with_char() {
+-    let actual = nu!(
+-        "\"ABC\" | save foo.txt; let res = open foo.txt | find -i abc; rm foo.txt; $res | get 0"
+-    );
++    let actual =
++        nu!("\"ABC\" | save foo.txt; let res = open foo.txt | find abc; rm foo.txt; $res | get 0");
+     let actual_no_highlight = nu!(
+-        "\"ABC\" | save foo.txt; let res = open foo.txt | find -i --no-highlight abc; rm foo.txt; $res | get 0"
++        "\"ABC\" | save foo.txt; let res = open foo.txt | find --no-highlight abc; rm foo.txt; $res | get 0"
+     );
+ 
+     assert_eq!(
+diff --git a/crates/nu-command/tests/commands/ls.rs b/crates/nu-command/tests/commands/ls.rs
+index 48158653dba79b4551ea6b9275aa48696a752cb2..a8d602b53bec5a0d3358137019281a787368b07c 100644
+--- a/crates/nu-command/tests/commands/ls.rs
++++ b/crates/nu-command/tests/commands/ls.rs
+@@ -652,7 +652,7 @@ fn list_ignores_ansi() {
+         let actual = nu!(
+             cwd: dirs.test(), pipeline(
+             "
+-                ls | find .txt | each {|| ls $in.name }
++                ls | find .txt | each {|| ls $in.name } 
+             "
+         ));
+ 
+@@ -661,17 +661,14 @@ fn list_ignores_ansi() {
+ }
+ 
+ #[test]
+-fn list_unknown_long_flag() {
+-    let actual = nu!("ls --full-path");
+-
+-    assert!(actual.err.contains("Did you mean: `--full-paths`?"));
+-}
+-
+-#[test]
+-fn list_unknown_short_flag() {
++fn list_unknown_flag() {
+     let actual = nu!("ls -r");
+ 
+-    assert!(actual.err.contains("Use `--help` to see available flags"));
++    assert!(
++        actual
++            .err
++            .contains("Available flags: --help(-h), --all(-a),")
++    );
+ }
+ 
+ #[test]
+diff --git a/crates/nu-command/tests/commands/mod.rs b/crates/nu-command/tests/commands/mod.rs
+index 8482dbac4cfa9dfc5d9cbc5acd904e3aadc92063..0d0fa8b1a18719e8f21247ef9febc4a1daa890f5 100644
+--- a/crates/nu-command/tests/commands/mod.rs
++++ b/crates/nu-command/tests/commands/mod.rs
+@@ -32,7 +32,6 @@ mod empty;
+ mod error_make;
+ mod every;
+ mod exec;
+-mod export;
+ mod export_def;
+ mod fill;
+ mod filter;
+diff --git a/crates/nu-command/tests/commands/network/http/delete.rs b/crates/nu-command/tests/commands/network/http/delete.rs
+index efcdfe7b5fac4333d2a34a379061f5d33370bd11..c5037453468ad6994e1b4310534c8ce1df795cfc 100644
+--- a/crates/nu-command/tests/commands/network/http/delete.rs
++++ b/crates/nu-command/tests/commands/network/http/delete.rs
+@@ -57,11 +57,7 @@ fn http_delete_failed_due_to_server_error() {
+         .as_str()
+     ));
+ 
+-    assert!(
+-        actual.err.contains("Bad request (400)"),
+-        "unexpected error: {:?}",
+-        actual.err
+-    )
++    assert!(actual.err.contains("Bad request (400)"))
+ }
+ 
+ #[test]
+@@ -144,14 +140,6 @@ fn http_delete_timeout() {
+         format!("http delete --max-time 100ms {url}", url = server.url()).as_str()
+     ));
+ 
+-    assert!(
+-        &actual.err.contains("nu::shell::io::timed_out"),
+-        "unexpected error : {:?}",
+-        actual.err
+-    );
+-    assert!(
+-        &actual.err.contains("Timed out"),
+-        "unexpected error : {:?}",
+-        actual.err
+-    );
++    assert!(&actual.err.contains("nu::shell::io::timed_out"));
++    assert!(&actual.err.contains("Timed out"));
+ }
+diff --git a/crates/nu-command/tests/commands/network/http/get.rs b/crates/nu-command/tests/commands/network/http/get.rs
+index 9be6d18df3961489159cb5ff1df097a6314739d9..a789f1e93aa5777de20f5387f332df9fdfda1769 100644
+--- a/crates/nu-command/tests/commands/network/http/get.rs
++++ b/crates/nu-command/tests/commands/network/http/get.rs
+@@ -334,14 +334,6 @@ fn http_get_timeout() {
+         format!("http get --max-time 100ms {url}", url = server.url()).as_str()
+     ));
+ 
+-    assert!(
+-        &actual.err.contains("nu::shell::io::timed_out"),
+-        "unexpected error: {:?}",
+-        actual.err
+-    );
+-    assert!(
+-        &actual.err.contains("Timed out"),
+-        "unexpected error: {:?}",
+-        actual.err
+-    );
++    assert!(&actual.err.contains("nu::shell::io::timed_out"));
++    assert!(&actual.err.contains("Timed out"));
+ }
+diff --git a/crates/nu-command/tests/commands/network/http/head.rs b/crates/nu-command/tests/commands/network/http/head.rs
+index 4fe3fb7f3dc81631f0ca872fdfe0d6f704e35202..f9af678fc53e7ccc08b5117d89df4e77f3e79a62 100644
+--- a/crates/nu-command/tests/commands/network/http/head.rs
++++ b/crates/nu-command/tests/commands/network/http/head.rs
+@@ -36,11 +36,8 @@ fn http_head_failed_due_to_server_error() {
+         )
+         .as_str()
+     ));
+-    assert!(
+-        actual.err.contains("Bad request (400)"),
+-        "Unexpected error: {:?}",
+-        actual.err
+-    )
++
++    assert!(actual.err.contains("Bad request (400)"))
+ }
+ 
+ #[test]
+diff --git a/crates/nu-command/tests/commands/network/http/post.rs b/crates/nu-command/tests/commands/network/http/post.rs
+index 8f98f59d99672ff1dd71d7462ed1f74d1aac582c..29a82e1a3b7ef6203174907656564817e88e16ae 100644
+--- a/crates/nu-command/tests/commands/network/http/post.rs
++++ b/crates/nu-command/tests/commands/network/http/post.rs
+@@ -101,15 +101,14 @@ fn http_post_failed_due_to_unexpected_body() {
+     assert!(actual.err.contains("Cannot make request"))
+ }
+ 
+-const JSON: &str = r#"{
+-  "foo": "bar"
+-}"#;
+-
+ #[test]
+ fn http_post_json_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server.mock("POST", "/").match_body(JSON).create();
++    let mock = server
++        .mock("POST", "/")
++        .match_body(r#"{"foo":"bar"}"#)
++        .create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} {{foo: 'bar'}}"#,
+@@ -117,14 +116,17 @@ fn http_post_json_is_success() {
+     ));
+ 
+     mock.assert();
+-    assert!(actual.out.is_empty(), "Unexpected output {:?}", actual.out)
++    assert!(actual.out.is_empty())
+ }
+ 
+ #[test]
+ fn http_post_json_string_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server.mock("POST", "/").match_body(JSON).create();
++    let mock = server
++        .mock("POST", "/")
++        .match_body(r#"{"foo":"bar"}"#)
++        .create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} '{{"foo":"bar"}}'"#,
+@@ -135,17 +137,14 @@ fn http_post_json_string_is_success() {
+     assert!(actual.out.is_empty())
+ }
+ 
+-const JSON_LIST: &str = r#"[
+-  {
+-    "foo": "bar"
+-  }
+-]"#;
+-
+ #[test]
+ fn http_post_json_list_is_success() {
+     let mut server = Server::new();
+ 
+-    let mock = server.mock("POST", "/").match_body(JSON_LIST).create();
++    let mock = server
++        .mock("POST", "/")
++        .match_body(r#"[{"foo":"bar"}]"#)
++        .create();
+ 
+     let actual = nu!(format!(
+         r#"http post -t 'application/json' {url} [{{foo: "bar"}}]"#,
+diff --git a/crates/nu-command/tests/commands/run_external.rs b/crates/nu-command/tests/commands/run_external.rs
+index 93bbb9d6b7df2740163b3f9f770b719e2fbdb937..1c7bcc85a1c9b78051cd4f825a708ab272d392d7 100644
+--- a/crates/nu-command/tests/commands/run_external.rs
++++ b/crates/nu-command/tests/commands/run_external.rs
+@@ -4,13 +4,6 @@ use nu_test_support::playground::Playground;
+ use rstest::rstest;
+ use rstest_reuse::*;
+ 
+-fn nu_path(prefix: &str) -> String {
+-    let binary = nu_test_support::fs::executable_path()
+-        .to_string_lossy()
+-        .to_string();
+-    format!("{prefix}{binary}")
+-}
+-
+ // Template for run-external test to ensure tests work when calling
+ // the binary directly, using the caret operator, and when using
+ // the run-external command
+@@ -25,8 +18,8 @@ fn run_external_prefixes(#[case] prefix: &str) {}
+ fn better_empty_redirection(prefix: &str) {
+     let actual = nu!(
+         cwd: "tests/fixtures/formats",
+-        "ls | each {{ |it| {} `--testbin` cococo $it.name }} | ignore",
+-        nu_path(prefix)
++        "ls | each {{ |it| {}nu `--testbin` cococo $it.name }} | ignore",
++        prefix
+     );
+ 
+     eprintln!("out: {}", actual.out);
+@@ -46,9 +39,9 @@ fn explicit_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo ('*.txt' | into glob)
++                {}nu `--testbin` cococo ('*.txt' | into glob)
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -68,9 +61,9 @@ fn bare_word_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             "
+-                {} `--testbin` cococo *.txt
++                {}nu `--testbin` cococo *.txt
+             ",
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -90,9 +83,9 @@ fn backtick_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo `*.txt`
++                {}nu `--testbin` cococo `*.txt`
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert!(actual.out.contains("D&D_volume_1.txt"));
+@@ -112,9 +105,9 @@ fn single_quote_does_not_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo '*.txt'
++                {}nu `--testbin` cococo '*.txt'
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(actual.out, "*.txt");
+@@ -133,9 +126,9 @@ fn double_quote_does_not_expand_path_glob(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo "*.txt"
++                {}nu `--testbin` cococo "*.txt"
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(actual.out, "*.txt");
+@@ -148,9 +141,9 @@ fn failed_command_with_semicolon_will_not_execute_following_cmds(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             "
+-                {} `--testbin` fail; echo done
++                {}nu `--testbin` fail; echo done
+             ",
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert!(!actual.out.contains("done"));
+@@ -163,9 +156,9 @@ fn external_args_with_quoted(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo "foo=bar 'hi'"
++                {}nu `--testbin` cococo "foo=bar 'hi'"
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(actual.out, "foo=bar 'hi'");
+@@ -205,9 +198,9 @@ fn external_arg_with_non_option_like_embedded_quotes(#[case] prefix: &str) {
+             let actual = nu!(
+                 cwd: dirs.test(),
+                 r#"
+-                    {} `--testbin` cococo foo='bar' 'foo'=bar
++                    {}nu `--testbin` cococo foo='bar' 'foo'=bar
+                 "#,
+-                nu_path(prefix)
++                prefix
+             );
+ 
+             assert_eq!(actual.out, "foo=bar foo=bar");
+@@ -224,9 +217,9 @@ fn external_arg_with_string_interpolation(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo foo=(2 + 2) $"foo=(2 + 2)" foo=$"(2 + 2)"
++                {}nu `--testbin` cococo foo=(2 + 2) $"foo=(2 + 2)" foo=$"(2 + 2)"
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(actual.out, "foo=4 foo=4 foo=4");
+@@ -240,9 +233,9 @@ fn external_arg_with_variable_name(prefix: &str) {
+             cwd: dirs.test(),
+             r#"
+                 let dump_command = "PGPASSWORD='db_secret' pg_dump -Fc -h 'db.host' -p '$db.port' -U postgres -d 'db_name' > '/tmp/dump_name'";
+-                {} `--testbin` nonu $dump_command
++                {}nu `--testbin` nonu $dump_command
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(
+@@ -258,9 +251,9 @@ fn external_command_escape_args(prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo "\"abcd"
++                {}nu `--testbin` cococo "\"abcd"
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         assert_eq!(actual.out, r#""abcd"#);
+@@ -271,9 +264,9 @@ fn external_command_escape_args(prefix: &str) {
+ fn external_command_ndots_args(prefix: &str) {
+     let actual = nu!(
+         r#"
+-            {} `--testbin` cococo foo/. foo/.. foo/... foo/./bar foo/../bar foo/.../bar ./bar ../bar .../bar
++            {}nu `--testbin` cococo foo/. foo/.. foo/... foo/./bar foo/../bar foo/.../bar ./bar ../bar .../bar
+         "#,
+-        nu_path(prefix)
++        prefix
+     );
+ 
+     assert_eq!(
+@@ -293,9 +286,9 @@ fn external_command_ndots_leading_dot_slash(prefix: &str) {
+     // Don't expand ndots with a leading `./`
+     let actual = nu!(
+         r#"
+-            {} `--testbin` cococo ./... ./....
++            {}nu `--testbin` cococo ./... ./....
+         "#,
+-        nu_path(prefix)
++        prefix
+     );
+ 
+     assert_eq!(actual.out, "./... ./....");
+@@ -307,9 +300,9 @@ fn external_command_url_args(prefix: &str) {
+     // here
+     let actual = nu!(
+         r#"
+-            {} `--testbin` cococo http://example.com http://example.com/.../foo //foo
++            {}nu `--testbin` cococo http://example.com http://example.com/.../foo //foo
+         "#,
+-        nu_path(prefix)
++        prefix
+     );
+ 
+     assert_eq!(
+@@ -366,9 +359,9 @@ fn external_arg_expand_tilde(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                {} `--testbin` cococo ~/foo ~/(2 + 2)
++                {}nu `--testbin` cococo ~/foo ~/(2 + 2)
+             "#,
+-            nu_path(prefix)
++            prefix
+         );
+ 
+         let home = dirs::home_dir().expect("failed to find home dir");
+@@ -389,7 +382,7 @@ fn external_command_not_expand_tilde_with_quotes(prefix: &str) {
+     Playground::setup(
+         "external command not expand tilde with quotes",
+         |dirs, _| {
+-            let actual = nu!(cwd: dirs.test(), r#"{} `--testbin` nonu "~""#, nu_path(prefix));
++            let actual = nu!(cwd: dirs.test(), r#"{}nu `--testbin` nonu "~""#, prefix);
+             assert_eq!(actual.out, r#"~"#);
+         },
+     )
+@@ -400,7 +393,7 @@ fn external_command_expand_tilde_with_back_quotes(prefix: &str) {
+     Playground::setup(
+         "external command not expand tilde with quotes",
+         |dirs, _| {
+-            let actual = nu!(cwd: dirs.test(), r#"{} `--testbin` nonu `~`"#, nu_path(prefix));
++            let actual = nu!(cwd: dirs.test(), r#"{}nu `--testbin` nonu `~`"#, prefix);
+             assert!(!actual.out.contains('~'));
+         },
+     )
+@@ -411,8 +404,8 @@ fn external_command_receives_raw_binary_data(prefix: &str) {
+     Playground::setup("external command receives raw binary data", |dirs, _| {
+         let actual = nu!(
+             cwd: dirs.test(),
+-            "0x[deadbeef] | {} `--testbin` input_bytes_length",
+-            nu_path(prefix)
++            "0x[deadbeef] | {}nu `--testbin` input_bytes_length",
++            prefix
+         );
+         assert_eq!(actual.out, r#"4"#);
+     })
+@@ -501,9 +494,9 @@ fn quotes_trimmed_when_shelling_out(prefix: &str) {
+     // regression test for a bug where we weren't trimming quotes around string args before shelling out to cmd.exe
+     let actual = nu!(
+         r#"
+-            {} `--testbin` cococo "foo"
++            {}nu `--testbin` cococo "foo"
+         "#,
+-        nu_path(prefix)
++        prefix
+     );
+ 
+     assert_eq!(actual.out, "foo");
+@@ -562,24 +555,6 @@ fn can_run_ps1_files_with_space_in_path(prefix: &str) {
+     });
+ }
+ 
+-#[rstest]
+-#[case("^")]
+-#[case("run-external ")]
+-fn can_run_external_without_path_env(#[case] prefix: &str) {
+-    Playground::setup("can run external without path env", |dirs, _| {
+-        let actual = nu!(
+-            cwd: dirs.test(),
+-            r#"
+-                hide-env -i PATH
+-                hide-env -i Path
+-                {} `--testbin` cococo
+-            "#,
+-            nu_path(prefix)
+-        );
+-        assert_eq!(actual.out, "cococo");
+-    })
+-}
+-
+ #[rstest]
+ #[case("^")]
+ #[case("run-external ")]
+@@ -590,9 +565,8 @@ fn expand_command_if_list(#[case] prefix: &str) {
+         let actual = nu!(
+             cwd: dirs.test(),
+             r#"
+-                let cmd = ['{}' `--testbin`]; {}$cmd meow foo.txt
++                let cmd = [nu `--testbin`]; {}$cmd meow foo.txt
+             "#,
+-            nu_path(""),
+             prefix
+         );
+ 
+diff --git a/crates/nu-command/tests/format_conversions/nuon.rs b/crates/nu-command/tests/format_conversions/nuon.rs
+index 90c8f982bf2e591bdfbfed7186d9844281bf0207..cdac5323e24d87cb23fa2de7faa8f2b91318b94f 100644
+--- a/crates/nu-command/tests/format_conversions/nuon.rs
++++ b/crates/nu-command/tests/format_conversions/nuon.rs
+@@ -515,19 +515,6 @@ fn quotes_some_strings_necessarily() {
+     assert_eq!(actual.out, "list<string>");
+ }
+ 
+-#[test]
+-fn quotes_some_strings_necessarily_in_record_keys() {
+-    let actual = nu!(pipeline(
+-        r#"
+-        ['=', 'a=', '=a'] | each {
+-           {$in : 42}
+-        } | reduce {|elt, acc| $acc | merge $elt} | to nuon | from nuon | columns | describe
+-        "#
+-    ));
+-
+-    assert_eq!(actual.out, "list<string>");
+-}
+-
+ #[test]
+ fn read_code_should_fail_rather_than_panic() {
+     let actual = nu!(cwd: "tests/fixtures/formats", pipeline(
+diff --git a/crates/nu-parser/tests/test_parser.rs b/crates/nu-parser/tests/test_parser.rs
+index b93762c86595901bea4ad174e6901f5938ba7836..2267916322f882b43ddab6b00e90b63bdd3ede73 100644
+--- a/crates/nu-parser/tests/test_parser.rs
++++ b/crates/nu-parser/tests/test_parser.rs
+@@ -292,21 +292,6 @@ pub fn parse_filesize() {
+     assert_eq!(value.unit.item, Unit::Filesize(FilesizeUnit::B));
+ }
+ 
+-#[test]
+-pub fn parse_non_utf8_fails() {
+-    let engine_state = EngineState::new();
+-    let mut working_set = StateWorkingSet::new(&engine_state);
+-
+-    // Panic when parsing units was triggered by non-UTF8 characters
+-    // due to bad handling via `String::from_utf8_lossy`
+-    //
+-    // See https://github.com/nushell/nushell/pull/16355
+-    let _block = parse(&mut working_set, None, b"0\xffB", true);
+-
+-    // Asserting on the exact error doesn't make as much sense as
+-    assert!(!working_set.parse_errors.is_empty());
+-}
+-
+ #[test]
+ pub fn parse_cell_path() {
+     let engine_state = EngineState::new();
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index beba4ebd34ed76600d09b471fc0435f3c909bbb1..3547b986e74468687a2d853dde8585825b1dcffb 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -145,7 +145,7 @@ fn test_into_int_from_u32() -> Result<(), ShellError> {
+     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+         .eval_with(
+             "into int from u32",
+-            PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
++            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
+         )?
+         .into_value(Span::test_data())?;
+     assert_eq!(Value::test_int(42), result);
+diff --git a/crates/nu-std/tests/test_std-rfc_kv.nu b/crates/nu-std/tests/test_std-rfc_kv.nu
+index 48f16214fa6adf2a3207764357acf5afb28835ea..84467fceeed5d5b84348253ec20a113e6291d562 100644
+--- a/crates/nu-std/tests/test_std-rfc_kv.nu
++++ b/crates/nu-std/tests/test_std-rfc_kv.nu
+@@ -302,17 +302,3 @@ def universal-return_value_only [] {
+     kv drop --universal $key
+     rm $env.NU_UNIVERSAL_KV_PATH
+ }
+-
+-@test
+-def simple-local-set-table [] {
+-    if ('sqlite' not-in (version).features) { return }
+-
+-    let key = (random uuid)
+-
+-    kv set -t foo $key 42
+-    let actual = (kv get -t foo $key)
+-    let expected = 42
+-    assert equal $actual $expected
+-
+-    kv drop -t foo $key | ignore
+-}
+\ No newline at end of file
+diff --git a/crates/nu-std/tests/test_std-rfc_str.nu b/crates/nu-std/tests/test_std-rfc_str.nu
+index d12f5eb0d3a4bbe9ddb70771d32a0481d42f9f5f..3620854fc71fce4820b4f3491b6e7bafc7c8472d 100644
+--- a/crates/nu-std/tests/test_std-rfc_str.nu
++++ b/crates/nu-std/tests/test_std-rfc_str.nu
+@@ -291,139 +291,3 @@ def str-unindent_whitespace_works_with_tabs [] {
+ 
+     assert equal $actual $expected
+ }
+-
+-@test
+-def str-align_simple [] {
+-    let actual = [
+-        "let a = 1"
+-        "let max = 2"
+-        "let very_long_variable_name = 3"
+-    ] | str align '='
+-
+-    let expected = [
+-        "let a                       = 1"
+-        "let max                     = 2"
+-        "let very_long_variable_name = 3"
+-    ] | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_center [] {
+-    let actual = [
+-        "a = 1"
+-        "max = 2"
+-        "very_long_variable_name = 3"
+-    ] | str align '=' --center
+-
+-    let expected = [
+-        "                      a = 1"
+-        "                    max = 2"
+-        "very_long_variable_name = 3"
+-    ] | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_with_range [] {
+-    let actual = r#'match 5 {
+-    1.. => { print "More than zero" }
+-    0 => { print "Zero" }
+-    -1 => { print "Negative one" }
+-    -119283 => { print "Very negative" }
+-}'# | str align '=>' --range 2..
+-
+-    let expected = r#'match 5 {
+-    1.. => { print "More than zero" }
+-    0       => { print "Zero" }
+-    -1      => { print "Negative one" }
+-    -119283 => { print "Very negative" }
+-}'# | lines | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_ignore_lines_with_no_target [] {
+-    let actual = [
+-        "let a = 1"
+-        "let max = 2"
+-        "# comment"
+-    ] | str align '='
+-
+-    let expected = [
+-        "let a   = 1"
+-        "let max = 2"
+-        "# comment"
+-    ] | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_use_different_char [] {
+-    let actual = [
+-        "=>"
+-        "=====>"
+-    ] | str align '>' -c '='
+-
+-    let expected = [
+-        "=====>"
+-        "=====>"
+-    ] | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_multiple_target_in_line [] {
+-    let actual = [
+-        "print test # Hello # World"
+-        "print hello there # test"
+-    ] | str align '#'
+-
+-    let expected = [
+-        "print test        # Hello # World"
+-        "print hello there # test"
+-    ] | str join "\n"
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_no_target [] {
+-
+-    let expected = [
+-        "print test # Hello # World"
+-        "print hello there # test"
+-    ] | str join "\n"
+-
+-    let actual = $expected | str align '='
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_empty_target_noop [] {
+-
+-    let expected = [
+-        "print test # Hello # World"
+-        "print hello there # test"
+-    ] | str join "\n"
+-
+-    let actual = $expected | str align ''
+-
+-    assert equal $actual $expected
+-}
+-
+-@test
+-def str-align_empty_input_noop [] {
+-
+-    let expected = ""
+-
+-    let actual = [] | str align '='
+-
+-    assert equal $actual $expected
+-}
+diff --git a/crates/nu-std/tests/test_std_random.nu b/crates/nu-std/tests/test_std_random.nu
+deleted file mode 100644
+index b0f2b7c32445d62241c19eff5b8cf095af509105..0000000000000000000000000000000000000000
+--- a/crates/nu-std/tests/test_std_random.nu
++++ /dev/null
+@@ -1,38 +0,0 @@
+-use std/assert
+-use std/testing *
+-use std/random
+-
+-@test
+-def "random dice rejects negative sides" [] {
+-  assert error {
+-    random dice --sides (-2)
+-  } "--sides (-2) should not have been accepted"
+-}
+-
+-@test
+-def "random dice rejects zero sides" [] {
+-  assert error {
+-    random dice --sides 0
+-  } "--sides 0 should not have been accepted"
+-}
+-
+-@test
+-def "random dice rejects negative dice" [] {
+-  assert error {
+-    random dice --dice (-2)
+-  } "--dice (-2) should not have been accepted"
+-}
+-
+-@test
+-def "random dice rejects zero dice" [] {
+-  assert error {
+-    random dice --dice 0
+-  } "--dice 0 should not have been accepted"
+-}
+-
+-@test
+-def "random dice rejects one-sided dice" [] {
+-  assert error {
+-    random dice --sides 1
+-  } "--sides 1 should not have been accepted"
+-}
+diff --git a/tests/overlays/mod.rs b/tests/overlays/mod.rs
+index 6dc678acaa26ed474103b5ff8ef2af25453a3460..b879409a74bb111836a2091fc69f13475fbd2292 100644
+--- a/tests/overlays/mod.rs
++++ b/tests/overlays/mod.rs
+@@ -198,7 +198,7 @@ fn new_overlay_from_const_name() {
+     let inp = &[
+         "const mod = 'spam'",
+         "overlay new $mod",
+-        "overlay list | last | get name",
++        "overlay list | last",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -212,7 +212,7 @@ fn hide_overlay_from_const_name() {
+         "const mod = 'spam'",
+         "overlay new $mod",
+         "overlay hide $mod",
+-        "overlay list | where active == true | get name | str join ' '",
++        "overlay list | str join ' '",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -410,7 +410,7 @@ fn hide_overlay_scoped_env() {
+ 
+ #[test]
+ fn list_default_overlay() {
+-    let inp = &["overlay list | last | get name"];
++    let inp = &["overlay list | last"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -424,7 +424,7 @@ fn list_last_overlay() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "overlay list | last | get name",
++        "overlay list | last",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -439,7 +439,7 @@ fn list_overlay_scoped() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use spam",
+-        "do { overlay list | last | get name }",
++        "do { overlay list | last }",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -695,7 +695,7 @@ fn reset_overrides() {
+ 
+ #[test]
+ fn overlay_new() {
+-    let inp = &["overlay new spam", "overlay list | last | get name"];
++    let inp = &["overlay new spam", "overlay list | last"];
+ 
+     let actual = nu!(&inp.join("; "));
+     let actual_repl = nu!(nu_repl_code(inp));
+@@ -1080,7 +1080,7 @@ fn overlay_use_find_scoped_module() {
+                     module spam { }
+ 
+                     overlay use spam
+-                    overlay list | last | get name
++                    overlay list | last
+                 }
+             ";
+ 
+@@ -1196,7 +1196,7 @@ fn overlay_trim_single_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         "overlay use 'spam'",
+-        "overlay list | last | get name",
++        "overlay list | last ",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1227,7 +1227,7 @@ fn overlay_trim_double_quote() {
+     let inp = &[
+         r#"module spam { export def foo [] { "foo" } }"#,
+         r#"overlay use "spam" "#,
+-        "overlay list | last | get name",
++        "overlay list | last ",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1428,7 +1428,7 @@ fn alias_overlay_use_2() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam",
+         "spam b",
+-        "overlay list | get 1.name",
++        "overlay list | get 1",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1447,7 +1447,7 @@ fn alias_overlay_use_3() {
+         "module spam { export alias b = overlay use inner }",
+         "use spam b",
+         "b",
+-        "overlay list | get 1.name",
++        "overlay list | get 1",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+@@ -1465,7 +1465,7 @@ fn alias_overlay_new() {
+         "alias on = overlay new",
+         "on spam",
+         "on eggs",
+-        "overlay list | last | get name",
++        "overlay list | last",
+     ];
+ 
+     let actual = nu!(&inp.join("; "));
+diff --git a/tests/repl/test_commandline.rs b/tests/repl/test_commandline.rs
+index c40923cddb8b5692be55b3272c7e33214c31a790..1b52797fc4a8733b34f6eec004ac0aee68c258fa 100644
+--- a/tests/repl/test_commandline.rs
++++ b/tests/repl/test_commandline.rs
+@@ -140,11 +140,3 @@ fn commandline_test_cursor_end() -> TestResult {
+ fn commandline_test_cursor_type() -> TestResult {
+     run_test("commandline get-cursor | describe", "int")
+ }
+-
+-#[test]
+-fn commandline_test_accepted_command() -> TestResult {
+-    run_test(
+-        "commandline edit --accept \"print accepted\"\n | commandline",
+-        "print accepted",
+-    )
+-}
+diff --git a/tests/repl/test_engine.rs b/tests/repl/test_engine.rs
+index d29325eb807a81f261cff4366e2f6d6a98144d54..22d81f08cb063503f745ffddd3ebecc66d74d8ed 100644
+--- a/tests/repl/test_engine.rs
++++ b/tests/repl/test_engine.rs
+@@ -1,4 +1,4 @@
+-use crate::repl::tests::{TestResult, fail_test, run_test, run_test_contains};
++use crate::repl::tests::{TestResult, fail_test, run_test};
+ use rstest::rstest;
+ 
+ #[test]
+@@ -87,8 +87,7 @@ fn in_used_in_range_to() -> TestResult {
+ 
+ #[test]
+ fn help_works_with_missing_requirements() -> TestResult {
+-    fail_test(r#"each"#, "missing_positional")?;
+-    run_test_contains(r#"each --help"#, "Usage")
++    run_test(r#"each --help | lines | length"#, "72")
+ }
+ 
+ #[rstest]
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index 2373c357c09084fcb9d3b9c4a04be8b9b6326d74..0cc4bc4cfea9fcf8a1606294a6fbd861b14975cd 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -1027,18 +1027,3 @@ fn not_panic_with_recursive_call() {
+     );
+     assert!(result.status.success());
+ }
+-
+-// https://github.com/nushell/nushell/issues/16040
+-#[test]
+-fn external_argument_with_subexpressions() -> TestResult {
+-    run_test(r#"^echo foo( ('bar') | $in ++ 'baz' )"#, "foobarbaz")?;
+-    run_test(r#"^echo foo( 'bar' )('baz')"#, "foobarbaz")?;
+-    run_test(r#"^echo ")('foo')(""#, ")('foo')(")?;
+-    fail_test(r#"^echo foo( 'bar'"#, "Unexpected end of code")
+-}
+-
+-// https://github.com/nushell/nushell/issues/16332
+-#[test]
+-fn quote_escape_but_not_env_shorthand() -> TestResult {
+-    run_test(r#""\"=foo""#, "\"=foo")
+-}
+diff --git a/tests/repl/test_spread.rs b/tests/repl/test_spread.rs
+index d4d87d01774edaeccbaeae6d11b43f819b1a3aa9..091d885f303ee26262aafd0ded3c440e9825e7ea 100644
+--- a/tests/repl/test_spread.rs
++++ b/tests/repl/test_spread.rs
+@@ -200,29 +200,3 @@ fn respect_shape() -> TestResult {
+     run_test(r#"def "...$foo" [] {2}; do { ...$foo }"#, "2").unwrap();
+     run_test(r#"match "...$foo" { ...$foo => 5 }"#, "5")
+ }
+-
+-#[test]
+-fn spread_null() -> TestResult {
+-    // Spread in list
+-    run_test(r#"[1, 2, ...(null)] | to nuon --raw"#, r#"[1,2]"#)?;
+-
+-    // Spread in record
+-    run_test(r#"{a: 1, b: 2, ...(null)} | to nuon --raw"#, r#"{a:1,b:2}"#)?;
+-
+-    // Spread to built-in command's ...rest
+-    run_test(r#"echo 1 2 ...(null) | to nuon --raw"#, r#"[1,2]"#)?;
+-
+-    // Spread to custom command's ...rest
+-    run_test(
+-        r#"
+-            def foo [...rest] { $rest }
+-            foo ...(null) 1 2 ...(null) 3 | to nuon --raw
+-        "#,
+-        r#"[1,2,3]"#,
+-    )?;
+-
+-    // Spread to external command's arguments
+-    assert_eq!(nu!(r#"nu --testbin cococo 1 ...(null) 2"#).out, "1 2");
+-
+-    Ok(())
+-}
+diff --git a/tests/repl/test_table_operations.rs b/tests/repl/test_table_operations.rs
+index 65ccbd4db0e080da6719af160474f9ae44d9e922..737f07dc6d167e4c18f830ed1e451d30c7b9079c 100644
+--- a/tests/repl/test_table_operations.rs
++++ b/tests/repl/test_table_operations.rs
+@@ -305,38 +305,9 @@ fn nullify_holes() -> TestResult {
+ }
+ 
+ #[test]
+-fn get_with_insensitive_cellpath() -> TestResult {
++fn get_insensitive() -> TestResult {
+     run_test(
+         r#"[[name, age]; [a, 1] [b, 2]] | get NAmE! | select 0 | get 0"#,
+         "a",
+     )
+ }
+-
+-#[test]
+-fn ignore_case_flag() -> TestResult {
+-    run_test(
+-        r#"
+-            [
+-                [Origin, Crate, Versions];
+-                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
+-            ]
+-            | get --ignore-case crate.name.0
+-        "#,
+-        "nu-cli",
+-    )?;
+-    run_test(
+-        r#"
+-            [
+-                [Origin, Crate, Versions];
+-                [World, {Name: "nu-cli"}, ['0.21', '0.22']]
+-            ]
+-            | select --ignore-case origin
+-            | to nuon --raw
+-        "#,
+-        r#"[[origin];[World]]"#,
+-    )?;
+-    run_test(
+-        r#"{A: {B: 3, C: 5}} | reject --ignore-case a.b | to nuon --raw"#,
+-        "{A:{C:5}}",
+-    )
+-}
+diff --git a/tests/scope/mod.rs b/tests/scope/mod.rs
+index 83f9ee5b8230f391ae52c842d2b72470e68aa1a1..ffcaa80bd7b2c3e72fb80a233358f59a699c7978 100644
+--- a/tests/scope/mod.rs
++++ b/tests/scope/mod.rs
+@@ -330,19 +330,3 @@ fn correct_scope_variables_fields() {
+     let actual = nu!(&inp.join("; "));
+     assert_eq!(actual.out, "false");
+ }
+-
+-#[test]
+-fn example_results_have_valid_span() {
+-    let inp = &[
+-        "scope commands",
+-        "| where name == 'do'",
+-        "| first",
+-        "| get examples",
+-        "| where result == 177",
+-        "| get 0.result",
+-        "| metadata",
+-        "| view span $in.span.start $in.span.end",
+-    ];
+-    let actual = nu!(&inp.join(" "));
+-    assert_eq!(actual.out, "scope commands");
+-}
+diff --git a/tests/shell/mod.rs b/tests/shell/mod.rs
+index c452e3d3a81360c383515cb6ccf95515908b7bd1..6f7d60aa587aed57f1ee7836a1f43e8dba87048e 100644
+--- a/tests/shell/mod.rs
++++ b/tests/shell/mod.rs
+@@ -445,20 +445,3 @@ fn main_script_subcommand_help_uses_script_name2() {
+         assert!(!actual.err.contains("Usage: main foo"));
+     })
+ }
+-
+-#[test]
+-fn script_file_not_found() {
+-    let actual = nu!(r#"nu non-existent-script.nu foo bar"#);
+-    assert!(
+-        !actual.err.contains(".rs"),
+-        "internal rust source was mentioned"
+-    );
+-    assert!(
+-        actual.err.contains("non-existent-script.nu"),
+-        "error did not include script name"
+-    );
+-    assert!(
+-        actual.err.contains("commandline"),
+-        "source file for the error was not commandline"
+-    );
+-}

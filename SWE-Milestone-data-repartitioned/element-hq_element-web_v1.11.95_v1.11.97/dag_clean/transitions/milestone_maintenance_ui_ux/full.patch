@@ -1,0 +1,261 @@
+diff --git a/res/css/components/views/utils/_Flex.pcss b/res/css/components/views/utils/_Flex.pcss
+index a7f3688466d38ec81348a50f81f4425fd0daefea..9cfa6424f074f7fbff20f1b588834e765ac2046c 100644
+--- a/res/css/components/views/utils/_Flex.pcss
++++ b/res/css/components/views/utils/_Flex.pcss
+@@ -12,4 +12,5 @@ Please see LICENSE files in the repository root for full details.
+     align-items: var(--mx-flex-align, unset);
+     justify-content: var(--mx-flex-justify, unset);
+     gap: var(--mx-flex-gap, unset);
++    flex-wrap: var(--mx-flex-wrap, unset);
+ }
+diff --git a/res/css/views/right_panel/_RoomSummaryCard.pcss b/res/css/views/right_panel/_RoomSummaryCard.pcss
+index fb1d6f7d9cdc643a0a97d0ed74702912225ebc2e..eb3b14579f9033138040da0d9d6b0d890dc37c42 100644
+--- a/res/css/views/right_panel/_RoomSummaryCard.pcss
++++ b/res/css/views/right_panel/_RoomSummaryCard.pcss
+@@ -100,3 +100,7 @@ Please see LICENSE files in the repository root for full details.
+ .mx_RoomSummaryCard_roomName {
+     margin: $spacing-12 0 $spacing-4;
+ }
++
++.mx_RoomSummaryCard_leave {
++    margin: 0 0 var(--cpd-space-8x);
++}
+diff --git a/res/css/views/settings/_SetIntegrationManager.pcss b/res/css/views/settings/_SetIntegrationManager.pcss
+index a046ce0fffab138235274dd018ff83916002c5be..f370d06e5eced3030e581f326ffd9d98c0bf608d 100644
+--- a/res/css/views/settings/_SetIntegrationManager.pcss
++++ b/res/css/views/settings/_SetIntegrationManager.pcss
+@@ -7,19 +7,13 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ .mx_SetIntegrationManager {
+-    .mx_SettingsFlag {
++    .mx_SetIntegrationManager_heading_manager {
++        display: flex;
+         align-items: center;
+-
+-        .mx_SetIntegrationManager_heading_manager {
+-            display: flex;
+-            align-items: center;
+-            flex-wrap: wrap;
+-            column-gap: $spacing-4;
+-        }
+-
+-        .mx_ToggleSwitch {
+-            align-self: flex-start;
+-            min-width: var(--ToggleSwitch-min-width); /* avoid compression */
+-        }
++        flex-wrap: wrap;
++        column-gap: $spacing-4;
++    }
++    form {
++        margin-top: var(--cpd-space-3x);
+     }
+ }
+diff --git a/src/accessibility/KeyboardShortcuts.ts b/src/accessibility/KeyboardShortcuts.ts
+index d5c32d6d8d192805ad4afc828704f16d27abb098..da0097f4b27766c78fb0ffbd70c7ea27d89f415c 100644
+--- a/src/accessibility/KeyboardShortcuts.ts
++++ b/src/accessibility/KeyboardShortcuts.ts
+@@ -521,8 +521,7 @@ export const KEYBOARD_SHORTCUTS: IKeyboardShortcuts = {
+     [KeyBindingAction.GoToHome]: {
+         default: {
+             ctrlKey: true,
+-            altKey: !IS_MAC,
+-            shiftKey: IS_MAC,
++            altKey: true,
+             key: Key.H,
+         },
+         displayName: _td("keyboard|go_home_view"),
+@@ -585,7 +584,7 @@ export const KEYBOARD_SHORTCUTS: IKeyboardShortcuts = {
+     },
+     [KeyBindingAction.ToggleHiddenEventVisibility]: {
+         default: {
+-            ctrlOrCmdKey: true,
++            ctrlKey: true,
+             shiftKey: true,
+             key: Key.H,
+         },
+diff --git a/src/components/structures/UserMenu.tsx b/src/components/structures/UserMenu.tsx
+index 08a519e1826c4eb624f10715884248b3a889cb6c..2fdf7af68b316788a25538a5de865577e5cc6d21 100644
+--- a/src/components/structures/UserMenu.tsx
++++ b/src/components/structures/UserMenu.tsx
+@@ -370,6 +370,13 @@ export default class UserMenu extends React.Component<IProps, IState> {
+             ? toRightOf(this.state.contextMenuPosition)
+             : below(this.state.contextMenuPosition);
+ 
++        const userIdentifierString = UserIdentifierCustomisations.getDisplayUserIdentifier(
++            MatrixClientPeg.safeGet().getSafeUserId(),
++            {
++                withDisplayName: true,
++            },
++        );
++
+         return (
+             <IconizedContextMenu {...position} onFinished={this.onCloseMenu} className="mx_UserMenu_contextMenu">
+                 <div className="mx_UserMenu_contextMenu_header">
+@@ -377,13 +384,8 @@ export default class UserMenu extends React.Component<IProps, IState> {
+                         <span className="mx_UserMenu_contextMenu_displayName">
+                             {OwnProfileStore.instance.displayName}
+                         </span>
+-                        <span className="mx_UserMenu_contextMenu_userId">
+-                            {UserIdentifierCustomisations.getDisplayUserIdentifier(
+-                                MatrixClientPeg.safeGet().getSafeUserId(),
+-                                {
+-                                    withDisplayName: true,
+-                                },
+-                            )}
++                        <span className="mx_UserMenu_contextMenu_userId" title={userIdentifierString || ""}>
++                            {userIdentifierString}
+                         </span>
+                     </div>
+ 
+diff --git a/src/components/utils/Flex.tsx b/src/components/utils/Flex.tsx
+index ca085a0a52bfeabd67bac1df8d56ddcbe981fbaf..c4e2f9006652d927325a5095746935cbb2ca9113 100644
+--- a/src/components/utils/Flex.tsx
++++ b/src/components/utils/Flex.tsx
+@@ -39,6 +39,11 @@ type FlexProps<T extends keyof JSX.IntrinsicElements | JSXElementConstructor<any
+      * @default start
+      */
+     justify?: "start" | "center" | "end" | "space-between";
++    /**
++     * The wrapping of the flex children
++     * @default nowrap
++     */
++    wrap?: "wrap" | "nowrap" | "wrap-reverse";
+     /**
+      * The spacing between the flex children, expressed with the CSS unit
+      * @default 0
+@@ -60,6 +65,7 @@ export function Flex<T extends keyof JSX.IntrinsicElements | JSXElementConstruct
+     align = "start",
+     justify = "start",
+     gap = "0",
++    wrap = "nowrap",
+     className,
+     children,
+     ...props
+@@ -71,8 +77,9 @@ export function Flex<T extends keyof JSX.IntrinsicElements | JSXElementConstruct
+             "--mx-flex-align": align,
+             "--mx-flex-justify": justify,
+             "--mx-flex-gap": gap,
++            "--mx-flex-wrap": wrap,
+         }),
+-        [align, direction, display, gap, justify],
++        [align, direction, display, gap, justify, wrap],
+     );
+ 
+     return React.createElement(as, { ...props, className: classNames("mx_Flex", className), style }, children);
+diff --git a/src/components/views/right_panel/RoomSummaryCard.tsx b/src/components/views/right_panel/RoomSummaryCard.tsx
+index 2d3453febaf244de3a1017b5c60a25940fffc351..c298224888f2842641b0451477affcff0a6736c1 100644
+--- a/src/components/views/right_panel/RoomSummaryCard.tsx
++++ b/src/components/views/right_panel/RoomSummaryCard.tsx
+@@ -35,7 +35,8 @@ import PinIcon from "@vector-im/compound-design-tokens/assets/web/icons/pin";
+ import LockIcon from "@vector-im/compound-design-tokens/assets/web/icons/lock-solid";
+ import LockOffIcon from "@vector-im/compound-design-tokens/assets/web/icons/lock-off";
+ import PublicIcon from "@vector-im/compound-design-tokens/assets/web/icons/public";
+-import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
++import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error";
++import ErrorSolidIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
+ import ChevronDownIcon from "@vector-im/compound-design-tokens/assets/web/icons/chevron-down";
+ import { EventType, JoinRule, type Room, RoomStateEvent } from "matrix-js-sdk/src/matrix";
+ 
+@@ -320,7 +321,7 @@ const RoomSummaryCard: React.FC<IProps> = ({
+ 
+                 {e2eStatus === E2EStatus.Warning && (
+                     <Badge kind="red">
+-                        <ErrorIcon width="1em" />
++                        <ErrorSolidIcon width="1em" />
+                         {_t("common|not_trusted")}
+                     </Badge>
+                 )}
+@@ -441,6 +442,7 @@ const RoomSummaryCard: React.FC<IProps> = ({
+                 <Separator />
+ 
+                 <MenuItem
++                    className="mx_RoomSummaryCard_leave"
+                     Icon={LeaveIcon}
+                     kind="critical"
+                     label={_t("action|leave_room")}
+diff --git a/src/components/views/settings/SetIntegrationManager.tsx b/src/components/views/settings/SetIntegrationManager.tsx
+index 8721ddcd4ba3de21bf2373809c180786a8746187..98066bc0a42615b47e503b3ae984da5fa9f0df6a 100644
+--- a/src/components/views/settings/SetIntegrationManager.tsx
++++ b/src/components/views/settings/SetIntegrationManager.tsx
+@@ -9,13 +9,13 @@ Please see LICENSE files in the repository root for full details.
+ import React from "react";
+ import { logger } from "matrix-js-sdk/src/logger";
+ import { type EmptyObject } from "matrix-js-sdk/src/matrix";
++import { Root, InlineField, Label, ToggleInput } from "@vector-im/compound-web";
+ 
+ import { _t } from "../../../languageHandler";
+ import { IntegrationManagers } from "../../../integrations/IntegrationManagers";
+ import { type IntegrationManagerInstance } from "../../../integrations/IntegrationManagerInstance";
+ import SettingsStore from "../../../settings/SettingsStore";
+ import { SettingLevel } from "../../../settings/SettingLevel";
+-import ToggleSwitch from "../elements/ToggleSwitch";
+ import Heading from "../typography/Heading";
+ import { SettingsSubsectionText } from "./shared/SettingsSubsection";
+ import { UIFeature } from "../../../settings/UIFeature";
+@@ -66,26 +66,33 @@ export default class SetIntegrationManager extends React.Component<EmptyObject,
+         if (!SettingsStore.getValue(UIFeature.Widgets)) return null;
+ 
+         return (
+-            <label
+-                className="mx_SetIntegrationManager"
+-                data-testid="mx_SetIntegrationManager"
+-                htmlFor="toggle_integration"
+-            >
++            <div className="mx_SetIntegrationManager" data-testid="mx_SetIntegrationManager">
+                 <div className="mx_SettingsFlag">
+                     <div className="mx_SetIntegrationManager_heading_manager">
+                         <Heading size="3">{_t("integration_manager|manage_title")}</Heading>
+                         <Heading size="4">{managerName}</Heading>
+                     </div>
+-                    <ToggleSwitch
+-                        id="toggle_integration"
+-                        checked={this.state.provisioningEnabled}
+-                        disabled={false}
+-                        onChange={this.onProvisioningToggled}
+-                    />
+                 </div>
+                 <SettingsSubsectionText>{bodyText}</SettingsSubsectionText>
+                 <SettingsSubsectionText>{_t("integration_manager|explainer")}</SettingsSubsectionText>
+-            </label>
++                <Root>
++                    <InlineField
++                        name="enable_im"
++                        control={
++                            <ToggleInput
++                                role="switch"
++                                id="mx_SetIntegrationManager_Toggle"
++                                checked={this.state.provisioningEnabled}
++                                onChange={this.onProvisioningToggled}
++                            />
++                        }
++                    >
++                        <Label htmlFor="mx_SetIntegrationManager_Toggle">
++                            {_t("integration_manager|toggle_label")}
++                        </Label>
++                    </InlineField>
++                </Root>
++            </div>
+         );
+     }
+ }
+diff --git a/src/components/views/verification/VerificationShowSas.tsx b/src/components/views/verification/VerificationShowSas.tsx
+index d2d53164d3dd3ffb3a2a14873df29565f43ee6ab..2292aad09072f7df460a6e0becf60f1168776a8c 100644
+--- a/src/components/views/verification/VerificationShowSas.tsx
++++ b/src/components/views/verification/VerificationShowSas.tsx
+@@ -165,12 +165,12 @@ export default class VerificationShowSas extends React.Component<IProps, IState>
+         } else {
+             confirm = (
+                 <div className="mx_VerificationShowSas_buttonRow">
+-                    <AccessibleButton onClick={this.onDontMatchClick} kind="danger">
+-                        {_t("encryption|verification|sas_no_match")}
+-                    </AccessibleButton>
+                     <AccessibleButton onClick={this.onMatchClick} kind="primary">
+                         {_t("encryption|verification|sas_match")}
+                     </AccessibleButton>
++                    <AccessibleButton onClick={this.onDontMatchClick} kind="secondary">
++                        {_t("encryption|verification|sas_no_match")}
++                    </AccessibleButton>
+                 </div>
+             );
+         }

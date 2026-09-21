@@ -1,0 +1,106 @@
+diff --git a/tests/json.rs b/tests/json.rs
+index 8af56b50c9a6932231b9b6422fb43ce7e842d43c..d1233d7631144d95e3a8324617b8ae9b02f0f87c 100644
+--- a/tests/json.rs
++++ b/tests/json.rs
+@@ -21,35 +21,35 @@ impl Message {
+     fn unwrap_begin(&self) -> Begin {
+         match *self {
+             Message::Begin(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Begin but got {:?}", x),
++            ref x => panic!("expected Message::Begin but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_end(&self) -> End {
+         match *self {
+             Message::End(ref x) => x.clone(),
+-            ref x => panic!("expected Message::End but got {:?}", x),
++            ref x => panic!("expected Message::End but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_match(&self) -> Match {
+         match *self {
+             Message::Match(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Match but got {:?}", x),
++            ref x => panic!("expected Message::Match but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_context(&self) -> Context {
+         match *self {
+             Message::Context(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Context but got {:?}", x),
++            ref x => panic!("expected Message::Context but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_summary(&self) -> Summary {
+         match *self {
+             Message::Summary(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Summary but got {:?}", x),
++            ref x => panic!("expected Message::Summary but got {x:?}"),
+         }
+     }
+ }
+diff --git a/tests/regression.rs b/tests/regression.rs
+index 4c08784455fc5b827885db2922fc8d40f3e4cbd6..bd8459055c3cfa71240cd1aeabfa5aeeeb204cdb 100644
+--- a/tests/regression.rs
++++ b/tests/regression.rs
+@@ -955,6 +955,43 @@ rgtest!(r1319, |dir: Dir, mut cmd: TestCommand| {
+     );
+ });
+ 
++// See: https://github.com/BurntSushi/ripgrep/issues/1332
++rgtest!(r1334_invert_empty_patterns, |dir: Dir, _cmd: TestCommand| {
++    dir.create("zero-patterns", "");
++    dir.create("one-pattern", "\n");
++    dir.create("haystack", "one\ntwo\nthree\n");
++
++    // zero patterns matches nothing
++    {
++        let mut cmd = dir.command();
++        cmd.arg("-f").arg("zero-patterns").arg("haystack").assert_err();
++    }
++    // one pattern that matches empty string matches everything
++    {
++        let mut cmd = dir.command();
++        eqnice!(
++            "one\ntwo\nthree\n",
++            cmd.arg("-f").arg("one-pattern").arg("haystack").stdout()
++        );
++    }
++
++    // inverting zero patterns matches everything
++    // (This is the regression. ripgrep used to match nothing because of an
++    // incorrect optimization.)
++    {
++        let mut cmd = dir.command();
++        eqnice!(
++            "one\ntwo\nthree\n",
++            cmd.arg("-vf").arg("zero-patterns").arg("haystack").stdout()
++        );
++    }
++    // inverting one pattern that matches empty string matches nothing
++    {
++        let mut cmd = dir.command();
++        cmd.arg("-vf").arg("one-pattern").arg("haystack").assert_err();
++    }
++});
++
+ // See: https://github.com/BurntSushi/ripgrep/issues/1334
+ rgtest!(r1334_crazy_literals, |dir: Dir, mut cmd: TestCommand| {
+     dir.create("patterns", &"1.208.0.0/12\n".repeat(40));
+diff --git a/tests/util.rs b/tests/util.rs
+index 4101766012aeece35a8a6e649cf323f4c88ac6dd..b578fec712d8c7d4d0d28b9f77e3c189c132c02d 100644
+--- a/tests/util.rs
++++ b/tests/util.rs
+@@ -75,7 +75,7 @@ impl Dir {
+             .expect("executable's directory")
+             .to_path_buf();
+         let dir =
+-            env::temp_dir().join(TEST_DIR).join(name).join(&format!("{}", id));
++            env::temp_dir().join(TEST_DIR).join(name).join(&format!("{id}"));
+         if dir.exists() {
+             nice_err(&dir, fs::remove_dir_all(&dir));
+         }

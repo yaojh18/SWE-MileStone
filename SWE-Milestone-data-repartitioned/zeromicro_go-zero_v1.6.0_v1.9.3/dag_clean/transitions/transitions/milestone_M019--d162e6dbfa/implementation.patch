@@ -1,0 +1,479 @@
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index b3b3a01d1a375aa1c836403932a6559b437196a0..38fcd7903f6782e9d133e39b363e279e8218fb25 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -13,6 +13,15 @@ const (
+ 
+ // Marshal marshals the given val and returns the map that contains the fields.
+ // optional=another is not implemented, and it's hard to implement and not commonly used.
++// support anonymous field, e.g.:
++//
++//	type Foo struct {
++//		Token string `header:"token"`
++//	}
++//	type FooB struct {
++//		Foo
++//		Bar string  `json:"bar"`
++//	}
+ func Marshal(val any) (map[string]map[string]any, error) {
+ 	ret := make(map[string]map[string]any)
+ 	tp := reflect.TypeOf(val)
+@@ -69,15 +78,35 @@ func processMember(field reflect.StructField, value reflect.Value,
+ 		val = fmt.Sprint(val)
+ 	}
+ 
+-	m, ok := collector[tag]
+-	if ok {
+-		m[key] = val
++	if field.Anonymous {
++		anonCollector, err := Marshal(val)
++		if err != nil {
++			return err
++		}
++		for anonTag, anonMap := range anonCollector {
++			for anonKey, anonVal := range anonMap {
++				m, ok := collector[anonTag]
++				if ok {
++					m[anonKey] = anonVal
++				} else {
++					m = map[string]any{
++						anonKey: anonVal,
++					}
++				}
++				collector[anonTag] = m
++			}
++		}
+ 	} else {
+-		m = map[string]any{
+-			key: val,
++		m, ok := collector[tag]
++		if ok {
++			m[key] = val
++		} else {
++			m = map[string]any{
++				key: val,
++			}
+ 		}
++		collector[tag] = m
+ 	}
+-	collector[tag] = m
+ 
+ 	return nil
+ }
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 326de7a54d60c67af0c75aa81f09895774b8b068..4b388172d65f0350117822972cbf060988e036e0 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -51,6 +51,7 @@ type (
+ 
+ 	unmarshalOptions struct {
+ 		fillDefault  bool
++		fromArray    bool
+ 		fromString   bool
+ 		opaqueKeys   bool
+ 		canonicalKey func(key string) string
+@@ -839,6 +840,19 @@ func (u *Unmarshaler) processNamedField(field reflect.StructField, value reflect
+ 		return u.processNamedFieldWithoutValue(field.Type, value, opts, fullName)
+ 	}
+ 
++	if u.opts.fromArray {
++		fieldKind := field.Type.Kind()
++		if fieldKind != reflect.Slice && fieldKind != reflect.Array {
++			valueKind := reflect.TypeOf(mapValue).Kind()
++			if valueKind == reflect.Slice || valueKind == reflect.Array {
++				val := reflect.ValueOf(mapValue)
++				if val.Len() > 0 {
++					mapValue = val.Index(0).Interface()
++				}
++			}
++		}
++	}
++
+ 	return u.processNamedFieldWithValue(field.Type, value, valueWithParent{
+ 		value:  mapValue,
+ 		parent: valuer,
+@@ -1018,6 +1032,16 @@ func WithDefault() UnmarshalOption {
+ 	}
+ }
+ 
++// WithFromArray customizes an Unmarshaler with converting array values to non-array types.
++// For example, if the field type is []string, and the value is [hello],
++// the field type can be `string`, instead of `[]string`.
++// Typically, this option is used for unmarshaling from form values.
++func WithFromArray() UnmarshalOption {
++	return func(opt *unmarshalOptions) {
++		opt.fromArray = true
++	}
++}
++
+ // WithOpaqueKeys customizes an Unmarshaler with opaque keys.
+ // Opaque keys are keys that are not processed by the unmarshaler.
+ func WithOpaqueKeys() UnmarshalOption {
+diff --git a/rest/handler/contentsecurityhandler.go b/rest/handler/contentsecurityhandler.go
+index a5b9c182ea6dd585c14350e1e5651c34557a3aa6..bd095fe97476768ea76c024984bf967c242a4236 100644
+--- a/rest/handler/contentsecurityhandler.go
++++ b/rest/handler/contentsecurityhandler.go
+@@ -60,7 +60,8 @@ func executeCallbacks(w http.ResponseWriter, r *http.Request, next http.Handler,
+ 	}
+ }
+ 
+-func handleVerificationFailure(w http.ResponseWriter, r *http.Request, next http.Handler, strict bool, code int) {
++func handleVerificationFailure(w http.ResponseWriter, r *http.Request, next http.Handler,
++	strict bool, _ int) {
+ 	if strict {
+ 		w.WriteHeader(http.StatusForbidden)
+ 	} else {
+diff --git a/rest/handler/loghandler.go b/rest/handler/loghandler.go
+index 30348e3b113deca06f63459bd2e159942493100e..e6552fc0210109db8467f2da250f1b6da54991d2 100644
+--- a/rest/handler/loghandler.go
++++ b/rest/handler/loghandler.go
+@@ -24,8 +24,9 @@ import (
+ )
+ 
+ const (
+-	limitBodyBytes       = 1024
+-	defaultSlowThreshold = time.Millisecond * 500
++	limitBodyBytes         = 1024
++	limitDetailedBodyBytes = 4096
++	defaultSlowThreshold   = time.Millisecond * 500
+ )
+ 
+ var slowThreshold = syncx.ForAtomicDuration(defaultSlowThreshold)
+@@ -94,7 +95,8 @@ func DetailedLogHandler(next http.Handler) http.Handler {
+ 		lrw := newDetailLoggedResponseWriter(rw, &buf)
+ 
+ 		var dup io.ReadCloser
+-		r.Body, dup = iox.DupReadCloser(r.Body)
++		// https://github.com/zeromicro/go-zero/issues/3564
++		r.Body, dup = iox.LimitDupReadCloser(r.Body, limitDetailedBodyBytes)
+ 		logs := new(internal.LogCollector)
+ 		next.ServeHTTP(lrw, r.WithContext(internal.WithLogCollector(r.Context(), logs)))
+ 		r.Body = dup
+@@ -160,7 +162,7 @@ func logDetails(r *http.Request, response *detailLoggedResponseWriter, timer *ut
+ 		r.Method, code, r.RemoteAddr, timex.ReprOfDuration(duration), dumpRequest(r)))
+ 	if duration > slowThreshold.Load() {
+ 		logger.Slowf("[HTTP] %s - %d - %s - slowcall(%s)\n=> %s\n", r.Method, code, r.RemoteAddr,
+-			fmt.Sprintf("slowcall(%s)", timex.ReprOfDuration(duration)), dumpRequest(r))
++			timex.ReprOfDuration(duration), dumpRequest(r))
+ 	}
+ 
+ 	body := logs.Flush()
+diff --git a/rest/handler/timeouthandler.go b/rest/handler/timeouthandler.go
+index 25a9812634ab699f70754bc0de7ee7a15498cfb0..9a1b001d28d384c2e698540355599c2675990fc4 100644
+--- a/rest/handler/timeouthandler.go
++++ b/rest/handler/timeouthandler.go
+@@ -24,6 +24,8 @@ const (
+ 	reason                    = "Request Timeout"
+ 	headerUpgrade             = "Upgrade"
+ 	valueWebsocket            = "websocket"
++	headerAccept              = "Accept"
++	valueSSE                  = "text/event-stream"
+ )
+ 
+ // TimeoutHandler returns the handler with given timeout.
+@@ -56,7 +58,9 @@ func (h *timeoutHandler) errorBody() string {
+ }
+ 
+ func (h *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+-	if r.Header.Get(headerUpgrade) == valueWebsocket {
++	if r.Header.Get(headerUpgrade) == valueWebsocket ||
++		// Server-Sent Event ignore timeout.
++		r.Header.Get(headerAccept) == valueSSE {
+ 		h.handler.ServeHTTP(w, r)
+ 		return
+ 	}
+@@ -110,7 +114,7 @@ func (h *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 			} else {
+ 				w.WriteHeader(http.StatusServiceUnavailable)
+ 			}
+-			io.WriteString(w, h.errorBody())
++			_, _ = io.WriteString(w, h.errorBody())
+ 		})
+ 		tw.timedOut = true
+ 	}
+diff --git a/rest/httpx/requests.go b/rest/httpx/requests.go
+index cac81a58c803eaf5bed0b3776d286427ebd23326..87c576a9fe475094519c8a99db6a457c223b145a 100644
+--- a/rest/httpx/requests.go
++++ b/rest/httpx/requests.go
+@@ -3,6 +3,7 @@ package httpx
+ import (
+ 	"io"
+ 	"net/http"
++	"reflect"
+ 	"strings"
+ 	"sync/atomic"
+ 
+@@ -23,9 +24,16 @@ const (
+ )
+ 
+ var (
+-	formUnmarshaler = mapping.NewUnmarshaler(formKey, mapping.WithStringValues(), mapping.WithOpaqueKeys())
+-	pathUnmarshaler = mapping.NewUnmarshaler(pathKey, mapping.WithStringValues(), mapping.WithOpaqueKeys())
+-	validator       atomic.Value
++	formUnmarshaler = mapping.NewUnmarshaler(
++		formKey,
++		mapping.WithStringValues(),
++		mapping.WithOpaqueKeys(),
++		mapping.WithFromArray())
++	pathUnmarshaler = mapping.NewUnmarshaler(
++		pathKey,
++		mapping.WithStringValues(),
++		mapping.WithOpaqueKeys())
++	validator atomic.Value
+ )
+ 
+ // Validator defines the interface for validating the request.
+@@ -36,16 +44,19 @@ type Validator interface {
+ 
+ // Parse parses the request.
+ func Parse(r *http.Request, v any) error {
+-	if err := ParsePath(r, v); err != nil {
+-		return err
+-	}
++	kind := mapping.Deref(reflect.TypeOf(v)).Kind()
++	if kind != reflect.Array && kind != reflect.Slice {
++		if err := ParsePath(r, v); err != nil {
++			return err
++		}
+ 
+-	if err := ParseForm(r, v); err != nil {
+-		return err
+-	}
++		if err := ParseForm(r, v); err != nil {
++			return err
++		}
+ 
+-	if err := ParseHeaders(r, v); err != nil {
+-		return err
++		if err := ParseHeaders(r, v); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	if err := ParseJsonBody(r, v); err != nil {
+diff --git a/rest/httpx/responses.go b/rest/httpx/responses.go
+index edd133a42561690e46718f64b4bcd4904171cbb8..1896a0507a22af23984ac8e3b62529fffae03134 100644
+--- a/rest/httpx/responses.go
++++ b/rest/httpx/responses.go
+@@ -1,10 +1,12 @@
+ package httpx
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"net/http"
+ 	"sync"
+ 
+@@ -88,6 +90,26 @@ func SetOkHandler(handler func(context.Context, any) any) {
+ 	okHandler = handler
+ }
+ 
++// Stream writes data into w with streaming mode.
++// The ctx is used to control the streaming loop, typically use r.Context().
++// The fn is called repeatedly until it returns false.
++func Stream(ctx context.Context, w http.ResponseWriter, fn func(w io.Writer) bool) {
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		default:
++			hasMore := fn(w)
++			if flusher, ok := w.(http.Flusher); ok {
++				flusher.Flush()
++			}
++			if !hasMore {
++				return
++			}
++		}
++	}
++}
++
+ // WriteJson writes v as json string into w with code.
+ func WriteJson(w http.ResponseWriter, code int, v any) {
+ 	if err := doWriteJson(w, code, v); err != nil {
+@@ -150,8 +172,28 @@ func doHandleError(w http.ResponseWriter, err error, handler func(error) (int, a
+ 	}
+ }
+ 
++func doMarshalJson(v any) ([]byte, error) {
++	// why not use json.Marshal?  https://github.com/golang/go/issues/28453
++	// it change the behavior of json.Marshal, like & -> \u0026, < -> \u003c, > -> \u003e
++	// which is not what we want in logic response
++	buf := &bytes.Buffer{}
++	enc := json.NewEncoder(buf)
++	enc.SetEscapeHTML(false)
++	if err := enc.Encode(v); err != nil {
++		return nil, err
++	}
++
++	bs := buf.Bytes()
++	// Remove trailing newline added by json.Encoder.Encode
++	if len(bs) > 0 && bs[len(bs)-1] == '\n' {
++		bs = bs[:len(bs)-1]
++	}
++
++	return bs, nil
++}
++
+ func doWriteJson(w http.ResponseWriter, code int, v any) error {
+-	bs, err := json.Marshal(v)
++	bs, err := doMarshalJson(v)
+ 	if err != nil {
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+ 		return fmt.Errorf("marshal json failed, error: %w", err)
+diff --git a/rest/httpx/util.go b/rest/httpx/util.go
+index 2341961419f398959678068f1a89dd7c0775e69b..19248ae74bb3c15ad2b94c5f670a5e2e78f39b99 100644
+--- a/rest/httpx/util.go
++++ b/rest/httpx/util.go
+@@ -1,6 +1,9 @@
+ package httpx
+ 
+-import "net/http"
++import (
++	"errors"
++	"net/http"
++)
+ 
+ const xForwardedFor = "X-Forwarded-For"
+ 
+@@ -11,16 +14,22 @@ func GetFormValues(r *http.Request) (map[string]any, error) {
+ 	}
+ 
+ 	if err := r.ParseMultipartForm(maxMemory); err != nil {
+-		if err != http.ErrNotMultipart {
++		if !errors.Is(err, http.ErrNotMultipart) {
+ 			return nil, err
+ 		}
+ 	}
+ 
+ 	params := make(map[string]any, len(r.Form))
+-	for name := range r.Form {
+-		formValue := r.Form.Get(name)
+-		if len(formValue) > 0 {
+-			params[name] = formValue
++	for name, values := range r.Form {
++		filtered := make([]string, 0, len(values))
++		for _, v := range values {
++			if len(v) > 0 {
++				filtered = append(filtered, v)
++			}
++		}
++
++		if len(filtered) > 0 {
++			params[name] = filtered
+ 		}
+ 	}
+ 
+diff --git a/rest/internal/cors/handlers.go b/rest/internal/cors/handlers.go
+index 133b47dd714488f5d4dcbf1aca1476e827164f1d..d0e7c9f737fe520c3bf5d077081bcfeefb083110 100644
+--- a/rest/internal/cors/handlers.go
++++ b/rest/internal/cors/handlers.go
+@@ -26,6 +26,11 @@ const (
+ 	originHeader     = "Origin"
+ )
+ 
++// AddAllowHeaders sets the allowed headers.
++func AddAllowHeaders(header http.Header, headers ...string) {
++	header.Add(allowHeaders, strings.Join(headers, ", "))
++}
++
+ // NotAllowedHandler handles cross domain not allowed requests.
+ // At most one origin can be specified, other origins are ignored if given, default to be *.
+ func NotAllowedHandler(fn func(w http.ResponseWriter), origins ...string) http.Handler {
+diff --git a/rest/server.go b/rest/server.go
+index bbf6ff39d039ffc6851bc622eab6a3d0a22a1aa5..43b256ddec2e837c64dd4ba40da8ff96fe8d377c 100644
+--- a/rest/server.go
++++ b/rest/server.go
+@@ -160,6 +160,18 @@ func WithCors(origin ...string) RunOption {
+ 	}
+ }
+ 
++// WithCorsHeaders returns a RunOption to enable CORS with given headers.
++func WithCorsHeaders(headers ...string) RunOption {
++	const allDomains = "*"
++
++	return func(server *Server) {
++		server.router.SetNotAllowedHandler(cors.NotAllowedHandler(nil, allDomains))
++		server.router = newCorsRouter(server.router, func(header http.Header) {
++			cors.AddAllowHeaders(header, headers...)
++		}, allDomains)
++	}
++}
++
+ // WithCustomCors returns a func to enable CORS for given origin, or default to all origins (*),
+ // fn lets caller customizing the response.
+ func WithCustomCors(middlewareFn func(header http.Header), notAllowedFn func(http.ResponseWriter),
+diff --git a/zrpc/internal/rpclogger.go b/zrpc/internal/rpclogger.go
+index d20887a2694e5070d7beaf7dc96314056b7e6e47..e871bb586a80ad89949b9332042614a367683fbf 100644
+--- a/zrpc/internal/rpclogger.go
++++ b/zrpc/internal/rpclogger.go
+@@ -46,17 +46,17 @@ func (l *Logger) Fatalln(args ...any) {
+ }
+ 
+ // Info ignores the grpc info logs.
+-func (l *Logger) Info(args ...any) {
++func (l *Logger) Info(_ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+ // Infoln ignores the grpc info logs.
+-func (l *Logger) Infoln(args ...any) {
++func (l *Logger) Infoln(_ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+ // Infof ignores the grpc info logs.
+-func (l *Logger) Infof(format string, args ...any) {
++func (l *Logger) Infof(_ string, _ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+@@ -66,16 +66,16 @@ func (l *Logger) V(v int) bool {
+ }
+ 
+ // Warning ignores the grpc warning logs.
+-func (l *Logger) Warning(args ...any) {
++func (l *Logger) Warning(_ ...any) {
+ 	// ignore builtin grpc warning
+ }
+ 
+ // Warningf ignores the grpc warning logs.
+-func (l *Logger) Warningf(format string, args ...any) {
++func (l *Logger) Warningf(_ string, _ ...any) {
+ 	// ignore builtin grpc warning
+ }
+ 
+ // Warningln ignores the grpc warning logs.
+-func (l *Logger) Warningln(args ...any) {
++func (l *Logger) Warningln(_ ...any) {
+ 	// ignore builtin grpc warning
+ }
+diff --git a/zrpc/resolver/internal/resolver.go b/zrpc/resolver/internal/resolver.go
+index 37362a07bb52f3e96ed64fcfdf39a9cd694415dc..2d64ccc84664dc3ed8f8bce2ce08ce1fb1c4ccf6 100644
+--- a/zrpc/resolver/internal/resolver.go
++++ b/zrpc/resolver/internal/resolver.go
+@@ -46,5 +46,5 @@ type nopResolver struct {
+ func (r *nopResolver) Close() {
+ }
+ 
+-func (r *nopResolver) ResolveNow(options resolver.ResolveNowOptions) {
++func (r *nopResolver) ResolveNow(_ resolver.ResolveNowOptions) {
+ }
+diff --git a/zrpc/resolver/register.go b/zrpc/resolver/register.go
+index 43a1ffd226aaeefc8bfb5979afbe335c27d65a23..cc1d04e600b8b9f0704090049dd99d866eb4c78b 100644
+--- a/zrpc/resolver/register.go
++++ b/zrpc/resolver/register.go
+@@ -1,8 +1,6 @@
+ package resolver
+ 
+-import (
+-	"github.com/zeromicro/go-zero/zrpc/resolver/internal"
+-)
++import "github.com/zeromicro/go-zero/zrpc/resolver/internal"
+ 
+ // Register registers schemes defined zrpc.
+ // Keep it in a separated package to let third party register manually.

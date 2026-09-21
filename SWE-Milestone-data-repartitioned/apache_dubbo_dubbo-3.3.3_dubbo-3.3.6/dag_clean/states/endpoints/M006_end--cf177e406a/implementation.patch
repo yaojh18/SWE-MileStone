@@ -1,0 +1,764 @@
+diff --git a/.artifacts b/.artifacts
+index 88f77a30cb0437d7a2758f892dc6b25408b1e13e..27974610f1f27779c544007b1144b2034d6bbf76 100644
+--- a/.artifacts
++++ b/.artifacts
+@@ -107,7 +107,6 @@ dubbo-zookeeper-curator5-spring-boot-starter
+ dubbo-sentinel-spring-boot-starter
+ dubbo-seata-spring-boot-starter
+ dubbo-spring-security
+-dubbo-spring6-security
+ dubbo-tracing
+ dubbo-xds
+ dubbo-plugin-loom
+diff --git a/.github/workflows/build-and-test-pr.yml b/.github/workflows/build-and-test-pr.yml
+index 921791f7666e8cb91496f4da2c3ffe9567406c06..1bd5e2e982472286917886501ffa3820d76e760f 100644
+--- a/.github/workflows/build-and-test-pr.yml
++++ b/.github/workflows/build-and-test-pr.yml
+@@ -207,12 +207,10 @@ jobs:
+ 
+   unit-test:
+     needs: [check-format, unit-test-prepare]
+-    name: "Unit Test On ubuntu-latest Java: ${{ matrix.java }}"
++    name: "Unit Test On ubuntu-latest"
+     runs-on: ubuntu-latest
+     strategy:
+       fail-fast: false
+-      matrix:
+-        java: [ 8, 11, 17, 21 ]
+     env:
+       DISABLE_FILE_SYSTEM_TEST: true
+       CURRENT_ROLE: ${{ matrix.case-role }}
+@@ -222,11 +220,11 @@ jobs:
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+-      - name: "Set up JDK ${{ matrix.java }}"
++      - name: "Set up JDK 21"
+         uses: actions/setup-java@v4
+         with:
+           distribution: 'zulu'
+-          java-version: ${{ matrix.java }}
++          java-version: 21
+       - name: "Set current date as env variable"
+         run: echo "TODAY=$(date +'%Y%m%d')" >> $GITHUB_ENV
+       - name: "Cache local maven repository"
+@@ -245,15 +243,8 @@ jobs:
+           key: zookeeper-${{ runner.os }}-${{ env.ZOOKEEPER_VERSION }}
+           restore-keys: |
+             zookeeper-${{ runner.os }}-
+-      - name: "Test with maven on Java: 8"
+-        timeout-minutes: 90
+-        if: ${{ matrix.java == '8' }}
+-        run: |
+-          set -o pipefail
+-          ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+-      - name: "Test with maven on Java: ${{ matrix.java }}"
++      - name: "Test with maven"
+         timeout-minutes: 90
+-        if: ${{ matrix.java != '8' }}
+         run: |
+           set -o pipefail
+           ./mvnw ${{ env.MAVEN_ARGS }} clean test verify -Pjacoco,jdk15ge-simple,'!jdk15ge-add-open',skip-spotless -DtrimStackTrace=false -Dmaven.test.skip=false -Dcheckstyle.skip=false -Dcheckstyle_unix.skip=false -Drat.skip=false -DembeddedZookeeperPath=${{ github.workspace }}/.tmp/zookeeper 2>&1 | tee >(grep -n -B 1 -A 200 "FAILURE! -- in" > test_errors.log)
+@@ -265,13 +256,13 @@ jobs:
+         with:
+           token: ${{ secrets.CODECOV_TOKEN }}
+           verbose: true
+-          flags: unit-tests-java${{ matrix.java }}
++          flags: unit-tests
+         env:
+           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+       - name: "Upload surefire reports"
+         uses: actions/upload-artifact@v4
+         with:
+-          name: surefire-reports-java${{ matrix.java }}
++          name: surefire-reports
+           path: "**/target/surefire-reports/**"
+ 
+   samples-test-prepare:
+@@ -302,7 +293,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -343,7 +334,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -374,7 +365,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -417,7 +408,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+         job_id: [1,2,3]
+     steps:
+       - uses: actions/checkout@v4
+@@ -458,7 +449,7 @@ jobs:
+           CANDIDATE_VERSIONS="dubbo.version:$DUBBO_VERSION;compiler.version:$DUBBO_VERSION;$CANDIDATE_VERSIONS;dubbo.compiler.version:$DUBBO_VERSION"
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+-        run: cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++        run: cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "merge jacoco result"
+@@ -489,7 +480,7 @@ jobs:
+       JAVA_VER: ${{matrix.java}}
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -510,7 +501,7 @@ jobs:
+     needs: [check-format, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+@@ -560,7 +551,7 @@ jobs:
+     needs: [check-format, integration-test-result, samples-test-result]
+     strategy:
+       matrix:
+-        java: [ 8, 21 ]
++        java: [ 8, 17 ]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/checkout@v4
+diff --git a/.github/workflows/build-and-test-scheduled-3.1.yml b/.github/workflows/build-and-test-scheduled-3.1.yml
+index 29fffd081e69b088dff50e48a1b29fab1ed8a860..d53f36a7db396964f70f629944b981a70fd4c3ae 100644
+--- a/.github/workflows/build-and-test-scheduled-3.1.yml
++++ b/.github/workflows/build-and-test-scheduled-3.1.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.2.yml b/.github/workflows/build-and-test-scheduled-3.2.yml
+index 514097e7796c16c7beaef02b690987a8c4c651e1..72d67ef65a1a9cd00efa8313abd5667b9e0a6ac0 100644
+--- a/.github/workflows/build-and-test-scheduled-3.2.yml
++++ b/.github/workflows/build-and-test-scheduled-3.2.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/build-and-test-scheduled-3.3.yml b/.github/workflows/build-and-test-scheduled-3.3.yml
+index 014b120a046aedcd1e5bcaeec0d3af68a3806cdb..944cbfa9247576d1945f173a924a0540f07c6f5a 100644
+--- a/.github/workflows/build-and-test-scheduled-3.3.yml
++++ b/.github/workflows/build-and-test-scheduled-3.3.yml
+@@ -288,7 +288,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+@@ -394,7 +394,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test logs"
+diff --git a/.github/workflows/release-test.yml b/.github/workflows/release-test.yml
+index a579ba3727cfea46da6c97ef49c6970e87148b96..e010b7e8335a17b05191bda8d00d9e82faa0e8b8 100644
+--- a/.github/workflows/release-test.yml
++++ b/.github/workflows/release-test.yml
+@@ -283,7 +283,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+@@ -383,7 +383,7 @@ jobs:
+           echo "CANDIDATE_VERSIONS=$CANDIDATE_VERSIONS" >> $GITHUB_ENV
+       - name: "Build test image"
+         run: |
+-          cd test && bash -c 'DEBIAN_MIRROR=http://archive.debian.org/debian-archive ./build-test-image.sh'
++          cd test && bash ./build-test-image.sh
+       - name: "Run tests"
+         run: cd test && bash ./run-tests.sh
+       - name: "Upload test result"
+diff --git a/README.md b/README.md
+index 3350b17742d80d8542d524baf57368702d1a0de2..56f43e9a6702c497d95f8df453be8e061373e529 100644
+--- a/README.md
++++ b/README.md
+@@ -73,7 +73,7 @@ Explore more through our hands-on tasks:
+ 
+ | Version  | JDK Support | Dependencies                                                                                          | Highlights                                                                                                     |
+ |----------|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+-| **3.3.5**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.5/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
++| **3.3.2**  | 1.8 – 21     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.3.2/dubbo-dependencies-bom/pom.xml#L92) | ✅ Actively Maintained <br> ✅ Triple Protocol (gRPC/cURL) <br> ✅ REST Support <br> ✅ Spring Boot Starters      |
+ | **3.2.16** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.5/dubbo-dependencies-bom/pom.xml#L94) | ✅ Actively Maintained <br> ✅ Metrics & Tracing <br> ✅ Thread Pool Isolation <br> ✅ +30% Performance <br> ✅ Native Image Support |
+ | **3.1.11** | 1.8 – 17     | [View Dependencies](https://github.com/apache/dubbo/blob/dubbo-3.2.11/dubbo-dependencies-bom/pom.xml#L90) | ⚠️ Stable, but Not Actively Maintained                                                                         |
+ 
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index 1075b795dcd02c1e428dac78f53b79fb294c7560..b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -90,7 +90,6 @@
+   <build>
+     <plugins>
+       <plugin>
+-        <!-- add os-maven-plugin to plugins just for Eclipse m2e, not for `mvn install` -->
+         <groupId>kr.motd.maven</groupId>
+         <artifactId>os-maven-plugin</artifactId>
+         <version>${maven_os_plugin_version}</version>
+@@ -113,13 +112,5 @@
+         </configuration>
+       </plugin>
+     </plugins>
+-    <extensions>
+-      <!-- add os-maven-plugin to extensions for `mvn install` -->
+-      <extension>
+-        <groupId>kr.motd.maven</groupId>
+-        <artifactId>os-maven-plugin</artifactId>
+-        <version>${maven_os_plugin_version}</version>
+-      </extension>
+-    </extensions>
+   </build>
+ </project>
+diff --git a/dubbo-dependencies-bom/pom.xml b/dubbo-dependencies-bom/pom.xml
+index a1ab6004d0e3fbd9c56ec020f8cd2e5fa7a24cb4..dd4c5021abdeacda6a5e1422ffd1a9a2077efaa7 100644
+--- a/dubbo-dependencies-bom/pom.xml
++++ b/dubbo-dependencies-bom/pom.xml
+@@ -95,7 +95,8 @@
+     <javassist_version>3.30.2-GA</javassist_version>
+     <byte-buddy_version>1.17.5</byte-buddy_version>
+     <netty_version>3.2.10.Final</netty_version>
+-    <netty4_version>4.2.2.Final</netty4_version>
++    <netty4_version>4.2.1.Final</netty4_version>
++    <netty_http3_version>0.0.29.Final</netty_http3_version>
+     <httpclient_version>4.5.14</httpclient_version>
+     <httpcore_version>4.4.16</httpcore_version>
+     <fastjson_version>1.2.83_noneautotype</fastjson_version>
+@@ -104,7 +105,7 @@
+     <curator_version>5.8.0</curator_version>
+     <curator_test_version>2.12.0</curator_test_version>
+     <hessian_version>4.0.66</hessian_version>
+-    <protobuf-java_version>3.25.8</protobuf-java_version>
++    <protobuf-java_version>3.25.7</protobuf-java_version>
+     <jsr305_version>3.0.2</jsr305_version>
+     <javax_annotation-api_version>1.3.2</javax_annotation-api_version>
+     <servlet_version>3.1.0</servlet_version>
+@@ -121,11 +122,11 @@
+     <snakeyaml_version>2.4</snakeyaml_version>
+     <commons_lang3_version>3.17.0</commons_lang3_version>
+     <envoy_api_version>0.1.35</envoy_api_version>
+-    <micrometer.version>1.15.1</micrometer.version>
++    <micrometer.version>1.15.0</micrometer.version>
+     <opentelemetry.version>1.50.0</opentelemetry.version>
+-    <zipkin-reporter.version>3.5.1</zipkin-reporter.version>
++    <zipkin-reporter.version>3.5.0</zipkin-reporter.version>
+     <zipkin.version>3.5.1</zipkin.version>
+-    <micrometer-tracing.version>1.5.1</micrometer-tracing.version>
++    <micrometer-tracing.version>1.5.0</micrometer-tracing.version>
+     <t_digest.version>3.3</t_digest.version>
+     <prometheus_client.version>0.16.0</prometheus_client.version>
+     <reactive.version>1.0.4</reactive.version>
+@@ -140,7 +141,7 @@
+     <nacos_version>2.5.1</nacos_version>
+     <sentinel.version>1.8.8</sentinel.version>
+     <seata.version>1.8.0</seata.version>
+-    <grpc.version>1.73.0</grpc.version>
++    <grpc.version>1.72.0</grpc.version>
+     <grpc_contrib_verdion>0.8.1</grpc_contrib_verdion>
+     <jprotoc_version>1.2.2</jprotoc_version>
+     <mustache_version>0.9.14</mustache_version>
+@@ -153,11 +154,11 @@
+     <log4j2_version>2.24.3</log4j2_version>
+     <commons_io_version>2.19.0</commons_io_version>
+     <commons-codec_version>1.18.0</commons-codec_version>
+-    <groovy_version>4.0.27</groovy_version>
++    <groovy_version>4.0.26</groovy_version>
+ 
+     <!-- Test libs -->
+     <junit_jupiter_version>5.12.2</junit_jupiter_version>
+-    <junit_platform_version>1.13.1</junit_platform_version>
++    <junit_platform_version>1.12.2</junit_platform_version>
+     <awaitility_version>4.3.0</awaitility_version>
+     <hamcrest_version>2.2</hamcrest_version>
+     <cglib_version>2.2.2</cglib_version>
+@@ -179,7 +180,7 @@
+     <portlet_version>2.0</portlet_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+     <commons_compress_version>1.27.1</commons_compress_version>
+-    <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
++    <spotless-maven-plugin.version>2.44.4</spotless-maven-plugin.version>
+     <spotless.action>check</spotless.action>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+@@ -299,6 +300,11 @@
+         <artifactId>netty-all</artifactId>
+         <version>${netty4_version}</version>
+       </dependency>
++      <dependency>
++        <groupId>io.netty.incubator</groupId>
++        <artifactId>netty-incubator-codec-http3</artifactId>
++        <version>${netty_http3_version}</version>
++      </dependency>
+       <dependency>
+         <groupId>org.javassist</groupId>
+         <artifactId>javassist</artifactId>
+diff --git a/dubbo-distribution/dubbo-all-shaded/pom.xml b/dubbo-distribution/dubbo-all-shaded/pom.xml
+index 0c91b206c99f8552bbb032bc160b28c0e3084ca5..a945581ddac45e310c8190bad1226feb43b72ec6 100644
+--- a/dubbo-distribution/dubbo-all-shaded/pom.xml
++++ b/dubbo-distribution/dubbo-all-shaded/pom.xml
+@@ -513,7 +513,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -990,21 +989,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1023,13 +1007,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-all/pom.xml b/dubbo-distribution/dubbo-all/pom.xml
+index c7c13862712611051a1de81fa2c046bc40295983..8df563097d9cb4ef890c639f2a763ca7fd0a6812 100644
+--- a/dubbo-distribution/dubbo-all/pom.xml
++++ b/dubbo-distribution/dubbo-all/pom.xml
+@@ -512,7 +512,6 @@
+                   <include>org.apache.dubbo:dubbo-security</include>
+                   <include>org.apache.dubbo:dubbo-reactive</include>
+                   <include>org.apache.dubbo:dubbo-spring-security</include>
+-                  <include>org.apache.dubbo:dubbo-spring6-security</include>
+                   <include>org.apache.dubbo:dubbo-registry-api</include>
+                   <include>org.apache.dubbo:dubbo-registry-multicast</include>
+                   <include>org.apache.dubbo:dubbo-registry-multiple</include>
+@@ -975,21 +974,6 @@
+   </build>
+ 
+   <profiles>
+-    <profile>
+-      <id>spring6-security</id>
+-      <activation>
+-        <jdk>[17,)</jdk>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+     <profile>
+       <id>loom</id>
+       <activation>
+@@ -1008,13 +992,6 @@
+     <profile>
+       <id>release</id>
+       <dependencies>
+-        <dependency>
+-          <groupId>org.apache.dubbo</groupId>
+-          <artifactId>dubbo-spring6-security</artifactId>
+-          <version>${project.version}</version>
+-          <scope>compile</scope>
+-          <optional>true</optional>
+-        </dependency>
+         <dependency>
+           <groupId>org.apache.dubbo</groupId>
+           <artifactId>dubbo-plugin-loom</artifactId>
+diff --git a/dubbo-distribution/dubbo-bom/pom.xml b/dubbo-distribution/dubbo-bom/pom.xml
+index 2cdb6b72a4450bc42b144a60955960e86436d70a..fd057752bb10fabd2146b72b6c9ed82cc22c3182 100644
+--- a/dubbo-distribution/dubbo-bom/pom.xml
++++ b/dubbo-distribution/dubbo-bom/pom.xml
+@@ -291,18 +291,6 @@
+         <version>${project.version}</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-spring6-security</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+-      <dependency>
+-        <groupId>org.apache.dubbo</groupId>
+-        <artifactId>dubbo-plugin-loom</artifactId>
+-        <version>${project.version}</version>
+-      </dependency>
+-
+       <dependency>
+         <groupId>org.apache.dubbo</groupId>
+         <artifactId>dubbo-rest-jaxrs</artifactId>
+diff --git a/dubbo-plugin/dubbo-spring-security/pom.xml b/dubbo-plugin/dubbo-spring-security/pom.xml
+index 32f4ac9e55968d2cedff40e750f9edaf05219a58..3e357d55ea31ae458c0d0e1e74a143bfd751d5ee 100644
+--- a/dubbo-plugin/dubbo-spring-security/pom.xml
++++ b/dubbo-plugin/dubbo-spring-security/pom.xml
+@@ -29,6 +29,7 @@
+ 
+   <properties>
+     <skip_maven_deploy>false</skip_maven_deploy>
++    <spring.oauth2.server>1.5.1</spring.oauth2.server>
+   </properties>
+ 
+   <dependencies>
+@@ -58,6 +59,12 @@
+       <artifactId>spring-security-core</artifactId>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-core</artifactId>
++      <optional>true</optional>
++    </dependency>
++
+     <dependency>
+       <groupId>org.springframework.security</groupId>
+       <artifactId>spring-security-oauth2-client</artifactId>
+@@ -65,6 +72,14 @@
+       <optional>true</optional>
+     </dependency>
+ 
++    <dependency>
++      <groupId>org.springframework.security</groupId>
++      <artifactId>spring-security-oauth2-authorization-server</artifactId>
++      <version>${spring.oauth2.server}</version>
++      <scope>test</scope>
++      <optional>true</optional>
++    </dependency>
++
+     <!-- spring security -->
+ 
+     <!-- jackson -->
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
+index ee38269b5056fff18f8d612ef9de06f071b8d634..55afd7502eb72060d35dd87ef4ae540ba49a8967 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
+@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.protocol.tri.rest.mapping;
+ 
+ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.logger.FluentLogger;
++import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.config.context.ConfigManager;
+ import org.apache.dubbo.config.nested.RestConfig;
+@@ -31,6 +32,7 @@ import org.apache.dubbo.rpc.model.MethodDescriptor;
+ import org.apache.dubbo.rpc.model.ReflectionMethodDescriptor;
+ import org.apache.dubbo.rpc.model.ReflectionServiceDescriptor;
+ import org.apache.dubbo.rpc.model.ServiceDescriptor;
++import org.apache.dubbo.rpc.model.StubServiceDescriptor;
+ import org.apache.dubbo.rpc.protocol.tri.DescriptorUtils;
+ import org.apache.dubbo.rpc.protocol.tri.TripleProtocol;
+ import org.apache.dubbo.rpc.protocol.tri.rest.Messages;
+@@ -48,6 +50,7 @@ import org.apache.dubbo.rpc.protocol.tri.rest.util.PathUtils;
+ 
+ import java.lang.reflect.Method;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.IdentityHashMap;
+ import java.util.LinkedList;
+@@ -129,7 +132,14 @@ public final class DefaultRequestMappingRegistry implements RequestMappingRegist
+                 RequestMapping classMapping = resolver.resolve(serviceMeta);
+                 consumer.accept((methods) -> {
+                     Method method = methods.get(0);
+-                    MethodDescriptor md = sd.getMethod(method.getName(), method.getParameterTypes());
++                    Class<?>[] paramTypes = method.getParameterTypes();
++                    MethodDescriptor md = sd.getMethod(method.getName(), paramTypes);
++                    if (md == null && sd instanceof StubServiceDescriptor) {
++                        int len = paramTypes.length;
++                        if (len > 0 && StreamObserver.class.isAssignableFrom(paramTypes[len - 1])) {
++                            md = sd.getMethod(method.getName(), Arrays.copyOf(paramTypes, len - 1));
++                        }
++                    }
+                     MethodMeta methodMeta = new MethodMeta(methods, md, serviceMeta);
+                     if (!resolver.accept(methodMeta)) {
+                         return;
+@@ -169,7 +179,7 @@ public final class DefaultRequestMappingRegistry implements RequestMappingRegist
+         try {
+             Registration registration = new Registration(mapping, handler);
+             for (PathExpression path : mapping.getPathCondition().getExpressions()) {
+-                Registration exists = tree.addPath(path, registration);
++                Registration exists = tree.addPath(path, registration, Registration::isMappingOverlap);
+                 if (exists == null) {
+                     counter.incrementAndGet();
+                     if (LOGGER.isDebugEnabled()) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
+index 786f29ded9119121db30dd1cf023ac7a296cf312..b95f22ff4ca1c480b8667e6c43564e8d460ad5e7 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
+@@ -31,7 +31,9 @@ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
++import java.util.Objects;
+ import java.util.function.BiConsumer;
++import java.util.function.BiFunction;
+ import java.util.function.Predicate;
+ 
+ /**
+@@ -63,13 +65,25 @@ public final class RadixTree<T> {
+         this(true, '/');
+     }
+ 
++    /**
++     * This is a default implementation that does not check for equality.
++     */
+     public T addPath(PathExpression path, T value) {
++        return addPath(path, value, (t, t2) -> Boolean.TRUE);
++    }
++
++    /**
++     * When the path is the same, the predicate is used to determine whether the values are considered equal.
++     * If the predicate returns true, the existing value is returned directly.
++     */
++    public T addPath(PathExpression path, T value, BiFunction<T, T, Boolean> predicate) {
++        Objects.requireNonNull(predicate);
+         if (path.isDirect()) {
+             KeyString key = new KeyString(path.getPath(), caseSensitive);
+             List<Match<T>> matches = directPathMap.computeIfAbsent(key, k -> new ArrayList<>());
+             for (int i = 0, size = matches.size(); i < size; i++) {
+                 Match<T> match = matches.get(i);
+-                if (match.getValue().equals(value)) {
++                if (predicate.apply(match.getValue(), value)) {
+                     return match.getValue();
+                 }
+             }
+@@ -85,7 +99,9 @@ public final class RadixTree<T> {
+                 List<Pair<PathExpression, T>> values = child.values;
+                 for (int j = 0, size = values.size(); j < size; j++) {
+                     if (values.get(j).getLeft().equals(path)) {
+-                        return values.get(j).getRight();
++                        if (predicate.apply(values.get(j).getRight(), value)) {
++                            return values.get(j).getRight();
++                        }
+                     }
+                 }
+                 values.add(Pair.of(path, value));
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
+index f5c993a45422c333cb96a0fab0cd4b0d1c62398f..ab2a381ddd787be97b7170dacae92b0c0d0df06a 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
+@@ -18,6 +18,9 @@ package org.apache.dubbo.rpc.protocol.tri.rest.mapping;
+ 
+ import org.apache.dubbo.rpc.protocol.tri.rest.mapping.meta.HandlerMeta;
+ 
++import java.util.Collections;
++import java.util.Objects;
++
+ public final class Registration {
+ 
+     private final RequestMapping mapping;
+@@ -47,6 +50,24 @@ public final class Registration {
+         return mapping.equals(((Registration) obj).mapping);
+     }
+ 
++    public boolean isMappingOverlap(Registration other) {
++        RequestMapping otherMapping = other.getMapping();
++        if (mapping == otherMapping) {
++            return true;
++        }
++        return (mapping.getMethodsCondition() == null
++                        || otherMapping.getMethodsCondition() == null
++                        || !Collections.disjoint(
++                                mapping.getMethodsCondition().getMethods(),
++                                otherMapping.getMethodsCondition().getMethods()))
++                && Objects.equals(mapping.getParamsCondition(), otherMapping.getParamsCondition())
++                && Objects.equals(mapping.getHeadersCondition(), otherMapping.getHeadersCondition())
++                && Objects.equals(mapping.getConsumesCondition(), otherMapping.getConsumesCondition())
++                && Objects.equals(mapping.getProducesCondition(), otherMapping.getProducesCondition())
++                && Objects.equals(mapping.getCustomCondition(), otherMapping.getCustomCondition())
++                && Objects.equals(mapping.getSig(), otherMapping.getSig());
++    }
++
+     @Override
+     public int hashCode() {
+         return mapping.hashCode();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
+index feef0738e8467a9d04533c97e68659e93623e189..c7c5577dcf3aaf054a91227b9f0cb8ca865c929e 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
+@@ -236,6 +236,10 @@ public final class RequestMapping implements Condition<RequestMapping, HttpReque
+         return producesCondition;
+     }
+ 
++    public ConditionWrapper getCustomCondition() {
++        return customCondition;
++    }
++
+     public CorsMeta getCors() {
+         return cors;
+     }
+diff --git a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+index 28a86e7b62272991e0be5eae2a001d1975b2c2f5..4d511307d427448cec8d3b04c71a67a763f44d6e 100644
+--- a/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
++++ b/dubbo-spring-boot-project/dubbo-spring-boot/src/main/java/org/apache/dubbo/spring/boot/context/event/WelcomeLogoApplicationListener.java
+@@ -60,6 +60,8 @@ public class WelcomeLogoApplicationListener implements ApplicationListener<Appli
+ 
+         if (logger.isInfoEnabled()) {
+             logger.info(bannerText);
++        } else {
++            System.out.print(bannerText);
+         }
+ 
+         // mark processed to be true
+diff --git a/dubbo-test/dubbo-dependencies-all/pom.xml b/dubbo-test/dubbo-dependencies-all/pom.xml
+index fcdc9b593bb29aa49ea551bb5a03b261b6cc9221..69889f8f9aa7bcd46ab753599086a431cbd0a4e3 100644
+--- a/dubbo-test/dubbo-dependencies-all/pom.xml
++++ b/dubbo-test/dubbo-dependencies-all/pom.xml
+@@ -71,6 +71,11 @@
+       <artifactId>dubbo-config-spring</artifactId>
+       <version>${project.version}</version>
+     </dependency>
++    <!--        <dependency>-->
++    <!--            <groupId>org.apache.dubbo</groupId>-->
++    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
++    <!--            <version>${project.version}</version>-->
++    <!--        </dependency>-->
+ 
+     <!-- config-center -->
+     <dependency>
+diff --git a/dubbo-test/dubbo-test-check/pom.xml b/dubbo-test/dubbo-test-check/pom.xml
+index 5951f0066e303e550c1a5af5cfcb9aae467441ab..3a7fd3df9db3599202b27260164c8e4c1a7a481b 100644
+--- a/dubbo-test/dubbo-test-check/pom.xml
++++ b/dubbo-test/dubbo-test-check/pom.xml
+@@ -32,7 +32,7 @@
+     <zookeeper.version>3.7.2</zookeeper.version>
+     <curator5.version>4.2.0</curator5.version>
+     <commons.compress.version>1.27.1</commons.compress.version>
+-    <commons.exec.version>1.5.0</commons.exec.version>
++    <commons.exec.version>1.4.0</commons.exec.version>
+     <async.http.client.version>2.12.4</async.http.client.version>
+   </properties>
+ 
+diff --git a/pom.xml b/pom.xml
+index 51acbee607d79c674779b9be101f8e9ca55cabcc..cccad376abe44f02cdb6f03c5680a513c9fd132f 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -157,21 +157,19 @@
+     <build_helper_maven_plugin_version>3.6.0</build_helper_maven_plugin_version>
+     <maven_jacoco_version>0.8.13</maven_jacoco_version>
+     <maven_flatten_version>1.7.0</maven_flatten_version>
+-    <maven_enforce_version>3.6.0</maven_enforce_version>
++    <maven_enforce_version>3.5.0</maven_enforce_version>
+     <maven_antrun_version>3.1.0</maven_antrun_version>
+     <maven_os_plugin_version>1.7.1</maven_os_plugin_version>
+     <maven_protobuf_plugin_version>0.6.1</maven_protobuf_plugin_version>
+     <maven_gmavenplus_version>3.0.2</maven_gmavenplus_version>
+ 
+     <!-- For unify spring boot 3 version -->
+-    <spring-6.version>6.2.8</spring-6.version>
+-    <spring-security-6.version>6.5.1</spring-security-6.version>
++    <spring-6.version>6.2.7</spring-6.version>
+     <spring-boot-3.version>3.5.0</spring-boot-3.version>
+ 
+     <protobuf-protoc_version>3.22.3</protobuf-protoc_version>
+-    <!-- grpc_version should be same as grpc.version at dubbo-dependencies-bom -->
+-    <grpc_version>1.73.0</grpc_version>
+-    <spotless-maven-plugin.version>2.44.5</spotless-maven-plugin.version>
++    <grpc_version>1.54.0</grpc_version>
++    <spotless-maven-plugin.version>2.44.4</spotless-maven-plugin.version>
+     <dubbo-shared-resources.version>1.0.0</dubbo-shared-resources.version>
+     <palantirJavaFormat.version>2.38.0</palantirJavaFormat.version>
+     <revision>3.3.6-SNAPSHOT</revision>
+@@ -497,7 +495,6 @@
+       </activation>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+       </modules>
+     </profile>
+     <!-- jacoco: mvn validate -Pjacoco  -->
+@@ -647,7 +644,6 @@
+       <id>release</id>
+       <modules>
+         <module>dubbo-spring-boot-project/dubbo-spring-boot-3-autoconfigure</module>
+-        <module>dubbo-plugin/dubbo-spring6-security</module>
+         <module>dubbo-plugin/dubbo-plugin-loom</module>
+         <module>dubbo-distribution/dubbo-all</module>
+         <module>dubbo-distribution/dubbo-all-shaded</module>

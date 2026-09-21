@@ -1,0 +1,535 @@
+diff --git a/ui/src/album/AlbumDatesField.jsx b/ui/src/album/AlbumDatesField.jsx
+index e4cdeedce340e7a695ddcf7072f74ecb380e0569..ce1301380cbec025ccb087dba9b852893b47955f 100644
+--- a/ui/src/album/AlbumDatesField.jsx
++++ b/ui/src/album/AlbumDatesField.jsx
+@@ -10,6 +10,12 @@ export const AlbumDatesField = ({ className, ...rest }) => {
+   const releaseYear = releaseDate?.toString().substring(0, 4)
+   const yearRange =
+     formatRange(record, 'originalYear') || record['maxYear']?.toString()
++
++  // Don't show anything if the year starts with "0"
++  if (yearRange === '0' || releaseYear?.startsWith('0')) {
++    return null
++  }
++
+   let label = yearRange
+ 
+   if (releaseYear !== undefined && yearRange !== releaseYear) {
+diff --git a/ui/src/album/AlbumDatesField.test.jsx b/ui/src/album/AlbumDatesField.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9bcd4156791e91b5da00218a01477b6d4cbd8e4b
+--- /dev/null
++++ b/ui/src/album/AlbumDatesField.test.jsx
+@@ -0,0 +1,112 @@
++import { describe, test, expect, vi } from 'vitest'
++import { render } from '@testing-library/react'
++import { RecordContextProvider } from 'react-admin'
++import { AlbumDatesField } from './AlbumDatesField'
++import { formatRange } from '../common/index.js'
++
++// Mock the formatRange function
++vi.mock('../common/index.js', () => ({
++  formatRange: vi.fn(),
++}))
++
++describe('AlbumDatesField', () => {
++  test('renders nothing when yearRange is "0"', () => {
++    const record = {
++      maxYear: '0',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('0')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders nothing when releaseYear is "0"', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '0-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders only yearRange when releaseYear is undefined', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('renders both years when they are different', () => {
++    const record = {
++      maxYear: '2018',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2018')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('♫ 2018 · ○ 2020')
++  })
++
++  test('renders only yearRange when both years are the same', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('applies className when provided', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField className="test-class" />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toHaveClass('test-class')
++  })
++})
+diff --git a/ui/src/artist/ArtistActions.test.jsx b/ui/src/artist/ArtistActions.test.jsx
+index 90be284094ddc09c17fe2584a7c0f2b97f46baba..a11ee50e37f21a2de1480432558fd8078b3df84c 100644
+--- a/ui/src/artist/ArtistActions.test.jsx
++++ b/ui/src/artist/ArtistActions.test.jsx
+@@ -49,11 +49,21 @@ describe('ArtistActions', () => {
+     // Mock console.error to suppress error logging in tests
+     vi.spyOn(console, 'error').mockImplementation(() => {})
+ 
++    const songWithReplayGain = {
++      id: 'rec1',
++      replayGain: {
++        albumGain: -5,
++        albumPeak: 1,
++        trackGain: -6,
++        trackPeak: 0.8,
++      },
++    }
++
+     subsonic.getSimilarSongs2.mockResolvedValue({
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          similarSongs2: { song: [{ id: 'rec1' }] },
++          similarSongs2: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -61,7 +71,7 @@ describe('ArtistActions', () => {
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          topSongs: { song: [{ id: 'rec1' }] },
++          topSongs: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -93,6 +103,22 @@ describe('ArtistActions', () => {
+       )
+       expect(mockDispatch).toHaveBeenCalled()
+     })
++
++    it('maps replaygain info', async () => {
++      renderArtistActions()
++      clickActionButton('radio')
++
++      await waitFor(() =>
++        expect(subsonic.getSimilarSongs2).toHaveBeenCalledWith('ar1', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
+   })
+ 
+   describe('Play action', () => {
+@@ -106,6 +132,22 @@ describe('ArtistActions', () => {
+       expect(mockDispatch).toHaveBeenCalled()
+     })
+ 
++    it('maps replaygain info for top songs', async () => {
++      renderArtistActions()
++      clickActionButton('topSongs')
++
++      await waitFor(() =>
++        expect(subsonic.getTopSongs).toHaveBeenCalledWith('Artist', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
++
+     it('handles API rejection', async () => {
+       subsonic.getTopSongs.mockRejectedValue(new Error('Network error'))
+ 
+diff --git a/ui/src/artist/actions.js b/ui/src/artist/actions.js
+index 0ab648fa08724d3688a91dde90b3b644135b159b..6a8fbd9c6b53c1de6d969ca6bf967903e278a9cb 100644
+--- a/ui/src/artist/actions.js
++++ b/ui/src/artist/actions.js
+@@ -1,6 +1,32 @@
+ import subsonic from '../subsonic/index.js'
+ import { playTracks } from '../actions/index.js'
+ 
++const mapReplayGain = (song) => {
++  const { replayGain: rg } = song
++  if (!rg) {
++    return song
++  }
++
++  return {
++    ...song,
++    ...(rg.albumGain !== undefined && { rgAlbumGain: rg.albumGain }),
++    ...(rg.albumPeak !== undefined && { rgAlbumPeak: rg.albumPeak }),
++    ...(rg.trackGain !== undefined && { rgTrackGain: rg.trackGain }),
++    ...(rg.trackPeak !== undefined && { rgTrackPeak: rg.trackPeak }),
++  }
++}
++
++const processSongsForPlayback = (songs) => {
++  const songData = {}
++  const ids = []
++  songs.forEach((s) => {
++    const song = mapReplayGain(s)
++    songData[song.id] = song
++    ids.push(song.id)
++  })
++  return { songData, ids }
++}
++
+ export const playTopSongs = async (dispatch, notify, artistName) => {
+   const res = await subsonic.getTopSongs(artistName, 100)
+   const data = res.json['subsonic-response']
+@@ -17,12 +43,7 @@ export const playTopSongs = async (dispatch, notify, artistName) => {
+     return
+   }
+ 
+-  const songData = {}
+-  const ids = []
+-  songs.forEach((s) => {
+-    songData[s.id] = s
+-    ids.push(s.id)
+-  })
++  const { songData, ids } = processSongsForPlayback(songs)
+   dispatch(playTracks(songData, ids))
+ }
+ 
+@@ -42,12 +63,7 @@ export const playSimilar = async (dispatch, notify, id) => {
+     return
+   }
+ 
+-  const songData = {}
+-  const ids = []
+-  songs.forEach((s) => {
+-    songData[s.id] = s
+-    ids.push(s.id)
+-  })
++  const { songData, ids } = processSongsForPlayback(songs)
+   dispatch(playTracks(songData, ids))
+ }
+ 
+diff --git a/ui/src/common/SongContextMenu.jsx b/ui/src/common/SongContextMenu.jsx
+index 32fbeb24375fe11e0affc6e1bf50a63dd724d9a7..f8b0bba5e3c0f7a551c8e191c17280b3b2a1dc36 100644
+--- a/ui/src/common/SongContextMenu.jsx
++++ b/ui/src/common/SongContextMenu.jsx
+@@ -233,19 +233,29 @@ export const SongContextMenu = ({
+         open={open}
+         onClose={handleMainMenuClose}
+       >
+-        {Object.keys(options).map(
+-          (key) =>
++        {Object.keys(options).map((key) => {
++          const showInPlaylistDisabled =
++            key === 'showInPlaylist' && !playlists.length
++          return (
+             options[key].enabled && (
+               <MenuItem
+                 value={key}
+                 key={key}
+-                onClick={handleItemClick}
+-                disabled={key === 'showInPlaylist' && !playlists.length}
++                onClick={
++                  showInPlaylistDisabled
++                    ? (e) => e.stopPropagation()
++                    : handleItemClick
++                }
++                disabled={showInPlaylistDisabled}
++                style={
++                  showInPlaylistDisabled ? { pointerEvents: 'auto' } : undefined
++                }
+               >
+                 {options[key].label}
+               </MenuItem>
+-            ),
+-        )}
++            )
++          )
++        })}
+       </Menu>
+       <Menu
+         anchorEl={playlistAnchorEl}
+diff --git a/ui/src/common/SongContextMenu.test.jsx b/ui/src/common/SongContextMenu.test.jsx
+index ee6a358d853747aa9482eb8875d562af4c53872d..a30da859f722ecfb6edb4887773f9257914d968a 100644
+--- a/ui/src/common/SongContextMenu.test.jsx
++++ b/ui/src/common/SongContextMenu.test.jsx
+@@ -10,6 +10,8 @@ vi.mock('../dataProvider', () => ({
+ 
+ vi.mock('react-redux', () => ({ useDispatch: () => vi.fn() }))
+ 
++const getPlaylistsMock = vi.fn()
++
+ vi.mock('react-admin', async (importOriginal) => {
+   const actual = await importOriginal()
+   return {
+@@ -18,9 +20,7 @@ vi.mock('react-admin', async (importOriginal) => {
+       window.location.hash = `#${url}`
+     },
+     useDataProvider: () => ({
+-      getPlaylists: vi.fn().mockResolvedValue({
+-        data: [{ id: 'pl1', name: 'Pl 1' }],
+-      }),
++      getPlaylists: getPlaylistsMock,
+       inspect: vi.fn().mockResolvedValue({
+         data: { rawTags: {} },
+       }),
+@@ -32,6 +32,9 @@ describe('SongContextMenu', () => {
+   beforeEach(() => {
+     vi.clearAllMocks()
+     window.location.hash = ''
++    getPlaylistsMock.mockResolvedValue({
++      data: [{ id: 'pl1', name: 'Pl 1' }],
++    })
+   })
+ 
+   it('navigates to playlist when selected', async () => {
+@@ -79,4 +82,26 @@ describe('SongContextMenu', () => {
+ 
+     expect(mockOnClick).not.toHaveBeenCalled()
+   })
++
++  it('does nothing when "Show in Playlist" is disabled', async () => {
++    getPlaylistsMock.mockResolvedValue({ data: [] })
++    const mockOnClick = vi.fn()
++    render(
++      <TestContext>
++        <div onClick={mockOnClick}>
++          <SongContextMenu record={{ id: 'song1', size: 1 }} resource="song" />
++        </div>
++      </TestContext>,
++    )
++
++    fireEvent.click(screen.getAllByRole('button')[1])
++    await waitFor(() =>
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++
++    fireEvent.click(
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++    expect(mockOnClick).not.toHaveBeenCalled()
++  })
+ })
+diff --git a/ui/src/dialogs/SelectPlaylistInput.jsx b/ui/src/dialogs/SelectPlaylistInput.jsx
+index 0e0636924c05a21e36aceb7bb1a3e96b0914f7e4..d401dd8220d452aae1a19d822efafed7de5c8bd1 100644
+--- a/ui/src/dialogs/SelectPlaylistInput.jsx
++++ b/ui/src/dialogs/SelectPlaylistInput.jsx
+@@ -226,7 +226,7 @@ const SelectedPlaylistChip = ({ playlist, onRemove }) => {
+         onClick={() => onRemove(playlist)}
+         title={translate('resources.playlist.actions.removeFromSelection')}
+       >
+-        {translate('resources.playlist.actions.removeSymbol')}
++        {'×'}
+       </IconButton>
+     </span>
+   )
+diff --git a/ui/src/dialogs/SelectPlaylistInput.test.jsx b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+index 93a14b3251bb1d0a68548950bbf5110bfb1f4430..4ffcdf0b6ee185d75312d1eb7cbf600c5785ae83 100644
+--- a/ui/src/dialogs/SelectPlaylistInput.test.jsx
++++ b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+@@ -205,9 +205,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Find and click the remove button (translation key)
+-      const removeButton = screen.getByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButton = screen.getByText('×')
+       fireEvent.click(removeButton)
+ 
+       await waitFor(() => {
+@@ -480,9 +478,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Remove the first selected playlist via chip
+-      const removeButtons = screen.getAllByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButtons = screen.getAllByText('×')
+       fireEvent.click(removeButtons[0])
+ 
+       await waitFor(() => {
+diff --git a/ui/src/layout/ActivityPanel.jsx b/ui/src/layout/ActivityPanel.jsx
+index 6b50cee0c3cc7439498c86e06c447e1f2b669bf3..18af8dc93befc9e0d2f39ac939ca3b650712f0c8 100644
+--- a/ui/src/layout/ActivityPanel.jsx
++++ b/ui/src/layout/ActivityPanel.jsx
+@@ -75,14 +75,25 @@ const ActivityPanel = () => {
+     scanStatus.scanning,
+     scanStatus.elapsedTime,
+   )
+-  const classes = useStyles({ up: up && !scanStatus.error })
++  const [acknowledgedError, setAcknowledgedError] = useState(null)
++  const isErrorVisible =
++    scanStatus.error && scanStatus.error !== acknowledgedError
++  const classes = useStyles({
++    up: up && (!scanStatus.error || !isErrorVisible),
++  })
+   const translate = useTranslate()
+   const notify = useNotify()
+   const [anchorEl, setAnchorEl] = useState(null)
+   const open = Boolean(anchorEl)
+   useInitialScanStatus()
+ 
+-  const handleMenuOpen = (event) => setAnchorEl(event.currentTarget)
++  const handleMenuOpen = (event) => {
++    if (scanStatus.error) {
++      setAcknowledgedError(scanStatus.error)
++    }
++    setAnchorEl(event.currentTarget)
++  }
++
+   const handleMenuClose = () => setAnchorEl(null)
+   const triggerScan = (full) => () => subsonic.startScan({ fullScan: full })
+ 
+@@ -111,10 +122,10 @@ const ActivityPanel = () => {
+     <div className={classes.wrapper}>
+       <Tooltip title={tooltipTitle}>
+         <IconButton className={classes.button} onClick={handleMenuOpen}>
+-          {!up || scanStatus.error ? (
+-            <BiError size={'20'} />
++          {!up || isErrorVisible ? (
++            <BiError data-testid="activity-error-icon" size={'20'} />
+           ) : (
+-            <FiActivity size={'20'} />
++            <FiActivity data-testid="activity-ok-icon" size={'20'} />
+           )}
+         </IconButton>
+       </Tooltip>
+diff --git a/ui/src/layout/ActivityPanel.test.jsx b/ui/src/layout/ActivityPanel.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c506fd08b09eecb23f189e7aacf46e99ae852c56
+--- /dev/null
++++ b/ui/src/layout/ActivityPanel.test.jsx
+@@ -0,0 +1,61 @@
++import React from 'react'
++import { render, screen, fireEvent } from '@testing-library/react'
++import { Provider } from 'react-redux'
++import { createStore, combineReducers } from 'redux'
++import { describe, it, beforeEach } from 'vitest'
++
++import ActivityPanel from './ActivityPanel'
++import { activityReducer } from '../reducers'
++import config from '../config'
++import subsonic from '../subsonic'
++
++vi.mock('../subsonic', () => ({
++  default: {
++    getScanStatus: vi.fn(() =>
++      Promise.resolve({
++        json: {
++          'subsonic-response': {
++            status: 'ok',
++            scanStatus: { error: 'Scan failed' },
++          },
++        },
++      }),
++    ),
++    startScan: vi.fn(),
++  },
++}))
++
++describe('<ActivityPanel />', () => {
++  let store
++
++  beforeEach(() => {
++    store = createStore(combineReducers({ activity: activityReducer }), {
++      activity: {
++        scanStatus: {
++          scanning: false,
++          folderCount: 0,
++          count: 0,
++          error: 'Scan failed',
++          elapsedTime: 0,
++        },
++        serverStart: { version: config.version, startTime: Date.now() },
++      },
++    })
++  })
++
++  it('clears the error icon after opening the panel', () => {
++    render(
++      <Provider store={store}>
++        <ActivityPanel />
++      </Provider>,
++    )
++
++    const button = screen.getByRole('button')
++    expect(screen.getByTestId('activity-error-icon')).toBeInTheDocument()
++
++    fireEvent.click(button)
++
++    expect(screen.getByTestId('activity-ok-icon')).toBeInTheDocument()
++    expect(screen.getByText('Scan failed')).toBeInTheDocument()
++  })
++})

@@ -1,0 +1,2876 @@
+diff --git a/core/collection/set_test.go b/core/collection/set_test.go
+index 11397f9618b2494f1c9f3fcef3a0ce6fed73ca9b..7baf0a49f9951818c20807475e18541e7c04c3ec 100644
+--- a/core/collection/set_test.go
++++ b/core/collection/set_test.go
+@@ -12,117 +12,34 @@ func init() {
+ 	logx.Disable()
+ }
+ 
+-// Set functionality tests
+-func TestTypedSetInt(t *testing.T) {
+-	set := NewSet[int]()
+-	values := []int{1, 2, 3, 2, 1} // Contains duplicates
+-
+-	// Test adding
+-	set.Add(values...)
+-	assert.Equal(t, 3, set.Count()) // Should only have 3 elements after deduplication
+-
+-	// Test contains
+-	assert.True(t, set.Contains(1))
+-	assert.True(t, set.Contains(2))
+-	assert.True(t, set.Contains(3))
+-	assert.False(t, set.Contains(4))
+-
+-	// Test getting all keys
+-	keys := set.Keys()
+-	sort.Ints(keys)
+-	assert.EqualValues(t, []int{1, 2, 3}, keys)
+-
+-	// Test removal
+-	set.Remove(2)
+-	assert.False(t, set.Contains(2))
+-	assert.Equal(t, 2, set.Count())
+-}
+-
+-func TestTypedSetStringOps(t *testing.T) {
+-	set := NewSet[string]()
+-	values := []string{"a", "b", "c", "b", "a"}
+-
+-	set.Add(values...)
+-	assert.Equal(t, 3, set.Count())
+-
+-	assert.True(t, set.Contains("a"))
+-	assert.True(t, set.Contains("b"))
+-	assert.True(t, set.Contains("c"))
+-	assert.False(t, set.Contains("d"))
+-
+-	keys := set.Keys()
+-	sort.Strings(keys)
+-	assert.EqualValues(t, []string{"a", "b", "c"}, keys)
+-}
+-
+-func TestTypedSetClear(t *testing.T) {
+-	set := NewSet[int]()
+-	set.Add(1, 2, 3)
+-	assert.Equal(t, 3, set.Count())
+-
+-	set.Clear()
+-	assert.Equal(t, 0, set.Count())
+-	assert.False(t, set.Contains(1))
+-}
+-
+-func TestTypedSetEmpty(t *testing.T) {
+-	set := NewSet[int]()
+-	assert.Equal(t, 0, set.Count())
+-	assert.False(t, set.Contains(1))
+-	assert.Empty(t, set.Keys())
+-}
+-
+-func TestTypedSetMultipleTypes(t *testing.T) {
+-	// Test different typed generic sets
+-	intSet := NewSet[int]()
+-	int64Set := NewSet[int64]()
+-	uintSet := NewSet[uint]()
+-	uint64Set := NewSet[uint64]()
+-	stringSet := NewSet[string]()
+-
+-	intSet.Add(1, 2, 3)
+-	int64Set.Add(1, 2, 3)
+-	uintSet.Add(1, 2, 3)
+-	uint64Set.Add(1, 2, 3)
+-	stringSet.Add("1", "2", "3")
+-
+-	assert.Equal(t, 3, intSet.Count())
+-	assert.Equal(t, 3, int64Set.Count())
+-	assert.Equal(t, 3, uintSet.Count())
+-	assert.Equal(t, 3, uint64Set.Count())
+-	assert.Equal(t, 3, stringSet.Count())
+-}
+-
+-// Set benchmarks
+-func BenchmarkTypedIntSet(b *testing.B) {
+-	s := NewSet[int]()
++func BenchmarkRawSet(b *testing.B) {
++	m := make(map[any]struct{})
+ 	for i := 0; i < b.N; i++ {
+-		s.Add(i)
+-		_ = s.Contains(i)
++		m[i] = struct{}{}
++		_ = m[i]
+ 	}
+ }
+ 
+-func BenchmarkTypedStringSet(b *testing.B) {
+-	s := NewSet[string]()
++func BenchmarkUnmanagedSet(b *testing.B) {
++	s := NewUnmanagedSet()
+ 	for i := 0; i < b.N; i++ {
+-		s.Add(string(rune(i)))
+-		_ = s.Contains(string(rune(i)))
++		s.Add(i)
++		_ = s.Contains(i)
+ 	}
+ }
+ 
+-// Legacy tests remain unchanged for backward compatibility
+-func BenchmarkRawSet(b *testing.B) {
+-	m := make(map[any]struct{})
++func BenchmarkSet(b *testing.B) {
++	s := NewSet()
+ 	for i := 0; i < b.N; i++ {
+-		m[i] = struct{}{}
+-		_ = m[i]
++		s.AddInt(i)
++		_ = s.Contains(i)
+ 	}
+ }
+ 
+ func TestAdd(t *testing.T) {
+ 	// given
+-	set := NewSet[int]()
+-	values := []int{1, 2, 3}
++	set := NewUnmanagedSet()
++	values := []any{1, 2, 3}
+ 
+ 	// when
+ 	set.Add(values...)
+@@ -134,74 +51,82 @@ func TestAdd(t *testing.T) {
+ 
+ func TestAddInt(t *testing.T) {
+ 	// given
+-	set := NewSet[int]()
++	set := NewSet()
+ 	values := []int{1, 2, 3}
+ 
+ 	// when
+-	set.Add(values...)
++	set.AddInt(values...)
+ 
+ 	// then
+ 	assert.True(t, set.Contains(1) && set.Contains(2) && set.Contains(3))
+-	keys := set.Keys()
++	keys := set.KeysInt()
+ 	sort.Ints(keys)
+ 	assert.EqualValues(t, values, keys)
+ }
+ 
+ func TestAddInt64(t *testing.T) {
+ 	// given
+-	set := NewSet[int64]()
++	set := NewSet()
+ 	values := []int64{1, 2, 3}
+ 
+ 	// when
+-	set.Add(values...)
++	set.AddInt64(values...)
+ 
+ 	// then
+-	assert.True(t, set.Contains(1) && set.Contains(2) && set.Contains(3))
+-	assert.Equal(t, len(values), len(set.Keys()))
++	assert.True(t, set.Contains(int64(1)) && set.Contains(int64(2)) && set.Contains(int64(3)))
++	assert.Equal(t, len(values), len(set.KeysInt64()))
+ }
+ 
+ func TestAddUint(t *testing.T) {
+ 	// given
+-	set := NewSet[uint]()
++	set := NewSet()
+ 	values := []uint{1, 2, 3}
+ 
+ 	// when
+-	set.Add(values...)
++	set.AddUint(values...)
+ 
+ 	// then
+-	assert.True(t, set.Contains(1) && set.Contains(2) && set.Contains(3))
+-	assert.Equal(t, len(values), len(set.Keys()))
++	assert.True(t, set.Contains(uint(1)) && set.Contains(uint(2)) && set.Contains(uint(3)))
++	assert.Equal(t, len(values), len(set.KeysUint()))
+ }
+ 
+ func TestAddUint64(t *testing.T) {
+ 	// given
+-	set := NewSet[uint64]()
++	set := NewSet()
+ 	values := []uint64{1, 2, 3}
+ 
+ 	// when
+-	set.Add(values...)
++	set.AddUint64(values...)
+ 
+ 	// then
+-	assert.True(t, set.Contains(1) && set.Contains(2) && set.Contains(3))
+-	assert.Equal(t, len(values), len(set.Keys()))
++	assert.True(t, set.Contains(uint64(1)) && set.Contains(uint64(2)) && set.Contains(uint64(3)))
++	assert.Equal(t, len(values), len(set.KeysUint64()))
+ }
+ 
+ func TestAddStr(t *testing.T) {
+ 	// given
+-	set := NewSet[string]()
++	set := NewSet()
+ 	values := []string{"1", "2", "3"}
+ 
+ 	// when
+-	set.Add(values...)
++	set.AddStr(values...)
+ 
+ 	// then
+ 	assert.True(t, set.Contains("1") && set.Contains("2") && set.Contains("3"))
+-	assert.Equal(t, len(values), len(set.Keys()))
++	assert.Equal(t, len(values), len(set.KeysStr()))
+ }
+ 
+ func TestContainsWithoutElements(t *testing.T) {
+ 	// given
+-	set := NewSet[int]()
++	set := NewSet()
++
++	// then
++	assert.False(t, set.Contains(1))
++}
++
++func TestContainsUnmanagedWithoutElements(t *testing.T) {
++	// given
++	set := NewUnmanagedSet()
+ 
+ 	// then
+ 	assert.False(t, set.Contains(1))
+@@ -209,8 +134,8 @@ func TestContainsWithoutElements(t *testing.T) {
+ 
+ func TestRemove(t *testing.T) {
+ 	// given
+-	set := NewSet[int]()
+-	set.Add([]int{1, 2, 3}...)
++	set := NewSet()
++	set.Add([]any{1, 2, 3}...)
+ 
+ 	// when
+ 	set.Remove(2)
+@@ -221,9 +146,57 @@ func TestRemove(t *testing.T) {
+ 
+ func TestCount(t *testing.T) {
+ 	// given
+-	set := NewSet[int]()
+-	set.Add([]int{1, 2, 3}...)
++	set := NewSet()
++	set.Add([]any{1, 2, 3}...)
+ 
+ 	// then
+ 	assert.Equal(t, set.Count(), 3)
+ }
++
++func TestKeysIntMismatch(t *testing.T) {
++	set := NewSet()
++	set.add(int64(1))
++	set.add(2)
++	vals := set.KeysInt()
++	assert.EqualValues(t, []int{2}, vals)
++}
++
++func TestKeysInt64Mismatch(t *testing.T) {
++	set := NewSet()
++	set.add(1)
++	set.add(int64(2))
++	vals := set.KeysInt64()
++	assert.EqualValues(t, []int64{2}, vals)
++}
++
++func TestKeysUintMismatch(t *testing.T) {
++	set := NewSet()
++	set.add(1)
++	set.add(uint(2))
++	vals := set.KeysUint()
++	assert.EqualValues(t, []uint{2}, vals)
++}
++
++func TestKeysUint64Mismatch(t *testing.T) {
++	set := NewSet()
++	set.add(1)
++	set.add(uint64(2))
++	vals := set.KeysUint64()
++	assert.EqualValues(t, []uint64{2}, vals)
++}
++
++func TestKeysStrMismatch(t *testing.T) {
++	set := NewSet()
++	set.add(1)
++	set.add("2")
++	vals := set.KeysStr()
++	assert.EqualValues(t, []string{"2"}, vals)
++}
++
++func TestSetType(t *testing.T) {
++	set := NewUnmanagedSet()
++	set.add(1)
++	set.add("2")
++	vals := set.Keys()
++	assert.ElementsMatch(t, []any{1, "2"}, vals)
++}
+diff --git a/core/discov/publisher_test.go b/core/discov/publisher_test.go
+index 2021d60233a71cbc5eed6a251bb175194f466c74..34a34f84f4ed77ec3ab2e0ffd3b471c746df8b06 100644
+--- a/core/discov/publisher_test.go
++++ b/core/discov/publisher_test.go
+@@ -15,7 +15,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+-	"go.etcd.io/etcd/api/v3/mvccpb"
+ 	clientv3 "go.etcd.io/etcd/client/v3"
+ 	"golang.org/x/net/http2"
+ 	"google.golang.org/grpc"
+@@ -212,9 +211,6 @@ func TestPublisher_keepAliveAsyncQuit(t *testing.T) {
+ 	defer restore()
+ 	cli.EXPECT().Ctx().AnyTimes()
+ 	cli.EXPECT().KeepAlive(gomock.Any(), id)
+-	// Add Watch expectation for the new watch mechanism
+-	watchChan := make(<-chan clientv3.WatchResponse)
+-	cli.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any()).Return(watchChan)
+ 	var wg sync.WaitGroup
+ 	wg.Add(1)
+ 	cli.EXPECT().Revoke(gomock.Any(), id).Do(func(_, _ any) {
+@@ -236,9 +232,6 @@ func TestPublisher_keepAliveAsyncPause(t *testing.T) {
+ 	defer restore()
+ 	cli.EXPECT().Ctx().AnyTimes()
+ 	cli.EXPECT().KeepAlive(gomock.Any(), id)
+-	// Add Watch expectation for the new watch mechanism
+-	watchChan := make(<-chan clientv3.WatchResponse)
+-	cli.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any()).Return(watchChan)
+ 	pub := NewPublisher(nil, "thekey", "thevalue")
+ 	var wg sync.WaitGroup
+ 	wg.Add(1)
+@@ -252,112 +245,6 @@ func TestPublisher_keepAliveAsyncPause(t *testing.T) {
+ 	wg.Wait()
+ }
+ 
+-// Test case for key deletion and re-registration (covers lines 148-155)
+-func TestPublisher_keepAliveAsyncKeyDeletion(t *testing.T) {
+-	ctrl := gomock.NewController(t)
+-	defer ctrl.Finish()
+-	const id clientv3.LeaseID = 1
+-	cli := internal.NewMockEtcdClient(ctrl)
+-	restore := setMockClient(cli)
+-	defer restore()
+-	cli.EXPECT().Ctx().AnyTimes()
+-	cli.EXPECT().KeepAlive(gomock.Any(), id)
+-
+-	// Create a watch channel that will send a delete event
+-	watchChan := make(chan clientv3.WatchResponse, 1)
+-	watchResp := clientv3.WatchResponse{
+-		Events: []*clientv3.Event{{
+-			Type: clientv3.EventTypeDelete,
+-			Kv: &mvccpb.KeyValue{
+-				Key: []byte("thekey"),
+-			},
+-		}},
+-	}
+-	watchChan <- watchResp
+-
+-	cli.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any()).Return((<-chan clientv3.WatchResponse)(watchChan))
+-
+-	var wg sync.WaitGroup
+-	wg.Add(1) // Only wait for Revoke call
+-
+-	// Use a channel to signal when Put has been called
+-	putCalled := make(chan struct{})
+-
+-	// Expect the re-put operation when key is deleted
+-	cli.EXPECT().Put(gomock.Any(), "thekey", "thevalue", gomock.Any()).Do(func(_, _, _, _ any) {
+-		close(putCalled) // Signal that Put has been called
+-	}).Return(nil, nil)
+-
+-	// Expect revoke when Stop is called
+-	cli.EXPECT().Revoke(gomock.Any(), id).Do(func(_, _ any) {
+-		wg.Done()
+-	})
+-
+-	pub := NewPublisher(nil, "thekey", "thevalue")
+-	pub.lease = id
+-	pub.fullKey = "thekey"
+-
+-	assert.Nil(t, pub.keepAliveAsync(cli))
+-
+-	// Wait for Put to be called, then stop
+-	<-putCalled
+-	pub.Stop()
+-	wg.Wait()
+-}
+-
+-// Test case for key deletion with re-put error (covers error branch in lines 151-152)
+-func TestPublisher_keepAliveAsyncKeyDeletionPutError(t *testing.T) {
+-	ctrl := gomock.NewController(t)
+-	defer ctrl.Finish()
+-	const id clientv3.LeaseID = 1
+-	cli := internal.NewMockEtcdClient(ctrl)
+-	restore := setMockClient(cli)
+-	defer restore()
+-	cli.EXPECT().Ctx().AnyTimes()
+-	cli.EXPECT().KeepAlive(gomock.Any(), id)
+-
+-	// Create a watch channel that will send a delete event
+-	watchChan := make(chan clientv3.WatchResponse, 1)
+-	watchResp := clientv3.WatchResponse{
+-		Events: []*clientv3.Event{{
+-			Type: clientv3.EventTypeDelete,
+-			Kv: &mvccpb.KeyValue{
+-				Key: []byte("thekey"),
+-			},
+-		}},
+-	}
+-	watchChan <- watchResp
+-
+-	cli.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any()).Return((<-chan clientv3.WatchResponse)(watchChan))
+-
+-	var wg sync.WaitGroup
+-	wg.Add(1) // Only wait for Revoke call
+-
+-	// Use a channel to signal when Put has been called
+-	putCalled := make(chan struct{})
+-
+-	// Expect the re-put operation to fail
+-	cli.EXPECT().Put(gomock.Any(), "thekey", "thevalue", gomock.Any()).Do(func(_, _, _, _ any) {
+-		close(putCalled) // Signal that Put has been called
+-	}).Return(nil, errors.New("put error"))
+-
+-	// Expect revoke when Stop is called
+-	cli.EXPECT().Revoke(gomock.Any(), id).Do(func(_, _ any) {
+-		wg.Done()
+-	})
+-
+-	pub := NewPublisher(nil, "thekey", "thevalue")
+-	pub.lease = id
+-	pub.fullKey = "thekey"
+-
+-	assert.Nil(t, pub.keepAliveAsync(cli))
+-
+-	// Wait for Put to be called, then stop
+-	<-putCalled
+-	pub.Stop()
+-	wg.Wait()
+-}
+-
+ func TestPublisher_Resume(t *testing.T) {
+ 	publisher := new(Publisher)
+ 	publisher.resumeChan = make(chan lang.PlaceholderType)
+@@ -386,9 +273,6 @@ func TestPublisher_keepAliveAsync(t *testing.T) {
+ 	defer restore()
+ 	cli.EXPECT().Ctx().AnyTimes()
+ 	cli.EXPECT().KeepAlive(gomock.Any(), id)
+-	// Add Watch expectation for the new watch mechanism
+-	watchChan := make(<-chan clientv3.WatchResponse)
+-	cli.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any()).Return(watchChan)
+ 	cli.EXPECT().Grant(gomock.Any(), timeToLive).Return(&clientv3.LeaseGrantResponse{
+ 		ID: 1,
+ 	}, nil)
+diff --git a/core/jsonx/json_test.go b/core/jsonx/json_test.go
+index 27e22b3ab3878e5c535e3fc706c0212fd4b16514..016acf207806b7c108b71ec6362b64dbbd2155ee 100644
+--- a/core/jsonx/json_test.go
++++ b/core/jsonx/json_test.go
+@@ -1,7 +1,6 @@
+ package jsonx
+ 
+ import (
+-	"fmt"
+ 	"strings"
+ 	"testing"
+ 
+@@ -102,105 +101,3 @@ func TestUnmarshalFromReaderError(t *testing.T) {
+ 	err := UnmarshalFromReader(strings.NewReader(s), &v)
+ 	assert.NotNil(t, err)
+ }
+-
+-func Test_doMarshalJson(t *testing.T) {
+-	type args struct {
+-		v any
+-	}
+-
+-	tests := []struct {
+-		name    string
+-		args    args
+-		want    []byte
+-		wantErr assert.ErrorAssertionFunc
+-	}{
+-		{
+-			name:    "nil",
+-			args:    args{nil},
+-			want:    []byte("null"),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "string",
+-			args:    args{"hello"},
+-			want:    []byte(`"hello"`),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "int",
+-			args:    args{42},
+-			want:    []byte("42"),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "bool",
+-			args:    args{true},
+-			want:    []byte("true"),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name: "struct",
+-			args: args{
+-				struct {
+-					Name string `json:"name"`
+-				}{Name: "test"},
+-			},
+-			want:    []byte(`{"name":"test"}`),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "slice",
+-			args:    args{[]int{1, 2, 3}},
+-			want:    []byte("[1,2,3]"),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "map",
+-			args:    args{map[string]int{"a": 1, "b": 2}},
+-			want:    []byte(`{"a":1,"b":2}`),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "unmarshalable type",
+-			args:    args{complex(1, 2)},
+-			want:    nil,
+-			wantErr: assert.Error,
+-		},
+-		{
+-			name:    "channel type",
+-			args:    args{make(chan int)},
+-			want:    nil,
+-			wantErr: assert.Error,
+-		},
+-		{
+-			name:    "url with query params",
+-			args:    args{"https://example.com/api?name=test&age=25"},
+-			want:    []byte(`"https://example.com/api?name=test&age=25"`),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "url with encoded query params",
+-			args:    args{"https://example.com/api?data=hello%20world&special=%26%3D"},
+-			want:    []byte(`"https://example.com/api?data=hello%20world&special=%26%3D"`),
+-			wantErr: assert.NoError,
+-		},
+-		{
+-			name:    "url with multiple query params",
+-			args:    args{"http://localhost:8080/users?page=1&limit=10&sort=name&order=asc"},
+-			want:    []byte(`"http://localhost:8080/users?page=1&limit=10&sort=name&order=asc"`),
+-			wantErr: assert.NoError,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		tt := tt
+-		t.Run(tt.name, func(t *testing.T) {
+-			got, err := Marshal(tt.args.v)
+-			if !tt.wantErr(t, err, fmt.Sprintf("Marshal(%v)", tt.args.v)) {
+-				return
+-			}
+-
+-			assert.Equalf(t, string(tt.want), string(got), "Marshal(%v)", tt.args.v)
+-		})
+-	}
+-}
+diff --git a/core/logx/fields_test.go b/core/logx/fields_test.go
+index f06cb26cffe4b5d8e3ff066371d197e70d325b80..c0727eb5a14a47880b5e47ef2afa980dcca2f26f 100644
+--- a/core/logx/fields_test.go
++++ b/core/logx/fields_test.go
+@@ -34,7 +34,7 @@ func TestAddGlobalFields(t *testing.T) {
+ 
+ func TestContextWithFields(t *testing.T) {
+ 	ctx := ContextWithFields(context.Background(), Field("a", 1), Field("b", 2))
+-	vals := ctx.Value(fieldsKey{})
++	vals := ctx.Value(fieldsContextKey)
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -43,7 +43,7 @@ func TestContextWithFields(t *testing.T) {
+ 
+ func TestWithFields(t *testing.T) {
+ 	ctx := WithFields(context.Background(), Field("a", 1), Field("b", 2))
+-	vals := ctx.Value(fieldsKey{})
++	vals := ctx.Value(fieldsContextKey)
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -55,7 +55,7 @@ func TestWithFieldsAppend(t *testing.T) {
+ 	ctx := context.WithValue(context.Background(), dummyKey, "dummy")
+ 	ctx = ContextWithFields(ctx, Field("a", 1), Field("b", 2))
+ 	ctx = ContextWithFields(ctx, Field("c", 3), Field("d", 4))
+-	vals := ctx.Value(fieldsKey{})
++	vals := ctx.Value(fieldsContextKey)
+ 	assert.NotNil(t, vals)
+ 	fields, ok := vals.([]LogField)
+ 	assert.True(t, ok)
+@@ -80,8 +80,8 @@ func TestWithFieldsAppendCopy(t *testing.T) {
+ 	ctxa := ContextWithFields(ctx, af)
+ 	ctxb := ContextWithFields(ctx, bf)
+ 
+-	assert.EqualValues(t, af, ctxa.Value(fieldsKey{}).([]LogField)[count])
+-	assert.EqualValues(t, bf, ctxb.Value(fieldsKey{}).([]LogField)[count])
++	assert.EqualValues(t, af, ctxa.Value(fieldsContextKey).([]LogField)[count])
++	assert.EqualValues(t, bf, ctxb.Value(fieldsContextKey).([]LogField)[count])
+ }
+ 
+ func BenchmarkAtomicValue(b *testing.B) {
+diff --git a/core/logx/sensitive_test.go b/core/logx/sensitive_test.go
+deleted file mode 100644
+index f2c07841e37285e69bb908449e2b3458f464c74b..0000000000000000000000000000000000000000
+--- a/core/logx/sensitive_test.go
++++ /dev/null
+@@ -1,50 +0,0 @@
+-package logx
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-const maskedContent = "******"
+-
+-type User struct {
+-	Name string
+-	Pass string
+-}
+-
+-func (u User) MaskSensitive() any {
+-	return User{
+-		Name: u.Name,
+-		Pass: maskedContent,
+-	}
+-}
+-
+-type NonSensitiveUser struct {
+-	Name string
+-	Pass string
+-}
+-
+-func TestMaskSensitive(t *testing.T) {
+-	t.Run("sensitive", func(t *testing.T) {
+-		user := User{
+-			Name: "kevin",
+-			Pass: "123",
+-		}
+-
+-		mu := maskSensitive(user)
+-		assert.Equal(t, user.Name, mu.(User).Name)
+-		assert.Equal(t, maskedContent, mu.(User).Pass)
+-	})
+-
+-	t.Run("non-sensitive", func(t *testing.T) {
+-		user := NonSensitiveUser{
+-			Name: "kevin",
+-			Pass: "123",
+-		}
+-
+-		mu := maskSensitive(user)
+-		assert.Equal(t, user.Name, mu.(NonSensitiveUser).Name)
+-		assert.Equal(t, user.Pass, mu.(NonSensitiveUser).Pass)
+-	})
+-}
+diff --git a/core/logx/writer_test.go b/core/logx/writer_test.go
+index 65ca7998df531e7fc7547d9fffcc5891af7f2b10..7d223dd40e02a32ca4d90b018a97d17c5e3f7762 100644
+--- a/core/logx/writer_test.go
++++ b/core/logx/writer_test.go
+@@ -225,48 +225,6 @@ func TestWritePlainDuplicate(t *testing.T) {
+ 	assert.Contains(t, buf.String(), "second=c")
+ }
+ 
+-func TestLogWithSensitive(t *testing.T) {
+-	old := atomic.SwapUint32(&encoding, plainEncodingType)
+-	t.Cleanup(func() {
+-		atomic.StoreUint32(&encoding, old)
+-	})
+-
+-	t.Run("sensitive", func(t *testing.T) {
+-		var buf bytes.Buffer
+-		output(&buf, levelInfo, User{
+-			Name: "kevin",
+-			Pass: "123",
+-		}, LogField{
+-			Key:   "first",
+-			Value: "a",
+-		}, LogField{
+-			Key:   "first",
+-			Value: "b",
+-		})
+-		assert.Contains(t, buf.String(), maskedContent)
+-		assert.NotContains(t, buf.String(), "first=a")
+-		assert.Contains(t, buf.String(), "first=b")
+-	})
+-
+-	t.Run("sensitive fields", func(t *testing.T) {
+-		var buf bytes.Buffer
+-		output(&buf, levelInfo, "foo", LogField{
+-			Key: "first",
+-			Value: User{
+-				Name: "kevin",
+-				Pass: "123",
+-			},
+-		}, LogField{
+-			Key:   "second",
+-			Value: "b",
+-		})
+-		assert.Contains(t, buf.String(), "foo")
+-		assert.Contains(t, buf.String(), "first")
+-		assert.Contains(t, buf.String(), maskedContent)
+-		assert.Contains(t, buf.String(), "second=b")
+-	})
+-}
+-
+ func TestLogWithLimitContentLength(t *testing.T) {
+ 	maxLen := atomic.LoadUint32(&maxContentLength)
+ 	atomic.StoreUint32(&maxContentLength, 10)
+diff --git a/core/mapping/unmarshaler_test.go b/core/mapping/unmarshaler_test.go
+index a0e4f782f13c5063c87c4b18222231e289c90a5e..d4a1a67f21e67689031d870042ddfc5dd185d434 100644
+--- a/core/mapping/unmarshaler_test.go
++++ b/core/mapping/unmarshaler_test.go
+@@ -203,20 +203,6 @@ func TestUnmarshalDuration(t *testing.T) {
+ 	}
+ }
+ 
+-func TestUnmarshalDurationUnexpectedError(t *testing.T) {
+-	type inner struct {
+-		Duration time.Duration `key:"duration"`
+-	}
+-	content := "{\"duration\": 1}"
+-	var m = map[string]any{}
+-	err := jsonx.Unmarshal([]byte(content), &m)
+-	assert.NoError(t, err)
+-	var in inner
+-	err = UnmarshalKey(m, &in)
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "expect string")
+-}
+-
+ func TestUnmarshalDurationDefault(t *testing.T) {
+ 	type inner struct {
+ 		Int      int           `key:"int"`
+@@ -4679,23 +4665,6 @@ func TestUnmarshal_EnvInt(t *testing.T) {
+ 	}
+ }
+ 
+-func TestUnmarshal_EnvInt64(t *testing.T) {
+-	type Value struct {
+-		Age int64 `key:"age,env=TEST_NAME_INT64"`
+-	}
+-
+-	const (
+-		envName = "TEST_NAME_INT64"
+-		envVal  = "88"
+-	)
+-	t.Setenv(envName, envVal)
+-
+-	var v Value
+-	if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+-		assert.Equal(t, int64(88), v.Age)
+-	}
+-}
+-
+ func TestUnmarshal_EnvIntOverwrite(t *testing.T) {
+ 	type Value struct {
+ 		Age int `key:"age,env=TEST_NAME_INT"`
+@@ -4801,33 +4770,20 @@ func TestUnmarshal_EnvBoolBad(t *testing.T) {
+ }
+ 
+ func TestUnmarshal_EnvDuration(t *testing.T) {
++	type Value struct {
++		Duration time.Duration `key:"duration,env=TEST_NAME_DURATION"`
++	}
++
+ 	const (
+ 		envName = "TEST_NAME_DURATION"
+ 		envVal  = "1s"
+ 	)
+ 	t.Setenv(envName, envVal)
+ 
+-	t.Run("valid duration", func(t *testing.T) {
+-		type Value struct {
+-			Duration time.Duration `key:"duration,env=TEST_NAME_DURATION"`
+-		}
+-
+-		var v Value
+-		if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+-			assert.Equal(t, time.Second, v.Duration)
+-		}
+-	})
+-
+-	t.Run("ptr of duration", func(t *testing.T) {
+-		type Value struct {
+-			Duration *time.Duration `key:"duration,env=TEST_NAME_DURATION"`
+-		}
+-
+-		var v Value
+-		if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+-			assert.Equal(t, time.Second, *v.Duration)
+-		}
+-	})
++	var v Value
++	if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
++		assert.Equal(t, time.Second, v.Duration)
++	}
+ }
+ 
+ func TestUnmarshal_EnvDurationBadValue(t *testing.T) {
+@@ -6039,16 +5995,6 @@ func TestUnmarshal_Unmarshaler(t *testing.T) {
+ 		}, &v))
+ 		assert.Nil(t, v.Foo)
+ 	})
+-
+-	t.Run("json.Number", func(t *testing.T) {
+-		v := struct {
+-			Foo *mockUnmarshaler `json:"name"`
+-		}{}
+-		m := map[string]any{
+-			"name": json.Number("123"),
+-		}
+-		assert.Error(t, UnmarshalJsonMap(m, &v))
+-	})
+ }
+ 
+ func TestParseJsonStringValue(t *testing.T) {
+@@ -6083,105 +6029,6 @@ func TestParseJsonStringValue(t *testing.T) {
+ 	})
+ }
+ 
+-// issue #5033, string type
+-func TestUnmarshalFromEnvString(t *testing.T) {
+-	t.Setenv("STRING_ENV", "dev")
+-
+-	t.Run("by value", func(t *testing.T) {
+-		type (
+-			Env    string
+-			Config struct {
+-				Env Env `json:",env=STRING_ENV,default=prod"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env("dev"), c.Env)
+-		}
+-	})
+-
+-	t.Run("by ptr", func(t *testing.T) {
+-		type (
+-			Env    string
+-			Config struct {
+-				Env *Env `json:",env=STRING_ENV,default=prod"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env("dev"), *c.Env)
+-		}
+-	})
+-}
+-
+-// issue #5033, bool type
+-func TestUnmarshalFromEnvBool(t *testing.T) {
+-	t.Setenv("BOOL_ENV", "true")
+-
+-	t.Run("by value", func(t *testing.T) {
+-		type (
+-			Env    bool
+-			Config struct {
+-				Env Env `json:",env=BOOL_ENV,default=false"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env(true), c.Env)
+-		}
+-	})
+-
+-	t.Run("by ptr", func(t *testing.T) {
+-		type (
+-			Env    bool
+-			Config struct {
+-				Env *Env `json:",env=BOOL_ENV,default=false"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env(true), *c.Env)
+-		}
+-	})
+-}
+-
+-// issue #5033, customized int type
+-func TestUnmarshalFromEnvInt(t *testing.T) {
+-	t.Setenv("INT_ENV", "2")
+-
+-	t.Run("by value", func(t *testing.T) {
+-		type (
+-			Env    int
+-			Config struct {
+-				Env Env `json:",env=INT_ENV,default=0"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env(2), c.Env)
+-		}
+-	})
+-
+-	t.Run("by ptr", func(t *testing.T) {
+-		type (
+-			Env    int
+-			Config struct {
+-				Env *Env `json:",env=INT_ENV,default=0"`
+-			}
+-		)
+-
+-		var c Config
+-		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+-			assert.Equal(t, Env(2), *c.Env)
+-		}
+-	})
+-}
+-
+ func BenchmarkDefaultValue(b *testing.B) {
+ 	for i := 0; i < b.N; i++ {
+ 		var a struct {
+diff --git a/core/mr/mapreduce_test.go b/core/mr/mapreduce_test.go
+index c0cc34cec7fa0756d4526c6a458b7898cde1ed0d..6aa924f577c5a3ffa802fe5f45cb9bf80888673c 100644
+--- a/core/mr/mapreduce_test.go
++++ b/core/mr/mapreduce_test.go
+@@ -39,36 +39,6 @@ func TestFinish(t *testing.T) {
+ 	assert.Nil(t, err)
+ }
+ 
+-func TestFinishWithPartialErrors(t *testing.T) {
+-	defer goleak.VerifyNone(t)
+-
+-	errDummy := errors.New("dummy")
+-
+-	t.Run("one error", func(t *testing.T) {
+-		err := Finish(func() error {
+-			return errDummy
+-		}, func() error {
+-			return nil
+-		}, func() error {
+-			return nil
+-		})
+-
+-		assert.Equal(t, errDummy, err)
+-	})
+-
+-	t.Run("two errors", func(t *testing.T) {
+-		err := Finish(func() error {
+-			return errDummy
+-		}, func() error {
+-			return errDummy
+-		}, func() error {
+-			return nil
+-		})
+-
+-		assert.Equal(t, errDummy, err)
+-	})
+-}
+-
+ func TestFinishNone(t *testing.T) {
+ 	defer goleak.VerifyNone(t)
+ 
+diff --git a/core/stores/sqlx/config_test.go b/core/stores/sqlx/config_test.go
+deleted file mode 100644
+index 5b350ba0f1aa8863595a99743a1605ecfec00bce..0000000000000000000000000000000000000000
+--- a/core/stores/sqlx/config_test.go
++++ /dev/null
+@@ -1,29 +0,0 @@
+-package sqlx
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/conf"
+-)
+-
+-func TestValidate(t *testing.T) {
+-	text := []byte(`DataSource: primary:password@tcp(127.0.0.1:3306)/primary_db
+-`)
+-
+-	var sc SqlConf
+-	err := conf.LoadFromYamlBytes(text, &sc)
+-	assert.Nil(t, err)
+-	assert.Equal(t, "mysql", sc.DriverName)
+-	assert.Equal(t, policyRoundRobin, sc.Policy)
+-	assert.Nil(t, sc.Validate())
+-
+-	sc = SqlConf{}
+-	assert.Equal(t, errEmptyDatasource, sc.Validate())
+-
+-	sc.DataSource = "primary:password@tcp(127.0.0.1:3306)/primary_db"
+-	assert.Equal(t, errEmptyDriverName, sc.Validate())
+-
+-	sc.DriverName = "mysql"
+-	assert.Nil(t, sc.Validate())
+-}
+diff --git a/core/stores/sqlx/orm_test.go b/core/stores/sqlx/orm_test.go
+index c354654739eeb57042db2732580057a853561b86..fcd0f2e8e01a78dd09a5b20a95032a2f3b3259a4 100644
+--- a/core/stores/sqlx/orm_test.go
++++ b/core/stores/sqlx/orm_test.go
+@@ -14,8 +14,7 @@ import (
+ func TestUnmarshalRowBool(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value bool
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -26,8 +25,7 @@ func TestUnmarshalRowBool(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value struct {
+ 			Value bool `db:"value"`
+@@ -41,8 +39,7 @@ func TestUnmarshalRowBool(t *testing.T) {
+ func TestUnmarshalRowBoolNotSettable(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value bool
+ 		assert.NotNil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -54,8 +51,7 @@ func TestUnmarshalRowBoolNotSettable(t *testing.T) {
+ func TestUnmarshalRowInt(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value int
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -68,8 +64,7 @@ func TestUnmarshalRowInt(t *testing.T) {
+ func TestUnmarshalRowInt8(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value int8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -82,8 +77,7 @@ func TestUnmarshalRowInt8(t *testing.T) {
+ func TestUnmarshalRowInt16(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("4")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value int16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -96,8 +90,7 @@ func TestUnmarshalRowInt16(t *testing.T) {
+ func TestUnmarshalRowInt32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value int32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -110,8 +103,7 @@ func TestUnmarshalRowInt32(t *testing.T) {
+ func TestUnmarshalRowInt64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("6")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value int64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -124,8 +116,7 @@ func TestUnmarshalRowInt64(t *testing.T) {
+ func TestUnmarshalRowUint(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value uint
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -138,8 +129,7 @@ func TestUnmarshalRowUint(t *testing.T) {
+ func TestUnmarshalRowUint8(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value uint8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -152,8 +142,7 @@ func TestUnmarshalRowUint8(t *testing.T) {
+ func TestUnmarshalRowUint16(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("4")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value uint16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -166,8 +155,7 @@ func TestUnmarshalRowUint16(t *testing.T) {
+ func TestUnmarshalRowUint32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value uint32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -180,8 +168,7 @@ func TestUnmarshalRowUint32(t *testing.T) {
+ func TestUnmarshalRowUint64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("6")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value uint64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -194,8 +181,7 @@ func TestUnmarshalRowUint64(t *testing.T) {
+ func TestUnmarshalRowFloat32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("7")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value float32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -208,8 +194,7 @@ func TestUnmarshalRowFloat32(t *testing.T) {
+ func TestUnmarshalRowFloat64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("8")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value float64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -223,8 +208,7 @@ func TestUnmarshalRowString(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		const expect = "hello"
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString(expect)
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value string
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -242,8 +226,7 @@ func TestUnmarshalRowStruct(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -260,8 +243,7 @@ func TestUnmarshalRowStruct(t *testing.T) {
+ 
+ 		errAny := errors.New("any error")
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, &mockedScanner{
+@@ -278,8 +260,7 @@ func TestUnmarshalRowStruct(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -293,8 +274,7 @@ func TestUnmarshalRowStruct(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -303,8 +283,7 @@ func TestUnmarshalRowStruct(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("8")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		type myString chan int
+ 		var value myString
+@@ -322,8 +301,7 @@ func TestUnmarshalRowStructWithTags(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -339,8 +317,7 @@ func TestUnmarshalRowStructWithTags(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -354,8 +331,7 @@ func TestUnmarshalRowStructWithTags(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -369,8 +345,7 @@ func TestUnmarshalRowStructWithTags(t *testing.T) {
+ 		}
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(&value, rows, true)
+@@ -386,43 +361,7 @@ func TestUnmarshalRowStructWithTags(t *testing.T) {
+ 		})
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRow(value, rows, true)
+-		}, "select name, age from users where user=?", "anyone"))
+-		assert.Equal(t, 5, value.Age)
+-	})
+-}
+-
+-func TestUnmarshalRowStructWithTagsIgnoreFields(t *testing.T) {
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		value := new(struct {
+-			Age    int `db:"age"`
+-			Name   string
+-			Ignore bool
+-		})
+-
+-		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRow(value, rows, true)
+-		}, "select name, age from users where user=?", "anyone"), ErrNotMatchDestination)
+-	})
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		value := new(struct {
+-			Age    int `db:"age"`
+-			Name   string
+-			Ignore bool `db:"-"`
+-		})
+-
+-		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("liao,5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -439,8 +378,7 @@ func TestUnmarshalRowStructWithTagsWrongColumns(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name"}).FromCSVString("liao")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		assert.NotNil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRow(value, rows, true)
+@@ -452,8 +390,7 @@ func TestUnmarshalRowsBool(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []bool{true, false}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1\n0")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []bool
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -464,8 +401,7 @@ func TestUnmarshalRowsBool(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1\n0")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []bool
+ 		assert.Error(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -475,8 +411,7 @@ func TestUnmarshalRowsBool(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1\n0")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value struct {
+ 			value []bool `db:"value"`
+@@ -488,8 +423,7 @@ func TestUnmarshalRowsBool(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1\n0")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []bool
+ 		errAny := errors.New("any")
+@@ -506,8 +440,7 @@ func TestUnmarshalRowsInt(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []int{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []int
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -521,8 +454,7 @@ func TestUnmarshalRowsInt8(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []int8{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []int8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -536,8 +468,7 @@ func TestUnmarshalRowsInt16(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []int16{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []int16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -551,8 +482,7 @@ func TestUnmarshalRowsInt32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []int32{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []int32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -566,8 +496,7 @@ func TestUnmarshalRowsInt64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []int64{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []int64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -581,8 +510,7 @@ func TestUnmarshalRowsUint(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []uint{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []uint
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -596,8 +524,7 @@ func TestUnmarshalRowsUint8(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []uint8{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []uint8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -611,8 +538,7 @@ func TestUnmarshalRowsUint16(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []uint16{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []uint16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -626,8 +552,7 @@ func TestUnmarshalRowsUint32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []uint32{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []uint32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -641,8 +566,7 @@ func TestUnmarshalRowsUint64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []uint64{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []uint64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -656,8 +580,7 @@ func TestUnmarshalRowsFloat32(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []float32{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []float32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -671,8 +594,7 @@ func TestUnmarshalRowsFloat64(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []float64{2, 3}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []float64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -686,8 +608,7 @@ func TestUnmarshalRowsString(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []string{"hello", "world"}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("hello\nworld")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []string
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -703,8 +624,7 @@ func TestUnmarshalRowsBoolPtr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*bool{&yes, &no}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("1\n0")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*bool
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -720,8 +640,7 @@ func TestUnmarshalRowsIntPtr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*int{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*int
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -737,8 +656,7 @@ func TestUnmarshalRowsInt8Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*int8{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*int8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -754,8 +672,7 @@ func TestUnmarshalRowsInt16Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*int16{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*int16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -771,8 +688,7 @@ func TestUnmarshalRowsInt32Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*int32{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*int32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -788,8 +704,7 @@ func TestUnmarshalRowsInt64Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*int64{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*int64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -805,8 +720,7 @@ func TestUnmarshalRowsUintPtr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*uint{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*uint
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -822,8 +736,7 @@ func TestUnmarshalRowsUint8Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*uint8{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*uint8
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -839,8 +752,7 @@ func TestUnmarshalRowsUint16Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*uint16{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*uint16
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -856,8 +768,7 @@ func TestUnmarshalRowsUint32Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*uint32{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*uint32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -873,8 +784,7 @@ func TestUnmarshalRowsUint64Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*uint64{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*uint64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -890,8 +800,7 @@ func TestUnmarshalRowsFloat32Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*float32{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*float32
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -907,8 +816,7 @@ func TestUnmarshalRowsFloat64Ptr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*float64{&two, &three}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("2\n3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*float64
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -924,8 +832,7 @@ func TestUnmarshalRowsStringPtr(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		expect := []*string{&hello, &world}
+ 		rs := sqlmock.NewRows([]string{"value"}).FromCSVString("hello\nworld")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var value []*string
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+@@ -956,8 +863,7 @@ func TestUnmarshalRowsStruct(t *testing.T) {
+ 		}
+ 
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -976,8 +882,7 @@ func TestUnmarshalRowsStruct(t *testing.T) {
+ 
+ 		errAny := errors.New("any error")
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, &mockedScanner{
+ 				colErr: errAny,
+@@ -994,8 +899,7 @@ func TestUnmarshalRowsStruct(t *testing.T) {
+ 
+ 		errAny := errors.New("any error")
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, &mockedScanner{
+ 				cols:    []string{"name", "age"},
+@@ -1010,8 +914,7 @@ func TestUnmarshalRowsStruct(t *testing.T) {
+ 
+ 		errAny := errors.New("any error")
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, &mockedScanner{
+ 				cols:    []string{"name", "age"},
+@@ -1050,8 +953,7 @@ func TestUnmarshalRowsStructWithNullStringType(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "value"}).AddRow(
+ 			"first", "firstnullstring").AddRow("second", nil)
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -1085,62 +987,7 @@ func TestUnmarshalRowsStructWithTags(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, age from users where user=?", "anyone"))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsStructWithTagsIgnoreFields(t *testing.T) {
+-	expect := []struct {
+-		Name   string
+-		Age    int64
+-		Ignore bool
+-	}{
+-		{
+-			Name:   "first",
+-			Age:    2,
+-			Ignore: false,
+-		},
+-		{
+-			Name:   "second",
+-			Age:    3,
+-			Ignore: false,
+-		},
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		var value []struct {
+-			Age    int64  `db:"age"`
+-			Name   string `db:"name"`
+-			Ignore bool
+-		}
+-
+-		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-		assert.ErrorIs(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, age from users where user=?", "anyone"), ErrNotMatchDestination)
+-	})
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		var value []struct {
+-			Age    int64  `db:"age"`
+-			Name   string `db:"name"`
+-			Ignore bool   `db:"-"`
+-		}
+-
+-		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -1181,8 +1028,7 @@ func TestUnmarshalRowsStructAndEmbeddedAnonymousStructWithTags(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age", "value"}).FromCSVString("first,2,3\nsecond,3,4")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age, value from users where user=?", "anyone"))
+@@ -1224,8 +1070,7 @@ func TestUnmarshalRowsStructAndEmbeddedStructPtrAnonymousWithTags(t *testing.T)
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age", "value"}).FromCSVString("first,2,3\nsecond,3,4")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age, value from users where user=?", "anyone"))
+@@ -1259,8 +1104,7 @@ func TestUnmarshalRowsStructPtr(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -1293,8 +1137,7 @@ func TestUnmarshalRowsStructWithTagsPtr(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -1327,8 +1170,7 @@ func TestUnmarshalRowsStructWithTagsPtrWithInnerPtr(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"name", "age"}).FromCSVString("first,2\nsecond,3")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+ 			return unmarshalRows(&value, rows, true)
+ 		}, "select name, age from users where user=?", "anyone"))
+@@ -1343,8 +1185,7 @@ func TestUnmarshalRowsStructWithTagsPtrWithInnerPtr(t *testing.T) {
+ func TestCommonSqlConn_QueryRowOptional(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		rs := sqlmock.NewRows([]string{"age"}).FromCSVString("5")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
++		mock.ExpectQuery("select (.+) from users where user=?").WithArgs("anyone").WillReturnRows(rs)
+ 
+ 		var r struct {
+ 			User string `db:"user"`
+@@ -1394,8 +1235,8 @@ func TestUnmarshalRowError(t *testing.T) {
+ 		t.Run(test.name, func(t *testing.T) {
+ 			dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 				rs := sqlmock.NewRows([]string{"age"}).FromCSVString("5")
+-				mock.ExpectQuery("select (.+) from users where user=?").
+-					WithArgs("anyone").WillReturnRows(rs)
++				mock.ExpectQuery("select (.+) from users where user=?").WithArgs(
++					"anyone").WillReturnRows(rs)
+ 
+ 				var r struct {
+ 					User string `db:"user"`
+@@ -1575,34 +1416,6 @@ func TestAnonymousStructPrError(t *testing.T) {
+ 	})
+ }
+ 
+-func BenchmarkIgnore(b *testing.B) {
+-	db, mock, err := sqlmock.New()
+-	if err != nil {
+-		b.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+-	}
+-	defer func() {
+-		_ = db.Close()
+-	}()
+-
+-	for i := 0; i < b.N; i++ {
+-		value := new(struct {
+-			Age    int `db:"age"`
+-			Name   string
+-			Ignore bool `db:"-"`
+-		})
+-
+-		rs := sqlmock.NewRows([]string{"name", "age", "ignore"}).FromCSVString("liao,5,true")
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(b, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRow(value, rows, true)
+-		}, "select name, age from users where user=?", "anyone"))
+-		assert.Equal(b, 5, value.Age)
+-
+-	}
+-}
+-
+ type mockedScanner struct {
+ 	cols    []string
+ 	colErr  error
+diff --git a/core/stores/sqlx/rwstrategy_test.go b/core/stores/sqlx/rwstrategy_test.go
+deleted file mode 100644
+index b368c7cb458edbf080ad08f76875525081757b64..0000000000000000000000000000000000000000
+--- a/core/stores/sqlx/rwstrategy_test.go
++++ /dev/null
+@@ -1,142 +0,0 @@
+-package sqlx
+-
+-import (
+-	"context"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestIsValid(t *testing.T) {
+-	testCases := []struct {
+-		name     string
+-		mode     readWriteMode
+-		expected bool
+-	}{
+-		{
+-			name:     "valid read-primary mode",
+-			mode:     readPrimaryMode,
+-			expected: true,
+-		},
+-		{
+-			name:     "valid read-replica mode",
+-			mode:     readReplicaMode,
+-			expected: true,
+-		},
+-		{
+-			name:     "valid write mode",
+-			mode:     writeMode,
+-			expected: true,
+-		},
+-		{
+-			name:     "not specified mode (empty)",
+-			mode:     notSpecifiedMode,
+-			expected: false,
+-		},
+-		{
+-			name:     "invalid custom string",
+-			mode:     readWriteMode("delete"),
+-			expected: false,
+-		},
+-		{
+-			name:     "case sensitive check",
+-			mode:     readWriteMode("READ"),
+-			expected: false,
+-		},
+-	}
+-
+-	for _, tc := range testCases {
+-		t.Run(tc.name, func(t *testing.T) {
+-			actual := tc.mode.isValid()
+-			assert.Equal(t, tc.expected, actual)
+-		})
+-	}
+-}
+-
+-func TestWithReadMode(t *testing.T) {
+-	ctx := context.Background()
+-	readPrimaryCtx := WithReadPrimary(ctx)
+-
+-	val := readPrimaryCtx.Value(readWriteModeKey{})
+-	assert.Equal(t, readPrimaryMode, val)
+-
+-	readReplicaCtx := WithReadReplica(ctx)
+-	val = readReplicaCtx.Value(readWriteModeKey{})
+-	assert.Equal(t, readReplicaMode, val)
+-}
+-
+-func TestWithWriteMode(t *testing.T) {
+-	ctx := context.Background()
+-	writeCtx := WithWrite(ctx)
+-
+-	val := writeCtx.Value(readWriteModeKey{})
+-	assert.Equal(t, writeMode, val)
+-}
+-
+-func TestGetReadWriteMode(t *testing.T) {
+-	t.Run("valid read-primary mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readPrimaryMode)
+-		assert.Equal(t, readPrimaryMode, getReadWriteMode(ctx))
+-	})
+-
+-	t.Run("valid read-replica mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readReplicaMode)
+-		assert.Equal(t, readReplicaMode, getReadWriteMode(ctx))
+-	})
+-
+-	t.Run("valid write mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, writeMode)
+-		assert.Equal(t, writeMode, getReadWriteMode(ctx))
+-	})
+-
+-	t.Run("invalid mode value (wrong type)", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, "not-a-mode")
+-		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
+-	})
+-
+-	t.Run("invalid mode value (wrong value)", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readWriteMode("delete"))
+-		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
+-	})
+-
+-	t.Run("no mode set", func(t *testing.T) {
+-		ctx := context.Background()
+-		assert.Equal(t, notSpecifiedMode, getReadWriteMode(ctx))
+-	})
+-}
+-
+-func TestUsePrimary(t *testing.T) {
+-	t.Run("context with read-replica mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readReplicaMode)
+-		assert.False(t, usePrimary(ctx))
+-	})
+-
+-	t.Run("context with read-primary mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readPrimaryMode)
+-		assert.True(t, usePrimary(ctx))
+-	})
+-
+-	t.Run("context with write mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, writeMode)
+-		assert.True(t, usePrimary(ctx))
+-	})
+-
+-	t.Run("context with invalid mode", func(t *testing.T) {
+-		ctx := context.WithValue(context.Background(), readWriteModeKey{}, readWriteMode("invalid"))
+-		assert.True(t, usePrimary(ctx))
+-	})
+-
+-	t.Run("context with no mode set", func(t *testing.T) {
+-		ctx := context.Background()
+-		assert.True(t, usePrimary(ctx))
+-	})
+-}
+-
+-func TestWithModeTwice(t *testing.T) {
+-	ctx := context.Background()
+-	ctx = WithReadPrimary(ctx)
+-	writeCtx := WithWrite(ctx)
+-
+-	val := writeCtx.Value(readWriteModeKey{})
+-	assert.Equal(t, writeMode, val)
+-}
+diff --git a/core/stores/sqlx/sqlconn_test.go b/core/stores/sqlx/sqlconn_test.go
+index 95e383ce14660f94f1042ff63b05ab3e3e46a10b..53ea0d5ace98b0e4498718bbfe19fa9be99d2b83 100644
+--- a/core/stores/sqlx/sqlconn_test.go
++++ b/core/stores/sqlx/sqlconn_test.go
+@@ -1,7 +1,6 @@
+ package sqlx
+ 
+ import (
+-	"context"
+ 	"database/sql"
+ 	"errors"
+ 	"io"
+@@ -99,7 +98,7 @@ func TestSqlConn_RawDB(t *testing.T) {
+ func TestSqlConn_Errors(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		conn := NewSqlConnFromDB(db)
+-		conn.(*commonSqlConn).connProv = func(ctx context.Context) (*sql.DB, error) {
++		conn.(*commonSqlConn).connProv = func() (*sql.DB, error) {
+ 			return nil, errors.New("error")
+ 		}
+ 		_, err := conn.Prepare("any")
+@@ -139,148 +138,6 @@ func TestSqlConn_Errors(t *testing.T) {
+ 	})
+ }
+ 
+-func TestConfigSqlConn(t *testing.T) {
+-	db, mock, err := sqlmock.New()
+-	assert.NotNil(t, db)
+-	assert.NotNil(t, mock)
+-	assert.Nil(t, err)
+-	connManager.Inject(mockedDatasource, db)
+-	mock.ExpectExec("any")
+-	mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}))
+-
+-	conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-	conn := MustNewConn(conf, withMysqlAcceptable())
+-
+-	_, err = conn.Exec("any", "value")
+-	assert.NotNil(t, err)
+-	_, err = conn.Prepare("any")
+-	assert.NotNil(t, err)
+-
+-	var val string
+-	assert.NotNil(t, conn.QueryRow(&val, "any"))
+-	assert.NotNil(t, conn.QueryRowPartial(&val, "any"))
+-	assert.NotNil(t, conn.QueryRows(&val, "any"))
+-	assert.NotNil(t, conn.QueryRowsPartial(&val, "any"))
+-}
+-
+-func TestConfigSqlConnStatement(t *testing.T) {
+-	db, mock, err := sqlmock.New()
+-	assert.NotNil(t, db)
+-	assert.NotNil(t, mock)
+-	assert.Nil(t, err)
+-	connManager.Inject(mockedDatasource, db)
+-
+-	mock.ExpectPrepare("any")
+-	mock.ExpectExec("any").WillReturnResult(sqlmock.NewResult(2, 3))
+-	mock.ExpectPrepare("any")
+-	row := sqlmock.NewRows([]string{"foo"}).AddRow("bar")
+-	mock.ExpectQuery("any").WillReturnRows(row)
+-
+-	conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-	conn := MustNewConn(conf, withMysqlAcceptable())
+-	stmt, err := conn.Prepare("any")
+-	assert.NoError(t, err)
+-
+-	res, err := stmt.Exec()
+-	assert.NoError(t, err)
+-	lastInsertID, err := res.LastInsertId()
+-	assert.NoError(t, err)
+-	assert.Equal(t, int64(2), lastInsertID)
+-	rowsAffected, err := res.RowsAffected()
+-	assert.NoError(t, err)
+-	assert.Equal(t, int64(3), rowsAffected)
+-
+-	stmt, err = conn.Prepare("any")
+-	assert.NoError(t, err)
+-
+-	var val string
+-	err = stmt.QueryRow(&val)
+-	assert.NoError(t, err)
+-	assert.Equal(t, "bar", val)
+-
+-	mock.ExpectPrepare("any")
+-	rows := sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar")
+-	mock.ExpectQuery("any").WillReturnRows(rows)
+-
+-	stmt, err = conn.Prepare("any")
+-	assert.NoError(t, err)
+-
+-	var vals []string
+-	assert.NoError(t, stmt.QueryRowsPartial(&vals))
+-	assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
+-}
+-
+-func TestConfigSqlConnQuery(t *testing.T) {
+-	db, mock, err := sqlmock.New()
+-	assert.NotNil(t, db)
+-	assert.NotNil(t, mock)
+-	assert.Nil(t, err)
+-	connManager.Inject(mockedDatasource, db)
+-
+-	t.Run("QueryRow", func(t *testing.T) {
+-		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}).AddRow("bar"))
+-		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-		conn := MustNewConn(conf)
+-		var val string
+-		assert.NoError(t, conn.QueryRow(&val, "any"))
+-		assert.Equal(t, "bar", val)
+-	})
+-
+-	t.Run("QueryRowPartial", func(t *testing.T) {
+-		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"foo"}).AddRow("bar"))
+-		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-		conn := MustNewConn(conf)
+-		var val string
+-		assert.NoError(t, conn.QueryRowPartial(&val, "any"))
+-		assert.Equal(t, "bar", val)
+-	})
+-
+-	t.Run("QueryRows", func(t *testing.T) {
+-		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar"))
+-		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-		conn := MustNewConn(conf)
+-		var vals []string
+-		assert.NoError(t, conn.QueryRows(&vals, "any"))
+-		assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
+-	})
+-
+-	t.Run("QueryRowsPartial", func(t *testing.T) {
+-		mock.ExpectQuery("any").WillReturnRows(sqlmock.NewRows([]string{"any"}).AddRow("foo").AddRow("bar"))
+-		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-		conn := MustNewConn(conf)
+-		var vals []string
+-		assert.NoError(t, conn.QueryRowsPartial(&vals, "any"))
+-		assert.ElementsMatch(t, []string{"foo", "bar"}, vals)
+-	})
+-}
+-
+-func TestConfigSqlConnErr(t *testing.T) {
+-	t.Run("panic on empty config", func(t *testing.T) {
+-		original := logx.ExitOnFatal.True()
+-		logx.ExitOnFatal.Set(false)
+-		defer logx.ExitOnFatal.Set(original)
+-
+-		assert.Panics(t, func() {
+-			MustNewConn(SqlConf{})
+-		})
+-	})
+-	t.Run("on error", func(t *testing.T) {
+-		db, mock, err := sqlmock.New()
+-		assert.NotNil(t, db)
+-		assert.NotNil(t, mock)
+-		assert.Nil(t, err)
+-		connManager.Inject(mockedDatasource, db)
+-
+-		conf := SqlConf{DataSource: mockedDatasource, DriverName: mysqlDriverName}
+-		conn := MustNewConn(conf)
+-		conn.(*commonSqlConn).connProv = func(ctx context.Context) (*sql.DB, error) {
+-			return nil, errors.New("error")
+-		}
+-		_, err = conn.Prepare("any")
+-		assert.Error(t, err)
+-	})
+-}
+-
+ func TestStatement(t *testing.T) {
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		mock.ExpectPrepare("any").WillBeClosed()
+@@ -446,93 +303,6 @@ func TestWithAcceptable(t *testing.T) {
+ 	assert.True(t, conn.accept(acceptableErr3))
+ }
+ 
+-func TestProvider(t *testing.T) {
+-	defer func() {
+-		_ = connManager.Close()
+-	}()
+-
+-	primaryDSN := "primary:password@tcp(127.0.0.1:3306)/primary_db"
+-	replicasDSN := []string{
+-		"replica_one:pwd@tcp(localhost:3306)/replica_one",
+-		"replica_two:pwd@tcp(localhost:3306)/replica_two",
+-		"replica_three:pwd@tcp(localhost:3306)/replica_three",
+-	}
+-
+-	primaryDB, err := connManager.GetResource(primaryDSN, func() (io.Closer, error) { return sql.Open(mysqlDriverName, primaryDSN) })
+-	assert.Nil(t, err)
+-	assert.NotNil(t, primaryDB)
+-	replicaOneDB, err := connManager.GetResource(replicasDSN[0], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[0]) })
+-	assert.Nil(t, err)
+-	assert.NotNil(t, replicaOneDB)
+-	replicaTwoDB, err := connManager.GetResource(replicasDSN[1], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[1]) })
+-	assert.Nil(t, err)
+-	assert.NotNil(t, replicaTwoDB)
+-	replicaThreeDB, err := connManager.GetResource(replicasDSN[2], func() (io.Closer, error) { return sql.Open(mysqlDriverName, replicasDSN[2]) })
+-	assert.Nil(t, err)
+-	assert.NotNil(t, replicaThreeDB)
+-
+-	sc := &commonSqlConn{}
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, nil)
+-
+-	ctx := context.Background()
+-	db, err := sc.connProv(ctx)
+-	assert.Nil(t, err)
+-	assert.Equal(t, primaryDB, db)
+-
+-	ctx = WithWrite(ctx)
+-	db, err = sc.connProv(ctx)
+-	assert.Nil(t, err)
+-	assert.Equal(t, primaryDB, db)
+-
+-	ctx = WithReadPrimary(ctx)
+-	db, err = sc.connProv(ctx)
+-	assert.Nil(t, err)
+-	assert.Equal(t, primaryDB, db)
+-
+-	// no mode set, should return primary
+-	ctx = context.Background()
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, replicasDSN)
+-	db, err = sc.connProv(ctx)
+-	assert.Nil(t, err)
+-	assert.Equal(t, primaryDB, db)
+-
+-	ctx = WithReadReplica(ctx)
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, []string{replicasDSN[0]})
+-	db, err = sc.connProv(ctx)
+-	assert.Nil(t, err)
+-	assert.Equal(t, replicaOneDB, db)
+-
+-	// default policy is round-robin
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRoundRobin, replicasDSN)
+-	replicas := []io.Closer{replicaOneDB, replicaTwoDB, replicaThreeDB}
+-	for i := 0; i < len(replicasDSN); i++ {
+-		db, err = sc.connProv(ctx)
+-		assert.Nil(t, err)
+-		assert.Equal(t, replicas[i], db)
+-	}
+-
+-	// random policy
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, policyRandom, replicasDSN)
+-	for i := 0; i < len(replicasDSN); i++ {
+-		db, err = sc.connProv(ctx)
+-		assert.Nil(t, err)
+-		assert.Contains(t, replicas, db)
+-	}
+-
+-	// unknown policy
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, "unknown", replicasDSN)
+-	_, err = sc.connProv(ctx)
+-	assert.NotNil(t, err)
+-
+-	// empty policy transforms to round-robin
+-	sc.connProv = getConnProvider(sc, mysqlDriverName, primaryDSN, "", replicasDSN)
+-	for i := 0; i < len(replicasDSN); i++ {
+-		db, err = sc.connProv(ctx)
+-		assert.Nil(t, err)
+-		assert.Equal(t, replicas[i], db)
+-	}
+-}
+-
+ func buildConn() (mock sqlmock.Sqlmock, err error) {
+ 	_, err = connManager.GetResource(mockedDatasource, func() (io.Closer, error) {
+ 		var db *sql.DB
+diff --git a/core/stores/sqlx/tx_test.go b/core/stores/sqlx/tx_test.go
+index 3a2de138be4f2294ea3593241596524f7ca74b9c..a7c87f1a4bcaf39c5163ee744ba183837e03af9c 100644
+--- a/core/stores/sqlx/tx_test.go
++++ b/core/stores/sqlx/tx_test.go
+@@ -117,7 +117,7 @@ func TestTxExceptions(t *testing.T) {
+ 
+ 	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+ 		conn := &commonSqlConn{
+-			connProv: func(ctx context.Context) (*sql.DB, error) {
++			connProv: func() (*sql.DB, error) {
+ 				return nil, errors.New("foo")
+ 			},
+ 			beginTx: begin,
+diff --git a/gateway/server_test.go b/gateway/server_test.go
+index 7eff9eb4758cb6f487db53cd6e7560b4f9f9b140..80c7693c098db09b7eb79a6f7f630d6e4db9b04e 100644
+--- a/gateway/server_test.go
++++ b/gateway/server_test.go
+@@ -325,50 +325,3 @@ type badResponseWriter struct {
+ func (w *badResponseWriter) Write([]byte) (int, error) {
+ 	return 0, errors.New("bad writer")
+ }
+-
+-func TestWithMiddleware(t *testing.T) {
+-	var callOrder []string
+-
+-	firstMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
+-		return func(w http.ResponseWriter, r *http.Request) {
+-			callOrder = append(callOrder, "first-start")
+-			w.Header().Set("X-First-Middleware", "called")
+-			next(w, r)
+-			callOrder = append(callOrder, "first-end")
+-		}
+-	}
+-
+-	secondMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
+-		return func(w http.ResponseWriter, r *http.Request) {
+-			callOrder = append(callOrder, "second-start")
+-			w.Header().Set("X-Second-Middleware", "called")
+-			next(w, r)
+-			callOrder = append(callOrder, "second-end")
+-		}
+-	}
+-
+-	var c GatewayConf
+-	err := conf.FillDefault(&c)
+-	assert.Nil(t, err)
+-	// Test multiple middlewares in one call
+-	server1 := MustNewServer(c, WithMiddleware(firstMiddleware, secondMiddleware))
+-	assert.Len(t, server1.middlewares, 2, "Should have 2 middlewares from one call")
+-	// Test multiple middleware calls
+-	server2 := MustNewServer(c, WithMiddleware(firstMiddleware), WithMiddleware(secondMiddleware))
+-	assert.Len(t, server2.middlewares, 2, "Should have 2 middlewares from separate calls")
+-	// Test execution order (onion model)
+-	finalHandler := func(w http.ResponseWriter, r *http.Request) {
+-		callOrder = append(callOrder, "handler")
+-		w.WriteHeader(http.StatusOK)
+-	}
+-
+-	testHandler := server1.buildChainHandler(finalHandler)
+-	w := httptest.NewRecorder()
+-	r := httptest.NewRequest("GET", "/test", nil)
+-	testHandler(w, r)
+-
+-	expectedOrder := []string{"first-start", "second-start", "handler", "second-end", "first-end"}
+-	assert.Equal(t, expectedOrder, callOrder, "Middleware execution should follow onion model")
+-	assert.Equal(t, "called", w.Header().Get("X-First-Middleware"))
+-	assert.Equal(t, "called", w.Header().Get("X-Second-Middleware"))
+-}
+diff --git a/rest/engine_test.go b/rest/engine_test.go
+index 0a9aadb8e901199cc0e83755c2531de9c4ebe66a..e7a08eb4379a5206634773d0aa1f4c4a201a247e 100644
+--- a/rest/engine_test.go
++++ b/rest/engine_test.go
+@@ -73,17 +73,7 @@ Verbose: true
+ 				Path:    "/",
+ 				Handler: func(w http.ResponseWriter, r *http.Request) {},
+ 			}},
+-			timeout: ptrOfDuration(time.Minute),
+-		},
+-		{
+-			jwt:       jwtSetting{},
+-			signature: signatureSetting{},
+-			routes: []Route{{
+-				Method:  http.MethodGet,
+-				Path:    "/",
+-				Handler: func(w http.ResponseWriter, r *http.Request) {},
+-			}},
+-			timeout: ptrOfDuration(0),
++			timeout: time.Minute,
+ 		},
+ 		{
+ 			priority:  true,
+@@ -94,7 +84,7 @@ Verbose: true
+ 				Path:    "/",
+ 				Handler: func(w http.ResponseWriter, r *http.Request) {},
+ 			}},
+-			timeout: ptrOfDuration(time.Second),
++			timeout: time.Second,
+ 		},
+ 		{
+ 			priority: true,
+@@ -237,12 +227,8 @@ Verbose: true
+ 				}))
+ 
+ 				timeout := time.Second * 3
+-				if route.timeout != nil {
+-					if *route.timeout == 0 {
+-						timeout = 0
+-					} else if *route.timeout > timeout {
+-						timeout = *route.timeout
+-					}
++				if route.timeout > timeout {
++					timeout = route.timeout
+ 				}
+ 				assert.Equal(t, timeout, ng.timeout)
+ 			})
+@@ -250,69 +236,10 @@ Verbose: true
+ 	}
+ }
+ 
+-func TestNewEngine_unsignedCallback(t *testing.T) {
+-	priKeyfile, err := fs.TempFilenameWithText(priKey)
+-	assert.Nil(t, err)
+-	defer os.Remove(priKeyfile)
+-
+-	yaml := `Name: foo
+-Host: localhost
+-Port: 0
+-Middlewares:
+-  Log: false
+-`
+-	route := featuredRoutes{
+-		priority: true,
+-		jwt: jwtSetting{
+-			enabled: true,
+-		},
+-		signature: signatureSetting{
+-			enabled: true,
+-			SignatureConf: SignatureConf{
+-				Strict: true,
+-				PrivateKeys: []PrivateKeyConf{
+-					{
+-						Fingerprint: "a",
+-						KeyFile:     priKeyfile,
+-					},
+-				},
+-			},
+-		},
+-		routes: []Route{{
+-			Method:  http.MethodGet,
+-			Path:    "/",
+-			Handler: func(w http.ResponseWriter, r *http.Request) {},
+-		}},
+-	}
+-
+-	var index int32
+-	t.Run(fmt.Sprintf("%s-%v", yaml, route.routes), func(t *testing.T) {
+-		var cnf RestConf
+-		assert.Nil(t, conf.LoadFromYamlBytes([]byte(yaml), &cnf))
+-		ng := newEngine(cnf)
+-		if atomic.AddInt32(&index, 1)%2 == 0 {
+-			ng.setUnsignedCallback(func(w http.ResponseWriter, r *http.Request,
+-				next http.Handler, strict bool, code int) {
+-			})
+-		}
+-		ng.addRoutes(route)
+-		ng.use(func(next http.HandlerFunc) http.HandlerFunc {
+-			return func(w http.ResponseWriter, r *http.Request) {
+-				next.ServeHTTP(w, r)
+-			}
+-		})
+-
+-		assert.NotNil(t, ng.start(mockedRouter{}, func(svr *http.Server) {
+-		}))
+-
+-		assert.Equal(t, time.Duration(time.Second*3), ng.timeout)
+-	})
+-}
+-
+ func TestEngine_checkedTimeout(t *testing.T) {
+ 	tests := []struct {
+ 		name    string
+-		timeout *time.Duration
++		timeout time.Duration
+ 		expect  time.Duration
+ 	}{
+ 		{
+@@ -321,17 +248,17 @@ func TestEngine_checkedTimeout(t *testing.T) {
+ 		},
+ 		{
+ 			name:    "less",
+-			timeout: ptrOfDuration(time.Millisecond * 500),
++			timeout: time.Millisecond * 500,
+ 			expect:  time.Millisecond * 500,
+ 		},
+ 		{
+ 			name:    "equal",
+-			timeout: ptrOfDuration(time.Second),
++			timeout: time.Second,
+ 			expect:  time.Second,
+ 		},
+ 		{
+ 			name:    "more",
+-			timeout: ptrOfDuration(time.Millisecond * 1500),
++			timeout: time.Millisecond * 1500,
+ 			expect:  time.Millisecond * 1500,
+ 		},
+ 	}
+@@ -474,7 +401,7 @@ func TestEngine_withTimeout(t *testing.T) {
+ 				},
+ 			})
+ 			svr := &http.Server{}
+-			ng.withNetworkTimeout()(svr)
++			ng.withTimeout()(svr)
+ 
+ 			assert.Equal(t, time.Duration(test.timeout)*time.Millisecond*4/5, svr.ReadTimeout)
+ 			assert.Equal(t, time.Duration(0), svr.ReadHeaderTimeout)
+@@ -524,7 +451,7 @@ func TestEngine_ReadWriteTimeout(t *testing.T) {
+ 				},
+ 			})
+ 			svr := &http.Server{}
+-			ng.withNetworkTimeout()(svr)
++			ng.withTimeout()(svr)
+ 
+ 			assert.Equal(t, time.Duration(0), svr.ReadHeaderTimeout)
+ 			assert.Equal(t, time.Duration(0), svr.IdleTimeout)
+@@ -578,7 +505,3 @@ func (m mockedRouter) SetNotFoundHandler(_ http.Handler) {
+ 
+ func (m mockedRouter) SetNotAllowedHandler(_ http.Handler) {
+ }
+-
+-func ptrOfDuration(d time.Duration) *time.Duration {
+-	return &d
+-}
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index 85afcfe84053a621afe8badf34d3e8f2a840d9cd..b6f81e1d993e22000ba26065d85849e1821379c2 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -10,7 +10,6 @@ import (
+ 	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/logx/logtest"
+ 	"github.com/zeromicro/go-zero/rest/internal"
+ 	"github.com/zeromicro/go-zero/rest/internal/response"
+ )
+@@ -87,26 +86,6 @@ func TestLogHandlerSlow(t *testing.T) {
+ 		assert.Equal(t, http.StatusOK, resp.Code)
+ 	}
+ }
+-
+-func TestDetailedLogHandler_LargeBody(t *testing.T) {
+-	lbuf := logtest.NewCollector(t)
+-
+-	var buf bytes.Buffer
+-	for i := 0; i < limitDetailedBodyBytes<<2; i++ {
+-		buf.WriteByte('a')
+-	}
+-
+-	req := httptest.NewRequest(http.MethodPost, "http://localhost", &buf)
+-	h := DetailedLogHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		io.Copy(io.Discard, r.Body)
+-	}))
+-	resp := httptest.NewRecorder()
+-	h.ServeHTTP(resp, req)
+-
+-	// extra 200 for the length of POST request headers
+-	assert.True(t, len(lbuf.Content()) < limitDetailedBodyBytes+200)
+-}
+-
+ func TestDetailedLogHandler_Hijack(t *testing.T) {
+ 	resp := httptest.NewRecorder()
+ 	writer := &detailLoggedResponseWriter{
+@@ -132,7 +111,6 @@ func TestDetailedLogHandler_Hijack(t *testing.T) {
+ 		_, _, _ = writer.Hijack()
+ 	})
+ }
+-
+ func TestSetSlowThreshold(t *testing.T) {
+ 	assert.Equal(t, defaultSlowThreshold, slowThreshold.Load())
+ 	SetSlowThreshold(time.Second)
+diff --git a/rest/internal/response/withcoderesponsewriter_test.go b/rest/internal/response/withcoderesponsewriter_test.go
+index c721117661b1838038e9824273e9c9aa968e9712..00485d3d985ea7bf079ca3a6effadbafc4089f42 100644
+--- a/rest/internal/response/withcoderesponsewriter_test.go
++++ b/rest/internal/response/withcoderesponsewriter_test.go
+@@ -46,15 +46,3 @@ func TestWithCodeResponseWriter_Hijack(t *testing.T) {
+ 		writer.Hijack()
+ 	})
+ }
+-
+-func TestWithCodeResponseWriter_Unwrap(t *testing.T) {
+-	resp := httptest.NewRecorder()
+-	writer := NewWithCodeResponseWriter(resp)
+-	unwrapped := writer.Unwrap()
+-	assert.Equal(t, resp, unwrapped)
+-
+-	// Test with a nested WithCodeResponseWriter
+-	nestedWriter := NewWithCodeResponseWriter(writer)
+-	unwrappedNested := nestedWriter.Unwrap()
+-	assert.Equal(t, resp, unwrappedNested)
+-}
+diff --git a/rest/server_test.go b/rest/server_test.go
+index a0b0fbe1f765a917797bdb760de452a0c110deaa..9a513ddc30455a12782850d6200e6eb56f047330 100644
+--- a/rest/server_test.go
++++ b/rest/server_test.go
+@@ -345,7 +345,7 @@ func TestWithPriority(t *testing.T) {
+ func TestWithTimeout(t *testing.T) {
+ 	var fr featuredRoutes
+ 	WithTimeout(time.Hour)(&fr)
+-	assert.Equal(t, time.Hour, *fr.timeout)
++	assert.Equal(t, time.Hour, fr.timeout)
+ }
+ 
+ func TestWithTLSConfig(t *testing.T) {
+@@ -819,6 +819,6 @@ func TestServerEmbedFileSystem(t *testing.T) {
+ //	serve(server, w, r)
+ //	// verify the response
+ func serve(s *Server, w http.ResponseWriter, r *http.Request) {
+-	_ = s.build()
+-	s.serve(w, r)
++	s.ngin.bindRoutes(s.router)
++	s.router.ServeHTTP(w, r)
+ }
+diff --git a/rest/serverless_test.go b/rest/serverless_test.go
+deleted file mode 100644
+index c7e5a6904a02cbbd0757774fa6a40611cb1f86e0..0000000000000000000000000000000000000000
+--- a/rest/serverless_test.go
++++ /dev/null
+@@ -1,67 +0,0 @@
+-package rest
+-
+-import (
+-	"net/http"
+-	"net/http/httptest"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/conf"
+-	"github.com/zeromicro/go-zero/core/logx/logtest"
+-)
+-
+-func TestNewServerless(t *testing.T) {
+-	logtest.Discard(t)
+-
+-	const configYaml = `
+-Name: foo
+-Host: localhost
+-Port: 0
+-`
+-	var cnf RestConf
+-	assert.Nil(t, conf.LoadFromYamlBytes([]byte(configYaml), &cnf))
+-
+-	svr, err := NewServer(cnf)
+-	assert.NoError(t, err)
+-
+-	svr.AddRoute(Route{
+-		Method: http.MethodGet,
+-		Path:   "/",
+-		Handler: func(w http.ResponseWriter, r *http.Request) {
+-			w.Write([]byte("Hello World"))
+-		},
+-	})
+-
+-	serverless, err := NewServerless(svr)
+-	assert.NoError(t, err)
+-
+-	w := httptest.NewRecorder()
+-	r := httptest.NewRequest(http.MethodGet, "/", nil)
+-	serverless.Serve(w, r)
+-	assert.Equal(t, http.StatusOK, w.Code)
+-	assert.Equal(t, "Hello World", w.Body.String())
+-}
+-
+-func TestNewServerlessWithError(t *testing.T) {
+-	logtest.Discard(t)
+-
+-	const configYaml = `
+-Name: foo
+-Host: localhost
+-Port: 0
+-`
+-	var cnf RestConf
+-	assert.Nil(t, conf.LoadFromYamlBytes([]byte(configYaml), &cnf))
+-
+-	svr, err := NewServer(cnf)
+-	assert.NoError(t, err)
+-
+-	svr.AddRoute(Route{
+-		Method:  http.MethodGet,
+-		Path:    "notstartwith/",
+-		Handler: nil,
+-	})
+-
+-	_, err = NewServerless(svr)
+-	assert.Error(t, err)
+-}
+diff --git a/tools/goctl/api/spec/tags_test.go b/tools/goctl/api/spec/tags_test.go
+deleted file mode 100644
+index 417b1f6218ca6f63889b3e5ad30e9aaedca41475..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/spec/tags_test.go
++++ /dev/null
+@@ -1,68 +0,0 @@
+-package spec
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestTags_Get(t *testing.T) {
+-	tags := &Tags{
+-		tags: []*Tag{
+-			{Key: "json", Name: "foo", Options: []string{"omitempty"}},
+-			{Key: "xml", Name: "bar", Options: nil},
+-		},
+-	}
+-
+-	tag, err := tags.Get("json")
+-	assert.NoError(t, err)
+-	assert.NotNil(t, tag)
+-	assert.Equal(t, "json", tag.Key)
+-	assert.Equal(t, "foo", tag.Name)
+-
+-	_, err = tags.Get("yaml")
+-	assert.Error(t, err)
+-
+-	var nilTags *Tags
+-	_, err = nilTags.Get("json")
+-	assert.Error(t, err)
+-}
+-
+-func TestTags_Keys(t *testing.T) {
+-	tags := &Tags{
+-		tags: []*Tag{
+-			{Key: "json", Name: "foo", Options: []string{"omitempty"}},
+-			{Key: "xml", Name: "bar", Options: nil},
+-		},
+-	}
+-
+-	keys := tags.Keys()
+-	expected := []string{"json", "xml"}
+-	assert.Equal(t, expected, keys)
+-
+-	var nilTags *Tags
+-	nilKeys := nilTags.Keys()
+-	assert.Empty(t, nilKeys)
+-}
+-
+-func TestTags_Tags(t *testing.T) {
+-	tags := &Tags{
+-		tags: []*Tag{
+-			{Key: "json", Name: "foo", Options: []string{"omitempty"}},
+-			{Key: "xml", Name: "bar", Options: nil},
+-		},
+-	}
+-
+-	result := tags.Tags()
+-	assert.Len(t, result, 2)
+-	assert.Equal(t, "json", result[0].Key)
+-	assert.Equal(t, "foo", result[0].Name)
+-	assert.Equal(t, []string{"omitempty"}, result[0].Options)
+-	assert.Equal(t, "xml", result[1].Key)
+-	assert.Equal(t, "bar", result[1].Name)
+-	assert.Nil(t, result[1].Options)
+-
+-	var nilTags *Tags
+-	nilResult := nilTags.Tags()
+-	assert.Empty(t, nilResult)
+-}
+diff --git a/tools/goctl/api/swagger/parameter_test.go b/tools/goctl/api/swagger/parameter_test.go
+deleted file mode 100644
+index 6c8785508ba81c0a2b90bccd7dda2232c09202b9..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/swagger/parameter_test.go
++++ /dev/null
+@@ -1,91 +0,0 @@
+-package swagger
+-
+-import (
+-	"net/http"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+-)
+-
+-func TestIsPostJson(t *testing.T) {
+-	tests := []struct {
+-		name     string
+-		method   string
+-		hasJson  bool
+-		expected bool
+-	}{
+-		{"POST with JSON", http.MethodPost, true, true},
+-		{"POST without JSON", http.MethodPost, false, false},
+-		{"GET with JSON", http.MethodGet, true, false},
+-		{"PUT with JSON", http.MethodPut, true, false},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			testStruct := createTestStruct("TestStruct", tt.hasJson)
+-			_, result := isPostJson(testingContext(t), tt.method, testStruct)
+-			assert.Equal(t, tt.expected, result)
+-		})
+-	}
+-}
+-
+-func TestParametersFromType(t *testing.T) {
+-	tests := []struct {
+-		name           string
+-		method         string
+-		useDefinitions bool
+-		hasJson        bool
+-		expectedCount  int
+-		expectedBody   bool
+-	}{
+-		{"POST JSON with definitions", http.MethodPost, true, true, 1, true},
+-		{"POST JSON without definitions", http.MethodPost, false, true, 1, true},
+-		{"GET with form", http.MethodGet, false, false, 1, false},
+-		{"POST with form", http.MethodPost, false, false, 1, false},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			ctx := Context{UseDefinitions: tt.useDefinitions}
+-			testStruct := createTestStruct("TestStruct", tt.hasJson)
+-			params := parametersFromType(ctx, tt.method, testStruct)
+-
+-			assert.Equal(t, tt.expectedCount, len(params))
+-			if tt.expectedBody {
+-				assert.Equal(t, paramsInBody, params[0].In)
+-			} else if len(params) > 0 {
+-				assert.NotEqual(t, paramsInBody, params[0].In)
+-			}
+-		})
+-	}
+-}
+-
+-func TestParametersFromType_EdgeCases(t *testing.T) {
+-	ctx := testingContext(t)
+-
+-	params := parametersFromType(ctx, http.MethodPost, nil)
+-	assert.Empty(t, params)
+-
+-	primitiveType := apiSpec.PrimitiveType{RawName: "string"}
+-	params = parametersFromType(ctx, http.MethodPost, primitiveType)
+-	assert.Empty(t, params)
+-}
+-
+-func createTestStruct(name string, hasJson bool) apiSpec.DefineStruct {
+-	tag := `form:"username"`
+-	if hasJson {
+-		tag = `json:"username"`
+-	}
+-
+-	return apiSpec.DefineStruct{
+-		RawName: name,
+-		Members: []apiSpec.Member{
+-			{
+-				Name: "Username",
+-				Type: apiSpec.PrimitiveType{RawName: "string"},
+-				Tag:  tag,
+-			},
+-		},
+-	}
+-}
+diff --git a/zrpc/internal/serverinterceptors/statinterceptor_test.go b/zrpc/internal/serverinterceptors/statinterceptor_test.go
+index 1fa4f23257036684b437c1279291fc74a4432496..322446e26993b7574f0996d264cf89abe5b29cef 100644
+--- a/zrpc/internal/serverinterceptors/statinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/statinterceptor_test.go
+@@ -88,7 +88,7 @@ func TestLogDuration(t *testing.T) {
+ 
+ 			assert.NotPanics(t, func() {
+ 				logDuration(test.ctx, "foo", test.req, test.duration,
+-					collection.NewSet[string](), test.durationThreshold)
++					collection.NewSet(), test.durationThreshold)
+ 			})
+ 		})
+ 	}
+@@ -150,7 +150,7 @@ func TestLogDurationWithoutContent(t *testing.T) {
+ 
+ 			assert.NotPanics(t, func() {
+ 				logDuration(test.ctx, "foo", test.req, test.duration,
+-					collection.NewSet[string](), test.durationThreshold)
++					collection.NewSet(), test.durationThreshold)
+ 			})
+ 		})
+ 	}
+@@ -206,10 +206,9 @@ func Test_shouldLogContent(t *testing.T) {
+ 			t.Cleanup(func() {
+ 				ignoreContentMethods = sync.Map{}
+ 			})
+-			set := collection.NewSet[string]()
+-			set.Add(tt.args.staticNotLoggingContentMethods...)
+-			assert.Equalf(t, tt.want, shouldLogContent(tt.args.method, set),
+-				"shouldLogContent(%v, %v)", tt.args.method, tt.args.staticNotLoggingContentMethods)
++			set := collection.NewSet()
++			set.AddStr(tt.args.staticNotLoggingContentMethods...)
++			assert.Equalf(t, tt.want, shouldLogContent(tt.args.method, set), "shouldLogContent(%v, %v)", tt.args.method, tt.args.staticNotLoggingContentMethods)
+ 		})
+ 	}
+ }

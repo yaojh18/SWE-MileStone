@@ -1,0 +1,910 @@
+diff --git a/res/css/_components.pcss b/res/css/_components.pcss
+index 6b68c3312acba4df6e7a3b899aee028ff4e09ee9..3d72e338606f1db2b4a1b758b8bbfbff0b48648e 100644
+--- a/res/css/_components.pcss
++++ b/res/css/_components.pcss
+@@ -269,6 +269,7 @@
+ @import "./views/right_panel/_VerificationPanel.pcss";
+ @import "./views/right_panel/_WidgetCard.pcss";
+ @import "./views/room_settings/_AliasSettings.pcss";
++@import "./views/rooms/RoomListPanel/_EmptyRoomList.pcss";
+ @import "./views/rooms/RoomListPanel/_RoomList.pcss";
+ @import "./views/rooms/RoomListPanel/_RoomListHeaderView.pcss";
+ @import "./views/rooms/RoomListPanel/_RoomListItemMenuView.pcss";
+diff --git a/res/css/views/rooms/RoomListPanel/_EmptyRoomList.pcss b/res/css/views/rooms/RoomListPanel/_EmptyRoomList.pcss
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0fbfdaea716e2ba41eafdcea0a61bf682a47464
+--- /dev/null
++++ b/res/css/views/rooms/RoomListPanel/_EmptyRoomList.pcss
+@@ -0,0 +1,33 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++.mx_EmptyRoomList_GenericPlaceholder {
++    align-self: center;
++    /** It should take 2/3 of the width **/
++    width: 66%;
++    /** It should be positioned at 1/3 of the height **/
++    padding-top: 33%;
++
++    .mx_EmptyRoomList_GenericPlaceholder_title {
++        font: var(--cpd-font-body-lg-semibold);
++        text-align: center;
++    }
++
++    .mx_EmptyRoomList_GenericPlaceholder_description {
++        font: var(--cpd-font-body-sm-regular);
++        color: var(--cpd-color-text-secondary);
++        text-align: center;
++    }
++
++    .mx_EmptyRoomList_DefaultPlaceholder {
++        margin-top: var(--cpd-space-4x);
++    }
++
++    button {
++        width: 100%;
++    }
++}
+diff --git a/res/css/views/rooms/RoomListPanel/_RoomListItemView.pcss b/res/css/views/rooms/RoomListPanel/_RoomListItemView.pcss
+index e526fea1ecce39790def3fdf840bd634850681c3..1594781dbde4bd4a6ad6acbd71edf78b5ea293de 100644
+--- a/res/css/views/rooms/RoomListPanel/_RoomListItemView.pcss
++++ b/res/css/views/rooms/RoomListPanel/_RoomListItemView.pcss
+@@ -20,6 +20,10 @@
+ 
+     &:hover {
+         background-color: var(--cpd-color-bg-action-secondary-hovered);
++
++        .mx_RoomListItemView_content {
++            padding-right: var(--cpd-space-1-5x);
++        }
+     }
+ 
+     .mx_RoomListItemView_container {
+@@ -28,7 +32,6 @@
+         height: 100%;
+ 
+         .mx_RoomListItemView_content {
+-            padding-right: var(--cpd-space-3x);
+             height: 100%;
+             flex: 1;
+             /* The border is only under the room name and the future hover menu  */
+@@ -47,8 +50,24 @@
+ 
+ .mx_RoomListItemView_menu_open {
+     background-color: var(--cpd-color-bg-action-secondary-hovered);
++
++    .mx_RoomListItemView_content {
++        padding-right: var(--cpd-space-1-5x);
++    }
+ }
+ 
+ .mx_RoomListItemView_selected {
+     background-color: var(--cpd-color-bg-action-secondary-pressed);
+ }
++
++.mx_RoomListItemView_notification_decoration {
++    .mx_RoomListItemView_content {
++        padding-right: var(--cpd-space-2x);
++    }
++}
++
++.mx_RoomListItemView_empty {
++    .mx_RoomListItemView_content {
++        padding-right: var(--cpd-space-3x);
++    }
++}
+diff --git a/src/components/viewmodels/roomlist/RoomListHeaderViewModel.tsx b/src/components/viewmodels/roomlist/RoomListHeaderViewModel.tsx
+index 9aa63451f3bbfac89f8f645d7cf144da6bfd9f72..8a1fdb1fe7dc96b175ef2f9849991cea91896ab7 100644
+--- a/src/components/viewmodels/roomlist/RoomListHeaderViewModel.tsx
++++ b/src/components/viewmodels/roomlist/RoomListHeaderViewModel.tsx
+@@ -6,10 +6,8 @@
+  */
+ 
+ import { useCallback } from "react";
+-import { EventTimeline, EventType, JoinRule, type Room, RoomEvent, RoomType } from "matrix-js-sdk/src/matrix";
++import { JoinRule, type Room, RoomEvent, RoomType } from "matrix-js-sdk/src/matrix";
+ 
+-import { shouldShowComponent } from "../../../customisations/helpers/UIComponents";
+-import { UIComponent } from "../../../settings/UIFeature";
+ import { useFeatureEnabled } from "../../../hooks/useSettings";
+ import defaultDispatcher from "../../../dispatcher/dispatcher";
+ import PosthogTrackers from "../../../PosthogTrackers";
+@@ -32,6 +30,7 @@ import {
+ } from "../../../utils/space";
+ import { useMatrixClientContext } from "../../../contexts/MatrixClientContext";
+ import type { ViewRoomPayload } from "../../../dispatcher/payloads/ViewRoomPayload";
++import { createRoom, hasCreateRoomRights } from "./utils";
+ 
+ /**
+  * Hook to get the active space and its title.
+@@ -128,14 +127,7 @@ export function useRoomListHeaderViewModel(): RoomListHeaderViewState {
+     const { activeSpace, title } = useSpace();
+     const isSpaceRoom = Boolean(activeSpace);
+ 
+-    const canCreateRoomInSpace = Boolean(
+-        activeSpace
+-            ?.getLiveTimeline()
+-            .getState(EventTimeline.FORWARDS)
+-            ?.maySendStateEvent(EventType.RoomAvatar, matrixClient.getSafeUserId()),
+-    );
+-    // If we are in a space, we check canCreateRoomInSpace
+-    const canCreateRoom = shouldShowComponent(UIComponent.CreateRooms) && (!isSpaceRoom || canCreateRoomInSpace);
++    const canCreateRoom = hasCreateRoomRights(matrixClient, activeSpace);
+     const canCreateVideoRoom = useFeatureEnabled("feature_video_rooms");
+     const displayComposeMenu = canCreateRoom || canCreateVideoRoom;
+     const displaySpaceMenu = isSpaceRoom;
+@@ -151,13 +143,9 @@ export function useRoomListHeaderViewModel(): RoomListHeaderViewState {
+         PosthogTrackers.trackInteraction("WebRoomListHeaderPlusMenuCreateChatItem", e);
+     }, []);
+ 
+-    const createRoom = useCallback(
++    const createRoomMemoized = useCallback(
+         (e: Event) => {
+-            if (activeSpace) {
+-                showCreateNewRoom(activeSpace);
+-            } else {
+-                defaultDispatcher.fire(Action.CreateRoom);
+-            }
++            createRoom(activeSpace);
+             PosthogTrackers.trackInteraction("WebRoomListHeaderPlusMenuCreateRoomItem", e);
+         },
+         [activeSpace],
+@@ -213,7 +201,7 @@ export function useRoomListHeaderViewModel(): RoomListHeaderViewState {
+         canInviteInSpace,
+         canAccessSpaceSettings,
+         createChatRoom,
+-        createRoom,
++        createRoom: createRoomMemoized,
+         createVideoRoom,
+         openSpaceHome,
+         inviteInSpace,
+diff --git a/src/components/viewmodels/roomlist/RoomListItemViewModel.tsx b/src/components/viewmodels/roomlist/RoomListItemViewModel.tsx
+index 9e38e6e8d89c15877a597b89adcf6beeb66595a1..1d5d9aba11cd05a4ec4ef34268552388bac24e44 100644
+--- a/src/components/viewmodels/roomlist/RoomListItemViewModel.tsx
++++ b/src/components/viewmodels/roomlist/RoomListItemViewModel.tsx
+@@ -5,13 +5,16 @@
+  * Please see LICENSE files in the repository root for full details.
+  */
+ 
+-import { useCallback } from "react";
++import { useCallback, useMemo } from "react";
+ import { type Room } from "matrix-js-sdk/src/matrix";
+ 
+ import dispatcher from "../../../dispatcher/dispatcher";
+ import type { ViewRoomPayload } from "../../../dispatcher/payloads/ViewRoomPayload";
+ import { Action } from "../../../dispatcher/actions";
+ import { hasAccessToOptionsMenu } from "./utils";
++import { _t } from "../../../languageHandler";
++import { type RoomNotificationState } from "../../../stores/notifications/RoomNotificationState";
++import { RoomNotificationStateStore } from "../../../stores/notifications/RoomNotificationStateStore";
+ 
+ export interface RoomListItemViewState {
+     /**
+@@ -22,6 +25,14 @@ export interface RoomListItemViewState {
+      * Open the room having given roomId.
+      */
+     openRoom: () => void;
++    /**
++     * The a11y label for the room list item.
++     */
++    a11yLabel: string;
++    /**
++     * The notification state of the room.
++     */
++    notificationState: RoomNotificationState;
+ }
+ 
+ /**
+@@ -31,6 +42,8 @@ export interface RoomListItemViewState {
+ export function useRoomListItemViewModel(room: Room): RoomListItemViewState {
+     // incoming: Check notification menu rights
+     const showHoverMenu = hasAccessToOptionsMenu(room);
++    const notificationState = useMemo(() => RoomNotificationStateStore.instance.getRoomState(room), [room]);
++    const a11yLabel = getA11yLabel(room, notificationState);
+ 
+     // Actions
+ 
+@@ -43,7 +56,38 @@ export function useRoomListItemViewModel(room: Room): RoomListItemViewState {
+     }, [room]);
+ 
+     return {
++        notificationState,
+         showHoverMenu,
+         openRoom,
++        a11yLabel,
+     };
+ }
++
++/**
++ * Get the a11y label for the room list item
++ * @param room
++ * @param notificationState
++ */
++function getA11yLabel(room: Room, notificationState: RoomNotificationState): string {
++    if (notificationState.isUnsetMessage) {
++        return _t("a11y|room_messsage_not_sent", {
++            roomName: room.name,
++        });
++    } else if (notificationState.invited) {
++        return _t("a11y|room_n_unread_invite", {
++            roomName: room.name,
++        });
++    } else if (notificationState.isMention) {
++        return _t("a11y|room_n_unread_messages_mentions", {
++            roomName: room.name,
++            count: notificationState.count,
++        });
++    } else if (notificationState.hasUnreadCount) {
++        return _t("a11y|room_n_unread_messages", {
++            roomName: room.name,
++            count: notificationState.count,
++        });
++    } else {
++        return _t("room_list|room|open_room", { roomName: room.name });
++    }
++}
+diff --git a/src/components/viewmodels/roomlist/RoomListViewModel.tsx b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+index 6c46ca6d38320dcc7fc7b9fc2818f86bc8fb6762..217eaefbd985ebce5be5eb234f49764ea000e174 100644
+--- a/src/components/viewmodels/roomlist/RoomListViewModel.tsx
++++ b/src/components/viewmodels/roomlist/RoomListViewModel.tsx
+@@ -5,22 +5,56 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
++import { useCallback } from "react";
++
+ import type { Room } from "matrix-js-sdk/src/matrix";
+ import { type PrimaryFilter, type SecondaryFilters, useFilteredRooms } from "./useFilteredRooms";
+ import { type SortOption, useSorter } from "./useSorter";
+ import { useMessagePreviewToggle } from "./useMessagePreviewToggle";
++import { createRoom as createRoomFunc, hasCreateRoomRights } from "./utils";
++import { useEventEmitterState } from "../../../hooks/useEventEmitter";
++import { UPDATE_SELECTED_SPACE } from "../../../stores/spaces";
++import SpaceStore from "../../../stores/spaces/SpaceStore";
++import dispatcher from "../../../dispatcher/dispatcher";
++import { Action } from "../../../dispatcher/actions";
++import { useMatrixClientContext } from "../../../contexts/MatrixClientContext";
++import { useStickyRoomList } from "./useStickyRoomList";
+ 
+ export interface RoomListViewState {
+     /**
+      * A list of rooms to be displayed in the left panel.
+      */
+     rooms: Room[];
++
++    /**
++     * Create a chat room
++     * @param e - The click event
++     */
++    createChatRoom: () => void;
++
++    /**
++     * Whether the user can create a room in the current space
++     */
++    canCreateRoom: boolean;
++
++    /**
++     * Create a room
++     * @param e - The click event
++     */
++    createRoom: () => void;
++
+     /**
+      * A list of objects that provide the view enough information
+      * to render primary room filters.
+      */
+     primaryFilters: PrimaryFilter[];
+ 
++    /**
++     * The currently active primary filter.
++     * If no primary filter is active, this will be undefined.
++     */
++    activePrimaryFilter?: PrimaryFilter;
++
+     /**
+      * A function to activate a given secondary filter.
+      */
+@@ -50,6 +84,11 @@ export interface RoomListViewState {
+      * A function to turn on/off message previews.
+      */
+     toggleMessagePreview: () => void;
++
++    /**
++     * The index of the active room in the room list.
++     */
++    activeIndex: number | undefined;
+ }
+ 
+ /**
+@@ -57,18 +96,42 @@ export interface RoomListViewState {
+  * @see {@link RoomListViewState} for more information about what this view model returns.
+  */
+ export function useRoomListViewModel(): RoomListViewState {
+-    const { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter } = useFilteredRooms();
++    const matrixClient = useMatrixClientContext();
++    const {
++        primaryFilters,
++        activePrimaryFilter,
++        rooms: filteredRooms,
++        activateSecondaryFilter,
++        activeSecondaryFilter,
++    } = useFilteredRooms();
++    const { activeIndex, rooms } = useStickyRoomList(filteredRooms);
++
++    const currentSpace = useEventEmitterState<Room | null>(
++        SpaceStore.instance,
++        UPDATE_SELECTED_SPACE,
++        () => SpaceStore.instance.activeSpaceRoom,
++    );
++    const canCreateRoom = hasCreateRoomRights(matrixClient, currentSpace);
++
+     const { activeSortOption, sort } = useSorter();
+     const { shouldShowMessagePreview, toggleMessagePreview } = useMessagePreviewToggle();
+ 
++    const createChatRoom = useCallback(() => dispatcher.fire(Action.CreateChat), []);
++    const createRoom = useCallback(() => createRoomFunc(currentSpace), [currentSpace]);
++
+     return {
+         rooms,
++        canCreateRoom,
++        createRoom,
++        createChatRoom,
+         primaryFilters,
++        activePrimaryFilter,
+         activateSecondaryFilter,
+         activeSecondaryFilter,
+         activeSortOption,
+         sort,
+         shouldShowMessagePreview,
+         toggleMessagePreview,
++        activeIndex,
+     };
+ }
+diff --git a/src/components/viewmodels/roomlist/useFilteredRooms.tsx b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+index 3b78dcd16b19216d9bcae49517644ac039ae0c0c..5e1554fcdc48872586001186dcecac981f405028 100644
+--- a/src/components/viewmodels/roomlist/useFilteredRooms.tsx
++++ b/src/components/viewmodels/roomlist/useFilteredRooms.tsx
+@@ -27,6 +27,8 @@ export interface PrimaryFilter {
+     active: boolean;
+     // Text that can be used in the UI to represent this filter.
+     name: string;
++    // The key of the filter
++    key: FilterKey;
+ }
+ 
+ interface FilteredRooms {
+@@ -34,6 +36,11 @@ interface FilteredRooms {
+     rooms: Room[];
+     activateSecondaryFilter: (filter: SecondaryFilters) => void;
+     activeSecondaryFilter: SecondaryFilters;
++    /**
++     * The currently active primary filter.
++     * If no primary filter is active, this will be undefined.
++     */
++    activePrimaryFilter?: PrimaryFilter;
+ }
+ 
+ const filterKeyToNameMap: Map<FilterKey, TranslationKey> = new Map([
+@@ -164,6 +171,7 @@ export function useFilteredRooms(): FilteredRooms {
+                 },
+                 active: primaryFilter === key,
+                 name,
++                key,
+             };
+         };
+         const filters: PrimaryFilter[] = [];
+@@ -176,5 +184,7 @@ export function useFilteredRooms(): FilteredRooms {
+         return filters;
+     }, [primaryFilter, updateRoomsFromStore, secondaryFilter]);
+ 
+-    return { primaryFilters, rooms, activateSecondaryFilter, activeSecondaryFilter };
++    const activePrimaryFilter = useMemo(() => primaryFilters.find((filter) => filter.active), [primaryFilters]);
++
++    return { primaryFilters, activePrimaryFilter, rooms, activateSecondaryFilter, activeSecondaryFilter };
+ }
+diff --git a/src/components/viewmodels/roomlist/useStickyRoomList.tsx b/src/components/viewmodels/roomlist/useStickyRoomList.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..e8234d14ae098752154cf33637d50ef6bd25bb49
+--- /dev/null
++++ b/src/components/viewmodels/roomlist/useStickyRoomList.tsx
+@@ -0,0 +1,117 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import { useCallback, useEffect, useState } from "react";
++
++import { SdkContextClass } from "../../../contexts/SDKContext";
++import { useDispatcher } from "../../../hooks/useDispatcher";
++import dispatcher from "../../../dispatcher/dispatcher";
++import { Action } from "../../../dispatcher/actions";
++import type { Room } from "matrix-js-sdk/src/matrix";
++import type { Optional } from "matrix-events-sdk";
++
++function getIndexByRoomId(rooms: Room[], roomId: Optional<string>): number | undefined {
++    const index = rooms.findIndex((room) => room.roomId === roomId);
++    return index === -1 ? undefined : index;
++}
++
++function getRoomsWithStickyRoom(
++    rooms: Room[],
++    oldIndex: number | undefined,
++    newIndex: number | undefined,
++    isRoomChange: boolean,
++): { newRooms: Room[]; newIndex: number | undefined } {
++    const updated = { newIndex, newRooms: rooms };
++    if (isRoomChange) {
++        /*
++         * When opening another room, the index should obviously change.
++         */
++        return updated;
++    }
++    if (newIndex === undefined || oldIndex === undefined) {
++        /*
++         * If oldIndex is undefined, then there was no active room before.
++         * So nothing to do in regards to sticky room.
++         * Similarly, if newIndex is undefined, there's no active room anymore.
++         */
++        return updated;
++    }
++    if (newIndex === oldIndex) {
++        /*
++         * If the index hasn't changed, we have nothing to do.
++         */
++        return updated;
++    }
++    if (oldIndex > rooms.length - 1) {
++        /*
++         * If the old index falls out of the bounds of the rooms array
++         * (usually because rooms were removed), we can no longer place
++         * the active room in the same old index.
++         */
++        return updated;
++    }
++
++    /*
++     * Making the active room sticky is as simple as removing it from
++     * its new index and placing it in the old index.
++     */
++    const newRooms = [...rooms];
++    const [newRoom] = newRooms.splice(newIndex, 1);
++    newRooms.splice(oldIndex, 0, newRoom);
++
++    return { newIndex: oldIndex, newRooms };
++}
++
++interface StickyRoomListResult {
++    /**
++     * List of rooms with sticky active room.
++     */
++    rooms: Room[];
++    /**
++     * Index of the active room in the room list.
++     */
++    activeIndex: number | undefined;
++}
++
++/**
++ * - Provides a list of rooms such that the active room is sticky i.e the active room is kept
++ * in the same index even when the order of rooms in the list changes.
++ * - Provides the index of the active room.
++ * @param rooms list of rooms
++ * @see {@link StickyRoomListResult} details what this hook returns..
++ */
++export function useStickyRoomList(rooms: Room[]): StickyRoomListResult {
++    const [listState, setListState] = useState<{ index: number | undefined; roomsWithStickyRoom: Room[] }>({
++        index: undefined,
++        roomsWithStickyRoom: rooms,
++    });
++
++    const updateRoomsAndIndex = useCallback(
++        (newRoomId?: string, isRoomChange: boolean = false) => {
++            setListState((current) => {
++                const activeRoomId = newRoomId ?? SdkContextClass.instance.roomViewStore.getRoomId();
++                const newActiveIndex = getIndexByRoomId(rooms, activeRoomId);
++                const oldIndex = current.index;
++                const { newIndex, newRooms } = getRoomsWithStickyRoom(rooms, oldIndex, newActiveIndex, isRoomChange);
++                return { index: newIndex, roomsWithStickyRoom: newRooms };
++            });
++        },
++        [rooms],
++    );
++
++    // Re-calculate the index when the active room has changed.
++    useDispatcher(dispatcher, (payload) => {
++        if (payload.action === Action.ActiveRoomChanged) updateRoomsAndIndex(payload.newRoomId, true);
++    });
++
++    // Re-calculate the index when the list of rooms has changed.
++    useEffect(() => {
++        updateRoomsAndIndex();
++    }, [rooms, updateRoomsAndIndex]);
++
++    return { activeIndex: listState.index, rooms: listState.roomsWithStickyRoom };
++}
+diff --git a/src/components/viewmodels/roomlist/utils.ts b/src/components/viewmodels/roomlist/utils.ts
+index 3886d0e3b07dc213c5e957763f8b08f27a733825..6220c3b96164a5ba7f67602cf0d825316608a46a 100644
+--- a/src/components/viewmodels/roomlist/utils.ts
++++ b/src/components/viewmodels/roomlist/utils.ts
+@@ -5,11 +5,14 @@
+  * Please see LICENSE files in the repository root for full details.
+  */
+ 
+-import { type Room, KnownMembership } from "matrix-js-sdk/src/matrix";
++import { type Room, KnownMembership, EventTimeline, EventType, type MatrixClient } from "matrix-js-sdk/src/matrix";
+ 
+ import { isKnockDenied } from "../../../utils/membership";
+ import { shouldShowComponent } from "../../../customisations/helpers/UIComponents";
+ import { UIComponent } from "../../../settings/UIFeature";
++import { showCreateNewRoom } from "../../../utils/space";
++import dispatcher from "../../../dispatcher/dispatcher";
++import { Action } from "../../../dispatcher/actions";
+ 
+ /**
+  * Check if the user has access to the options menu.
+@@ -23,3 +26,33 @@ export function hasAccessToOptionsMenu(room: Room): boolean {
+             shouldShowComponent(UIComponent.RoomOptionsMenu))
+     );
+ }
++
++/**
++ * Create a room
++ * @param space - The space to create the room in
++ */
++export async function createRoom(space?: Room | null): Promise<void> {
++    if (space) {
++        await showCreateNewRoom(space);
++    } else {
++        dispatcher.fire(Action.CreateRoom);
++    }
++}
++
++/**
++ * Check if the user has the rights to create a room in the given space
++ * If the space is not provided, it will check if the user has the rights to create a room in general
++ * @param matrixClient
++ * @param space
++ */
++export function hasCreateRoomRights(matrixClient: MatrixClient, space?: Room | null): boolean {
++    const hasUIRight = shouldShowComponent(UIComponent.CreateRooms);
++    if (!space || !hasUIRight) return hasUIRight;
++
++    return Boolean(
++        space
++            ?.getLiveTimeline()
++            .getState(EventTimeline.FORWARDS)
++            ?.maySendStateEvent(EventType.RoomAvatar, matrixClient.getSafeUserId()),
++    );
++}
+diff --git a/src/components/views/rooms/NotificationDecoration.tsx b/src/components/views/rooms/NotificationDecoration.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a2f62cb5a5495688e3d084df5c99a977d08900d
+--- /dev/null
++++ b/src/components/views/rooms/NotificationDecoration.tsx
+@@ -0,0 +1,59 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import React, { type HTMLProps, type JSX } from "react";
++import MentionIcon from "@vector-im/compound-design-tokens/assets/web/icons/mention";
++import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error";
++import NotificationOffIcon from "@vector-im/compound-design-tokens/assets/web/icons/notifications-off-solid";
++import { UnreadCounter, Unread } from "@vector-im/compound-web";
++
++import { Flex } from "../../utils/Flex";
++import { type RoomNotificationState } from "../../../stores/notifications/RoomNotificationState";
++
++interface NotificationDecorationProps extends HTMLProps<HTMLDivElement> {
++    /**
++     * The notification state of the room or thread.
++     */
++    notificationState: RoomNotificationState;
++}
++
++/**
++ * Displays the notification decoration for a room or a thread.
++ */
++export function NotificationDecoration({
++    notificationState,
++    ...props
++}: NotificationDecorationProps): JSX.Element | null {
++    const {
++        hasAnyNotificationOrActivity,
++        isUnsetMessage,
++        invited,
++        isMention,
++        isActivityNotification,
++        isNotification,
++        count,
++        muted,
++    } = notificationState;
++    if (!hasAnyNotificationOrActivity && !muted) return null;
++
++    return (
++        <Flex
++            align="center"
++            justify="center"
++            gap="var(--cpd-space-1-5x)"
++            {...props}
++            data-testid="notification-decoration"
++        >
++            {isUnsetMessage && <ErrorIcon width="20px" height="20px" fill="var(--cpd-color-icon-critical-primary)" />}
++            {invited && <UnreadCounter count={1} />}
++            {isMention && <MentionIcon width="20px" height="20px" fill="var(--cpd-color-icon-accent-primary)" />}
++            {(isMention || isNotification) && <UnreadCounter count={count || null} />}
++            {isActivityNotification && <Unread />}
++            {muted && <NotificationOffIcon width="20px" height="20px" fill="var(--cpd-color-icon-tertiary)" />}
++        </Flex>
++    );
++}
+diff --git a/src/components/views/rooms/RoomListPanel/EmptyRoomList.tsx b/src/components/views/rooms/RoomListPanel/EmptyRoomList.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4824e2b45b2c1dce91fe79ea0593b87e51df228
+--- /dev/null
++++ b/src/components/views/rooms/RoomListPanel/EmptyRoomList.tsx
+@@ -0,0 +1,149 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import React, { type JSX, type PropsWithChildren } from "react";
++import { Button } from "@vector-im/compound-web";
++import UserAddIcon from "@vector-im/compound-design-tokens/assets/web/icons/user-add";
++import RoomIcon from "@vector-im/compound-design-tokens/assets/web/icons/room";
++
++import type { RoomListViewState } from "../../../viewmodels/roomlist/RoomListViewModel";
++import { Flex } from "../../../utils/Flex";
++import { _t } from "../../../../languageHandler";
++import { FilterKey } from "../../../../stores/room-list-v3/skip-list/filters";
++import { type PrimaryFilter } from "../../../viewmodels/roomlist/useFilteredRooms";
++
++interface EmptyRoomListProps {
++    /**
++     * The view model for the room list
++     */
++    vm: RoomListViewState;
++}
++
++/**
++ * The empty state for the room list
++ */
++export function EmptyRoomList({ vm }: EmptyRoomListProps): JSX.Element | undefined {
++    // If there is no active primary filter, show the default empty state
++    if (!vm.activePrimaryFilter) return <DefaultPlaceholder vm={vm} />;
++
++    switch (vm.activePrimaryFilter.key) {
++        case FilterKey.FavouriteFilter:
++            return (
++                <GenericPlaceholder
++                    title={_t("room_list|empty|no_favourites")}
++                    description={_t("room_list|empty|no_favourites_description")}
++                />
++            );
++        case FilterKey.PeopleFilter:
++            return (
++                <GenericPlaceholder
++                    title={_t("room_list|empty|no_people")}
++                    description={_t("room_list|empty|no_people_description")}
++                />
++            );
++        case FilterKey.RoomsFilter:
++            return (
++                <GenericPlaceholder
++                    title={_t("room_list|empty|no_rooms")}
++                    description={_t("room_list|empty|no_rooms_description")}
++                />
++            );
++        case FilterKey.UnreadFilter:
++            return <UnreadPlaceholder filter={vm.activePrimaryFilter} />;
++        default:
++            return undefined;
++    }
++}
++
++interface GenericPlaceholderProps {
++    /**
++     * The title of the placeholder
++     */
++    title: string;
++    /**
++     * The description of the placeholder
++     */
++    description?: string;
++}
++
++/**
++ * A generic placeholder for the room list
++ */
++function GenericPlaceholder({ title, description, children }: PropsWithChildren<GenericPlaceholderProps>): JSX.Element {
++    return (
++        <Flex
++            data-testid="empty-room-list"
++            className="mx_EmptyRoomList_GenericPlaceholder"
++            direction="column"
++            align="stretch"
++            justify="center"
++            gap="var(--cpd-space-2x)"
++        >
++            <span className="mx_EmptyRoomList_GenericPlaceholder_title">{title}</span>
++            {description && <span className="mx_EmptyRoomList_GenericPlaceholder_description">{description}</span>}
++            {children}
++        </Flex>
++    );
++}
++
++interface DefaultPlaceholderProps {
++    /**
++     * The view model for the room list
++     */
++    vm: RoomListViewState;
++}
++
++/**
++ * The default empty state for the room list when no primary filter is active
++ * The user can create chat or room (if they have the permission)
++ */
++function DefaultPlaceholder({ vm }: DefaultPlaceholderProps): JSX.Element {
++    return (
++        <GenericPlaceholder
++            title={_t("room_list|empty|no_chats")}
++            description={
++                vm.canCreateRoom
++                    ? _t("room_list|empty|no_chats_description")
++                    : _t("room_list|empty|no_chats_description_no_room_rights")
++            }
++        >
++            <Flex
++                className="mx_EmptyRoomList_DefaultPlaceholder"
++                align="center"
++                justify="center"
++                direction="column"
++                gap="var(--cpd-space-4x)"
++            >
++                <Button size="sm" kind="secondary" Icon={UserAddIcon} onClick={vm.createChatRoom}>
++                    {_t("action|new_message")}
++                </Button>
++                {vm.canCreateRoom && (
++                    <Button size="sm" kind="secondary" Icon={RoomIcon} onClick={vm.createRoom}>
++                        {_t("action|new_room")}
++                    </Button>
++                )}
++            </Flex>
++        </GenericPlaceholder>
++    );
++}
++
++interface UnreadPlaceholderProps {
++    filter: PrimaryFilter;
++}
++
++/**
++ * The empty state for the room list when the unread filter is active
++ */
++function UnreadPlaceholder({ filter }: UnreadPlaceholderProps): JSX.Element {
++    return (
++        <GenericPlaceholder title={_t("room_list|empty|no_unread")}>
++            <Button kind="tertiary" onClick={filter.toggle}>
++                {_t("room_list|empty|show_chats")}
++            </Button>
++        </GenericPlaceholder>
++    );
++}
+diff --git a/src/components/views/rooms/RoomListPanel/RoomListItemMenuView.tsx b/src/components/views/rooms/RoomListPanel/RoomListItemMenuView.tsx
+index ca08bf698cbcefacfe19de244d30c191e1ac1690..00d23cc2d2413a35fa2e7657d6dbbc513e63e9fa 100644
+--- a/src/components/views/rooms/RoomListPanel/RoomListItemMenuView.tsx
++++ b/src/components/views/rooms/RoomListPanel/RoomListItemMenuView.tsx
+@@ -43,7 +43,7 @@ export function RoomListItemMenuView({ room, setMenuOpen }: RoomListItemMenuView
+     const vm = useRoomListItemMenuViewModel(room);
+ 
+     return (
+-        <Flex className="mx_RoomListItemMenuView" align="center" gap="var(--cpd-space-1x)">
++        <Flex className="mx_RoomListItemMenuView" align="center" gap="var(--cpd-space-0-5x)">
+             {vm.showMoreOptionsMenu && <MoreOptionsMenu setMenuOpen={setMenuOpen} vm={vm} />}
+         </Flex>
+     );
+@@ -77,7 +77,7 @@ function MoreOptionsMenu({ vm, setMenuOpen }: MoreOptionsMenuProps): JSX.Element
+             title={_t("room_list|room|more_options")}
+             showTitle={false}
+             align="start"
+-            trigger={<MoreOptionsButton />}
++            trigger={<MoreOptionsButton size="24px" />}
+         >
+             {vm.canMarkAsRead && (
+                 <MenuItem
+diff --git a/src/components/views/rooms/RoomListPanel/RoomListItemView.tsx b/src/components/views/rooms/RoomListPanel/RoomListItemView.tsx
+index 37ad4ec848bf443f1332d3e8356b4309f0b6c18f..637ac265cc1f9c2fef17517e84abe2e8acd49278 100644
+--- a/src/components/views/rooms/RoomListPanel/RoomListItemView.tsx
++++ b/src/components/views/rooms/RoomListPanel/RoomListItemView.tsx
+@@ -12,8 +12,8 @@ import classNames from "classnames";
+ import { useRoomListItemViewModel } from "../../../viewmodels/roomlist/RoomListItemViewModel";
+ import DecoratedRoomAvatar from "../../avatars/DecoratedRoomAvatar";
+ import { Flex } from "../../../utils/Flex";
+-import { _t } from "../../../../languageHandler";
+ import { RoomListItemMenuView } from "./RoomListItemMenuView";
++import { NotificationDecoration } from "../NotificationDecoration";
+ 
+ interface RoomListItemViewPropsProps extends React.HTMLAttributes<HTMLButtonElement> {
+     /**
+@@ -38,15 +38,20 @@ export function RoomListItemView({ room, isSelected, ...props }: RoomListItemVie
+     // Using display: none; and then display:flex when hovered in CSS causes the menu to be misaligned
+     const showHoverDecoration = (isMenuOpen || isHover) && vm.showHoverMenu;
+ 
++    const isNotificationDecorationVisible =
++        !showHoverDecoration && (vm.notificationState.hasAnyNotificationOrActivity || vm.notificationState.muted);
++
+     return (
+         <button
+             className={classNames("mx_RoomListItemView", {
++                mx_RoomListItemView_empty: !isNotificationDecorationVisible && !showHoverDecoration,
++                mx_RoomListItemView_notification_decoration: isNotificationDecorationVisible,
+                 mx_RoomListItemView_menu_open: showHoverDecoration,
+                 mx_RoomListItemView_selected: isSelected,
+             })}
+             type="button"
+             aria-selected={isSelected}
+-            aria-label={_t("room_list|room|open_room", { roomName: room.name })}
++            aria-label={vm.a11yLabel}
+             onClick={() => vm.openRoom()}
+             onMouseOver={() => setIsHover(true)}
+             onMouseOut={() => setIsHover(false)}
+@@ -65,7 +70,7 @@ export function RoomListItemView({ room, isSelected, ...props }: RoomListItemVie
+                 >
+                     {/* We truncate the room name when too long. Title here is to show the full name on hover */}
+                     <span title={room.name}>{room.name}</span>
+-                    {showHoverDecoration && (
++                    {showHoverDecoration ? (
+                         <RoomListItemMenuView
+                             room={room}
+                             setMenuOpen={(isOpen) => {
+@@ -74,6 +79,11 @@ export function RoomListItemView({ room, isSelected, ...props }: RoomListItemVie
+                                 else setTimeout(() => setIsMenuOpen(isOpen), 0);
+                             }}
+                         />
++                    ) : (
++                        <>
++                            {/* aria-hidden because we summarise the unread count/notification status in a11yLabel variable */}
++                            <NotificationDecoration notificationState={vm.notificationState} aria-hidden={true} />
++                        </>
+                     )}
+                 </Flex>
+             </Flex>
+diff --git a/src/components/views/rooms/RoomListPanel/RoomListView.tsx b/src/components/views/rooms/RoomListPanel/RoomListView.tsx
+index 36fab956588a5037578ce2c4859cef3afb005397..f4800f7009358f9cce45b3f9062dcebdb5a9614e 100644
+--- a/src/components/views/rooms/RoomListPanel/RoomListView.tsx
++++ b/src/components/views/rooms/RoomListPanel/RoomListView.tsx
+@@ -9,6 +9,7 @@ import React, { type JSX } from "react";
+ 
+ import { useRoomListViewModel } from "../../../viewmodels/roomlist/RoomListViewModel";
+ import { RoomList } from "./RoomList";
++import { EmptyRoomList } from "./EmptyRoomList";
+ import { RoomListPrimaryFilters } from "./RoomListPrimaryFilters";
+ 
+ /**
+@@ -16,10 +17,12 @@ import { RoomListPrimaryFilters } from "./RoomListPrimaryFilters";
+  */
+ export function RoomListView(): JSX.Element {
+     const vm = useRoomListViewModel();
++    const isRoomListEmpty = vm.rooms.length === 0;
++
+     return (
+         <>
+             <RoomListPrimaryFilters vm={vm} />
+-            <RoomList vm={vm} />
++            {isRoomListEmpty ? <EmptyRoomList vm={vm} /> : <RoomList vm={vm} />}
+         </>
+     );
+ }

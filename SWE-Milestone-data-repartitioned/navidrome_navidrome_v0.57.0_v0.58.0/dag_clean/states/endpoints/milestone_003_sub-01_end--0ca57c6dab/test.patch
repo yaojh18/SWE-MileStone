@@ -1,0 +1,1314 @@
+diff --git a/model/metadata/persistent_ids_test.go b/model/metadata/persistent_ids_test.go
+index d07b363310b2c05e0c1b833847d188185717fe7a..8ab6f3699c9a141d33314624d8dbb316286a1a00 100644
+--- a/model/metadata/persistent_ids_test.go
++++ b/model/metadata/persistent_ids_test.go
+@@ -15,7 +15,7 @@ var _ = Describe("getPID", func() {
+ 		md     Metadata
+ 		mf     model.MediaFile
+ 		sum    hashFunc
+-		getPID func(mf model.MediaFile, md Metadata, spec string) string
++		getPID getPIDFunc
+ 	)
+ 
+ 	BeforeEach(func() {
+@@ -28,7 +28,7 @@ var _ = Describe("getPID", func() {
+ 		When("no attributes were present", func() {
+ 			It("should return empty pid", func() {
+ 				md.tags = map[model.TagName][]string{}
+-				pid := getPID(mf, md, spec)
++				pid := getPID(mf, md, spec, false)
+ 				Expect(pid).To(Equal("()"))
+ 			})
+ 		})
+@@ -40,7 +40,7 @@ var _ = Describe("getPID", func() {
+ 					"discnumber":          {"1"},
+ 					"tracknumber":         {"1"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(mbtrackid)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(mbtrackid)"))
+ 			})
+ 		})
+ 		When("only first field is present", func() {
+@@ -48,7 +48,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{
+ 					"musicbrainz_trackid": {"mbtrackid"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(mbtrackid)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(mbtrackid)"))
+ 			})
+ 		})
+ 		When("first is empty, but second field is present", func() {
+@@ -57,7 +57,7 @@ var _ = Describe("getPID", func() {
+ 					"album":      {"album name"},
+ 					"discnumber": {"1"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name\\1\\)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name\\1\\)"))
+ 			})
+ 		})
+ 	})
+@@ -73,7 +73,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{"title": {"title"}}
+ 				md.filePath = "/path/to/file.mp3"
+ 				mf.Title = "Title"
+-				Expect(getPID(mf, md, spec)).To(Equal("(Title)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Title)"))
+ 			})
+ 		})
+ 		When("field is folder", func() {
+@@ -81,7 +81,7 @@ var _ = Describe("getPID", func() {
+ 				spec := "folder|title"
+ 				md.tags = map[model.TagName][]string{"title": {"title"}}
+ 				mf.Path = "/path/to/file.mp3"
+-				Expect(getPID(mf, md, spec)).To(Equal("(/path/to)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(/path/to)"))
+ 			})
+ 		})
+ 		When("field is albumid", func() {
+@@ -94,7 +94,7 @@ var _ = Describe("getPID", func() {
+ 					"releasedate": {"2021-01-01"},
+ 				}
+ 				mf.AlbumArtist = "Album Artist"
+-				Expect(getPID(mf, md, spec)).To(Equal("(((album artist)\\album name\\version\\2021-01-01))"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(((album artist)\\album name\\version\\2021-01-01))"))
+ 			})
+ 		})
+ 		When("field is albumartistid", func() {
+@@ -104,14 +104,14 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 				}
+ 				mf.AlbumArtist = "Album Artist"
+-				Expect(getPID(mf, md, spec)).To(Equal("((album artist))"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("((album artist))"))
+ 			})
+ 		})
+ 		When("field is album", func() {
+ 			It("should return the pid", func() {
+ 				spec := "album|title"
+ 				md.tags = map[model.TagName][]string{"album": {"Album Name"}}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name)"))
+ 			})
+ 		})
+ 	})
+@@ -123,7 +123,7 @@ var _ = Describe("getPID", func() {
+ 				md.tags = map[model.TagName][]string{
+ 					"album": {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(album name)"))
+ 			})
+ 		})
+ 		When("the spec has spaces", func() {
+@@ -133,7 +133,7 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 					"album":       {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(Album Artist\\album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Album Artist\\album name)"))
+ 			})
+ 		})
+ 		When("the spec has mixed case fields", func() {
+@@ -143,7 +143,7 @@ var _ = Describe("getPID", func() {
+ 					"albumartist": {"Album Artist"},
+ 					"album":       {"album name"},
+ 				}
+-				Expect(getPID(mf, md, spec)).To(Equal("(Album Artist\\album name)"))
++				Expect(getPID(mf, md, spec, false)).To(Equal("(Album Artist\\album name)"))
+ 			})
+ 		})
+ 	})
+diff --git a/persistence/artist_repository_test.go b/persistence/artist_repository_test.go
+index 0dc0b087c9e316c027c0b66ec6e0025ff4b6bd3a..ed55a376e23ade9eaa7ed45dfca38cd07bcf4e18 100644
+--- a/persistence/artist_repository_test.go
++++ b/persistence/artist_repository_test.go
+@@ -95,7 +95,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				er := repo.Put(&artistBeatles)
+ 				Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("F"))
+@@ -113,7 +113,7 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			// BFR Empty SortArtistName is not saved in the DB anymore
+ 			XIt("returns the index when PreferSortTags is true and SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -135,7 +135,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				er := repo.Put(&artistBeatles)
+ 				Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -152,7 +152,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns the index when SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false)
++				idx, err := repo.GetIndex(false, []int{1})
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -169,27 +169,37 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			BeforeEach(func() {
+ 				raw = repo.(*artistRepository)
+-				// Add stats to artists using direct SQL since Put doesn't populate stats
++				// Add stats to library_artist table since stats are now stored per-library
+ 				composerStats := `{"composer": {"s": 1000, "m": 5, "a": 2}}`
+ 				producerStats := `{"producer": {"s": 500, "m": 3, "a": 1}}`
+ 
+-				// Set Beatles as composer
+-				_, err := raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", composerStats).Where(squirrel.Eq{"id": artistBeatles.ID}))
++				// Set Beatles as composer in library 1
++				_, err := raw.executeSQL(squirrel.Insert("library_artist").
++					Columns("library_id", "artist_id", "stats").
++					Values(1, artistBeatles.ID, composerStats).
++					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
+ 				Expect(err).ToNot(HaveOccurred())
+ 
+-				// Set Kraftwerk as producer
+-				_, err = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", producerStats).Where(squirrel.Eq{"id": artistKraftwerk.ID}))
++				// Set Kraftwerk as producer in library 1
++				_, err = raw.executeSQL(squirrel.Insert("library_artist").
++					Columns("library_id", "artist_id", "stats").
++					Values(1, artistKraftwerk.ID, producerStats).
++					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
+ 				Expect(err).ToNot(HaveOccurred())
+ 			})
+ 
+ 			AfterEach(func() {
+-				// Clean up stats
+-				_, _ = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", "{}").Where(squirrel.Eq{"id": artistBeatles.ID}))
+-				_, _ = raw.executeSQL(squirrel.Update(raw.tableName).Set("stats", "{}").Where(squirrel.Eq{"id": artistKraftwerk.ID}))
++				// Clean up stats from library_artist table
++				_, _ = raw.executeSQL(squirrel.Update("library_artist").
++					Set("stats", "{}").
++					Where(squirrel.Eq{"artist_id": artistBeatles.ID, "library_id": 1}))
++				_, _ = raw.executeSQL(squirrel.Update("library_artist").
++					Set("stats", "{}").
++					Where(squirrel.Eq{"artist_id": artistKraftwerk.ID, "library_id": 1}))
+ 			})
+ 
+ 			It("returns only artists with the specified role", func() {
+-				idx, err := repo.GetIndex(false, model.RoleComposer)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(1))
+ 				Expect(idx[0].ID).To(Equal("B"))
+@@ -198,7 +208,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns artists with any of the specified roles", func() {
+-				idx, err := repo.GetIndex(false, model.RoleComposer, model.RoleProducer)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer, model.RoleProducer)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(2))
+ 
+@@ -219,7 +229,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			})
+ 
+ 			It("returns empty index when no artists have the specified role", func() {
+-				idx, err := repo.GetIndex(false, model.RoleDirector)
++				idx, err := repo.GetIndex(false, []int{1}, model.RoleDirector)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(idx).To(HaveLen(0))
+ 			})
+@@ -239,12 +249,14 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 		Describe("PostScan", func() {
+ 			It("parses stats and similar artists correctly", func() {
+-				stats := map[string]map[string]int64{
+-					"total":    {"s": 1000, "m": 10, "a": 2},
+-					"composer": {"s": 500, "m": 5, "a": 1},
++				stats := map[string]map[string]map[string]int64{
++					"1": {
++						"total":    {"s": 1000, "m": 10, "a": 2},
++						"composer": {"s": 500, "m": 5, "a": 1},
++					},
+ 				}
+ 				statsJSON, _ := json.Marshal(stats)
+-				dba.Stats = string(statsJSON)
++				dba.LibraryStatsJSON = string(statsJSON)
+ 				dba.SimilarArtists = `[{"id":"2","Name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`
+ 
+ 				err := dba.PostScan()
+@@ -306,6 +318,11 @@ var _ = Describe("ArtistRepository", func() {
+ 				raw = repo.(*artistRepository)
+ 				_, err := raw.executeSQL(squirrel.Update(raw.tableName).Set("missing", true).Where(squirrel.Eq{"id": missing.ID}))
+ 				Expect(err).ToNot(HaveOccurred())
++
++				// Associate the existing fixture with library 1 for repository visibility.
++				lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++				err = lr.AddArtist(1, missing.ID)
++				Expect(err).ToNot(HaveOccurred())
+ 			}
+ 
+ 			removeMissing := func() {
+@@ -317,7 +334,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			Context("regular user", func() {
+ 				BeforeEach(func() {
+ 					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, model.User{ID: "u1"})
++					ctx = request.WithUser(ctx, regularUser)
+ 					repo = NewArtistRepository(ctx, GetDBXBuilder())
+ 					insertMissing()
+ 				})
+@@ -337,7 +354,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				})
+ 
+ 				It("does not return missing artist in GetIndex", func() {
+-					idx, err := repo.GetIndex(false)
++					idx, err := repo.GetIndex(false, []int{1})
+ 					Expect(err).ToNot(HaveOccurred())
+ 					// Only 2 artists should be present
+ 					total := 0
+@@ -351,7 +368,7 @@ var _ = Describe("ArtistRepository", func() {
+ 			Context("admin user", func() {
+ 				BeforeEach(func() {
+ 					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, model.User{ID: "admin", IsAdmin: true})
++					ctx = request.WithUser(ctx, adminUser)
+ 					repo = NewArtistRepository(ctx, GetDBXBuilder())
+ 					insertMissing()
+ 				})
+@@ -371,7 +388,7 @@ var _ = Describe("ArtistRepository", func() {
+ 				})
+ 
+ 				It("returns missing artist in GetIndex when included", func() {
+-					idx, err := repo.GetIndex(true)
++					idx, err := repo.GetIndex(true, []int{1})
+ 					Expect(err).ToNot(HaveOccurred())
+ 					total := 0
+ 					for _, ix := range idx {
+@@ -385,19 +402,19 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 	Describe("roleFilter", func() {
+ 		It("filters out roles not present in the participants model", func() {
+-			Expect(roleFilter("", "artist")).To(Equal(squirrel.NotEq{"stats ->> '$.artist'": nil}))
+-			Expect(roleFilter("", "albumartist")).To(Equal(squirrel.NotEq{"stats ->> '$.albumartist'": nil}))
+-			Expect(roleFilter("", "composer")).To(Equal(squirrel.NotEq{"stats ->> '$.composer'": nil}))
+-			Expect(roleFilter("", "conductor")).To(Equal(squirrel.NotEq{"stats ->> '$.conductor'": nil}))
+-			Expect(roleFilter("", "lyricist")).To(Equal(squirrel.NotEq{"stats ->> '$.lyricist'": nil}))
+-			Expect(roleFilter("", "arranger")).To(Equal(squirrel.NotEq{"stats ->> '$.arranger'": nil}))
+-			Expect(roleFilter("", "producer")).To(Equal(squirrel.NotEq{"stats ->> '$.producer'": nil}))
+-			Expect(roleFilter("", "director")).To(Equal(squirrel.NotEq{"stats ->> '$.director'": nil}))
+-			Expect(roleFilter("", "engineer")).To(Equal(squirrel.NotEq{"stats ->> '$.engineer'": nil}))
+-			Expect(roleFilter("", "mixer")).To(Equal(squirrel.NotEq{"stats ->> '$.mixer'": nil}))
+-			Expect(roleFilter("", "remixer")).To(Equal(squirrel.NotEq{"stats ->> '$.remixer'": nil}))
+-			Expect(roleFilter("", "djmixer")).To(Equal(squirrel.NotEq{"stats ->> '$.djmixer'": nil}))
+-			Expect(roleFilter("", "performer")).To(Equal(squirrel.NotEq{"stats ->> '$.performer'": nil}))
++			Expect(roleFilter("", "artist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.artist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "albumartist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.albumartist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "composer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.composer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "conductor")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.conductor.m') IS NOT NULL)")))
++			Expect(roleFilter("", "lyricist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.lyricist.m') IS NOT NULL)")))
++			Expect(roleFilter("", "arranger")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.arranger.m') IS NOT NULL)")))
++			Expect(roleFilter("", "producer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.producer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "director")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.director.m') IS NOT NULL)")))
++			Expect(roleFilter("", "engineer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.engineer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "mixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.mixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "remixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.remixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "djmixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.djmixer.m') IS NOT NULL)")))
++			Expect(roleFilter("", "performer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.performer.m') IS NOT NULL)")))
+ 
+ 			Expect(roleFilter("", "wizard")).To(Equal(squirrel.Eq{"1": 2}))
+ 			Expect(roleFilter("", "songanddanceman")).To(Equal(squirrel.Eq{"1": 2}))
+@@ -418,9 +435,12 @@ var _ = Describe("ArtistRepository", func() {
+ 				MbzArtistID: "550e8400-e29b-41d4-a716-446655440010", // Valid UUID v4
+ 			}
+ 
+-			// Insert the test artist into the database
++			// Insert the test artist with its canonical library association.
+ 			err := repo.Put(&artistWithMBID)
+ 			Expect(err).ToNot(HaveOccurred())
++			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++			err = lr.AddArtist(1, artistWithMBID.ID)
++			Expect(err).ToNot(HaveOccurred())
+ 		})
+ 
+ 		AfterEach(func() {
+@@ -453,6 +473,9 @@ var _ = Describe("ArtistRepository", func() {
+ 
+ 			err := repo.Put(&missingArtist)
+ 			Expect(err).ToNot(HaveOccurred())
++			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
++			err = lr.AddArtist(1, missingArtist.ID)
++			Expect(err).ToNot(HaveOccurred())
+ 
+ 			// Should not find missing artist when includeMissing is false
+ 			results, err := repo.Search("550e8400-e29b-41d4-a716-446655440012", 0, 10, false)
+diff --git a/persistence/persistence_suite_test.go b/persistence/persistence_suite_test.go
+index 7edfeee1f752b69f0bd7abbf56a5b8ce3a12ff29..a3d5ebc74d23121177622c13d7c35063e0e5aae4 100644
+--- a/persistence/persistence_suite_test.go
++++ b/persistence/persistence_suite_test.go
+@@ -34,6 +34,7 @@ func mf(mf model.MediaFile) model.MediaFile {
+ 	mf.Tags = model.Tags{}
+ 	mf.LibraryID = 1
+ 	mf.LibraryPath = "music" // Default folder
++	mf.LibraryName = "Music Library"
+ 	mf.Participants = model.Participants{
+ 		model.RoleArtist: model.ParticipantList{
+ 			model.Participant{Artist: model.Artist{ID: mf.ArtistID, Name: mf.Artist}},
+@@ -47,6 +48,8 @@ func mf(mf model.MediaFile) model.MediaFile {
+ 
+ func al(al model.Album) model.Album {
+ 	al.LibraryID = 1
++	al.LibraryPath = "music"
++	al.LibraryName = "Music Library"
+ 	al.Discs = model.Discs{}
+ 	al.Tags = model.Tags{}
+ 	al.Participants = model.Participants{}
+@@ -138,14 +141,13 @@ var _ = BeforeSuite(func() {
+ 		}
+ 	}
+ 
+-	//gr := NewGenreRepository(ctx, conn)
+-	//for i := range testGenres {
+-	//	g := testGenres[i]
+-	//	err := gr.Put(&g)
+-	//	if err != nil {
+-	//		panic(err)
+-	//	}
+-	//}
++	// Associate users with library 1 (default test library)
++	for i := range testUsers {
++		err := ur.SetUserLibraries(testUsers[i].ID, []int{1})
++		if err != nil {
++			panic(err)
++		}
++	}
+ 
+ 	alr := NewAlbumRepository(ctx, conn).(*albumRepository)
+ 	for i := range testAlbums {
+@@ -165,6 +167,15 @@ var _ = BeforeSuite(func() {
+ 		}
+ 	}
+ 
++	// Associate artists with library 1 (default test library)
++	lr := NewLibraryRepository(ctx, conn)
++	for i := range testArtists {
++		err := lr.AddArtist(1, testArtists[i].ID)
++		if err != nil {
++			panic(err)
++		}
++	}
++
+ 	mr := NewMediaFileRepository(ctx, conn)
+ 	for i := range testSongs {
+ 		err := mr.Put(&testSongs[i])
+@@ -190,9 +201,9 @@ var _ = BeforeSuite(func() {
+ 		Public:    true,
+ 		SongCount: 2,
+ 	}
+-	plsBest.AddTracks([]string{"1001", "1003"})
++	plsBest.AddMediaFilesByID([]string{"1001", "1003"})
+ 	plsCool = model.Playlist{Name: "Cool", OwnerID: "userid", OwnerName: "userid"}
+-	plsCool.AddTracks([]string{"1004"})
++	plsCool.AddMediaFilesByID([]string{"1004"})
+ 	testPlaylists = []*model.Playlist{&plsBest, &plsCool}
+ 
+ 	pr := NewPlaylistRepository(ctx, conn)
+diff --git a/persistence/playlist_repository_test.go b/persistence/playlist_repository_test.go
+index b799d4912def3737c7902a26c708357bf6dabdae..15ae438d9ae0c684dc4268885fcfc2700017d501 100644
+--- a/persistence/playlist_repository_test.go
++++ b/persistence/playlist_repository_test.go
+@@ -79,13 +79,13 @@ var _ = Describe("PlaylistRepository", func() {
+ 	It("Put/Exists/Delete", func() {
+ 		By("saves the playlist to the DB")
+ 		newPls := model.Playlist{Name: "Great!", OwnerID: "userid"}
+-		newPls.AddTracks([]string{"1004", "1003"})
++		newPls.AddMediaFilesByID([]string{"1004", "1003"})
+ 
+ 		By("saves the playlist to the DB")
+ 		Expect(repo.Put(&newPls)).To(BeNil())
+ 
+ 		By("adds repeated songs to a playlist and keeps the order")
+-		newPls.AddTracks([]string{"1004"})
++		newPls.AddMediaFilesByID([]string{"1004"})
+ 		Expect(repo.Put(&newPls)).To(BeNil())
+ 		saved, _ := repo.GetWithTracks(newPls.ID, true, false)
+ 		Expect(saved.Tracks).To(HaveLen(3))
+diff --git a/persistence/tag_repository_test.go b/persistence/tag_repository_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c3947a9f7d52bff88d49f665579d7fdb4ace10f8
+--- /dev/null
++++ b/persistence/tag_repository_test.go
+@@ -0,0 +1,311 @@
++package persistence
++
++import (
++	"context"
++	"slices"
++	"strings"
++
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/id"
++	"github.com/navidrome/navidrome/model/request"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"github.com/pocketbase/dbx"
++)
++
++var _ = Describe("TagRepository", func() {
++	var repo model.TagRepository
++	var restRepo model.ResourceRepository
++	var ctx context.Context
++
++	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++		ctx = request.WithUser(log.NewContext(context.TODO()), model.User{ID: "userid", UserName: "johndoe", IsAdmin: true})
++		tagRepo := NewTagRepository(ctx, GetDBXBuilder())
++		repo = tagRepo
++		restRepo = tagRepo.(model.ResourceRepository)
++
++		// Clean the database before each test to ensure isolation
++		db := GetDBXBuilder()
++		_, err := db.NewQuery("DELETE FROM tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("DELETE FROM library_tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Ensure library 1 exists (if it doesn't already)
++		_, err = db.NewQuery("INSERT OR IGNORE INTO library (id, name, path, default_new_users) VALUES (1, 'Test Library', '/test', true)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Ensure the admin user has access to library 1
++		_, err = db.NewQuery("INSERT OR IGNORE INTO user_library (user_id, library_id) VALUES ('userid', 1)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Add comprehensive test data that covers all test scenarios
++		newTag := func(name, value string) model.Tag {
++			return model.Tag{ID: id.NewTagID(name, value), TagName: model.TagName(name), TagValue: value}
++		}
++
++		err = repo.Add(1,
++			// Genre tags
++			newTag("genre", "rock"),
++			newTag("genre", "pop"),
++			newTag("genre", "jazz"),
++			newTag("genre", "electronic"),
++			newTag("genre", "classical"),
++			newTag("genre", "ambient"),
++			newTag("genre", "techno"),
++			newTag("genre", "house"),
++			newTag("genre", "trance"),
++			newTag("genre", "Alternative Rock"),
++			newTag("genre", "Blues"),
++			newTag("genre", "Country"),
++			// Mood tags
++			newTag("mood", "happy"),
++			newTag("mood", "sad"),
++			newTag("mood", "energetic"),
++			newTag("mood", "calm"),
++			// Other tag types
++			newTag("instrument", "guitar"),
++			newTag("instrument", "piano"),
++			newTag("decade", "1980s"),
++			newTag("decade", "1990s"),
++		)
++		Expect(err).ToNot(HaveOccurred())
++	})
++
++	Describe("Add", func() {
++		It("should handle adding new tags", func() {
++			newTag := model.Tag{
++				ID:       id.NewTagID("genre", "experimental"),
++				TagName:  "genre",
++				TagValue: "experimental",
++			}
++
++			err := repo.Add(1, newTag)
++			Expect(err).ToNot(HaveOccurred())
++
++			// Verify tag was added
++			result, err := restRepo.Read(newTag.ID)
++			Expect(err).ToNot(HaveOccurred())
++			resultTag := result.(*model.Tag)
++			Expect(resultTag.TagValue).To(Equal("experimental"))
++
++			// Check count increased
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(21))) // 20 from dataset + 1 new
++		})
++
++		It("should handle duplicate tags gracefully", func() {
++			// Try to add a duplicate tag
++			duplicateTag := model.Tag{
++				ID:       id.NewTagID("genre", "rock"), // This already exists
++				TagName:  "genre",
++				TagValue: "rock",
++			}
++
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // Still 20 tags
++
++			err = repo.Add(1, duplicateTag)
++			Expect(err).ToNot(HaveOccurred()) // Should not error
++
++			// Count should remain the same
++			count, err = restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // Still 20 tags
++		})
++	})
++
++	Describe("UpdateCounts", func() {
++		It("should update tag counts successfully", func() {
++			err := repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle empty database gracefully", func() {
++			// Clear the database first
++			db := GetDBXBuilder()
++			_, err := db.NewQuery("DELETE FROM tag").Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle albums with non-existent tag IDs in JSON gracefully", func() {
++			// Regression test for foreign key constraint error
++			// Create an album with tag IDs in JSON that don't exist in tag table
++			db := GetDBXBuilder()
++
++			// First, create a non-existent tag ID (this simulates tags in JSON that aren't in tag table)
++			nonExistentTagID := id.NewTagID("genre", "nonexistent-genre")
++
++			// Create album with JSON containing the non-existent tag ID
++			albumWithBadTags := `{"genre":[{"id":"` + nonExistentTagID + `","value":"nonexistent-genre"}]}`
++
++			// Insert album directly into database with the problematic JSON
++			_, err := db.NewQuery("INSERT INTO album (id, name, library_id, tags) VALUES ({:id}, {:name}, {:lib}, {:tags})").
++				Bind(dbx.Params{
++					"id":   "test-album-bad-tags",
++					"name": "Album With Bad Tags",
++					"lib":  1,
++					"tags": albumWithBadTags,
++				}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			// This should not fail with foreign key constraint error
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++
++			// Cleanup
++			_, err = db.NewQuery("DELETE FROM album WHERE id = {:id}").
++				Bind(dbx.Params{"id": "test-album-bad-tags"}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		})
++
++		It("should handle media files with non-existent tag IDs in JSON gracefully", func() {
++			// Regression test for foreign key constraint error with media files
++			db := GetDBXBuilder()
++
++			// Create a non-existent tag ID
++			nonExistentTagID := id.NewTagID("genre", "another-nonexistent-genre")
++
++			// Create media file with JSON containing the non-existent tag ID
++			mediaFileWithBadTags := `{"genre":[{"id":"` + nonExistentTagID + `","value":"another-nonexistent-genre"}]}`
++
++			// Insert media file directly into database with the problematic JSON
++			_, err := db.NewQuery("INSERT INTO media_file (id, title, library_id, tags) VALUES ({:id}, {:title}, {:lib}, {:tags})").
++				Bind(dbx.Params{
++					"id":    "test-media-bad-tags",
++					"title": "Media File With Bad Tags",
++					"lib":   1,
++					"tags":  mediaFileWithBadTags,
++				}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			// This should not fail with foreign key constraint error
++			err = repo.UpdateCounts()
++			Expect(err).ToNot(HaveOccurred())
++
++			// Cleanup
++			_, err = db.NewQuery("DELETE FROM media_file WHERE id = {:id}").
++				Bind(dbx.Params{"id": "test-media-bad-tags"}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		})
++	})
++
++	Describe("Count", func() {
++		It("should return correct count of tags", func() {
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(20))) // From the test dataset
++		})
++	})
++
++	Describe("Read", func() {
++		It("should return existing tag", func() {
++			rockID := id.NewTagID("genre", "rock")
++			result, err := restRepo.Read(rockID)
++			Expect(err).ToNot(HaveOccurred())
++			resultTag := result.(*model.Tag)
++			Expect(resultTag.ID).To(Equal(rockID))
++			Expect(resultTag.TagName).To(Equal(model.TagName("genre")))
++			Expect(resultTag.TagValue).To(Equal("rock"))
++		})
++
++		It("should return error for non-existent tag", func() {
++			_, err := restRepo.Read("non-existent-id")
++			Expect(err).To(HaveOccurred())
++		})
++	})
++
++	Describe("ReadAll", func() {
++		It("should return all tags from dataset", func() {
++			result, err := restRepo.ReadAll()
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(20))
++		})
++
++		It("should filter tags by partial value correctly", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%rock%"}, // Tags containing 'rock'
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(2)) // "rock" and "Alternative Rock"
++
++			// Verify all returned tags contain 'rock' in their value
++			for _, tag := range tags {
++				Expect(strings.ToLower(tag.TagValue)).To(ContainSubstring("rock"))
++			}
++		})
++
++		It("should filter tags by partial value using LIKE", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%e%"}, // Tags containing 'e'
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(8)) // electronic, house, trance, energetic, Blues, decade x2, Alternative Rock
++
++			// Verify all returned tags contain 'e' in their value
++			for _, tag := range tags {
++				Expect(strings.ToLower(tag.TagValue)).To(ContainSubstring("e"))
++			}
++		})
++
++		It("should sort tags by value ascending", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%r%"}, // Tags containing 'r'
++				Sort:    "name",
++				Order:   "asc",
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(7))
++
++			Expect(slices.IsSortedFunc(tags, func(a, b model.Tag) int {
++				return strings.Compare(strings.ToLower(a.TagValue), strings.ToLower(b.TagValue))
++			}))
++		})
++
++		It("should sort tags by value descending", func() {
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%r%"}, // Tags containing 'r'
++				Sort:    "name",
++				Order:   "desc",
++			}
++			result, err := restRepo.ReadAll(options)
++			Expect(err).ToNot(HaveOccurred())
++			tags := result.(model.TagList)
++			Expect(tags).To(HaveLen(7))
++
++			Expect(slices.IsSortedFunc(tags, func(a, b model.Tag) int {
++				return strings.Compare(strings.ToLower(b.TagValue), strings.ToLower(a.TagValue)) // Descending order
++			}))
++		})
++	})
++
++	Describe("EntityName", func() {
++		It("should return correct entity name", func() {
++			name := restRepo.EntityName()
++			Expect(name).To(Equal("tag"))
++		})
++	})
++
++	Describe("NewInstance", func() {
++		It("should return new tag instance", func() {
++			instance := restRepo.NewInstance()
++			Expect(instance).To(BeAssignableToTypeOf(model.Tag{}))
++		})
++	})
++})
+diff --git a/plugins/adapter_media_agent_test.go b/plugins/adapter_media_agent_test.go
+index 709fd62cd25ce0a462f4e20f7fe00c0dafc69658..e730507f3b8f4a69cd1560b782d5b1483b0c8df6 100644
+--- a/plugins/adapter_media_agent_test.go
++++ b/plugins/adapter_media_agent_test.go
+@@ -14,7 +14,7 @@ import (
+ 
+ var _ = Describe("Adapter Media Agent", func() {
+ 	var ctx context.Context
+-	var mgr *Manager
++	var mgr *managerImpl
+ 
+ 	BeforeEach(func() {
+ 		ctx = GinkgoT().Context()
+diff --git a/plugins/host_scheduler_test.go b/plugins/host_scheduler_test.go
+index f544d716e44daa8a389fcbb9dba7e77e1f92a6cc..1a3efaae91caf055feacc941ed78fbb94079588d 100644
+--- a/plugins/host_scheduler_test.go
++++ b/plugins/host_scheduler_test.go
+@@ -2,7 +2,9 @@ package plugins
+ 
+ import (
+ 	"context"
++	"time"
+ 
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/host/scheduler"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -11,12 +13,12 @@ import (
+ var _ = Describe("SchedulerService", func() {
+ 	var (
+ 		ss         *schedulerService
+-		manager    *Manager
++		manager    *managerImpl
+ 		pluginName = "test_plugin"
+ 	)
+ 
+ 	BeforeEach(func() {
+-		manager = createManager(nil, nil)
++		manager = createManager(nil, metrics.NewNoopInstance())
+ 		ss = manager.schedulerService
+ 	})
+ 
+@@ -163,4 +165,28 @@ var _ = Describe("SchedulerService", func() {
+ 			Expect(ss.scheduleCount()).To(Equal(beforeCount), "Job count should remain the same after replacement")
+ 		})
+ 	})
++
++	Describe("TimeNow", func() {
++		It("returns current time in RFC3339Nano, Unix milliseconds, and local timezone", func() {
++			now := time.Now()
++			req := &scheduler.TimeNowRequest{}
++			resp, err := ss.timeNow(context.Background(), req)
++
++			Expect(err).ToNot(HaveOccurred())
++			Expect(resp.UnixMilli).To(BeNumerically(">=", now.UnixMilli()))
++			Expect(resp.LocalTimeZone).ToNot(BeEmpty())
++
++			// Validate RFC3339Nano format can be parsed
++			parsedTime, parseErr := time.Parse(time.RFC3339Nano, resp.Rfc3339Nano)
++			Expect(parseErr).ToNot(HaveOccurred())
++
++			// Validate that Unix milliseconds is reasonably close to the RFC3339Nano time
++			expectedMillis := parsedTime.UnixMilli()
++			Expect(resp.UnixMilli).To(Equal(expectedMillis))
++
++			// Validate local timezone matches the current system timezone
++			expectedTimezone := now.Location().String()
++			Expect(resp.LocalTimeZone).To(Equal(expectedTimezone))
++		})
++	})
+ })
+diff --git a/plugins/host_websocket_test.go b/plugins/host_websocket_test.go
+index b6f4e20945a1539ec5689f66d8977350fb2cd4fc..00b20b452989e9766fc2302d53ba6d274c44112d 100644
+--- a/plugins/host_websocket_test.go
++++ b/plugins/host_websocket_test.go
+@@ -17,7 +17,7 @@ import (
+ var _ = Describe("WebSocket Host Service", func() {
+ 	var (
+ 		wsService      *websocketService
+-		manager        *Manager
++		manager        *managerImpl
+ 		ctx            context.Context
+ 		server         *httptest.Server
+ 		upgrader       gorillaws.Upgrader
+diff --git a/plugins/manager_test.go b/plugins/manager_test.go
+index 55a3b8f728cd09426872e2900a8df598e1ea96fd..a6bb8ff0f3ec42f10b6f8d418621fd11f0821fc9 100644
+--- a/plugins/manager_test.go
++++ b/plugins/manager_test.go
+@@ -12,7 +12,7 @@ import (
+ )
+ 
+ var _ = Describe("Plugin Manager", func() {
+-	var mgr *Manager
++	var mgr *managerImpl
+ 	var ctx context.Context
+ 
+ 	BeforeEach(func() {
+@@ -76,7 +76,7 @@ var _ = Describe("Plugin Manager", func() {
+ 
+ 	Describe("ScanPlugins", func() {
+ 		var tempPluginsDir string
+-		var m *Manager
++		var m *managerImpl
+ 
+ 		BeforeEach(func() {
+ 			tempPluginsDir, _ = os.MkdirTemp("", "navidrome-plugins-test-*")
+diff --git a/plugins/manifest_permissions_test.go b/plugins/manifest_permissions_test.go
+index da221eb56ec7edff9c89cbc2dfaa5b412645aa62..188e1774600d19f6d4a7005d200d511bdb40cd02 100644
+--- a/plugins/manifest_permissions_test.go
++++ b/plugins/manifest_permissions_test.go
+@@ -47,7 +47,7 @@ func createTestPlugin(tempDir, name string, permissions schema.PluginManifestPer
+ 
+ var _ = Describe("Plugin Permissions", func() {
+ 	var (
+-		mgr     *Manager
++		mgr     *managerImpl
+ 		tempDir string
+ 		ctx     context.Context
+ 	)
+diff --git a/plugins/plugin_lifecycle_manager_test.go b/plugins/plugin_lifecycle_manager_test.go
+index c0621b2a708e9000844ff4067bae52507e99d9ac..e46f29b7658980fb0006df0738e5902861290b9a 100644
+--- a/plugins/plugin_lifecycle_manager_test.go
++++ b/plugins/plugin_lifecycle_manager_test.go
+@@ -18,7 +18,7 @@ func hasInitService(info *plugin) bool {
+ }
+ 
+ var _ = Describe("LifecycleManagement", func() {
+-	Describe("Plugin Lifecycle Manager", func() {
++	Describe("Plugin Lifecycle managerImpl", func() {
+ 		var lifecycleManager *pluginLifecycleManager
+ 
+ 		BeforeEach(func() {
+diff --git a/plugins/runtime_test.go b/plugins/runtime_test.go
+index 32cd421181b096da1408751536fa14ca4716b230..507f68b20abf53c3cc6af0ebf44f626dafefdda1 100644
+--- a/plugins/runtime_test.go
++++ b/plugins/runtime_test.go
+@@ -34,7 +34,7 @@ var _ = Describe("Runtime", func() {
+ var _ = Describe("CachingRuntime", func() {
+ 	var (
+ 		ctx    context.Context
+-		mgr    *Manager
++		mgr    *managerImpl
+ 		plugin *wasmScrobblerPlugin
+ 	)
+ 
+diff --git a/scanner/controller_test.go b/scanner/controller_test.go
+index 4f6576a39a1fa744467015364404ec3c8e4c2144..e551e15b170f28f3a8f3f1ac33fc5961eb29d85b 100644
+--- a/scanner/controller_test.go
++++ b/scanner/controller_test.go
+@@ -9,7 +9,6 @@ import (
+ 	"github.com/navidrome/navidrome/core/artwork"
+ 	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/db"
+-	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/persistence"
+ 	"github.com/navidrome/navidrome/scanner"
+ 	"github.com/navidrome/navidrome/server/events"
+@@ -32,7 +31,6 @@ var _ = Describe("Controller", func() {
+ 			ds = &tests.MockDataStore{RealDS: persistence.New(db.Db())}
+ 			ds.MockedProperty = &tests.MockedPropertyRepo{}
+ 			ctrl = scanner.New(ctx, ds, artwork.NoopCacheWarmer(), events.NoopBroker(), core.NewPlaylists(ds), metrics.NewNoopInstance())
+-			Expect(ds.Library(ctx).Put(&model.Library{ID: 1, Name: "lib", Path: "/tmp"})).To(Succeed())
+ 		})
+ 
+ 		It("includes last scan error", func() {
+diff --git a/scanner/scanner_test.go b/scanner/scanner_test.go
+index 6bb74997f21e674eb70b4a94fc4e1db9a4445f1f..e7e354f21f293d6f032aec9baece1c10acf46ce6 100644
+--- a/scanner/scanner_test.go
++++ b/scanner/scanner_test.go
+@@ -58,12 +58,14 @@ var _ = Describe("Scanner", Ordered, func() {
+ 	})
+ 
+ 	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++		conf.Server.MusicFolder = "fake:///music" // Set to match test library path
++		conf.Server.DevExternalScanner = false
++
+ 		db.Init(ctx)
+ 		DeferCleanup(func() {
+ 			Expect(tests.ClearDB()).To(Succeed())
+ 		})
+-		DeferCleanup(configtest.SetupConfig())
+-		conf.Server.DevExternalScanner = false
+ 
+ 		ds = &tests.MockDataStore{RealDS: persistence.New(db.Db())}
+ 		mfRepo = &mockMediaFileRepo{
+@@ -71,6 +73,16 @@ var _ = Describe("Scanner", Ordered, func() {
+ 		}
+ 		ds.MockedMediaFile = mfRepo
+ 
++		// Create the admin user in the database to match the context
++		adminUser := model.User{
++			ID:          "123",
++			UserName:    "admin",
++			Name:        "Admin User",
++			IsAdmin:     true,
++			NewPassword: "password",
++		}
++		Expect(ds.User(ctx).Put(&adminUser)).To(Succeed())
++
+ 		s = scanner.New(ctx, ds, artwork.NoopCacheWarmer(), events.NoopBroker(),
+ 			core.NewPlaylists(ds), metrics.NewNoopInstance())
+ 
+diff --git a/ui/src/album/AlbumDatesField.test.jsx b/ui/src/album/AlbumDatesField.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9bcd4156791e91b5da00218a01477b6d4cbd8e4b
+--- /dev/null
++++ b/ui/src/album/AlbumDatesField.test.jsx
+@@ -0,0 +1,112 @@
++import { describe, test, expect, vi } from 'vitest'
++import { render } from '@testing-library/react'
++import { RecordContextProvider } from 'react-admin'
++import { AlbumDatesField } from './AlbumDatesField'
++import { formatRange } from '../common/index.js'
++
++// Mock the formatRange function
++vi.mock('../common/index.js', () => ({
++  formatRange: vi.fn(),
++}))
++
++describe('AlbumDatesField', () => {
++  test('renders nothing when yearRange is "0"', () => {
++    const record = {
++      maxYear: '0',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('0')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders nothing when releaseYear is "0"', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '0-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toBeNull()
++  })
++
++  test('renders only yearRange when releaseYear is undefined', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('renders both years when they are different', () => {
++    const record = {
++      maxYear: '2018',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2018')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('♫ 2018 · ○ 2020')
++  })
++
++  test('renders only yearRange when both years are the same', () => {
++    const record = {
++      maxYear: '2020',
++      releaseDate: '2020-01-01',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField />
++      </RecordContextProvider>,
++    )
++
++    expect(container.textContent).toBe('2020')
++  })
++
++  test('applies className when provided', () => {
++    const record = {
++      maxYear: '2020',
++    }
++
++    vi.mocked(formatRange).mockReturnValue('2020')
++
++    const { container } = render(
++      <RecordContextProvider value={record}>
++        <AlbumDatesField className="test-class" />
++      </RecordContextProvider>,
++    )
++
++    expect(container.firstChild).toHaveClass('test-class')
++  })
++})
+diff --git a/ui/src/artist/ArtistActions.test.jsx b/ui/src/artist/ArtistActions.test.jsx
+index 90be284094ddc09c17fe2584a7c0f2b97f46baba..a11ee50e37f21a2de1480432558fd8078b3df84c 100644
+--- a/ui/src/artist/ArtistActions.test.jsx
++++ b/ui/src/artist/ArtistActions.test.jsx
+@@ -49,11 +49,21 @@ describe('ArtistActions', () => {
+     // Mock console.error to suppress error logging in tests
+     vi.spyOn(console, 'error').mockImplementation(() => {})
+ 
++    const songWithReplayGain = {
++      id: 'rec1',
++      replayGain: {
++        albumGain: -5,
++        albumPeak: 1,
++        trackGain: -6,
++        trackPeak: 0.8,
++      },
++    }
++
+     subsonic.getSimilarSongs2.mockResolvedValue({
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          similarSongs2: { song: [{ id: 'rec1' }] },
++          similarSongs2: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -61,7 +71,7 @@ describe('ArtistActions', () => {
+       json: {
+         'subsonic-response': {
+           status: 'ok',
+-          topSongs: { song: [{ id: 'rec1' }] },
++          topSongs: { song: [songWithReplayGain] },
+         },
+       },
+     })
+@@ -93,6 +103,22 @@ describe('ArtistActions', () => {
+       )
+       expect(mockDispatch).toHaveBeenCalled()
+     })
++
++    it('maps replaygain info', async () => {
++      renderArtistActions()
++      clickActionButton('radio')
++
++      await waitFor(() =>
++        expect(subsonic.getSimilarSongs2).toHaveBeenCalledWith('ar1', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
+   })
+ 
+   describe('Play action', () => {
+@@ -106,6 +132,22 @@ describe('ArtistActions', () => {
+       expect(mockDispatch).toHaveBeenCalled()
+     })
+ 
++    it('maps replaygain info for top songs', async () => {
++      renderArtistActions()
++      clickActionButton('topSongs')
++
++      await waitFor(() =>
++        expect(subsonic.getTopSongs).toHaveBeenCalledWith('Artist', 100),
++      )
++      const action = mockDispatch.mock.calls[0][0]
++      expect(action.data.rec1).toMatchObject({
++        rgAlbumGain: -5,
++        rgAlbumPeak: 1,
++        rgTrackGain: -6,
++        rgTrackPeak: 0.8,
++      })
++    })
++
+     it('handles API rejection', async () => {
+       subsonic.getTopSongs.mockRejectedValue(new Error('Network error'))
+ 
+diff --git a/ui/src/common/SongContextMenu.test.jsx b/ui/src/common/SongContextMenu.test.jsx
+index ee6a358d853747aa9482eb8875d562af4c53872d..a30da859f722ecfb6edb4887773f9257914d968a 100644
+--- a/ui/src/common/SongContextMenu.test.jsx
++++ b/ui/src/common/SongContextMenu.test.jsx
+@@ -10,6 +10,8 @@ vi.mock('../dataProvider', () => ({
+ 
+ vi.mock('react-redux', () => ({ useDispatch: () => vi.fn() }))
+ 
++const getPlaylistsMock = vi.fn()
++
+ vi.mock('react-admin', async (importOriginal) => {
+   const actual = await importOriginal()
+   return {
+@@ -18,9 +20,7 @@ vi.mock('react-admin', async (importOriginal) => {
+       window.location.hash = `#${url}`
+     },
+     useDataProvider: () => ({
+-      getPlaylists: vi.fn().mockResolvedValue({
+-        data: [{ id: 'pl1', name: 'Pl 1' }],
+-      }),
++      getPlaylists: getPlaylistsMock,
+       inspect: vi.fn().mockResolvedValue({
+         data: { rawTags: {} },
+       }),
+@@ -32,6 +32,9 @@ describe('SongContextMenu', () => {
+   beforeEach(() => {
+     vi.clearAllMocks()
+     window.location.hash = ''
++    getPlaylistsMock.mockResolvedValue({
++      data: [{ id: 'pl1', name: 'Pl 1' }],
++    })
+   })
+ 
+   it('navigates to playlist when selected', async () => {
+@@ -79,4 +82,26 @@ describe('SongContextMenu', () => {
+ 
+     expect(mockOnClick).not.toHaveBeenCalled()
+   })
++
++  it('does nothing when "Show in Playlist" is disabled', async () => {
++    getPlaylistsMock.mockResolvedValue({ data: [] })
++    const mockOnClick = vi.fn()
++    render(
++      <TestContext>
++        <div onClick={mockOnClick}>
++          <SongContextMenu record={{ id: 'song1', size: 1 }} resource="song" />
++        </div>
++      </TestContext>,
++    )
++
++    fireEvent.click(screen.getAllByRole('button')[1])
++    await waitFor(() =>
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++
++    fireEvent.click(
++      screen.getByText(/resources\.song\.actions\.showInPlaylist/),
++    )
++    expect(mockOnClick).not.toHaveBeenCalled()
++  })
+ })
+diff --git a/ui/src/dialogs/SelectPlaylistInput.test.jsx b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+index 93a14b3251bb1d0a68548950bbf5110bfb1f4430..4ffcdf0b6ee185d75312d1eb7cbf600c5785ae83 100644
+--- a/ui/src/dialogs/SelectPlaylistInput.test.jsx
++++ b/ui/src/dialogs/SelectPlaylistInput.test.jsx
+@@ -205,9 +205,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Find and click the remove button (translation key)
+-      const removeButton = screen.getByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButton = screen.getByText('×')
+       fireEvent.click(removeButton)
+ 
+       await waitFor(() => {
+@@ -480,9 +478,7 @@ describe('SelectPlaylistInput', () => {
+       })
+ 
+       // Remove the first selected playlist via chip
+-      const removeButtons = screen.getAllByText(
+-        'resources.playlist.actions.removeSymbol',
+-      )
++      const removeButtons = screen.getAllByText('×')
+       fireEvent.click(removeButtons[0])
+ 
+       await waitFor(() => {
+diff --git a/ui/src/layout/ActivityPanel.test.jsx b/ui/src/layout/ActivityPanel.test.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c506fd08b09eecb23f189e7aacf46e99ae852c56
+--- /dev/null
++++ b/ui/src/layout/ActivityPanel.test.jsx
+@@ -0,0 +1,61 @@
++import React from 'react'
++import { render, screen, fireEvent } from '@testing-library/react'
++import { Provider } from 'react-redux'
++import { createStore, combineReducers } from 'redux'
++import { describe, it, beforeEach } from 'vitest'
++
++import ActivityPanel from './ActivityPanel'
++import { activityReducer } from '../reducers'
++import config from '../config'
++import subsonic from '../subsonic'
++
++vi.mock('../subsonic', () => ({
++  default: {
++    getScanStatus: vi.fn(() =>
++      Promise.resolve({
++        json: {
++          'subsonic-response': {
++            status: 'ok',
++            scanStatus: { error: 'Scan failed' },
++          },
++        },
++      }),
++    ),
++    startScan: vi.fn(),
++  },
++}))
++
++describe('<ActivityPanel />', () => {
++  let store
++
++  beforeEach(() => {
++    store = createStore(combineReducers({ activity: activityReducer }), {
++      activity: {
++        scanStatus: {
++          scanning: false,
++          folderCount: 0,
++          count: 0,
++          error: 'Scan failed',
++          elapsedTime: 0,
++        },
++        serverStart: { version: config.version, startTime: Date.now() },
++      },
++    })
++  })
++
++  it('clears the error icon after opening the panel', () => {
++    render(
++      <Provider store={store}>
++        <ActivityPanel />
++      </Provider>,
++    )
++
++    const button = screen.getByRole('button')
++    expect(screen.getByTestId('activity-error-icon')).toBeInTheDocument()
++
++    fireEvent.click(button)
++
++    expect(screen.getByTestId('activity-ok-icon')).toBeInTheDocument()
++    expect(screen.getByText('Scan failed')).toBeInTheDocument()
++  })
++})

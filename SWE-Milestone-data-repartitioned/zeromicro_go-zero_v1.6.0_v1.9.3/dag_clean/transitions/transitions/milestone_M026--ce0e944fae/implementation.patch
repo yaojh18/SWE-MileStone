@@ -1,0 +1,86 @@
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 64796ef78b16ddd2224a9ea3aedb776368b9605e..e643b94ddd73c34930222cac34db9fecfd5c7bc6 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -189,7 +189,7 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
+ 	switch tp.Kind() {
+ 	case reflect.Struct:
+ 		return buildStructFieldsInfo(tp, fullName)
+-	case reflect.Array, reflect.Slice:
++	case reflect.Array, reflect.Slice, reflect.Map:
+ 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
+ 	case reflect.Chan, reflect.Func:
+ 		return nil, fmt.Errorf("unsupported type: %s", tp.Kind())
+@@ -332,6 +332,8 @@ func toLowerCaseKeyMap(m map[string]any, info *fieldInfo) map[string]any {
+ 			res[lk] = toLowerCaseInterface(v, ti)
+ 		} else if info.mapField != nil {
+ 			res[k] = toLowerCaseInterface(v, info.mapField)
++		} else if vv, ok := v.(map[string]any); ok {
++			res[k] = toLowerCaseKeyMap(vv, info)
+ 		} else {
+ 			res[k] = v
+ 		}
+diff --git a/zrpc/resolver/internal/kubebuilder.go b/zrpc/resolver/internal/kubebuilder.go
+index 2392cc67a24412f1f8427571529934a9af2a46d1..152f60af334806bd34e34a4025817b0742d86696 100644
+--- a/zrpc/resolver/internal/kubebuilder.go
++++ b/zrpc/resolver/internal/kubebuilder.go
+@@ -1,3 +1,5 @@
++//go:build !no_k8s
++
+ package internal
+ 
+ import (
+diff --git a/zrpc/resolver/internal/register.go b/zrpc/resolver/internal/register.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..364b2c9adaf6a193ca493e842909fe8c96a3f5db
+--- /dev/null
++++ b/zrpc/resolver/internal/register.go
+@@ -0,0 +1,8 @@
++//go:build no_k8s
++
++package internal
++
++// RegisterResolver registers the direct, etcd and discov schemes to the resolver.
++func RegisterResolver() {
++	register()
++}
+diff --git a/zrpc/resolver/internal/register_k8s.go b/zrpc/resolver/internal/register_k8s.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cac14691976abc8e71f40942491d5702746053d
+--- /dev/null
++++ b/zrpc/resolver/internal/register_k8s.go
+@@ -0,0 +1,13 @@
++//go:build !no_k8s
++
++package internal
++
++import "google.golang.org/grpc/resolver"
++
++var k8sResolverBuilder kubeBuilder
++
++// RegisterResolver registers the direct, etcd, discov and k8s schemes to the resolver.
++func RegisterResolver() {
++	register()
++	resolver.Register(&k8sResolverBuilder)
++}
+diff --git a/zrpc/resolver/internal/resolver.go b/zrpc/resolver/internal/resolver.go
+index 37362a07bb52f3e96ed64fcfdf39a9cd694415dc..b82ae44f57fb5d2a52dc7623dba2a62db3d651a1 100644
+--- a/zrpc/resolver/internal/resolver.go
++++ b/zrpc/resolver/internal/resolver.go
+@@ -28,15 +28,12 @@ var (
+ 	directResolverBuilder directBuilder
+ 	discovResolverBuilder discovBuilder
+ 	etcdResolverBuilder   etcdBuilder
+-	k8sResolverBuilder    kubeBuilder
+ )
+ 
+-// RegisterResolver registers the direct and discov schemes to the resolver.
+-func RegisterResolver() {
++func register() {
+ 	resolver.Register(&directResolverBuilder)
+ 	resolver.Register(&discovResolverBuilder)
+ 	resolver.Register(&etcdResolverBuilder)
+-	resolver.Register(&k8sResolverBuilder)
+ }
+ 
+ type nopResolver struct {

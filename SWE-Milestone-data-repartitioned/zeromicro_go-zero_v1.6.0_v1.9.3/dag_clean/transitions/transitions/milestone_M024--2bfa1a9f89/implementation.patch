@@ -1,0 +1,491 @@
+diff --git a/core/fx/stream.go b/core/fx/stream.go
+index cebb11e3673173e1250c794978f1d87474fbf8fa..a330fff3f8f047931abf2196266e8541a52ff705 100644
+--- a/core/fx/stream.go
++++ b/core/fx/stream.go
+@@ -84,10 +84,10 @@ func Range(source <-chan any) Stream {
+ 	}
+ }
+ 
+-// AllMach returns whether all elements of this stream match the provided predicate.
++// AllMatch returns whether all elements of this stream match the provided predicate.
+ // May not evaluate the predicate on all elements if not necessary for determining the result.
+ // If the stream is empty then true is returned and the predicate is not evaluated.
+-func (s Stream) AllMach(predicate func(item any) bool) bool {
++func (s Stream) AllMatch(predicate func(item any) bool) bool {
+ 	for item := range s.source {
+ 		if !predicate(item) {
+ 			// make sure the former goroutine not block, and current func returns fast.
+@@ -99,10 +99,10 @@ func (s Stream) AllMach(predicate func(item any) bool) bool {
+ 	return true
+ }
+ 
+-// AnyMach returns whether any elements of this stream match the provided predicate.
++// AnyMatch returns whether any elements of this stream match the provided predicate.
+ // May not evaluate the predicate on all elements if not necessary for determining the result.
+ // If the stream is empty then false is returned and the predicate is not evaluated.
+-func (s Stream) AnyMach(predicate func(item any) bool) bool {
++func (s Stream) AnyMatch(predicate func(item any) bool) bool {
+ 	for item := range s.source {
+ 		if predicate(item) {
+ 			// make sure the former goroutine not block, and current func returns fast.
+diff --git a/zrpc/client.go b/zrpc/client.go
+index e44abc165f80dd87a18cad1b5f7dfb860233277f..0b1bb17ee4a094a0c972fa0f576eb3add8a8e65f 100644
+--- a/zrpc/client.go
++++ b/zrpc/client.go
+@@ -17,6 +17,9 @@ var (
+ 	WithDialOption = internal.WithDialOption
+ 	// WithNonBlock sets the dialing to be nonblock.
+ 	WithNonBlock = internal.WithNonBlock
++	// WithBlock sets the dialing to be blocking.
++	// Deprecated: blocking dials are not recommended by gRPC.
++	WithBlock = internal.WithBlock
+ 	// WithStreamClientInterceptor is an alias of internal.WithStreamClientInterceptor.
+ 	WithStreamClientInterceptor = internal.WithStreamClientInterceptor
+ 	// WithTimeout is an alias of internal.WithTimeout.
+@@ -57,6 +60,8 @@ func NewClient(c RpcClientConf, options ...ClientOption) (Client, error) {
+ 	}
+ 	if c.NonBlock {
+ 		opts = append(opts, WithNonBlock())
++	} else {
++		opts = append(opts, WithBlock())
+ 	}
+ 	if c.Timeout > 0 {
+ 		opts = append(opts, WithTimeout(time.Duration(c.Timeout)*time.Millisecond))
+diff --git a/zrpc/config.go b/zrpc/config.go
+index 84a32160dc67833495d6f08f2fe762002cf30c23..5dc8fdf4c583bd8da23d8782e6bc885f4c1d72c6 100644
+--- a/zrpc/config.go
++++ b/zrpc/config.go
+@@ -27,7 +27,7 @@ type (
+ 		Target        string          `json:",optional"`
+ 		App           string          `json:",optional"`
+ 		Token         string          `json:",optional"`
+-		NonBlock      bool            `json:",optional"`
++		NonBlock      bool            `json:",default=true"`
+ 		Timeout       int64           `json:",default=2000"`
+ 		KeepaliveTime time.Duration   `json:",optional"`
+ 		Middlewares   ClientMiddlewaresConf
+diff --git a/zrpc/internal/balancer/p2c/p2c.go b/zrpc/internal/balancer/p2c/p2c.go
+index 08ea1aad948eedf0732ab1cf8bcbb0ebc8f41a22..b5a38f50b13bdfd8955e66574d26f1de32eb5209 100644
+--- a/zrpc/internal/balancer/p2c/p2c.go
++++ b/zrpc/internal/balancer/p2c/p2c.go
+@@ -22,13 +22,20 @@ const (
+ 	// Name is the name of p2c balancer.
+ 	Name = "p2c_ewma"
+ 
+-	decayTime       = int64(time.Second * 10) // default value from finagle
+-	forcePick       = int64(time.Second)
+-	initSuccess     = 1000
++	// default value from finagle
++	decayTime = int64(time.Second * 10)
++	// if a node is not selected for a period of time, it is forcibly selected.
++	forcePick = int64(time.Second)
++	// initial success count
++	initSuccess = 1000
++	// success count to trigger throttling
+ 	throttleSuccess = initSuccess / 2
+-	penalty         = int64(math.MaxInt32)
+-	pickTimes       = 3
+-	logInterval     = time.Minute
++	// penalty value for load calculation
++	penalty = int64(math.MaxInt32)
++	// number of pick attempts
++	pickTimes = 3
++	// log interval for statistics
++	logInterval = time.Minute
+ )
+ 
+ var emptyPickResult balancer.PickResult
+@@ -45,7 +52,7 @@ func (b *p2cPickerBuilder) Build(info base.PickerBuildInfo) balancer.Picker {
+ 		return base.NewErrPicker(balancer.ErrNoSubConnAvailable)
+ 	}
+ 
+-	var conns []*subConn
++	conns := make([]*subConn, 0, len(readySCs))
+ 	for conn, connInfo := range readySCs {
+ 		conns = append(conns, &subConn{
+ 			addr:    connInfo.Address,
+@@ -121,6 +128,11 @@ func (p *p2cPicker) buildDoneFunc(c *subConn) func(info balancer.DoneInfo) {
+ 		if td < 0 {
+ 			td = 0
+ 		}
++
++		// As the td/decayTime value increases, indicating an increase in delay,
++		// the value of w (y-axis) will decrease, inversely proportional.
++		// The function curve of y = x^(-x) is as follows:
++		// https://github.com/zeromicro/zero-doc/blob/main/doc/images/y_e_x.png?raw=true
+ 		w := math.Exp(float64(-td) / float64(decayTime))
+ 		lag := int64(now) - start
+ 		if lag < 0 {
+@@ -130,6 +142,8 @@ func (p *p2cPicker) buildDoneFunc(c *subConn) func(info balancer.DoneInfo) {
+ 		if olag == 0 {
+ 			w = 0
+ 		}
++
++		// The smaller the value of w, the lower the impact of historical data.
+ 		atomic.StoreUint64(&c.lag, uint64(float64(olag)*w+float64(lag)*(1-w)))
+ 		success := initSuccess
+ 		if info.Err != nil && !codes.Acceptable(info.Err) {
+@@ -182,7 +196,11 @@ func (p *p2cPicker) logStats() {
+ }
+ 
+ type subConn struct {
+-	lag      uint64
++	// The request latency measured by the weighted moving average algorithm.
++	lag uint64
++
++	// The value represents the number of requests that are either pending or just
++	// starting at the current node, and it is obtained through atomic addition.
+ 	inflight int64
+ 	success  uint64
+ 	requests int64
+diff --git a/zrpc/internal/client.go b/zrpc/internal/client.go
+index 0d01ae993e041004f8225e2c0addf7246e627479..08cda0055ae8afc1edefd8f564257847175d8013 100644
+--- a/zrpc/internal/client.go
++++ b/zrpc/internal/client.go
+@@ -145,6 +145,15 @@ func (c *client) dial(server string, opts ...ClientOption) error {
+ 	return nil
+ }
+ 
++// WithBlock sets the dialing to be blocking.
++// Deprecated: blocking dials are not recommended by gRPC.
++// See https://github.com/grpc/grpc-go/blob/master/Documentation/anti-patterns.md
++func WithBlock() ClientOption {
++	return func(options *ClientOptions) {
++		options.NonBlock = false
++	}
++}
++
+ // WithDialOption returns a func to customize a ClientOptions with given dial option.
+ func WithDialOption(opt grpc.DialOption) ClientOption {
+ 	return func(options *ClientOptions) {
+diff --git a/zrpc/internal/rpcpubserver.go b/zrpc/internal/rpcpubserver.go
+index 3efde008dd37bc5a7778cf58098a4476d1fa931f..70b481323d923b833f86592102295d22fce00326 100644
+--- a/zrpc/internal/rpcpubserver.go
++++ b/zrpc/internal/rpcpubserver.go
+@@ -14,7 +14,7 @@ const (
+ )
+ 
+ // NewRpcPubServer returns a Server.
+-func NewRpcPubServer(etcd discov.EtcdConf, listenOn string, middlewares ServerMiddlewaresConf,
++func NewRpcPubServer(etcd discov.EtcdConf, listenOn string,
+ 	opts ...ServerOption) (Server, error) {
+ 	registerEtcd := func() error {
+ 		pubListenOn := figureOutListenOn(listenOn)
+@@ -34,7 +34,7 @@ func NewRpcPubServer(etcd discov.EtcdConf, listenOn string, middlewares ServerMi
+ 	}
+ 	server := keepAliveServer{
+ 		registerEtcd: registerEtcd,
+-		Server:       NewRpcServer(listenOn, middlewares, opts...),
++		Server:       NewRpcServer(listenOn, opts...),
+ 	}
+ 
+ 	return server, nil
+diff --git a/zrpc/internal/rpcserver.go b/zrpc/internal/rpcserver.go
+index ed4aa2356b6a9503fcf6419b5c9fad55439218e2..c1302f03ae529b761daced5a11e78f17a795f5c2 100644
+--- a/zrpc/internal/rpcserver.go
++++ b/zrpc/internal/rpcserver.go
+@@ -5,9 +5,7 @@ import (
+ 	"net"
+ 
+ 	"github.com/zeromicro/go-zero/core/proc"
+-	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/internal/health"
+-	"github.com/zeromicro/go-zero/zrpc/internal/serverinterceptors"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/health/grpc_health_v1"
+ )
+@@ -19,38 +17,31 @@ type (
+ 	ServerOption func(options *rpcServerOptions)
+ 
+ 	rpcServerOptions struct {
+-		metrics *stat.Metrics
+-		health  bool
++		health bool
+ 	}
+ 
+ 	rpcServer struct {
+ 		*baseRpcServer
+ 		name          string
+-		middlewares   ServerMiddlewaresConf
+ 		healthManager health.Probe
+ 	}
+ )
+ 
+ // NewRpcServer returns a Server.
+-func NewRpcServer(addr string, middlewares ServerMiddlewaresConf, opts ...ServerOption) Server {
++func NewRpcServer(addr string, opts ...ServerOption) Server {
+ 	var options rpcServerOptions
+ 	for _, opt := range opts {
+ 		opt(&options)
+ 	}
+-	if options.metrics == nil {
+-		options.metrics = stat.NewMetrics(addr)
+-	}
+ 
+ 	return &rpcServer{
+ 		baseRpcServer: newBaseRpcServer(addr, &options),
+-		middlewares:   middlewares,
+ 		healthManager: health.NewHealthManager(fmt.Sprintf("%s-%s", probeNamePrefix, addr)),
+ 	}
+ }
+ 
+ func (s *rpcServer) SetName(name string) {
+ 	s.name = name
+-	s.baseRpcServer.SetName(name)
+ }
+ 
+ func (s *rpcServer) Start(register RegisterFn) error {
+@@ -59,8 +50,8 @@ func (s *rpcServer) Start(register RegisterFn) error {
+ 		return err
+ 	}
+ 
+-	unaryInterceptorOption := grpc.ChainUnaryInterceptor(s.buildUnaryInterceptors()...)
+-	streamInterceptorOption := grpc.ChainStreamInterceptor(s.buildStreamInterceptors()...)
++	unaryInterceptorOption := grpc.ChainUnaryInterceptor(s.unaryInterceptors...)
++	streamInterceptorOption := grpc.ChainStreamInterceptor(s.streamInterceptors...)
+ 
+ 	options := append(s.options, unaryInterceptorOption, streamInterceptorOption)
+ 	server := grpc.NewServer(options...)
+@@ -87,52 +78,6 @@ func (s *rpcServer) Start(register RegisterFn) error {
+ 	return server.Serve(lis)
+ }
+ 
+-func (s *rpcServer) buildStreamInterceptors() []grpc.StreamServerInterceptor {
+-	var interceptors []grpc.StreamServerInterceptor
+-
+-	if s.middlewares.Trace {
+-		interceptors = append(interceptors, serverinterceptors.StreamTracingInterceptor)
+-	}
+-	if s.middlewares.Recover {
+-		interceptors = append(interceptors, serverinterceptors.StreamRecoverInterceptor)
+-	}
+-	if s.middlewares.Breaker {
+-		interceptors = append(interceptors, serverinterceptors.StreamBreakerInterceptor)
+-	}
+-
+-	return append(interceptors, s.streamInterceptors...)
+-}
+-
+-func (s *rpcServer) buildUnaryInterceptors() []grpc.UnaryServerInterceptor {
+-	var interceptors []grpc.UnaryServerInterceptor
+-
+-	if s.middlewares.Trace {
+-		interceptors = append(interceptors, serverinterceptors.UnaryTracingInterceptor)
+-	}
+-	if s.middlewares.Recover {
+-		interceptors = append(interceptors, serverinterceptors.UnaryRecoverInterceptor)
+-	}
+-	if s.middlewares.Stat {
+-		interceptors = append(interceptors,
+-			serverinterceptors.UnaryStatInterceptor(s.metrics, s.middlewares.StatConf))
+-	}
+-	if s.middlewares.Prometheus {
+-		interceptors = append(interceptors, serverinterceptors.UnaryPrometheusInterceptor)
+-	}
+-	if s.middlewares.Breaker {
+-		interceptors = append(interceptors, serverinterceptors.UnaryBreakerInterceptor)
+-	}
+-
+-	return append(interceptors, s.unaryInterceptors...)
+-}
+-
+-// WithMetrics returns a func that sets metrics to a Server.
+-func WithMetrics(metrics *stat.Metrics) ServerOption {
+-	return func(options *rpcServerOptions) {
+-		options.metrics = metrics
+-	}
+-}
+-
+ // WithRpcHealth returns a func that sets rpc health switch to a Server.
+ func WithRpcHealth(health bool) ServerOption {
+ 	return func(options *rpcServerOptions) {
+diff --git a/zrpc/internal/server.go b/zrpc/internal/server.go
+index ad405b3458a554f26a32e9157a6804b4a3dfb5cd..fc9eea0cbb50210284cee7573df1509d89abc74f 100644
+--- a/zrpc/internal/server.go
++++ b/zrpc/internal/server.go
+@@ -3,7 +3,6 @@ package internal
+ import (
+ 	"time"
+ 
+-	"github.com/zeromicro/go-zero/core/stat"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/health"
+ 	"google.golang.org/grpc/keepalive"
+@@ -27,7 +26,6 @@ type (
+ 	baseRpcServer struct {
+ 		address            string
+ 		health             *health.Server
+-		metrics            *stat.Metrics
+ 		options            []grpc.ServerOption
+ 		streamInterceptors []grpc.StreamServerInterceptor
+ 		unaryInterceptors  []grpc.UnaryServerInterceptor
+@@ -42,7 +40,6 @@ func newBaseRpcServer(address string, rpcServerOpts *rpcServerOptions) *baseRpcS
+ 	return &baseRpcServer{
+ 		address: address,
+ 		health:  h,
+-		metrics: rpcServerOpts.metrics,
+ 		options: []grpc.ServerOption{grpc.KeepaliveParams(keepalive.ServerParameters{
+ 			MaxConnectionIdle: defaultConnectionIdleDuration,
+ 		})},
+@@ -60,7 +57,3 @@ func (s *baseRpcServer) AddStreamInterceptors(interceptors ...grpc.StreamServerI
+ func (s *baseRpcServer) AddUnaryInterceptors(interceptors ...grpc.UnaryServerInterceptor) {
+ 	s.unaryInterceptors = append(s.unaryInterceptors, interceptors...)
+ }
+-
+-func (s *baseRpcServer) SetName(name string) {
+-	s.metrics.SetName(name)
+-}
+diff --git a/zrpc/internal/serverinterceptors/breakerinterceptor.go b/zrpc/internal/serverinterceptors/breakerinterceptor.go
+index 79d8c68c59820eeff980fafd2accc49699dfd47f..4c2b94bac43b50704a411950d8f63161a0dfed1a 100644
+--- a/zrpc/internal/serverinterceptors/breakerinterceptor.go
++++ b/zrpc/internal/serverinterceptors/breakerinterceptor.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 
+ 	"github.com/zeromicro/go-zero/core/breaker"
++	"github.com/zeromicro/go-zero/core/errorx"
+ 	"github.com/zeromicro/go-zero/zrpc/internal/codes"
+ 	"google.golang.org/grpc"
+ 	gcodes "google.golang.org/grpc/codes"
+@@ -13,11 +14,13 @@ import (
+ 
+ // StreamBreakerInterceptor is an interceptor that acts as a circuit breaker.
+ func StreamBreakerInterceptor(svr any, stream grpc.ServerStream, info *grpc.StreamServerInfo,
+-	handler grpc.StreamHandler) (err error) {
++	handler grpc.StreamHandler) error {
+ 	breakerName := info.FullMethod
+-	return breaker.DoWithAcceptable(breakerName, func() error {
++	err := breaker.DoWithAcceptable(breakerName, func() error {
+ 		return handler(svr, stream)
+-	}, codes.Acceptable)
++	}, serverSideAcceptable)
++
++	return convertError(err)
+ }
+ 
+ // UnaryBreakerInterceptor is an interceptor that acts as a circuit breaker.
+@@ -28,10 +31,28 @@ func UnaryBreakerInterceptor(ctx context.Context, req any, info *grpc.UnaryServe
+ 		var err error
+ 		resp, err = handler(ctx, req)
+ 		return err
+-	}, codes.Acceptable)
++	}, serverSideAcceptable)
++
++	return resp, convertError(err)
++}
++
++func convertError(err error) error {
++	if err == nil {
++		return nil
++	}
++
++	// we don't convert context.DeadlineExceeded to status error,
++	// because grpc will convert it and return to the client.
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+-		err = status.Error(gcodes.Unavailable, err.Error())
++		return status.Error(gcodes.Unavailable, err.Error())
+ 	}
+ 
+-	return resp, err
++	return err
++}
++
++func serverSideAcceptable(err error) bool {
++	if errorx.In(err, context.DeadlineExceeded, breaker.ErrServiceUnavailable) {
++		return false
++	}
++	return codes.Acceptable(err)
+ }
+diff --git a/zrpc/server.go b/zrpc/server.go
+index d891c8e69924f0a31368dbdc929d948185296487..813fc358d298ee71672529198a90c01584d46924 100644
+--- a/zrpc/server.go
++++ b/zrpc/server.go
+@@ -36,21 +36,23 @@ func NewServer(c RpcServerConf, register internal.RegisterFn) (*RpcServer, error
+ 	var server internal.Server
+ 	metrics := stat.NewMetrics(c.ListenOn)
+ 	serverOptions := []internal.ServerOption{
+-		internal.WithMetrics(metrics),
+ 		internal.WithRpcHealth(c.Health),
+ 	}
+ 
+ 	if c.HasEtcd() {
+-		server, err = internal.NewRpcPubServer(c.Etcd, c.ListenOn, c.Middlewares, serverOptions...)
++		server, err = internal.NewRpcPubServer(c.Etcd, c.ListenOn, serverOptions...)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+ 	} else {
+-		server = internal.NewRpcServer(c.ListenOn, c.Middlewares, serverOptions...)
++		server = internal.NewRpcServer(c.ListenOn, serverOptions...)
+ 	}
+ 
+ 	server.SetName(c.Name)
+-	if err = setupInterceptors(server, c, metrics); err != nil {
++	metrics.SetName(c.Name)
++	setupStreamInterceptors(server, c)
++	setupUnaryInterceptors(server, c, metrics)
++	if err = setupAuthInterceptors(server, c); err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -108,6 +110,9 @@ func SetServerSlowThreshold(threshold time.Duration) {
+ }
+ 
+ func setupAuthInterceptors(svr internal.Server, c RpcServerConf) error {
++	if !c.Auth {
++		return nil
++	}
+ 	rds, err := redis.NewRedis(c.Redis.RedisConf)
+ 	if err != nil {
+ 		return err
+@@ -124,22 +129,40 @@ func setupAuthInterceptors(svr internal.Server, c RpcServerConf) error {
+ 	return nil
+ }
+ 
+-func setupInterceptors(svr internal.Server, c RpcServerConf, metrics *stat.Metrics) error {
++func setupStreamInterceptors(svr internal.Server, c RpcServerConf) {
++	if c.Middlewares.Trace {
++		svr.AddStreamInterceptors(serverinterceptors.StreamTracingInterceptor)
++	}
++	if c.Middlewares.Recover {
++		svr.AddStreamInterceptors(serverinterceptors.StreamRecoverInterceptor)
++	}
++	if c.Middlewares.Breaker {
++		svr.AddStreamInterceptors(serverinterceptors.StreamBreakerInterceptor)
++	}
++}
++
++func setupUnaryInterceptors(svr internal.Server, c RpcServerConf, metrics *stat.Metrics) {
++	if c.Middlewares.Trace {
++		svr.AddUnaryInterceptors(serverinterceptors.UnaryTracingInterceptor)
++	}
++	if c.Middlewares.Recover {
++		svr.AddUnaryInterceptors(serverinterceptors.UnaryRecoverInterceptor)
++	}
++	if c.Middlewares.Stat {
++		svr.AddUnaryInterceptors(serverinterceptors.UnaryStatInterceptor(metrics, c.Middlewares.StatConf))
++	}
++	if c.Middlewares.Prometheus {
++		svr.AddUnaryInterceptors(serverinterceptors.UnaryPrometheusInterceptor)
++	}
++	if c.Middlewares.Breaker {
++		svr.AddUnaryInterceptors(serverinterceptors.UnaryBreakerInterceptor)
++	}
+ 	if c.CpuThreshold > 0 {
+ 		shedder := load.NewAdaptiveShedder(load.WithCpuThreshold(c.CpuThreshold))
+ 		svr.AddUnaryInterceptors(serverinterceptors.UnarySheddingInterceptor(shedder, metrics))
+ 	}
+-
+ 	if c.Timeout > 0 {
+ 		svr.AddUnaryInterceptors(serverinterceptors.UnaryTimeoutInterceptor(
+ 			time.Duration(c.Timeout)*time.Millisecond, c.MethodTimeouts...))
+ 	}
+-
+-	if c.Auth {
+-		if err := setupAuthInterceptors(svr, c); err != nil {
+-			return err
+-		}
+-	}
+-
+-	return nil
+ }

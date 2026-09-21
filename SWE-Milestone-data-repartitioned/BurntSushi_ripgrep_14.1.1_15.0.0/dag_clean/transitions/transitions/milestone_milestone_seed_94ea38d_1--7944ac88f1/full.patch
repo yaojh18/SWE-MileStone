@@ -1,0 +1,63 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5ac7d9b1bd0606b51c882f8c6272d91b7930f51a..8aa2dcb3a508ad3fea8a4263d265f3368c9f5e02 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -20,6 +20,8 @@ Feature enhancements:
+   Completions for the fish shell take ripgrep's config file into account.
+ * [FEATURE #2841](https://github.com/BurntSushi/ripgrep/pull/2841):
+   Add `italic` to the list of available style attributes in `--color`.
++* [FEATURE #2842](https://github.com/BurntSushi/ripgrep/pull/2842):
++  Directories containing `.jj` are now treated as git repositories.
+ 
+ 
+ 14.1.1 (2024-09-08)
+diff --git a/crates/ignore/src/dir.rs b/crates/ignore/src/dir.rs
+index 01ff8ecd99d238dc961bb11995478d4ae16b7a31..2aa5ba87cb0a04784470e87002a8f61cba902e08 100644
+--- a/crates/ignore/src/dir.rs
++++ b/crates/ignore/src/dir.rs
+@@ -212,7 +212,7 @@ impl Ignore {
+             igtmp.absolute_base = Some(absolute_base.clone());
+             igtmp.has_git =
+                 if self.0.opts.require_git && self.0.opts.git_ignore {
+-                    parent.join(".git").exists()
++                    parent.join(".git").exists() || parent.join(".jj").exists()
+                 } else {
+                     false
+                 };
+@@ -251,7 +251,7 @@ impl Ignore {
+         } else {
+             None
+         };
+-        let has_git = git_type.map(|_| true).unwrap_or(false);
++        let has_git = git_type.is_some() || dir.join(".jj").exists();
+ 
+         let mut errs = PartialErrorBuilder::default();
+         let custom_ig_matcher = if self.0.custom_ignore_filenames.is_empty() {
+@@ -290,6 +290,7 @@ impl Ignore {
+             errs.maybe_push(err);
+             m
+         };
++
+         let gi_exclude_matcher = if !self.0.opts.git_exclude {
+             Gitignore::empty()
+         } else {
+@@ -954,6 +955,19 @@ mod tests {
+         assert!(ig.matched("baz", false).is_none());
+     }
+ 
++    #[test]
++    fn gitignore_with_jj() {
++        let td = tmpdir();
++        mkdirp(td.path().join(".jj"));
++        wfile(td.path().join(".gitignore"), "foo\n!bar");
++
++        let (ig, err) = IgnoreBuilder::new().build().add_child(td.path());
++        assert!(err.is_none());
++        assert!(ig.matched("foo", false).is_ignore());
++        assert!(ig.matched("bar", false).is_whitelist());
++        assert!(ig.matched("baz", false).is_none());
++    }
++
+     #[test]
+     fn gitignore_no_git() {
+         let td = tmpdir();

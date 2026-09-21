@@ -1,0 +1,284 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index e0938bc92ff2cf8264b8099ac1e1afc63b995b5e..33622fcabc99698e6fb132d5db35c18d778749b0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -99,11 +99,14 @@ jobs:
+           os: macos-latest
+           rust: nightly
+         - build: win-msvc
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly
+         - build: win-gnu
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly-x86_64-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
+     steps:
+     - name: Checkout repository
+       uses: actions/checkout@v4
+@@ -177,7 +180,7 @@ jobs:
+       # 'rg' binary (done in test-complete) with qemu, which is a pain and
+       # doesn't really gain us much. If shell completion works in one place,
+       # it probably works everywhere.
+-      if: matrix.target == '' && matrix.os != 'windows-2022'
++      if: matrix.target == '' && !startsWith(matrix.os, 'windows')
+       shell: bash
+       run: ci/test-complete
+ 
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index f6ea3d926f44da95a1b1fb68867530243978e203..9a9cc0386ee1748cb76a4e4cfae6f916380aa907 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -122,6 +122,10 @@ jobs:
+           os: windows-latest
+           rust: nightly-x86_64-gnu
+           target: x86_64-pc-windows-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
++          target: aarch64-pc-windows-msvc
+         - build: win32-msvc
+           os: windows-latest
+           rust: nightly
+@@ -175,7 +179,7 @@ jobs:
+       shell: bash
+       run: |
+         ${{ env.CARGO }} build --verbose --release --features pcre2 ${{ env.TARGET_FLAGS }}
+-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
++        if [[ "${{ matrix.os }}" == windows-* ]]; then
+           bin="target/${{ matrix.target }}/release/rg.exe"
+         else
+           bin="target/${{ matrix.target }}/release/rg"
+@@ -258,7 +262,7 @@ jobs:
+ 
+     - name: Build archive (Windows)
+       shell: bash
+-      if: matrix.os == 'windows-latest'
++      if: startsWith(matrix.os, 'windows')
+       run: |
+         7z a "$ARCHIVE.zip" "$ARCHIVE"
+         certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+@@ -267,7 +271,7 @@ jobs:
+ 
+     - name: Build archive (Unix)
+       shell: bash
+-      if: matrix.os != 'windows-latest'
++      if: ${{ !startsWith(matrix.os, 'windows') }}
+       run: |
+         tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+         shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9601936b22457ccfe206a30ab6c5d9e0adb013c6..e37735e2a52b5069ddb8d0684961c0bcabb71213 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -16,8 +16,15 @@ Bug fixes:
+   [BUG #2836](https://github.com/BurntSushi/ripgrep/issues/2836),
+   [BUG #2933](https://github.com/BurntSushi/ripgrep/pull/2933):
+   Fix bug related to gitignores from parent directories.
++* [BUG #1332](https://github.com/BurntSushi/ripgrep/issues/1332),
++  [BUG #3001](https://github.com/BurntSushi/ripgrep/issues/3001):
++  Make `rg -vf file` where `file` is empty match everything.
+ * [BUG #2177](https://github.com/BurntSushi/ripgrep/issues/2177):
+   Ignore a UTF-8 BOM marker at the start of `.gitignore` (and similar files).
++* [BUG #2944](https://github.com/BurntSushi/ripgrep/pull/2944):
++  Fix a bug where the "bytes searched" in `--stats` output could be incorrect.
++* [BUG #2990](https://github.com/BurntSushi/ripgrep/issues/2990):
++  Fix a bug where ripgrep would mishandle globs that ended with a `.`.
+ 
+ Feature enhancements:
+ 
+@@ -32,6 +39,10 @@ Feature enhancements:
+   Directories containing `.jj` are now treated as git repositories.
+ * [FEATURE #2849](https://github.com/BurntSushi/ripgrep/pull/2849):
+   When using multithreading, schedule files to search in order given on CLI.
++* [FEATURE #2943](https://github.com/BurntSushi/ripgrep/issues/2943):
++  Add `aarch64` release artifacts for Windows.
++* [FEATURE #3048](https://github.com/BurntSushi/ripgrep/pull/3048):
++  Globs in ripgrep (and the `globset` crate) now support nested alternates.
+ 
+ 
+ 14.1.1 (2024-09-08)
+diff --git a/Cargo.lock b/Cargo.lock
+index fac37ce8bcbf5898d6f6d7db5be46e2d6efefb58..49af1f7871600f61d7b6140a6d90aa4854e0e51e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -261,26 +261,6 @@ version = "1.0.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+ 
+-[[package]]
+-name = "jemalloc-sys"
+-version = "0.5.4+5.3.0-patched"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ac6c1946e1cea1788cbfde01c993b52a10e2da07f4bac608228d1bed20bfebf2"
+-dependencies = [
+- "cc",
+- "libc",
+-]
+-
+-[[package]]
+-name = "jemallocator"
+-version = "0.5.4"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a0de374a9f8e63150e6f5e8a60cc14c668226d7a347d8aee1a45766e3c4dd3bc"
+-dependencies = [
+- "jemalloc-sys",
+- "libc",
+-]
+-
+ [[package]]
+ name = "jobserver"
+ version = "0.1.33"
+@@ -413,7 +393,6 @@ dependencies = [
+  "bstr",
+  "grep",
+  "ignore",
+- "jemallocator",
+  "lexopt",
+  "log",
+  "serde",
+@@ -421,6 +400,7 @@ dependencies = [
+  "serde_json",
+  "termcolor",
+  "textwrap",
++ "tikv-jemallocator",
+  "walkdir",
+ ]
+ 
+@@ -503,6 +483,26 @@ version = "0.16.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+ 
++[[package]]
++name = "tikv-jemalloc-sys"
++version = "0.6.0+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cd3c60906412afa9c2b5b5a48ca6a5abe5736aec9eb48ad05037a677e52e4e2d"
++dependencies = [
++ "cc",
++ "libc",
++]
++
++[[package]]
++name = "tikv-jemallocator"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4cec5ff18518d81584f477e9bfdf957f5bb0979b0bac3af4ca30b5b3ae2d2865"
++dependencies = [
++ "libc",
++ "tikv-jemalloc-sys",
++]
++
+ [[package]]
+ name = "unicode-ident"
+ version = "1.0.18"
+diff --git a/Cargo.toml b/Cargo.toml
+index 46fdf31ab83e1e419565e787065f6f207bf0f4dd..16aed2f04d1e2c703a8dd969a96f06613dadc116 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -60,8 +60,8 @@ serde_json = "1.0.23"
+ termcolor = "1.1.0"
+ textwrap = { version = "0.16.0", default-features = false }
+ 
+-[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.jemallocator]
+-version = "0.5.0"
++[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.tikv-jemallocator]
++version = "0.6.0"
+ 
+ [dev-dependencies]
+ serde = "1.0.77"
+diff --git a/FAQ.md b/FAQ.md
+index f244250bed7366e2e75c56583da18b6dffe3d4c8..52a0ed0925870761967477bb88d50eba87c2c661 100644
+--- a/FAQ.md
++++ b/FAQ.md
+@@ -1055,7 +1055,7 @@ How can I donate to ripgrep or its maintainers?
+ 
+ I welcome [sponsorship](https://github.com/sponsors/BurntSushi/).
+ 
+-Or if you'd prefer, donating to a charitably organization that you like would
++Or if you'd prefer, donating to a charitable organization that you like would
+ also be most welcome. My favorites are:
+ 
+ * [The Internet Archive](https://archive.org/donate/)
+diff --git a/README.md b/README.md
+index 4502d7619b785268682e9e17e2148cc20866b26c..7373c39b38cd7150452e0128afda72af2b87bbed 100644
+--- a/README.md
++++ b/README.md
+@@ -302,17 +302,8 @@ and **openSUSE Leap** since 15.1.
+ $ sudo zypper install ripgrep
+ ```
+ 
+-If you're a **RHEL/CentOS 7/8** user, you can install ripgrep from
+-[copr](https://copr.fedorainfracloud.org/coprs/carlwgeorge/ripgrep/):
+-
+-```
+-$ sudo yum install -y yum-utils
+-$ sudo yum-config-manager --add-repo=https://copr.fedorainfracloud.org/coprs/carlwgeorge/ripgrep/repo/epel-7/carlwgeorge-ripgrep-epel-7.repo
+-$ sudo yum install ripgrep
+-```
+-
+ If you're a **Nix** user, you can install ripgrep from
+-[nixpkgs](https://github.com/NixOS/nixpkgs/blob/master/pkgs/tools/text/ripgrep/default.nix):
++[nixpkgs](https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/ri/ripgrep/package.nix):
+ 
+ ```
+ $ nix-env --install ripgrep
+diff --git a/build.rs b/build.rs
+index db9584bff5369df8a67ce7dc023c0ab5bf483a0c..3479b69e9c36cba90e4fe3e96f997fd12e217032 100644
+--- a/build.rs
++++ b/build.rs
+@@ -22,7 +22,7 @@ fn set_windows_exe_options() {
+     manifest.push(MANIFEST);
+     let Some(manifest) = manifest.to_str() else { return };
+ 
+-    println!("cargo:rerun-if-changed={}", MANIFEST);
++    println!("cargo:rerun-if-changed={MANIFEST}");
+     // Embed the Windows application manifest file.
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFEST:EMBED");
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFESTINPUT:{manifest}");
+@@ -37,10 +37,25 @@ fn set_git_revision_hash() {
+     use std::process::Command;
+ 
+     let args = &["rev-parse", "--short=10", "HEAD"];
+-    let Ok(output) = Command::new("git").args(args).output() else { return };
+-    let rev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+-    if rev.is_empty() {
+-        return;
++    let output = Command::new("git").args(args).output();
++    match output {
++        Ok(output) => {
++            let rev =
++                String::from_utf8_lossy(&output.stdout).trim().to_string();
++            if rev.is_empty() {
++                println!(
++                    "cargo:warning=output from `git rev-parse` is empty, \
++                     so skipping embedding of commit hash"
++                );
++                return;
++            }
++            println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={rev}");
++        }
++        Err(e) => {
++            println!(
++                "cargo:warning=failed to run `git rev-parse`, \
++                 so skipping embedding of commit hash: {e}"
++            );
++        }
+     }
+-    println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={}", rev);
+ }
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index b1fc696af2c634ce983254d81eb7712cf06e6db3..3d1a6ea504fa86f2d54d08abceff0399db141988 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -979,6 +979,7 @@ mod tests {
+         let set = GlobSetBuilder::new().build().unwrap();
+         assert!(!set.is_match(""));
+         assert!(!set.is_match("a"));
++        assert!(set.matches_all("a"));
+     }
+ 
+     #[test]

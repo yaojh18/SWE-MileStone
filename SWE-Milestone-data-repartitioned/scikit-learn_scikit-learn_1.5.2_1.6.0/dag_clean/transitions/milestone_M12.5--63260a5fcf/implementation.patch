@@ -1,0 +1,1123 @@
+diff --git a/sklearn/cluster/_affinity_propagation.py b/sklearn/cluster/_affinity_propagation.py
+index f68fa0522f6ffe041dc90230e76624982897bf50..fa5a3513ed899770288e5759323f2a860332b746 100644
+--- a/sklearn/cluster/_affinity_propagation.py
++++ b/sklearn/cluster/_affinity_propagation.py
+@@ -502,13 +502,10 @@ class AffinityPropagation(ClusterMixin, BaseEstimator):
+             Returns the instance itself.
+         """
+         if self.affinity == "precomputed":
+-            accept_sparse = False
+-        else:
+-            accept_sparse = "csr"
+-        X = self._validate_data(X, accept_sparse=accept_sparse)
+-        if self.affinity == "precomputed":
+-            self.affinity_matrix_ = X.copy() if self.copy else X
++            X = self._validate_data(X, copy=self.copy, force_writeable=True)
++            self.affinity_matrix_ = X
+         else:  # self.affinity == "euclidean"
++            X = self._validate_data(X, accept_sparse="csr")
+             self.affinity_matrix_ = -euclidean_distances(X, squared=True)
+ 
+         if self.affinity_matrix_.shape[0] != self.affinity_matrix_.shape[1]:
+diff --git a/sklearn/cluster/_agglomerative.py b/sklearn/cluster/_agglomerative.py
+index f1fbeebcf24b299cc39276f56b5ddc167edd812f..21d3dbff1f6ef3d76b221d9a5fc75a12ffb7f591 100644
+--- a/sklearn/cluster/_agglomerative.py
++++ b/sklearn/cluster/_agglomerative.py
+@@ -29,7 +29,6 @@ from ..utils import check_array
+ from ..utils._fast_dict import IntFloatDict
+ from ..utils._param_validation import (
+     HasMethods,
+-    Hidden,
+     Interval,
+     StrOptions,
+     validate_params,
+@@ -1129,10 +1128,6 @@ class FeatureAgglomeration(
+ 
+         .. versionadded:: 1.2
+ 
+-        .. deprecated:: 1.4
+-           `metric=None` is deprecated in 1.4 and will be removed in 1.6.
+-           Let `metric` be the default value (i.e. `"euclidean"`) instead.
+-
+     memory : str or object with the joblib.Memory interface, default=None
+         Used to cache the output of the computation of the tree.
+         By default, no caching is done. If a string is given, it is the
+@@ -1259,7 +1254,6 @@ class FeatureAgglomeration(
+         "metric": [
+             StrOptions(set(_VALID_METRICS) | {"precomputed"}),
+             callable,
+-            Hidden(None),
+         ],
+         "memory": [str, HasMethods("cache"), None],
+         "connectivity": ["array-like", "sparse matrix", callable, None],
+diff --git a/sklearn/cluster/_hdbscan/hdbscan.py b/sklearn/cluster/_hdbscan/hdbscan.py
+index d59e7ee2cefeaf69424c884a127d30bf6ccabb24..983269e28d13045e3a5ab457b2d1dc7daa376b99 100644
+--- a/sklearn/cluster/_hdbscan/hdbscan.py
++++ b/sklearn/cluster/_hdbscan/hdbscan.py
+@@ -756,6 +756,7 @@ class HDBSCAN(ClusterMixin, BaseEstimator):
+                 X,
+                 accept_sparse=["csr", "lil"],
+                 dtype=np.float64,
++                force_writeable=True,
+             )
+         else:
+             # Only non-sparse, precomputed distance matrices are handled here
+@@ -763,7 +764,9 @@ class HDBSCAN(ClusterMixin, BaseEstimator):
+ 
+             # Perform data validation after removing infinite values (numpy.inf)
+             # from the given distance matrix.
+-            X = self._validate_data(X, force_all_finite=False, dtype=np.float64)
++            X = self._validate_data(
++                X, force_all_finite=False, dtype=np.float64, force_writeable=True
++            )
+             if np.isnan(X).any():
+                 # TODO: Support np.nan in Cython implementation for precomputed
+                 # dense HDBSCAN
+diff --git a/sklearn/cluster/_mean_shift.py b/sklearn/cluster/_mean_shift.py
+index 3d1ad97d02c138e95caa97430362152005ed6198..dbed95ac1692bbb30c51644e1cc5f263f7395eb7 100644
+--- a/sklearn/cluster/_mean_shift.py
++++ b/sklearn/cluster/_mean_shift.py
+@@ -122,7 +122,7 @@ def _mean_shift_single_seed(my_mean, X, nbrs, max_iter):
+         my_mean = np.mean(points_within, axis=0)
+         # If converged or at max_iter, adds the cluster
+         if (
+-            np.linalg.norm(my_mean - my_old_mean) < stop_thresh
++            np.linalg.norm(my_mean - my_old_mean) <= stop_thresh
+             or completed_iterations == max_iter
+         ):
+             break
+diff --git a/sklearn/compose/_column_transformer.py b/sklearn/compose/_column_transformer.py
+index 4c9c21cd4f4ec26c9af809aac463bdf8ac68a23d..3c6403397645668b3f60b99d79e66c0370270a69 100644
+--- a/sklearn/compose/_column_transformer.py
++++ b/sklearn/compose/_column_transformer.py
+@@ -788,22 +788,17 @@ class ColumnTransformer(TransformerMixin, _BaseComposition):
+                 if pd.NA not in Xs[col_name].values:
+                     continue
+                 class_name = self.__class__.__name__
+-                # TODO(1.6): replace warning with ValueError
+-                warnings.warn(
+-                    (
+-                        f"The output of the '{name}' transformer for column"
+-                        f" '{col_name}' has dtype {dtype} and uses pandas.NA to"
+-                        " represent null values. Storing this output in a numpy array"
+-                        " can cause errors in downstream scikit-learn estimators, and"
+-                        " inefficiencies. Starting with scikit-learn version 1.6, this"
+-                        " will raise a ValueError. To avoid this problem you can (i)"
+-                        " store the output in a pandas DataFrame by using"
+-                        f" {class_name}.set_output(transform='pandas') or (ii) modify"
+-                        f" the input data or the '{name}' transformer to avoid the"
+-                        " presence of pandas.NA (for example by using"
+-                        " pandas.DataFrame.astype)."
+-                    ),
+-                    FutureWarning,
++                raise ValueError(
++                    f"The output of the '{name}' transformer for column"
++                    f" '{col_name}' has dtype {dtype} and uses pandas.NA to"
++                    " represent null values. Storing this output in a numpy array"
++                    " can cause errors in downstream scikit-learn estimators, and"
++                    " inefficiencies. To avoid this problem you can (i)"
++                    " store the output in a pandas DataFrame by using"
++                    f" {class_name}.set_output(transform='pandas') or (ii) modify"
++                    f" the input data or the '{name}' transformer to avoid the"
++                    " presence of pandas.NA (for example by using"
++                    " pandas.DataFrame.astype)."
+                 )
+ 
+     def _record_output_indices(self, Xs):
+diff --git a/sklearn/covariance/_empirical_covariance.py b/sklearn/covariance/_empirical_covariance.py
+index 1e194857c64a2172222563187fd981c610255786..5ae7d1793769fc55bc7ab188014b116953615a0b 100644
+--- a/sklearn/covariance/_empirical_covariance.py
++++ b/sklearn/covariance/_empirical_covariance.py
+@@ -12,6 +12,8 @@ import warnings
+ import numpy as np
+ from scipy import linalg
+ 
++from sklearn.utils import metadata_routing
++
+ from .. import config_context
+ from ..base import BaseEstimator, _fit_context
+ from ..metrics.pairwise import pairwise_distances
+@@ -180,6 +182,9 @@ class EmpiricalCovariance(BaseEstimator):
+     array([0.0622..., 0.0193...])
+     """
+ 
++    # X_test should have been called X
++    __metadata_request__score = {"X_test": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "store_precision": ["boolean"],
+         "assume_centered": ["boolean"],
+diff --git a/sklearn/cross_decomposition/_pls.py b/sklearn/cross_decomposition/_pls.py
+index f36b384d503cab55f6358d27a24c23f95e1a0412..ac1e8035590d6db174ad622c8d36a5d1fb1a68f8 100644
+--- a/sklearn/cross_decomposition/_pls.py
++++ b/sklearn/cross_decomposition/_pls.py
+@@ -263,10 +263,19 @@ class _PLS(
+ 
+         check_consistent_length(X, y)
+         X = self._validate_data(
+-            X, dtype=np.float64, copy=self.copy, ensure_min_samples=2
++            X,
++            dtype=np.float64,
++            force_writeable=True,
++            copy=self.copy,
++            ensure_min_samples=2,
+         )
+         y = check_array(
+-            y, input_name="y", dtype=np.float64, copy=self.copy, ensure_2d=False
++            y,
++            input_name="y",
++            dtype=np.float64,
++            force_writeable=True,
++            copy=self.copy,
++            ensure_2d=False,
+         )
+         if y.ndim == 1:
+             self._predict_1d = True
+@@ -1058,10 +1067,19 @@ class PLSSVD(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEstimator):
+         y = _deprecate_Y_when_required(y, Y)
+         check_consistent_length(X, y)
+         X = self._validate_data(
+-            X, dtype=np.float64, copy=self.copy, ensure_min_samples=2
++            X,
++            dtype=np.float64,
++            force_writeable=True,
++            copy=self.copy,
++            ensure_min_samples=2,
+         )
+         y = check_array(
+-            y, input_name="y", dtype=np.float64, copy=self.copy, ensure_2d=False
++            y,
++            input_name="y",
++            dtype=np.float64,
++            force_writeable=True,
++            copy=self.copy,
++            ensure_2d=False,
+         )
+         if y.ndim == 1:
+             y = y.reshape(-1, 1)
+diff --git a/sklearn/decomposition/_factor_analysis.py b/sklearn/decomposition/_factor_analysis.py
+index 2164feb67aa2663e7bcdb6b599df7dd04b1b5432..df45606fe3de474f5a0839834078e16f985a9e58 100644
+--- a/sklearn/decomposition/_factor_analysis.py
++++ b/sklearn/decomposition/_factor_analysis.py
+@@ -216,7 +216,9 @@ class FactorAnalysis(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEsti
+         self : object
+             FactorAnalysis class instance.
+         """
+-        X = self._validate_data(X, copy=self.copy, dtype=np.float64)
++        X = self._validate_data(
++            X, copy=self.copy, dtype=np.float64, force_writeable=True
++        )
+ 
+         n_samples, n_features = X.shape
+         n_components = self.n_components
+diff --git a/sklearn/decomposition/_incremental_pca.py b/sklearn/decomposition/_incremental_pca.py
+index d6c8d1729c18c372dfe155b98e0709f0e2eba4f4..17a512eab60dbb92906b323b74e145912db217f3 100644
+--- a/sklearn/decomposition/_incremental_pca.py
++++ b/sklearn/decomposition/_incremental_pca.py
+@@ -8,6 +8,8 @@ from numbers import Integral
+ import numpy as np
+ from scipy import linalg, sparse
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import _fit_context
+ from ..utils import gen_batches
+ from ..utils._param_validation import Interval
+@@ -183,6 +185,8 @@ class IncrementalPCA(_BasePCA):
+     (1797, 7)
+     """
+ 
++    __metadata_request__partial_fit = {"check_input": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "n_components": [Interval(Integral, 1, None, closed="left"), None],
+         "whiten": ["boolean"],
+@@ -228,6 +232,7 @@ class IncrementalPCA(_BasePCA):
+             accept_sparse=["csr", "csc", "lil"],
+             copy=self.copy,
+             dtype=[np.float64, np.float32],
++            force_writeable=True,
+         )
+         n_samples, n_features = X.shape
+ 
+@@ -277,7 +282,11 @@ class IncrementalPCA(_BasePCA):
+                     "or use IncrementalPCA.fit to do so in batches."
+                 )
+             X = self._validate_data(
+-                X, copy=self.copy, dtype=[np.float64, np.float32], reset=first_pass
++                X,
++                copy=self.copy,
++                dtype=[np.float64, np.float32],
++                force_writeable=True,
++                reset=first_pass,
+             )
+         n_samples, n_features = X.shape
+         if first_pass:
+diff --git a/sklearn/decomposition/_pca.py b/sklearn/decomposition/_pca.py
+index 51d01a5781720f57b93e344e131fc7ef520a0956..ffbf42d32b2bc1549734c770694065877b5fe60d 100644
+--- a/sklearn/decomposition/_pca.py
++++ b/sklearn/decomposition/_pca.py
+@@ -505,6 +505,7 @@ class PCA(_BasePCA):
+         X = self._validate_data(
+             X,
+             dtype=[xp.float64, xp.float32],
++            force_writeable=True,
+             accept_sparse=("csr", "csc"),
+             ensure_2d=True,
+             copy=False,
+diff --git a/sklearn/ensemble/_voting.py b/sklearn/ensemble/_voting.py
+index f880bfe2a086fd4a8bf139d6a582cffecf6410ef..5c9a4de5882d6e0699f4405e5227bae6aa8d8a07 100644
+--- a/sklearn/ensemble/_voting.py
++++ b/sklearn/ensemble/_voting.py
+@@ -555,6 +555,9 @@ class VotingRegressor(RegressorMixin, _BaseVoting):
+     regressors, each on the whole dataset. Then it averages the individual
+     predictions to form a final prediction.
+ 
++    For a detailed example, refer to
++    :ref:`sphx_glr_auto_examples_ensemble_plot_voting_regressor.py`.
++
+     Read more in the :ref:`User Guide <voting_regressor>`.
+ 
+     .. versionadded:: 0.21
+diff --git a/sklearn/feature_extraction/_dict_vectorizer.py b/sklearn/feature_extraction/_dict_vectorizer.py
+index 6f4f0890c327e73765fa6567ff1a66f4b7de1935..0f7d3a37499d89f808449390f9438e8aafaaaed2 100644
+--- a/sklearn/feature_extraction/_dict_vectorizer.py
++++ b/sklearn/feature_extraction/_dict_vectorizer.py
+@@ -9,6 +9,8 @@ from operator import itemgetter
+ import numpy as np
+ import scipy.sparse as sp
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import BaseEstimator, TransformerMixin, _fit_context
+ from ..utils import check_array
+ from ..utils.validation import check_is_fitted
+@@ -91,6 +93,9 @@ class DictVectorizer(TransformerMixin, BaseEstimator):
+     array([[0., 0., 4.]])
+     """
+ 
++    # This isn't something that people should be routing / using in a pipeline.
++    __metadata_request__inverse_transform = {"dict_type": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "dtype": "no_validation",  # validation delegated to numpy,
+         "separator": [str],
+diff --git a/sklearn/feature_extraction/_hash.py b/sklearn/feature_extraction/_hash.py
+index a7cad9d33695b46d653a19fb2847de528068d69d..217fd4c96d7a8191fe59c67b66830c4ed9c74145 100644
+--- a/sklearn/feature_extraction/_hash.py
++++ b/sklearn/feature_extraction/_hash.py
+@@ -7,6 +7,8 @@ from numbers import Integral
+ import numpy as np
+ import scipy.sparse as sp
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import BaseEstimator, TransformerMixin, _fit_context
+ from ..utils._param_validation import Interval, StrOptions
+ from ._hashing_fast import transform as _hashing_transform
+@@ -104,6 +106,9 @@ class FeatureHasher(TransformerMixin, BaseEstimator):
+            [ 0., -1.,  0.,  0.,  0.,  0.,  0.,  1.]])
+     """
+ 
++    # raw_X should have been called X
++    __metadata_request__transform = {"raw_X": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "n_features": [Interval(Integral, 1, np.iinfo(np.int32).max, closed="both")],
+         "input_type": [StrOptions({"dict", "pair", "string"})],
+diff --git a/sklearn/feature_extraction/text.py b/sklearn/feature_extraction/text.py
+index 2d68b2f6e0a2ee1ee17c6a2bcf9b7e5f0090aa96..c31ff4e2658554d4c32dca1b300abb42097d17ab 100644
+--- a/sklearn/feature_extraction/text.py
++++ b/sklearn/feature_extraction/text.py
+@@ -16,6 +16,8 @@ from operator import itemgetter
+ import numpy as np
+ import scipy.sparse as sp
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import BaseEstimator, OneToOneFeatureMixin, TransformerMixin, _fit_context
+ from ..exceptions import NotFittedError
+ from ..preprocessing import normalize
+@@ -1115,6 +1117,11 @@ class CountVectorizer(_VectorizerMixin, BaseEstimator):
+      [0 0 1 0 1 0 1 0 0 0 0 0 1]]
+     """
+ 
++    # raw_documents should not be in the routing mechanism. It should have been
++    # called X in the first place.
++    __metadata_request__fit = {"raw_documents": metadata_routing.UNUSED}
++    __metadata_request__transform = {"raw_documents": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "input": [StrOptions({"filename", "file", "content"})],
+         "encoding": [str],
+diff --git a/sklearn/feature_selection/_sequential.py b/sklearn/feature_selection/_sequential.py
+index 2e4785e525f23eacdc4f6e2749e0499ea0181ced..bc5af4cc2e8ffe6fe250e9d684c26c4adc6b3b87 100644
+--- a/sklearn/feature_selection/_sequential.py
++++ b/sklearn/feature_selection/_sequential.py
+@@ -62,6 +62,7 @@ class SequentialFeatureSelector(SelectorMixin, MetaEstimatorMixin, BaseEstimator
+         consecutive feature additions or removals, stop adding or removing.
+ 
+         `tol` can be negative when removing features using `direction="backward"`.
++        `tol` is required to be strictly positive when doing forward selection.
+         It can be useful to reduce the number of features at the cost of a small
+         decrease in the score.
+ 
+@@ -247,7 +248,9 @@ class SequentialFeatureSelector(SelectorMixin, MetaEstimatorMixin, BaseEstimator
+             self.n_features_to_select_ = int(n_features * self.n_features_to_select)
+ 
+         if self.tol is not None and self.tol < 0 and self.direction == "forward":
+-            raise ValueError("tol must be positive when doing forward selection")
++            raise ValueError(
++                "tol must be strictly positive when doing forward selection"
++            )
+ 
+         cv = check_cv(self.cv, y, classifier=is_classifier(self.estimator))
+ 
+diff --git a/sklearn/impute/_base.py b/sklearn/impute/_base.py
+index 5a053f6b3ddfea57c8a0e0e29f726cd5d9f02c1f..6109e3fde7b2a0e1db879ae7301baed9f7c1d173 100644
+--- a/sklearn/impute/_base.py
++++ b/sklearn/impute/_base.py
+@@ -333,6 +333,7 @@ class SimpleImputer(_BaseImputer):
+                 reset=in_fit,
+                 accept_sparse="csc",
+                 dtype=dtype,
++                force_writeable=True if not in_fit else None,
+                 force_all_finite=force_all_finite,
+                 copy=self.copy,
+             )
+diff --git a/sklearn/impute/_iterative.py b/sklearn/impute/_iterative.py
+index 41f903061c34d5d996e7588e4ffbe41fee42b75b..80b64a246319fa4a8367f94fd9e91b4d928500c1 100644
+--- a/sklearn/impute/_iterative.py
++++ b/sklearn/impute/_iterative.py
+@@ -637,19 +637,28 @@ class IterativeImputer(_BaseImputer):
+         else:
+             X_filled = self.initial_imputer_.transform(X)
+ 
+-        valid_mask = np.flatnonzero(
+-            np.logical_not(np.isnan(self.initial_imputer_.statistics_))
+-        )
++        if in_fit:
++            self._is_empty_feature = np.all(mask_missing_values, axis=0)
+ 
+         if not self.keep_empty_features:
+             # drop empty features
+-            Xt = X[:, valid_mask]
+-            mask_missing_values = mask_missing_values[:, valid_mask]
++            Xt = X[:, ~self._is_empty_feature]
++            mask_missing_values = mask_missing_values[:, ~self._is_empty_feature]
++
++            if self.initial_imputer_.get_params()["strategy"] == "constant":
++                # The constant strategy has a specific behavior and preserve empty
++                # features even with ``keep_empty_features=False``. We need to drop
++                # the column for consistency.
++                # TODO: remove this `if` branch once the following issue is addressed:
++                # https://github.com/scikit-learn/scikit-learn/issues/29827
++                X_filled = X_filled[:, ~self._is_empty_feature]
++
+         else:
+             # mark empty features as not missing and keep the original
+             # imputation
+-            mask_missing_values[:, valid_mask] = True
++            mask_missing_values[:, self._is_empty_feature] = False
+             Xt = X
++            Xt[:, self._is_empty_feature] = X_filled[:, self._is_empty_feature]
+ 
+         return Xt, X_filled, mask_missing_values, X_missing_mask
+ 
+diff --git a/sklearn/impute/_knn.py b/sklearn/impute/_knn.py
+index b1ddc3ae412f8a0f7b97af76d7e612999ebbfb9a..eee64d5c0c13b07461648af72f12e2696fff6996 100644
+--- a/sklearn/impute/_knn.py
++++ b/sklearn/impute/_knn.py
+@@ -269,6 +269,7 @@ class KNNImputer(_BaseImputer):
+             X,
+             accept_sparse=False,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             force_all_finite=force_all_finite,
+             copy=self.copy,
+             reset=False,
+diff --git a/sklearn/isotonic.py b/sklearn/isotonic.py
+index 91718acb51357d3932de9499e1d3b3a373228348..50f01764f9e29a119fe1e3c2c1921248f0a8c91a 100644
+--- a/sklearn/isotonic.py
++++ b/sklearn/isotonic.py
+@@ -11,6 +11,8 @@ import numpy as np
+ from scipy import interpolate, optimize
+ from scipy.stats import spearmanr
+ 
++from sklearn.utils import metadata_routing
++
+ from ._isotonic import _inplace_contiguous_isotonic_regression, _make_unique
+ from .base import BaseEstimator, RegressorMixin, TransformerMixin, _fit_context
+ from .utils import check_array, check_consistent_length
+@@ -272,6 +274,10 @@ class IsotonicRegression(RegressorMixin, TransformerMixin, BaseEstimator):
+     array([1.8628..., 3.7256...])
+     """
+ 
++    # T should have been called X
++    __metadata_request__predict = {"T": metadata_routing.UNUSED}
++    __metadata_request__transform = {"T": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "y_min": [Interval(Real, None, None, closed="both"), None],
+         "y_max": [Interval(Real, None, None, closed="both"), None],
+diff --git a/sklearn/linear_model/_base.py b/sklearn/linear_model/_base.py
+index 2feda1fea56084b39ff8be283c22e1033245b9f0..4586c2cdcaa059d533a6fdc34ae8d80b1cbc0af9 100644
+--- a/sklearn/linear_model/_base.py
++++ b/sklearn/linear_model/_base.py
+@@ -602,7 +602,12 @@ class LinearRegression(MultiOutputMixin, RegressorMixin, LinearModel):
+         accept_sparse = False if self.positive else ["csr", "csc", "coo"]
+ 
+         X, y = self._validate_data(
+-            X, y, accept_sparse=accept_sparse, y_numeric=True, multi_output=True
++            X,
++            y,
++            accept_sparse=accept_sparse,
++            y_numeric=True,
++            multi_output=True,
++            force_writeable=True,
+         )
+ 
+         has_sw = sample_weight is not None
+diff --git a/sklearn/linear_model/_bayes.py b/sklearn/linear_model/_bayes.py
+index e87ea5320c6c100e36aa190d0b8984689bbe593b..dfdcdf23599c9aac530fd18110776ab1ba8c6ff7 100644
+--- a/sklearn/linear_model/_bayes.py
++++ b/sklearn/linear_model/_bayes.py
+@@ -235,7 +235,9 @@ class BayesianRidge(RegressorMixin, LinearModel):
+         self : object
+             Returns the instance itself.
+         """
+-        X, y = self._validate_data(X, y, dtype=[np.float64, np.float32], y_numeric=True)
++        X, y = self._validate_data(
++            X, y, dtype=[np.float64, np.float32], force_writeable=True, y_numeric=True
++        )
+         dtype = X.dtype
+ 
+         if sample_weight is not None:
+@@ -620,7 +622,12 @@ class ARDRegression(RegressorMixin, LinearModel):
+             Fitted estimator.
+         """
+         X, y = self._validate_data(
+-            X, y, dtype=[np.float64, np.float32], y_numeric=True, ensure_min_samples=2
++            X,
++            y,
++            dtype=[np.float64, np.float32],
++            force_writeable=True,
++            y_numeric=True,
++            ensure_min_samples=2,
+         )
+         dtype = X.dtype
+ 
+diff --git a/sklearn/linear_model/_coordinate_descent.py b/sklearn/linear_model/_coordinate_descent.py
+index 425639ce885f5bd9e91a17b1b34f031e68f9a81a..340654910979816d1b8786c74fff9f62112b1c6c 100644
+--- a/sklearn/linear_model/_coordinate_descent.py
++++ b/sklearn/linear_model/_coordinate_descent.py
+@@ -12,6 +12,8 @@ import numpy as np
+ from joblib import effective_n_jobs
+ from scipy import sparse
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import MultiOutputMixin, RegressorMixin, _fit_context
+ from ..model_selection import check_cv
+ from ..utils import Bunch, check_array, check_scalar
+@@ -871,6 +873,10 @@ class ElasticNet(MultiOutputMixin, RegressorMixin, LinearModel):
+     [1.451...]
+     """
+ 
++    # "check_input" is used for optimisation and isn't something to be passed
++    # around in a pipeline.
++    __metadata_request__fit = {"check_input": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "alpha": [Interval(Real, 0, None, closed="left")],
+         "l1_ratio": [Interval(Real, 0, 1, closed="both")],
+@@ -975,6 +981,7 @@ class ElasticNet(MultiOutputMixin, RegressorMixin, LinearModel):
+                 accept_sparse="csc",
+                 order="F",
+                 dtype=[np.float64, np.float32],
++                force_writeable=True,
+                 accept_large_sparse=False,
+                 copy=X_copied,
+                 multi_output=True,
+@@ -1603,6 +1610,7 @@ class LinearModelCV(MultiOutputMixin, LinearModel, ABC):
+             check_X_params = dict(
+                 accept_sparse="csc",
+                 dtype=[np.float64, np.float32],
++                force_writeable=True,
+                 copy=False,
+                 accept_large_sparse=False,
+             )
+@@ -1628,6 +1636,7 @@ class LinearModelCV(MultiOutputMixin, LinearModel, ABC):
+                 accept_sparse="csc",
+                 dtype=[np.float64, np.float32],
+                 order="F",
++                force_writeable=True,
+                 copy=copy_X,
+             )
+             X, y = self._validate_data(
+@@ -2505,6 +2514,7 @@ class MultiTaskElasticNet(Lasso):
+         check_X_params = dict(
+             dtype=[np.float64, np.float32],
+             order="F",
++            force_writeable=True,
+             copy=self.copy_X and self.fit_intercept,
+         )
+         check_y_params = dict(ensure_2d=False, order="F")
+diff --git a/sklearn/linear_model/_least_angle.py b/sklearn/linear_model/_least_angle.py
+index 78588ddd76698b613c6d3a522aad41aafbba926e..7f9e917dfc31c99bb3dbdc3c12f67c6820a0054d 100644
+--- a/sklearn/linear_model/_least_angle.py
++++ b/sklearn/linear_model/_least_angle.py
+@@ -1177,7 +1177,9 @@ class Lars(MultiOutputMixin, RegressorMixin, LinearModel):
+         self : object
+             Returns an instance of self.
+         """
+-        X, y = self._validate_data(X, y, y_numeric=True, multi_output=True)
++        X, y = self._validate_data(
++            X, y, force_writeable=True, y_numeric=True, multi_output=True
++        )
+ 
+         alpha = getattr(self, "alpha", 0.0)
+         if hasattr(self, "n_nonzero_coefs"):
+@@ -1718,7 +1720,7 @@ class LarsCV(Lars):
+         """
+         _raise_for_params(params, self, "fit")
+ 
+-        X, y = self._validate_data(X, y, y_numeric=True)
++        X, y = self._validate_data(X, y, force_writeable=True, y_numeric=True)
+         X = as_float_array(X, copy=self.copy_X)
+         y = as_float_array(y, copy=self.copy_X)
+ 
+@@ -2235,7 +2237,7 @@ class LassoLarsIC(LassoLars):
+         """
+         if copy_X is None:
+             copy_X = self.copy_X
+-        X, y = self._validate_data(X, y, y_numeric=True)
++        X, y = self._validate_data(X, y, force_writeable=True, y_numeric=True)
+ 
+         X, y, Xmean, ymean, Xstd = _preprocess_data(
+             X, y, fit_intercept=self.fit_intercept, copy=copy_X
+diff --git a/sklearn/linear_model/_ridge.py b/sklearn/linear_model/_ridge.py
+index 1d96e827fb8e0447445725810b88581339f7d689..df69baac5a1e7a82c3b5c7515146d60f4ad3e142 100644
+--- a/sklearn/linear_model/_ridge.py
++++ b/sklearn/linear_model/_ridge.py
+@@ -1241,6 +1241,7 @@ class Ridge(MultiOutputMixin, RegressorMixin, _BaseRidge):
+             y,
+             accept_sparse=_accept_sparse,
+             dtype=[xp.float64, xp.float32],
++            force_writeable=True,
+             multi_output=True,
+             y_numeric=True,
+         )
+@@ -1290,6 +1291,7 @@ class _RidgeClassifierMixin(LinearClassifierMixin):
+             accept_sparse=accept_sparse,
+             multi_output=True,
+             y_numeric=False,
++            force_writeable=True,
+         )
+ 
+         self._label_binarizer = LabelBinarizer(pos_label=1, neg_label=-1)
+@@ -2129,8 +2131,6 @@ class _RidgeGCV(LinearModel):
+ 
+         X_mean, *decomposition = decompose(X, y, sqrt_sw)
+ 
+-        scorer = self._get_scorer()
+-
+         n_y = 1 if len(y.shape) == 1 else y.shape[1]
+         n_alphas = 1 if np.ndim(self.alphas) == 0 else len(self.alphas)
+ 
+@@ -2141,7 +2141,7 @@ class _RidgeGCV(LinearModel):
+ 
+         for i, alpha in enumerate(np.atleast_1d(self.alphas)):
+             G_inverse_diag, c = solve(float(alpha), y, sqrt_sw, X_mean, *decomposition)
+-            if scorer is None:
++            if self.scoring is None:
+                 squared_errors = (c / G_inverse_diag) ** 2
+                 alpha_score = self._score_without_scorer(squared_errors=squared_errors)
+                 if self.store_cv_results:
+@@ -2164,7 +2164,7 @@ class _RidgeGCV(LinearModel):
+                     predictions=predictions,
+                     y=unscaled_y,
+                     n_y=n_y,
+-                    scorer=scorer,
++                    scorer=self.scoring,
+                     score_params=score_params,
+                 )
+ 
+@@ -2211,9 +2211,6 @@ class _RidgeGCV(LinearModel):
+ 
+         return self
+ 
+-    def _get_scorer(self):
+-        return check_scoring(self, scoring=self.scoring, allow_none=True)
+-
+     def _score_without_scorer(self, squared_errors):
+         """Performs scoring using squared errors when the scorer is None."""
+         if self.alpha_per_target:
+@@ -2329,6 +2326,7 @@ class _BaseRidgeCV(LinearModel):
+         """
+         _raise_for_params(params, self, "fit")
+         cv = self.cv
++        scorer = self._get_scorer()
+ 
+         # TODO(1.7): Remove in 1.7
+         # Also change `store_cv_results` default back to False
+@@ -2392,10 +2390,14 @@ class _BaseRidgeCV(LinearModel):
+                 if sample_weight is not None:
+                     routed_params.scorer.score["sample_weight"] = sample_weight
+ 
++            # reset `scorer` variable to original user-intend if no scoring is passed
++            if self.scoring is None:
++                scorer = None
++
+             estimator = _RidgeGCV(
+                 alphas,
+                 fit_intercept=self.fit_intercept,
+-                scoring=self.scoring,
++                scoring=scorer,
+                 gcv_mode=self.gcv_mode,
+                 store_cv_results=self._store_cv_results,
+                 is_clf=is_classifier(self),
+@@ -2431,7 +2433,7 @@ class _BaseRidgeCV(LinearModel):
+                 estimator,
+                 parameters,
+                 cv=cv,
+-                scoring=self.scoring,
++                scoring=scorer,
+             )
+ 
+             grid_search.fit(X, y, **params)
+@@ -2465,14 +2467,25 @@ class _BaseRidgeCV(LinearModel):
+             MetadataRouter(owner=self.__class__.__name__)
+             .add_self_request(self)
+             .add(
+-                scorer=self._get_scorer(),
+-                method_mapping=MethodMapping().add(callee="score", caller="fit"),
++                scorer=self.scoring,
++                method_mapping=MethodMapping().add(caller="fit", callee="score"),
++            )
++            .add(
++                splitter=self.cv,
++                method_mapping=MethodMapping().add(caller="fit", callee="split"),
+             )
+         )
+         return router
+ 
+     def _get_scorer(self):
+-        return check_scoring(self, scoring=self.scoring, allow_none=True)
++        scorer = check_scoring(estimator=self, scoring=self.scoring, allow_none=True)
++        if _routing_enabled() and self.scoring is None:
++            # This estimator passes an array of 1s as sample_weight even if
++            # sample_weight is not provided by the user. Therefore we need to
++            # always request it. But we don't set it if it's passed explicitly
++            # by the user.
++            scorer.set_score_request(sample_weight=True)
++        return scorer
+ 
+     # TODO(1.7): Remove
+     # mypy error: Decorated property not supported
+diff --git a/sklearn/model_selection/_classification_threshold.py b/sklearn/model_selection/_classification_threshold.py
+index 9fb681fc8a244417de98c9c37bb0f8221652d060..870da8735cdb26ed824fd9a5b321e036441d1e6e 100644
+--- a/sklearn/model_selection/_classification_threshold.py
++++ b/sklearn/model_selection/_classification_threshold.py
+@@ -259,6 +259,13 @@ class FixedThresholdClassifier(BaseThresholdClassifier):
+           If the method is not implemented by the classifier, it will raise an
+           error.
+ 
++    prefit : bool, default=False
++        Whether a pre-fitted model is expected to be passed into the constructor
++        directly or not. If `True`, `estimator` must be a fitted estimator. If `False`,
++        `estimator` is fitted and updated by calling `fit`.
++
++        .. versionadded:: 1.6
++
+     Attributes
+     ----------
+     estimator_ : estimator instance
+@@ -310,6 +317,7 @@ class FixedThresholdClassifier(BaseThresholdClassifier):
+         **BaseThresholdClassifier._parameter_constraints,
+         "threshold": [StrOptions({"auto"}), Real],
+         "pos_label": [Real, str, "boolean", None],
++        "prefit": ["boolean"],
+     }
+ 
+     def __init__(
+@@ -319,10 +327,12 @@ class FixedThresholdClassifier(BaseThresholdClassifier):
+         threshold="auto",
+         pos_label=None,
+         response_method="auto",
++        prefit=False,
+     ):
+         super().__init__(estimator=estimator, response_method=response_method)
+         self.pos_label = pos_label
+         self.threshold = threshold
++        self.prefit = prefit
+ 
+     def _fit(self, X, y, **params):
+         """Fit the classifier.
+@@ -345,7 +355,13 @@ class FixedThresholdClassifier(BaseThresholdClassifier):
+             Returns an instance of self.
+         """
+         routed_params = process_routing(self, "fit", **params)
+-        self.estimator_ = clone(self.estimator).fit(X, y, **routed_params.estimator.fit)
++        if self.prefit:
++            check_is_fitted(self.estimator)
++            self.estimator_ = self.estimator
++        else:
++            self.estimator_ = clone(self.estimator).fit(
++                X, y, **routed_params.estimator.fit
++            )
+         return self
+ 
+     def predict(self, X):
+diff --git a/sklearn/preprocessing/_data.py b/sklearn/preprocessing/_data.py
+index 0835f566a7fe7ebb99c6f4d758c5eaf5f30b7cbb..1ab56aeb2c9e0be9727e449c8750bdfb502cc91f 100644
+--- a/sklearn/preprocessing/_data.py
++++ b/sklearn/preprocessing/_data.py
+@@ -9,6 +9,8 @@ import numpy as np
+ from scipy import optimize, sparse, stats
+ from scipy.special import boxcox, inv_boxcox
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import (
+     BaseEstimator,
+     ClassNamePrefixFeaturesOutMixin,
+@@ -529,6 +531,7 @@ class MinMaxScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             X,
+             copy=self.copy,
+             dtype=_array_api.supported_float_dtypes(xp),
++            force_writeable=True,
+             force_all_finite="allow-nan",
+             reset=False,
+         )
+@@ -560,6 +563,7 @@ class MinMaxScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             X,
+             copy=self.copy,
+             dtype=_array_api.supported_float_dtypes(xp),
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1040,6 +1044,7 @@ class StandardScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             accept_sparse="csr",
+             copy=copy,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1081,6 +1086,7 @@ class StandardScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             accept_sparse="csr",
+             copy=copy,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1285,6 +1291,7 @@ class MaxAbsScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             copy=self.copy,
+             reset=False,
+             dtype=_array_api.supported_float_dtypes(xp),
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1316,6 +1323,7 @@ class MaxAbsScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             accept_sparse=("csr", "csc"),
+             copy=self.copy,
+             dtype=_array_api.supported_float_dtypes(xp),
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1648,6 +1656,7 @@ class RobustScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             accept_sparse=("csr", "csc"),
+             copy=self.copy,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             reset=False,
+             force_all_finite="allow-nan",
+         )
+@@ -1681,6 +1690,7 @@ class RobustScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             accept_sparse=("csr", "csc"),
+             copy=self.copy,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             force_all_finite="allow-nan",
+         )
+ 
+@@ -1922,6 +1932,7 @@ def normalize(X, norm="l2", *, axis=1, copy=True, return_norm=False):
+         copy=copy,
+         estimator="the normalize function",
+         dtype=_array_api.supported_float_dtypes(xp),
++        force_writeable=True,
+     )
+     if axis == 0:
+         X = X.T
+@@ -2085,8 +2096,10 @@ class Normalizer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             Transformed array.
+         """
+         copy = copy if copy is not None else self.copy
+-        X = self._validate_data(X, accept_sparse="csr", reset=False)
+-        return normalize(X, norm=self.norm, axis=1, copy=copy)
++        X = self._validate_data(
++            X, accept_sparse="csr", force_writeable=True, copy=copy, reset=False
++        )
++        return normalize(X, norm=self.norm, axis=1, copy=False)
+ 
+     def _more_tags(self):
+         return {"stateless": True, "array_api_support": True}
+@@ -2140,7 +2153,7 @@ def binarize(X, *, threshold=0.0, copy=True):
+     array([[0., 1., 0.],
+            [1., 0., 0.]])
+     """
+-    X = check_array(X, accept_sparse=["csr", "csc"], copy=copy)
++    X = check_array(X, accept_sparse=["csr", "csc"], force_writeable=True, copy=copy)
+     if sparse.issparse(X):
+         if threshold < 0:
+             raise ValueError("Cannot binarize a sparse matrix with threshold < 0")
+@@ -2281,7 +2294,13 @@ class Binarizer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+         copy = copy if copy is not None else self.copy
+         # TODO: This should be refactored because binarize also calls
+         # check_array
+-        X = self._validate_data(X, accept_sparse=["csr", "csc"], copy=copy, reset=False)
++        X = self._validate_data(
++            X,
++            accept_sparse=["csr", "csc"],
++            force_writeable=True,
++            copy=copy,
++            reset=False,
++        )
+         return binarize(X, threshold=self.threshold, copy=False)
+ 
+     def _more_tags(self):
+@@ -2366,6 +2385,10 @@ class KernelCenterer(ClassNamePrefixFeaturesOutMixin, TransformerMixin, BaseEsti
+            [ -5., -14.,  19.]])
+     """
+ 
++    # X is called K in these methods.
++    __metadata_request__transform = {"K": metadata_routing.UNUSED}
++    __metadata_request__fit = {"K": metadata_routing.UNUSED}
++
+     def fit(self, K, y=None):
+         """Fit KernelCenterer.
+ 
+@@ -2842,6 +2865,9 @@ class QuantileTransformer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator)
+             accept_sparse="csc",
+             copy=copy,
+             dtype=FLOAT_DTYPES,
++            # only set force_writeable for the validation at transform time because
++            # it's the only place where QuantileTransformer performs inplace operations.
++            force_writeable=True if not in_fit else None,
+             force_all_finite="allow-nan",
+         )
+         # we only accept positive sparse matrix when ignore_implicit_zeros is
+@@ -3469,6 +3495,7 @@ class PowerTransformer(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+             X,
+             ensure_2d=True,
+             dtype=FLOAT_DTYPES,
++            force_writeable=True,
+             copy=self.copy,
+             force_all_finite="allow-nan",
+             reset=in_fit,
+diff --git a/sklearn/tree/_classes.py b/sklearn/tree/_classes.py
+index 61c572554b3b6c518a31fac62e36fa8f76e28ee5..f3ac81718c882315ae4ea5d642f1573bc678f764 100644
+--- a/sklearn/tree/_classes.py
++++ b/sklearn/tree/_classes.py
+@@ -15,6 +15,8 @@ from numbers import Integral, Real
+ import numpy as np
+ from scipy.sparse import issparse
+ 
++from sklearn.utils import metadata_routing
++
+ from ..base import (
+     BaseEstimator,
+     ClassifierMixin,
+@@ -91,6 +93,10 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
+     Use derived classes instead.
+     """
+ 
++    # "check_input" is used for optimisation and isn't something to be passed
++    # around in a pipeline.
++    __metadata_request__predict = {"check_input": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         "splitter": [StrOptions({"best", "random"})],
+         "max_depth": [Interval(Integral, 1, None, closed="left"), None],
+@@ -928,6 +934,11 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
+             0.93...,  0.93...,  1.     ,  0.93...,  1.      ])
+     """
+ 
++    # "check_input" is used for optimisation and isn't something to be passed
++    # around in a pipeline.
++    __metadata_request__predict_proba = {"check_input": metadata_routing.UNUSED}
++    __metadata_request__fit = {"check_input": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         **BaseDecisionTree._parameter_constraints,
+         "criterion": [StrOptions({"gini", "entropy", "log_loss"}), Hidden(Criterion)],
+@@ -1297,6 +1308,10 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
+            0.16...,  0.11..., -0.73..., -0.30..., -0.00...])
+     """
+ 
++    # "check_input" is used for optimisation and isn't something to be passed
++    # around in a pipeline.
++    __metadata_request__fit = {"check_input": metadata_routing.UNUSED}
++
+     _parameter_constraints: dict = {
+         **BaseDecisionTree._parameter_constraints,
+         "criterion": [
+diff --git a/sklearn/utils/estimator_checks.py b/sklearn/utils/estimator_checks.py
+index 90e0c7f91de335e3a651887420ce314987119eab..2f663329560326d4cb3fc203835d81bd2d3defbb 100644
+--- a/sklearn/utils/estimator_checks.py
++++ b/sklearn/utils/estimator_checks.py
+@@ -4779,3 +4779,49 @@ def check_set_output_transform_polars(name, transformer_orig):
+ 
+ def check_global_set_output_transform_polars(name, transformer_orig):
+     _check_set_output_transform_polars_context(name, transformer_orig, "global")
++
++
++@ignore_warnings(category=FutureWarning)
++def check_inplace_ensure_writeable(name, estimator_orig):
++    """Check that estimators able to do inplace operations can work on read-only
++    input data even if a copy is not explicitly requested by the user.
++
++    Make sure that a copy is made and consequently that the input array and its
++    writeability are not modified by the estimator.
++    """
++    rng = np.random.RandomState(0)
++
++    estimator = clone(estimator_orig)
++    set_random_state(estimator)
++
++    n_samples = 100
++
++    X, _ = make_blobs(n_samples=n_samples, n_features=3, random_state=rng)
++    X = _enforce_estimator_tags_X(estimator, X)
++
++    # These estimators can only work inplace with fortran ordered input
++    if name in ("Lasso", "ElasticNet", "MultiTaskElasticNet", "MultiTaskLasso"):
++        X = np.asfortranarray(X)
++
++    # Add a missing value for imputers so that transform has to do something
++    if hasattr(estimator, "missing_values"):
++        X[0, 0] = np.nan
++
++    if is_regressor(estimator):
++        y = rng.normal(size=n_samples)
++    else:
++        y = rng.randint(low=0, high=2, size=n_samples)
++    y = _enforce_estimator_tags_y(estimator, y)
++
++    X_copy = X.copy()
++
++    # Make X read-only
++    X.setflags(write=False)
++
++    estimator.fit(X, y)
++
++    if hasattr(estimator, "transform"):
++        estimator.transform(X)
++
++    assert not X.flags.writeable
++    assert_allclose(X, X_copy)
+diff --git a/sklearn/utils/validation.py b/sklearn/utils/validation.py
+index 7216b60c72b6923b1a325d8e901353021691a851..b6da50e757d0bafa29d1a561f01eef766fd15d3c 100644
+--- a/sklearn/utils/validation.py
++++ b/sklearn/utils/validation.py
+@@ -717,6 +717,7 @@ def check_array(
+     dtype="numeric",
+     order=None,
+     copy=False,
++    force_writeable=False,
+     force_all_finite=True,
+     ensure_2d=True,
+     allow_nd=False,
+@@ -767,6 +768,13 @@ def check_array(
+         Whether a forced copy will be triggered. If copy=False, a copy might
+         be triggered by a conversion.
+ 
++    force_writeable : bool, default=False
++        Whether to force the output array to be writeable. If True, the returned array
++        is guaranteed to be writeable, which may require a copy. Otherwise the
++        writeability of the input array is preserved.
++
++        .. versionadded:: 1.6
++
+     force_all_finite : bool or 'allow-nan', default=True
+         Whether to raise an error on np.inf, np.nan, pd.NA in array. The
+         possibilities are:
+@@ -1085,17 +1093,32 @@ def check_array(
+                 % (n_features, array.shape, ensure_min_features, context)
+             )
+ 
+-    # With an input pandas dataframe or series, we know we can always make the
+-    # resulting array writeable:
+-    # - if copy=True, we have already made a copy so it is fine to make the
+-    #   array writeable
+-    # - if copy=False, the caller is telling us explicitly that we can do
+-    #   in-place modifications
+-    # See https://pandas.pydata.org/docs/dev/user_guide/copy_on_write.html#read-only-numpy-arrays
+-    # for more details about pandas copy-on-write mechanism, that is enabled by
+-    # default in pandas 3.0.0.dev.
+-    if _is_pandas_df_or_series(array_orig) and hasattr(array, "flags"):
+-        array.flags.writeable = True
++    if force_writeable:
++        # By default, array.copy() creates a C-ordered copy. We set order=K to
++        # preserve the order of the array.
++        copy_params = {"order": "K"} if not sp.issparse(array) else {}
++
++        array_data = array.data if sp.issparse(array) else array
++        flags = getattr(array_data, "flags", None)
++        if not getattr(flags, "writeable", True):
++            # This situation can only happen when copy=False, the array is read-only and
++            # a writeable output is requested. This is an ambiguous setting so we chose
++            # to always (except for one specific setting, see below) make a copy to
++            # ensure that the output is writeable, even if avoidable, to not overwrite
++            # the user's data by surprise.
++
++            if _is_pandas_df_or_series(array_orig):
++                try:
++                    # In pandas >= 3, np.asarray(df), called earlier in check_array,
++                    # returns a read-only intermediate array. It can be made writeable
++                    # safely without copy because if the original DataFrame was backed
++                    # by a read-only array, trying to change the flag would raise an
++                    # error, in which case we make a copy.
++                    array_data.flags.writeable = True
++                except ValueError:
++                    array = array.copy(**copy_params)
++            else:
++                array = array.copy(**copy_params)
+ 
+     return array
+ 
+@@ -1131,6 +1154,7 @@ def check_X_y(
+     dtype="numeric",
+     order=None,
+     copy=False,
++    force_writeable=False,
+     force_all_finite=True,
+     ensure_2d=True,
+     allow_nd=False,
+@@ -1185,6 +1209,13 @@ def check_X_y(
+         Whether a forced copy will be triggered. If copy=False, a copy might
+         be triggered by a conversion.
+ 
++    force_writeable : bool, default=False
++        Whether to force the output array to be writeable. If True, the returned array
++        is guaranteed to be writeable, which may require a copy. Otherwise the
++        writeability of the input array is preserved.
++
++        .. versionadded:: 1.6
++
+     force_all_finite : bool or 'allow-nan', default=True
+         Whether to raise an error on np.inf, np.nan, pd.NA in X. This parameter
+         does not influence whether y can have np.inf, np.nan, pd.NA values.
+@@ -1268,6 +1299,7 @@ def check_X_y(
+         dtype=dtype,
+         order=order,
+         copy=copy,
++        force_writeable=force_writeable,
+         force_all_finite=force_all_finite,
+         ensure_2d=ensure_2d,
+         allow_nd=allow_nd,

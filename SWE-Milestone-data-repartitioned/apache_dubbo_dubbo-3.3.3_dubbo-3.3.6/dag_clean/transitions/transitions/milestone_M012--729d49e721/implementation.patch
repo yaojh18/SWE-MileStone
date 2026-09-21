@@ -1,0 +1,240 @@
+diff --git a/dubbo-metrics/dubbo-metrics-api/src/main/java/org/apache/dubbo/metrics/aggregate/DubboMergingDigest.java b/dubbo-metrics/dubbo-metrics-api/src/main/java/org/apache/dubbo/metrics/aggregate/DubboMergingDigest.java
+index b4bfe34b74c05398dfca4a09a38d1f1593953c34..aa2336edd992318c45bbbc1577e04389c5a16d83 100644
+--- a/dubbo-metrics/dubbo-metrics-api/src/main/java/org/apache/dubbo/metrics/aggregate/DubboMergingDigest.java
++++ b/dubbo-metrics/dubbo-metrics-api/src/main/java/org/apache/dubbo/metrics/aggregate/DubboMergingDigest.java
+@@ -283,7 +283,7 @@ public class DubboMergingDigest extends DubboAbstractTDigest {
+ 
+     private void add(double x, int w, List<Double> history) {
+         if (Double.isNaN(x)) {
+-            throw new IllegalArgumentException("Cannot add NaN to t-digest");
++            return;
+         }
+ 
+         int where;
+diff --git a/dubbo-metrics/dubbo-metrics-event/src/main/java/org/apache/dubbo/metrics/event/MetricsEventBus.java b/dubbo-metrics/dubbo-metrics-event/src/main/java/org/apache/dubbo/metrics/event/MetricsEventBus.java
+index 7654c2d9020297de05d8fcae785f02a4c669c514..37de6ad4e06a77e69eaa7b8959761ac1ef57fd92 100644
+--- a/dubbo-metrics/dubbo-metrics-event/src/main/java/org/apache/dubbo/metrics/event/MetricsEventBus.java
++++ b/dubbo-metrics/dubbo-metrics-event/src/main/java/org/apache/dubbo/metrics/event/MetricsEventBus.java
+@@ -38,7 +38,7 @@ public class MetricsEventBus {
+      * @param event event to post.
+      */
+     public static void publish(MetricsEvent event) {
+-        if (event.getSource() == null) {
++        if (event == null || event.getSource() == null) {
+             return;
+         }
+         MetricsEventMulticaster dispatcher = event.getMetricsEventMulticaster();
+@@ -92,6 +92,9 @@ public class MetricsEventBus {
+     }
+ 
+     public static void tryInvoke(Runnable runnable) {
++        if (runnable == null) {
++            return;
++        }
+         try {
+             runnable.run();
+         } catch (Throwable e) {
+@@ -115,14 +118,20 @@ public class MetricsEventBus {
+         if (dispatcher == null) return;
+         tryInvoke(() -> {
+             event.customAfterPost(result);
+-            dispatcher.publishFinishEvent((TimeCounterEvent) event);
++            if (event instanceof TimeCounterEvent) {
++                dispatcher.publishFinishEvent((TimeCounterEvent) event);
++            }
+         });
+     }
+ 
+     public static void error(MetricsEvent event) {
+         MetricsEventMulticaster dispatcher = validate(event);
+         if (dispatcher == null) return;
+-        tryInvoke(() -> dispatcher.publishErrorEvent((TimeCounterEvent) event));
++        tryInvoke(() -> {
++            if (event instanceof TimeCounterEvent) {
++                dispatcher.publishErrorEvent((TimeCounterEvent) event);
++            }
++        });
+     }
+ 
+     private static MetricsEventMulticaster validate(MetricsEvent event) {
+diff --git a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/DubboObservationRegistry.java b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/DubboObservationRegistry.java
+index 5e9b7b35b3894fb24b21d1edb0d380ec840fe0bf..690cfa2779fde51c95545fc7f93e21c870233317 100644
+--- a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/DubboObservationRegistry.java
++++ b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/DubboObservationRegistry.java
+@@ -20,16 +20,24 @@ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
+ import org.apache.dubbo.common.logger.LoggerFactory;
+ import org.apache.dubbo.common.utils.JsonUtils;
+ import org.apache.dubbo.config.TracingConfig;
+-import org.apache.dubbo.metrics.MetricsGlobalRegistry;
+ import org.apache.dubbo.metrics.utils.MetricsSupportUtil;
+ import org.apache.dubbo.rpc.model.ApplicationModel;
+ import org.apache.dubbo.tracing.handler.DubboClientTracingObservationHandler;
+ import org.apache.dubbo.tracing.handler.DubboServerTracingObservationHandler;
++import org.apache.dubbo.tracing.metrics.ObservationMeter;
+ import org.apache.dubbo.tracing.tracer.PropagatorProvider;
+ import org.apache.dubbo.tracing.tracer.PropagatorProviderFactory;
+ import org.apache.dubbo.tracing.tracer.TracerProvider;
+ import org.apache.dubbo.tracing.tracer.TracerProviderFactory;
+ 
++import io.micrometer.observation.ObservationHandler;
++import io.micrometer.observation.ObservationRegistry;
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
++import io.micrometer.tracing.handler.PropagatingReceiverTracingObservationHandler;
++import io.micrometer.tracing.handler.PropagatingSenderTracingObservationHandler;
++import io.micrometer.tracing.propagation.Propagator;
++
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.COMMON_NOT_FOUND_TRACER_DEPENDENCY;
+ 
+ public class DubboObservationRegistry {
+@@ -48,8 +56,8 @@ public class DubboObservationRegistry {
+ 
+     public void initObservationRegistry() {
+         // If get ObservationRegistry.class from external(eg Spring.), use external.
+-        io.micrometer.observation.ObservationRegistry externalObservationRegistry =
+-                applicationModel.getBeanFactory().getBean(io.micrometer.observation.ObservationRegistry.class);
++        ObservationRegistry externalObservationRegistry =
++                applicationModel.getBeanFactory().getBean(ObservationRegistry.class);
+         if (externalObservationRegistry != null) {
+             if (logger.isDebugEnabled()) {
+                 logger.debug("ObservationRegistry.class from external is existed.");
+@@ -71,36 +79,26 @@ public class DubboObservationRegistry {
+             return;
+         }
+         // The real tracer will come from tracer implementation (OTel / Brave)
+-        io.micrometer.tracing.Tracer tracer = tracerProvider.getTracer();
++        Tracer tracer = tracerProvider.getTracer();
+ 
+         // The real propagator will come from tracer implementation (OTel / Brave)
+         PropagatorProvider propagatorProvider = PropagatorProviderFactory.getPropagatorProvider();
+-        io.micrometer.tracing.propagation.Propagator propagator = propagatorProvider != null
+-                ? propagatorProvider.getPropagator()
+-                : io.micrometer.tracing.propagation.Propagator.NOOP;
++        Propagator propagator = propagatorProvider != null ? propagatorProvider.getPropagator() : Propagator.NOOP;
+ 
+-        io.micrometer.observation.ObservationRegistry registry = io.micrometer.observation.ObservationRegistry.create();
++        ObservationRegistry registry = ObservationRegistry.create();
+         registry.observationConfig()
+                 // set up a first matching handler that creates spans - it comes from Micrometer Tracing.
+                 // set up spans for sending and receiving data over the wire and a default one.
+-                .observationHandler(
+-                        new io.micrometer.observation.ObservationHandler.FirstMatchingCompositeObservationHandler(
+-                                new io.micrometer.tracing.handler.PropagatingSenderTracingObservationHandler<>(
+-                                        tracer, propagator),
+-                                new io.micrometer.tracing.handler.PropagatingReceiverTracingObservationHandler<>(
+-                                        tracer, propagator),
+-                                new io.micrometer.tracing.handler.DefaultTracingObservationHandler(tracer)))
+-                .observationHandler(
+-                        new io.micrometer.observation.ObservationHandler.FirstMatchingCompositeObservationHandler(
+-                                new DubboClientTracingObservationHandler<>(tracer),
+-                                new DubboServerTracingObservationHandler<>(tracer)));
++                .observationHandler(new ObservationHandler.FirstMatchingCompositeObservationHandler(
++                        new PropagatingSenderTracingObservationHandler<>(tracer, propagator),
++                        new PropagatingReceiverTracingObservationHandler<>(tracer, propagator),
++                        new DefaultTracingObservationHandler(tracer)))
++                .observationHandler(new ObservationHandler.FirstMatchingCompositeObservationHandler(
++                        new DubboClientTracingObservationHandler<>(tracer),
++                        new DubboServerTracingObservationHandler<>(tracer)));
+ 
+         if (MetricsSupportUtil.isSupportMetrics()) {
+-            io.micrometer.core.instrument.MeterRegistry meterRegistry =
+-                    MetricsGlobalRegistry.getCompositeRegistry(applicationModel);
+-            registry.observationConfig()
+-                    .observationHandler(new io.micrometer.core.instrument.observation.DefaultMeterObservationHandler(
+-                            meterRegistry));
++            ObservationMeter.addMeterRegistry(registry, applicationModel);
+         }
+ 
+         applicationModel.getBeanFactory().registerBean(registry);
+diff --git a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/context/DubboServerContext.java b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/context/DubboServerContext.java
+index 6ffe5e27e274fedc2b06b39e3804cd5ce13f6350..b636481ed2da6c7819763db67c627739f1636c4c 100644
+--- a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/context/DubboServerContext.java
++++ b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/context/DubboServerContext.java
+@@ -32,7 +32,7 @@ public class DubboServerContext extends ReceiverContext<Invocation> {
+     private final Invocation invocation;
+ 
+     public DubboServerContext(Invoker<?> invoker, Invocation invocation) {
+-        super((carrier, s) -> String.valueOf(carrier.getAttachment(s)), Kind.SERVER);
++        super((carrier, s) -> carrier.getAttachment(s), Kind.SERVER);
+         this.invoker = invoker;
+         this.invocation = invocation;
+         setCarrier(invocation);
+diff --git a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboClientTracingObservationHandler.java b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboClientTracingObservationHandler.java
+index 1f6542ba4f9ac3e935b44223369d20c687878bd0..f638dc6c589587f3fc002ae18b530e0a89e535ae 100644
+--- a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboClientTracingObservationHandler.java
++++ b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboClientTracingObservationHandler.java
+@@ -20,7 +20,6 @@ import org.apache.dubbo.tracing.context.DubboClientContext;
+ 
+ import io.micrometer.observation.Observation;
+ import io.micrometer.observation.ObservationHandler;
+-import io.micrometer.observation.transport.SenderContext;
+ import io.micrometer.tracing.Tracer;
+ 
+ public class DubboClientTracingObservationHandler<T extends DubboClientContext> implements ObservationHandler<T> {
+@@ -35,6 +34,6 @@ public class DubboClientTracingObservationHandler<T extends DubboClientContext>
+ 
+     @Override
+     public boolean supportsContext(Observation.Context context) {
+-        return context instanceof SenderContext;
++        return context instanceof DubboClientContext;
+     }
+ }
+diff --git a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboServerTracingObservationHandler.java b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboServerTracingObservationHandler.java
+index e117b3ab68ae7234b6fd82e9712e37be20675b00..c355f2fe85c0387a3f6b1b5798b7250a1e58afa9 100644
+--- a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboServerTracingObservationHandler.java
++++ b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/handler/DubboServerTracingObservationHandler.java
+@@ -21,7 +21,6 @@ import org.apache.dubbo.tracing.context.DubboServerContext;
+ 
+ import io.micrometer.observation.Observation;
+ import io.micrometer.observation.ObservationHandler;
+-import io.micrometer.observation.transport.ReceiverContext;
+ import io.micrometer.tracing.TraceContext;
+ import io.micrometer.tracing.Tracer;
+ 
+@@ -46,6 +45,6 @@ public class DubboServerTracingObservationHandler<T extends DubboServerContext>
+ 
+     @Override
+     public boolean supportsContext(Observation.Context context) {
+-        return context instanceof ReceiverContext;
++        return context instanceof DubboServerContext;
+     }
+ }
+diff --git a/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/metrics/ObservationMeter.java b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/metrics/ObservationMeter.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..d54d5248b53258aed393d06418bb5d337716e5e3
+--- /dev/null
++++ b/dubbo-metrics/dubbo-tracing/src/main/java/org/apache/dubbo/tracing/metrics/ObservationMeter.java
+@@ -0,0 +1,33 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.tracing.metrics;
++
++import org.apache.dubbo.metrics.MetricsGlobalRegistry;
++import org.apache.dubbo.rpc.model.ApplicationModel;
++
++import io.micrometer.core.instrument.MeterRegistry;
++import io.micrometer.observation.ObservationRegistry;
++
++public class ObservationMeter {
++
++    public static void addMeterRegistry(ObservationRegistry registry, ApplicationModel applicationModel) {
++        MeterRegistry meterRegistry = MetricsGlobalRegistry.getCompositeRegistry(applicationModel);
++        registry.observationConfig()
++                .observationHandler(
++                        new io.micrometer.core.instrument.observation.DefaultMeterObservationHandler(meterRegistry));
++    }
++}

@@ -1,0 +1,2297 @@
+diff --git a/package.json b/package.json
+index 1386c0531f9461b5c57ebc9d51b61a186473ed82..4e5494ed8200a7d176e4c8e93fabd07944bd968d 100644
+--- a/package.json
++++ b/package.json
+@@ -122,7 +122,6 @@
+         "jsrsasign": "^11.0.0",
+         "jszip": "^3.7.0",
+         "katex": "^0.16.0",
+-        "linkify-element": "4.1.4",
+         "linkify-react": "4.2.0",
+         "linkify-string": "4.2.0",
+         "linkifyjs": "4.2.0",
+diff --git a/src/HtmlUtils.tsx b/src/HtmlUtils.tsx
+index 0a6243a12d732669c91900bcbd5f6001f48448ec..daf30b2a4679dc12c0a42e2fa55bfacefe22d80d 100644
+--- a/src/HtmlUtils.tsx
++++ b/src/HtmlUtils.tsx
+@@ -25,7 +25,7 @@ import { PERMITTED_URL_SCHEMES } from "./utils/UrlUtils";
+ import { sanitizeHtmlParams, transformTags } from "./Linkify";
+ import { graphemeSegmenter } from "./utils/strings";
+ 
+-export { Linkify, linkifyElement, linkifyAndSanitizeHtml } from "./Linkify";
++export { Linkify, linkifyAndSanitizeHtml } from "./Linkify";
+ 
+ // Anything outside the basic multilingual plane will be a surrogate pair
+ const SURROGATE_PAIR_PATTERN = /([\ud800-\udbff])([\udc00-\udfff])/;
+@@ -365,53 +365,6 @@ function analyseEvent(content: IContent, highlights: Optional<string[]>, opts: E
+     }
+ }
+ 
+-export function bodyToDiv(
+-    content: IContent,
+-    highlights: Optional<string[]>,
+-    opts: EventRenderOpts = {},
+-    ref?: React.Ref<HTMLDivElement>,
+-): ReactNode {
+-    const { strippedBody, formattedBody, emojiBodyElements, className } = bodyToNode(content, highlights, opts);
+-
+-    return formattedBody ? (
+-        <div
+-            key="body"
+-            ref={ref}
+-            className={className}
+-            dangerouslySetInnerHTML={{ __html: formattedBody }}
+-            dir="auto"
+-        />
+-    ) : (
+-        <div key="body" ref={ref} className={className} dir="auto">
+-            {emojiBodyElements || strippedBody}
+-        </div>
+-    );
+-}
+-
+-export function bodyToSpan(
+-    content: IContent,
+-    highlights: Optional<string[]>,
+-    opts: EventRenderOpts = {},
+-    ref?: React.Ref<HTMLSpanElement>,
+-    includeDir = true,
+-): ReactNode {
+-    const { strippedBody, formattedBody, emojiBodyElements, className } = bodyToNode(content, highlights, opts);
+-
+-    return formattedBody ? (
+-        <span
+-            key="body"
+-            ref={ref}
+-            className={className}
+-            dangerouslySetInnerHTML={{ __html: formattedBody }}
+-            dir={includeDir ? "auto" : undefined}
+-        />
+-    ) : (
+-        <span key="body" ref={ref} className={className} dir={includeDir ? "auto" : undefined}>
+-            {emojiBodyElements || strippedBody}
+-        </span>
+-    );
+-}
+-
+ interface BodyToNodeReturn {
+     strippedBody: string;
+     formattedBody?: string;
+@@ -419,7 +372,11 @@ interface BodyToNodeReturn {
+     className: string;
+ }
+ 
+-function bodyToNode(content: IContent, highlights: Optional<string[]>, opts: EventRenderOpts = {}): BodyToNodeReturn {
++export function bodyToNode(
++    content: IContent,
++    highlights: Optional<string[]>,
++    opts: EventRenderOpts = {},
++): BodyToNodeReturn {
+     const eventInfo = analyseEvent(content, highlights, opts);
+ 
+     let emojiBody = false;
+diff --git a/src/LegacyCallHandler.tsx b/src/LegacyCallHandler.tsx
+index 4361d3d02770fdcc49a2fc41d5c304d45f2bb30b..608d396ddacfea4ba6d5e579e10971a8a5711346 100644
+--- a/src/LegacyCallHandler.tsx
++++ b/src/LegacyCallHandler.tsx
+@@ -22,7 +22,6 @@ import {
+     type MatrixCall,
+ } from "matrix-js-sdk/src/webrtc/call";
+ import { logger } from "matrix-js-sdk/src/logger";
+-import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
+ import { CallEventHandlerEvent } from "matrix-js-sdk/src/webrtc/callEventHandler";
+ 
+ import { MatrixClientPeg } from "./MatrixClientPeg";
+@@ -596,7 +595,7 @@ export default class LegacyCallHandler extends TypedEventEmitter<LegacyCallHandl
+ 
+         switch (newState) {
+             case CallState.Ringing: {
+-                const incomingCallPushRule = new PushProcessor(MatrixClientPeg.safeGet()).getPushRuleById(
++                const incomingCallPushRule = MatrixClientPeg.safeGet().pushProcessor.getPushRuleById(
+                     RuleId.IncomingCall,
+                 );
+                 const pushRuleEnabled = incomingCallPushRule?.enabled;
+diff --git a/src/Linkify.tsx b/src/Linkify.tsx
+index a51b312d4828dbe3bd7164af612aa79d5b54a0a2..27dd4783be5c96cba666de350fe3fc3a9a7a8afb 100644
+--- a/src/Linkify.tsx
++++ b/src/Linkify.tsx
+@@ -11,12 +11,7 @@ import sanitizeHtml, { type IOptions } from "sanitize-html";
+ import { merge } from "lodash";
+ import _Linkify from "linkify-react";
+ 
+-import {
+-    _linkifyElement,
+-    _linkifyString,
+-    ELEMENT_URL_PATTERN,
+-    options as linkifyMatrixOptions,
+-} from "./linkify-matrix";
++import { _linkifyString, ELEMENT_URL_PATTERN, options as linkifyMatrixOptions } from "./linkify-matrix";
+ import SettingsStore from "./settings/SettingsStore";
+ import { tryTransformPermalinkToLocalHref } from "./utils/permalinks/Permalinks";
+ import { mediaFromMxc } from "./customisations/Media";
+@@ -223,17 +218,6 @@ export function linkifyString(str: string, options = linkifyMatrixOptions): stri
+     return _linkifyString(str, options);
+ }
+ 
+-/**
+- * Linkifies the given DOM element. This is a wrapper around 'linkifyjs/element'.
+- *
+- * @param {object} element DOM element to linkify
+- * @param {object} [options] Options for linkifyElement. Default: linkifyMatrixOptions
+- * @returns {object}
+- */
+-export function linkifyElement(element: HTMLElement, options = linkifyMatrixOptions): HTMLElement {
+-    return _linkifyElement(element, options);
+-}
+-
+ /**
+  * Linkify the given string and sanitize the HTML afterwards.
+  *
+diff --git a/src/components/structures/EmbeddedPage.tsx b/src/components/structures/EmbeddedPage.tsx
+index 4b89102d6fce77bb62acb02e81594ccb38c19399..f1c7b75b961db579c131b02798945e3e250eb493 100644
+--- a/src/components/structures/EmbeddedPage.tsx
++++ b/src/components/structures/EmbeddedPage.tsx
+@@ -40,8 +40,8 @@ export default class EmbeddedPage extends React.PureComponent<IProps, IState> {
+     private unmounted = false;
+     private dispatcherRef?: string;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             page: "",
+diff --git a/src/components/structures/MessagePanel.tsx b/src/components/structures/MessagePanel.tsx
+index 9f535da257fe1453de6c72a2c7bd76b35c107ede..1baaa2eb25ab2a96d3e1b6a67092c6abda003392 100644
+--- a/src/components/structures/MessagePanel.tsx
++++ b/src/components/structures/MessagePanel.tsx
+@@ -259,8 +259,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+     // A map to allow groupers to maintain consistent keys even if their first event is uprooted due to back-pagination.
+     public grouperKeyMap = new WeakMap<MatrixEvent, string>();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             // previous positions the read marker has been in, so we can
+diff --git a/src/components/structures/NotificationPanel.tsx b/src/components/structures/NotificationPanel.tsx
+index cd71710782d3f21bb512001f255a787ea9bd582f..b5b404d6f1e53d137bb598e0f93a8037eebb658f 100644
+--- a/src/components/structures/NotificationPanel.tsx
++++ b/src/components/structures/NotificationPanel.tsx
+@@ -38,8 +38,8 @@ export default class NotificationPanel extends React.PureComponent<IProps, IStat
+ 
+     private card = React.createRef<HTMLDivElement>();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             narrow: false,
+diff --git a/src/components/structures/RightPanel.tsx b/src/components/structures/RightPanel.tsx
+index 8d46c9b1e323ca11fe118ed206546201c2e02a80..21e2a2ee71f60bf66f9e419c934deafb645231ba 100644
+--- a/src/components/structures/RightPanel.tsx
++++ b/src/components/structures/RightPanel.tsx
+@@ -64,8 +64,10 @@ export default class RightPanel extends React.Component<Props, IState> {
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: Props, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: Props) {
++        super(props);
++
++        this.state = RightPanel.getDerivedStateFromProps(props);
+     }
+ 
+     private readonly delayedUpdate = throttle(
+diff --git a/src/components/structures/ThreadView.tsx b/src/components/structures/ThreadView.tsx
+index 512a1156a5847faa30481650674d167f08d8ad06..c22c726ac1cd1f9e0b9a20dbdf0c43e6f687b47e 100644
+--- a/src/components/structures/ThreadView.tsx
++++ b/src/components/structures/ThreadView.tsx
+@@ -86,8 +86,8 @@ export default class ThreadView extends React.Component<IProps, IState> {
+     // Set by setEventId in ctor.
+     private eventId!: string;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.setEventId(this.props.mxEvent);
+         const thread = this.props.room.getThread(this.eventId) ?? undefined;
+diff --git a/src/components/structures/UserMenu.tsx b/src/components/structures/UserMenu.tsx
+index 2fdf7af68b316788a25538a5de865577e5cc6d21..e2dc5bc5b8bdf809032650a35e7f9e28cf5fbe93 100644
+--- a/src/components/structures/UserMenu.tsx
++++ b/src/components/structures/UserMenu.tsx
+@@ -83,8 +83,8 @@ export default class UserMenu extends React.Component<IProps, IState> {
+     private readonly dndWatcherRef?: string;
+     private buttonRef: React.RefObject<HTMLButtonElement> = createRef();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof SDKContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             contextMenuPosition: null,
+diff --git a/src/components/structures/UserView.tsx b/src/components/structures/UserView.tsx
+index be947d9a4b5635e67f39665117c2409796ee11a9..58aed9932b9e33c4603bb6a2db28c606d9331ff5 100644
+--- a/src/components/structures/UserView.tsx
++++ b/src/components/structures/UserView.tsx
+@@ -34,8 +34,8 @@ export default class UserView extends React.Component<IProps, IState> {
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+         this.state = {
+             loading: true,
+         };
+diff --git a/src/components/structures/auth/SoftLogout.tsx b/src/components/structures/auth/SoftLogout.tsx
+index 62cb2801f86cf9bfa830ec8839cf409b4395e0d3..4990a978b499825a5b261170fc874f0d6d01c4b0 100644
+--- a/src/components/structures/auth/SoftLogout.tsx
++++ b/src/components/structures/auth/SoftLogout.tsx
+@@ -66,8 +66,8 @@ export default class SoftLogout extends React.Component<IProps, IState> {
+     public static contextType = SDKContext;
+     declare public context: React.ContextType<typeof SDKContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof SDKContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             loginView: LoginView.Loading,
+diff --git a/src/components/views/context_menus/MessageContextMenu.tsx b/src/components/views/context_menus/MessageContextMenu.tsx
+index 9997fad35b91b8b7ccb22968e9d3c4630358ede2..82168a59bc08d16112373842741ca64b636c0a85 100644
+--- a/src/components/views/context_menus/MessageContextMenu.tsx
++++ b/src/components/views/context_menus/MessageContextMenu.tsx
+@@ -130,8 +130,8 @@ export default class MessageContextMenu extends React.Component<IProps, IState>
+ 
+     private reactButtonRef = createRef<any>(); // XXX Ref to a functional component
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             canRedact: false,
+diff --git a/src/components/views/elements/Pill.tsx b/src/components/views/elements/Pill.tsx
+index e52bd6bff42bdc210a58bc9d4ed147d061d84131..32e78fc32eb6f92ec2c686b34c6417f544e830ec 100644
+--- a/src/components/views/elements/Pill.tsx
++++ b/src/components/views/elements/Pill.tsx
+@@ -6,13 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
+-import React, { type ReactElement } from "react";
++import React, { type ReactElement, useContext } from "react";
+ import classNames from "classnames";
+ import { type Room, type RoomMember } from "matrix-js-sdk/src/matrix";
+ import { Tooltip } from "@vector-im/compound-web";
+ import { LinkIcon, UserSolidIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
+ 
+-import { MatrixClientPeg } from "../../../MatrixClientPeg";
+ import MatrixClientContext from "../../../contexts/MatrixClientContext";
+ import { usePermalink } from "../../../hooks/usePermalink";
+ import RoomAvatar from "../avatars/RoomAvatar";
+@@ -28,14 +27,6 @@ export enum PillType {
+     Keyword = "TYPE_KEYWORD", // Used to highlight keywords that triggered a notification rule
+ }
+ 
+-export const pillRoomNotifPos = (text: string | null): number => {
+-    return text?.indexOf("@room") ?? -1;
+-};
+-
+-export const pillRoomNotifLen = (): number => {
+-    return "@room".length;
+-};
+-
+ const linkIcon = <LinkIcon className="mx_Pill_LinkIcon mx_BaseAvatar" />;
+ 
+ const PillRoomAvatar: React.FC<{
+@@ -89,6 +80,7 @@ export const Pill: React.FC<PillProps> = ({
+     shouldShowPillAvatar = true,
+     text: customPillText,
+ }) => {
++    const cli = useContext(MatrixClientContext);
+     const {
+         event,
+         member,
+@@ -113,7 +105,7 @@ export const Pill: React.FC<PillProps> = ({
+         mx_RoomPill: type === PillType.RoomMention,
+         mx_SpacePill: type === "space" || targetRoom?.isSpaceRoom(),
+         mx_UserPill: type === PillType.UserMention,
+-        mx_UserPill_me: resourceId === MatrixClientPeg.safeGet().getUserId(),
++        mx_UserPill_me: resourceId === cli.getUserId(),
+         mx_EventPill: type === PillType.EventInOtherRoom || type === PillType.EventInSameRoom,
+         mx_KeywordPill: type === PillType.Keyword,
+     });
+@@ -160,26 +152,24 @@ export const Pill: React.FC<PillProps> = ({
+     const isAnchor = !!inMessage && !!url;
+     return (
+         <bdi>
+-            <MatrixClientContext.Provider value={MatrixClientPeg.safeGet()}>
+-                <Tooltip
+-                    description={resourceId ?? ""}
+-                    open={resourceId ? undefined : false}
+-                    placement="right"
+-                    isTriggerInteractive={isAnchor}
+-                >
+-                    {isAnchor ? (
+-                        <a className={classes} href={url} onClick={onClick}>
+-                            {avatar}
+-                            <span className="mx_Pill_text">{pillText}</span>
+-                        </a>
+-                    ) : (
+-                        <span className={classes}>
+-                            {avatar}
+-                            <span className="mx_Pill_text">{pillText}</span>
+-                        </span>
+-                    )}
+-                </Tooltip>
+-            </MatrixClientContext.Provider>
++            <Tooltip
++                description={resourceId ?? ""}
++                open={resourceId ? undefined : false}
++                placement="right"
++                isTriggerInteractive={isAnchor}
++            >
++                {isAnchor ? (
++                    <a className={classes} href={url} onClick={onClick}>
++                        {avatar}
++                        <span className="mx_Pill_text">{pillText}</span>
++                    </a>
++                ) : (
++                    <span className={classes}>
++                        {avatar}
++                        <span className="mx_Pill_text">{pillText}</span>
++                    </span>
++                )}
++            </Tooltip>
+         </bdi>
+     );
+ };
+diff --git a/src/components/views/elements/ReplyChain.tsx b/src/components/views/elements/ReplyChain.tsx
+index ca51d0fd0493dd490ac25b9342c689b5bb60448f..9d902559b4a8c2b0c792358ce2eed2dc53d97bc4 100644
+--- a/src/components/views/elements/ReplyChain.tsx
++++ b/src/components/views/elements/ReplyChain.tsx
+@@ -71,8 +71,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+     private room: Room;
+     private blockquoteRef = React.createRef<HTMLQuoteElement>();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             events: [],
+diff --git a/src/components/views/elements/RoomAliasField.tsx b/src/components/views/elements/RoomAliasField.tsx
+index fe0e9c412f54bb200f5bbe6142b0abbec422f8f5..678de4205a6247f14649771d69bb87fd4a4cedc9 100644
+--- a/src/components/views/elements/RoomAliasField.tsx
++++ b/src/components/views/elements/RoomAliasField.tsx
+@@ -37,8 +37,8 @@ export default class RoomAliasField extends React.PureComponent<IProps, IState>
+ 
+     private fieldRef = createRef<Field>();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             isValid: true,
+diff --git a/src/components/views/elements/Spoiler.tsx b/src/components/views/elements/Spoiler.tsx
+index 588da46c6f924f40ba2a2bcfbf04a44151cc5687..8d3d0a55fd2a939ca6b8ef4dcc05614aa1ffb643 100644
+--- a/src/components/views/elements/Spoiler.tsx
++++ b/src/components/views/elements/Spoiler.tsx
+@@ -6,11 +6,11 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+  */
+ 
+-import React from "react";
++import React, { type ReactNode } from "react";
+ 
+ interface IProps {
+     reason?: string;
+-    contentHtml: string;
++    children: ReactNode;
+ }
+ 
+ interface IState {
+@@ -38,9 +38,6 @@ export default class Spoiler extends React.Component<IProps, IState> {
+         const reason = this.props.reason ? (
+             <span className="mx_EventTile_spoiler_reason">{"(" + this.props.reason + ")"}</span>
+         ) : null;
+-        // react doesn't allow appending a DOM node as child.
+-        // as such, we pass the this.props.contentHtml instead and then set the raw
+-        // HTML content. This is secure as the contents have already been parsed previously
+         return (
+             <button
+                 className={"mx_EventTile_spoiler" + (this.state.visible ? " visible" : "")}
+@@ -48,10 +45,7 @@ export default class Spoiler extends React.Component<IProps, IState> {
+             >
+                 {reason}
+                 &nbsp;
+-                <span
+-                    className="mx_EventTile_spoiler_content"
+-                    dangerouslySetInnerHTML={{ __html: this.props.contentHtml }}
+-                />
++                <span className="mx_EventTile_spoiler_content">{this.props.children}</span>
+             </button>
+         );
+     }
+diff --git a/src/components/views/emojipicker/ReactionPicker.tsx b/src/components/views/emojipicker/ReactionPicker.tsx
+index 8509b4014ac17171e8cbc22a94e7ff2b3416c536..11b3d9468af49acd7645291fe52c2bd575413f0e 100644
+--- a/src/components/views/emojipicker/ReactionPicker.tsx
++++ b/src/components/views/emojipicker/ReactionPicker.tsx
+@@ -31,8 +31,8 @@ class ReactionPicker extends React.Component<IProps, IState> {
+     public static contextType = RoomContext;
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             selectedEmojis: new Set(Object.keys(this.getReactions())),
+diff --git a/src/components/views/location/LocationPicker.tsx b/src/components/views/location/LocationPicker.tsx
+index 52762b5fe9b468fe8bcf77569cb2529b33cf314e..dce5699fcc0faba4c27bd106e00fac460292698b 100644
+--- a/src/components/views/location/LocationPicker.tsx
++++ b/src/components/views/location/LocationPicker.tsx
+@@ -47,8 +47,8 @@ class LocationPicker extends React.Component<ILocationPickerProps, IState> {
+     private geolocate?: maplibregl.GeolocateControl;
+     private marker?: maplibregl.Marker;
+ 
+-    public constructor(props: ILocationPickerProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: ILocationPickerProps) {
++        super(props);
+ 
+         this.state = {
+             position: undefined,
+diff --git a/src/components/views/messages/CodeBlock.tsx b/src/components/views/messages/CodeBlock.tsx
+index fd623eea0186b71cb4d5b1cee3a72d889d36887e..2ec5f728b3dacc5046a1fbf4b4b2d79be4184346 100644
+--- a/src/components/views/messages/CodeBlock.tsx
++++ b/src/components/views/messages/CodeBlock.tsx
+@@ -5,9 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
+-import React, { useState } from "react";
++import React, { type JSX, useState } from "react";
+ import classNames from "classnames";
+-import { TooltipProvider } from "@vector-im/compound-web";
++import { type DOMNode, Element as ParserElement, domToReact } from "html-react-parser";
++import { textContent, getInnerHTML } from "domutils";
+ 
+ import { useSettingValue } from "../../../hooks/useSettings.ts";
+ import { CopyTextButton } from "../elements/CopyableText.tsx";
+@@ -16,7 +17,7 @@ const MAX_HIGHLIGHT_LENGTH = 4096;
+ const MAX_LINES_BEFORE_COLLAPSE = 5;
+ 
+ interface Props {
+-    children: HTMLElement;
++    preNode: ParserElement;
+     onHeightChanged?(): void;
+ }
+ 
+@@ -35,14 +36,16 @@ const ExpandCollapseButton: React.FC<{
+     );
+ };
+ 
+-const CodeBlock: React.FC<Props> = ({ children, onHeightChanged }) => {
++const CodeBlock: React.FC<Props> = ({ preNode, onHeightChanged }) => {
+     const enableSyntaxHighlightLanguageDetection = useSettingValue("enableSyntaxHighlightLanguageDetection");
+     const showCodeLineNumbers = useSettingValue("showCodeLineNumbers");
+     const expandCodeByDefault = useSettingValue("expandCodeByDefault");
+     const [expanded, setExpanded] = useState(expandCodeByDefault);
+ 
++    const text = textContent(preNode);
++
+     let expandCollapseButton: JSX.Element | undefined;
+-    if (children.textContent && children.textContent.split("\n").length >= MAX_LINES_BEFORE_COLLAPSE) {
++    if (text.split("\n").length >= MAX_LINES_BEFORE_COLLAPSE) {
+         expandCollapseButton = (
+             <ExpandCollapseButton
+                 expanded={expanded}
+@@ -55,10 +58,11 @@ const CodeBlock: React.FC<Props> = ({ children, onHeightChanged }) => {
+         );
+     }
+ 
++    const innerHTML = getInnerHTML(preNode);
+     let lineNumbers: JSX.Element | undefined;
+     if (showCodeLineNumbers) {
+         // Calculate number of lines in pre
+-        const number = children.innerHTML.replace(/\n(<\/code>)?$/, "").split(/\n/).length;
++        const number = innerHTML.replace(/\n(<\/code>)?$/, "").split(/\n/).length;
+         // Iterate through lines starting with 1 (number of the first line is 1)
+         lineNumbers = (
+             <span className="mx_EventTile_lineNumbers">
+@@ -108,28 +112,37 @@ const CodeBlock: React.FC<Props> = ({ children, onHeightChanged }) => {
+         }
+     }
+ 
++    function highlightCodeRef(div: HTMLElement | null): void {
++        highlightCode(div);
++    }
++
++    let content = domToReact(preNode.children as DOMNode[]);
++
++    // Add code element if it's missing since we depend on it
++    if (!preNode.children.some((child) => child instanceof ParserElement && child.tagName.toUpperCase() === "CODE")) {
++        content = <code>{content}</code>;
++    }
++
+     return (
+-        <TooltipProvider>
++        <div className="mx_EventTile_pre_container">
+             <pre
+                 className={classNames({
+                     mx_EventTile_collapsedCodeBlock: !expanded,
+                 })}
+             >
+                 {lineNumbers}
+-                <div
+-                    style={{ display: "contents" }}
+-                    dangerouslySetInnerHTML={{ __html: children.innerHTML }}
+-                    ref={highlightCode}
+-                />
++                <div style={{ display: "contents" }} ref={highlightCodeRef}>
++                    {content}
++                </div>
+             </pre>
+             {expandCollapseButton}
+             <CopyTextButton
+-                getTextToCopy={() => children.getElementsByTagName("code")[0]?.textContent ?? null}
++                getTextToCopy={() => text}
+                 className={classNames("mx_EventTile_button mx_EventTile_copyButton", {
+                     mx_EventTile_buttonBottom: !!expandCollapseButton,
+                 })}
+             />
+-        </TooltipProvider>
++        </div>
+     );
+ };
+ 
+diff --git a/src/components/views/messages/EditHistoryMessage.tsx b/src/components/views/messages/EditHistoryMessage.tsx
+index c7470e2b509bdc6fdaab43d5e6bb26cb6793fb89..26687af1592a1379990bfe219c684cabe65e01ab 100644
+--- a/src/components/views/messages/EditHistoryMessage.tsx
++++ b/src/components/views/messages/EditHistoryMessage.tsx
+@@ -10,11 +10,9 @@ import React, { createRef } from "react";
+ import { type EventStatus, type IContent, type MatrixEvent, MatrixEventEvent, MsgType } from "matrix-js-sdk/src/matrix";
+ import classNames from "classnames";
+ 
+-import * as HtmlUtils from "../../../HtmlUtils";
++import EventContentBody from "./EventContentBody.tsx";
+ import { editBodyDiffToHtml } from "../../../utils/MessageDiffUtils";
+ import { formatTime } from "../../../DateUtils";
+-import { pillifyLinks } from "../../../utils/pillify";
+-import { tooltipifyLinks } from "../../../utils/tooltipify";
+ import { _t } from "../../../languageHandler";
+ import Modal from "../../../Modal";
+ import RedactedBody from "./RedactedBody";
+@@ -23,7 +21,6 @@ import ConfirmAndWaitRedactDialog from "../dialogs/ConfirmAndWaitRedactDialog";
+ import ViewSource from "../../structures/ViewSource";
+ import SettingsStore from "../../../settings/SettingsStore";
+ import MatrixClientContext from "../../../contexts/MatrixClientContext";
+-import { ReactRootManager } from "../../../utils/react";
+ 
+ function getReplacedContent(event: MatrixEvent): IContent {
+     const originalContent = event.getOriginalContent();
+@@ -48,8 +45,6 @@ export default class EditHistoryMessage extends React.PureComponent<IProps, ISta
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+     private content = createRef<HTMLDivElement>();
+-    private pills = new ReactRootManager();
+-    private tooltips = new ReactRootManager();
+ 
+     public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+         super(props, context);
+@@ -94,37 +89,11 @@ export default class EditHistoryMessage extends React.PureComponent<IProps, ISta
+         );
+     };
+ 
+-    private pillifyLinks(): void {
+-        // not present for redacted events
+-        if (this.content.current) {
+-            pillifyLinks(this.context, this.content.current.children, this.props.mxEvent, this.pills);
+-        }
+-    }
+-
+-    private tooltipifyLinks(): void {
+-        // not present for redacted events
+-        if (this.content.current) {
+-            tooltipifyLinks(this.content.current.children, this.pills.elements, this.tooltips);
+-        }
+-    }
+-
+-    public componentDidMount(): void {
+-        this.pillifyLinks();
+-        this.tooltipifyLinks();
+-    }
+-
+     public componentWillUnmount(): void {
+-        this.pills.unmount();
+-        this.tooltips.unmount();
+         const event = this.props.mxEvent;
+         event.localRedactionEvent()?.off(MatrixEventEvent.Status, this.onAssociatedStatusChanged);
+     }
+ 
+-    public componentDidUpdate(): void {
+-        this.pillifyLinks();
+-        this.tooltipifyLinks();
+-    }
+-
+     private renderActionBar(): React.ReactNode {
+         // hide the button when already redacted
+         let redactButton: JSX.Element | undefined;
+@@ -164,9 +133,19 @@ export default class EditHistoryMessage extends React.PureComponent<IProps, ISta
+             if (this.props.previousEdit) {
+                 contentElements = editBodyDiffToHtml(getReplacedContent(this.props.previousEdit), content);
+             } else {
+-                contentElements = HtmlUtils.bodyToSpan(content, null, {
+-                    stripReplyFallback: true,
+-                });
++                contentElements = (
++                    <EventContentBody
++                        as="span"
++                        mxEvent={mxEvent}
++                        content={content}
++                        highlights={[]}
++                        stripReply
++                        renderMentionPills
++                        renderCodeBlocks
++                        renderSpoilers
++                        linkify
++                    />
++                );
+             }
+             if (mxEvent.getContent().msgtype === MsgType.Emote) {
+                 const name = mxEvent.sender ? mxEvent.sender.name : mxEvent.getSender();
+diff --git a/src/components/views/messages/EventContentBody.tsx b/src/components/views/messages/EventContentBody.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bf0e48c16a5f18a3d6f522b4fc28a13fdaa22474
+--- /dev/null
++++ b/src/components/views/messages/EventContentBody.tsx
+@@ -0,0 +1,210 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React, { memo, forwardRef, useContext, useMemo } from "react";
++import { type IContent, type MatrixEvent, MsgType, PushRuleKind } from "matrix-js-sdk/src/matrix";
++import parse from "html-react-parser";
++import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
++
++import { bodyToNode } from "../../../HtmlUtils.tsx";
++import { Linkify } from "../../../Linkify.tsx";
++import PlatformPeg from "../../../PlatformPeg.ts";
++import {
++    applyReplacerOnString,
++    combineRenderers,
++    type Replacer,
++    type RendererMap,
++    keywordPillRenderer,
++    mentionPillRenderer,
++    ambiguousLinkTooltipRenderer,
++    codeBlockRenderer,
++    spoilerRenderer,
++    replacerToRenderFunction,
++} from "../../../renderer";
++import MatrixClientContext from "../../../contexts/MatrixClientContext.tsx";
++import { useSettingValue } from "../../../hooks/useSettings.ts";
++import { filterBoolean } from "../../../utils/arrays.ts";
++
++/**
++ * Returns a RegExp pattern for the keyword in the push rule of the given Matrix event, if any
++ * @param mxEvent - the Matrix event to get the push rule keyword pattern from
++ */
++const getPushDetailsKeywordPatternRegexp = (mxEvent: MatrixEvent): RegExp | undefined => {
++    const pushDetails = mxEvent.getPushDetails();
++    if (
++        pushDetails.rule?.enabled &&
++        pushDetails.rule.kind === PushRuleKind.ContentSpecific &&
++        pushDetails.rule.pattern
++    ) {
++        return PushProcessor.getPushRuleGlobRegex(pushDetails.rule.pattern, true, "gi");
++    }
++    return undefined;
++};
++
++interface ReplacerOptions {
++    /**
++     * Whether to render room/user mentions as pills
++     */
++    renderMentionPills?: boolean;
++    /**
++     * Whether to render push rule keywords as pills
++     */
++    renderKeywordPills?: boolean;
++    /**
++     * Whether to render spoilers as hidden content revealed on click
++     */
++    renderSpoilers?: boolean;
++    /**
++     * Whether to render code blocks as syntax highlighted code with a copy to clipboard button
++     */
++    renderCodeBlocks?: boolean;
++    /**
++     * Whether to render tooltips for ambiguous links, only effective on platforms which specify `needsUrlTooltips` true
++     */
++    renderTooltipsForAmbiguousLinks?: boolean;
++}
++
++// Returns a memoized Replacer based on the input parameters
++const useReplacer = (
++    content: IContent,
++    mxEvent: MatrixEvent | undefined,
++    onHeightChanged: (() => void) | undefined,
++    options: ReplacerOptions,
++): Replacer => {
++    const cli = useContext(MatrixClientContext);
++    const room = cli.getRoom(mxEvent?.getRoomId()) ?? undefined;
++
++    const shouldShowPillAvatar = useSettingValue("Pill.shouldShowPillAvatar");
++    const isHtml = content.format === "org.matrix.custom.html";
++
++    const replacer = useMemo(() => {
++        const keywordRegexpPattern = mxEvent ? getPushDetailsKeywordPatternRegexp(mxEvent) : undefined;
++        const replacers = filterBoolean<RendererMap>([
++            options.renderMentionPills ? mentionPillRenderer : undefined,
++            options.renderKeywordPills && keywordRegexpPattern ? keywordPillRenderer : undefined,
++            options.renderTooltipsForAmbiguousLinks && PlatformPeg.get()?.needsUrlTooltips()
++                ? ambiguousLinkTooltipRenderer
++                : undefined,
++            options.renderSpoilers ? spoilerRenderer : undefined,
++            options.renderCodeBlocks ? codeBlockRenderer : undefined,
++        ]);
++        return combineRenderers(...replacers)({
++            isHtml,
++            mxEvent,
++            room,
++            shouldShowPillAvatar,
++            keywordRegexpPattern,
++            onHeightChanged,
++        });
++    }, [
++        mxEvent,
++        options.renderMentionPills,
++        options.renderKeywordPills,
++        options.renderTooltipsForAmbiguousLinks,
++        options.renderSpoilers,
++        options.renderCodeBlocks,
++        isHtml,
++        room,
++        shouldShowPillAvatar,
++        onHeightChanged,
++    ]);
++
++    return replacer;
++};
++
++interface Props extends ReplacerOptions {
++    /**
++     * Whether to render the content in a div or span
++     */
++    as: "span" | "div";
++    /**
++     * Whether to render links as clickable anchors
++     */
++    linkify: boolean;
++    /**
++     * The Matrix event to render, required for renderMentionPills & renderKeywordPills
++     */
++    mxEvent?: MatrixEvent;
++    /**
++     * The content to render
++     */
++    content: IContent;
++    /**
++     * Whether to strip reply fallbacks from the content before rendering
++     */
++    stripReply?: boolean;
++    /**
++     * Highlights to emphasise in the content
++     */
++    highlights?: string[];
++    /**
++     * Callback for when the height of the content changes
++     */
++    onHeightChanged?: () => void;
++    /**
++     * Whether to include the `dir="auto"` attribute on the rendered element
++     */
++    includeDir?: boolean;
++}
++
++/**
++ * Component to render a Matrix event's content body.
++ * If the content is formatted HTML then it will be sanitised before rendering.
++ * A number of rendering features are supported as configured by {@link ReplacerOptions}
++ * Returns a div or span depending on `as`, the `dir` on a `div` is always set to `"auto"` but set by `includeDir` otherwise.
++ */
++const EventContentBody = memo(
++    forwardRef<HTMLElement, Props>(
++        (
++            { as, mxEvent, stripReply, content, onHeightChanged, linkify, highlights, includeDir = true, ...options },
++            ref,
++        ) => {
++            const enableBigEmoji = useSettingValue("TextualBody.enableBigEmoji");
++
++            const replacer = useReplacer(content, mxEvent, onHeightChanged, options);
++            const linkifyOptions = useMemo(
++                () => ({
++                    render: replacerToRenderFunction(replacer),
++                }),
++                [replacer],
++            );
++
++            const isEmote = content.msgtype === MsgType.Emote;
++
++            const { strippedBody, formattedBody, emojiBodyElements, className } = useMemo(
++                () =>
++                    bodyToNode(content, highlights, {
++                        disableBigEmoji: isEmote || !enableBigEmoji,
++                        // Part of Replies fallback support
++                        stripReplyFallback: stripReply,
++                    }),
++                [content, enableBigEmoji, highlights, isEmote, stripReply],
++            );
++
++            if (as === "div") includeDir = true; // force dir="auto" on divs
++
++            const As = as;
++            const body = formattedBody ? (
++                <As ref={ref as any} className={className} dir={includeDir ? "auto" : undefined}>
++                    {parse(formattedBody, {
++                        replace: replacer,
++                    })}
++                </As>
++            ) : (
++                <As ref={ref as any} className={className} dir={includeDir ? "auto" : undefined}>
++                    {applyReplacerOnString(emojiBodyElements || strippedBody, replacer)}
++                </As>
++            );
++
++            if (!linkify) return body;
++
++            return <Linkify options={linkifyOptions}>{body}</Linkify>;
++        },
++    ),
++);
++
++export default EventContentBody;
+diff --git a/src/components/views/messages/MLocationBody.tsx b/src/components/views/messages/MLocationBody.tsx
+index eb5881e815981ab97f220da08ebcb4fd2ad810a0..abf7e0f507f1d9ec250408d898f630105a73ee72 100644
+--- a/src/components/views/messages/MLocationBody.tsx
++++ b/src/components/views/messages/MLocationBody.tsx
+@@ -36,8 +36,8 @@ export default class MLocationBody extends React.Component<IBodyProps, IState> {
+     private mapId: string;
+     private reconnectedListener: ClientEventHandlerMap[ClientEvent.Sync];
+ 
+-    public constructor(props: IBodyProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IBodyProps) {
++        super(props);
+ 
+         // multiple instances of same map might be in document
+         // eg thread and main timeline, reply
+diff --git a/src/components/views/messages/MPollBody.tsx b/src/components/views/messages/MPollBody.tsx
+index 395aa740a6d686721a2f1b4aab664d0ea44a7605..73fb82083a1654f52a89be12ba68534a1c92aa91 100644
+--- a/src/components/views/messages/MPollBody.tsx
++++ b/src/components/views/messages/MPollBody.tsx
+@@ -142,8 +142,8 @@ export default class MPollBody extends React.Component<IBodyProps, IState> {
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+     private seenEventIds: string[] = []; // Events we have already seen
+ 
+-    public constructor(props: IBodyProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IBodyProps) {
++        super(props);
+ 
+         this.state = {
+             selected: null,
+diff --git a/src/components/views/messages/MessageEvent.tsx b/src/components/views/messages/MessageEvent.tsx
+index be634579026694d345485059316056a91ec22ab8..4be0dc44934124ae215dbea2e747101f9cf5e4d2 100644
+--- a/src/components/views/messages/MessageEvent.tsx
++++ b/src/components/views/messages/MessageEvent.tsx
+@@ -27,7 +27,6 @@ import UnknownBody from "./UnknownBody";
+ import { type IMediaBody } from "./IMediaBody";
+ import { MediaEventHelper } from "../../../utils/MediaEventHelper";
+ import { type IBodyProps } from "./IBodyProps";
+-import MatrixClientContext from "../../../contexts/MatrixClientContext";
+ import TextualBody from "./TextualBody";
+ import MImageBody from "./MImageBody";
+ import MFileBody from "./MFileBody";
+@@ -83,11 +82,8 @@ export default class MessageEvent extends React.Component<IProps> implements IMe
+     private bodyTypes = new Map<string, typeof React.Component>(baseBodyTypes.entries());
+     private evTypes = new Map<string, React.ComponentType<IBodyProps>>(baseEvTypes.entries());
+ 
+-    public static contextType = MatrixClientContext;
+-    declare public context: React.ContextType<typeof MatrixClientContext>;
+-
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         if (MediaEventHelper.isEligible(this.props.mxEvent)) {
+             this.mediaHelper = new MediaEventHelper(this.props.mxEvent);
+diff --git a/src/components/views/messages/TextualBody.tsx b/src/components/views/messages/TextualBody.tsx
+index 296f7cd5377c1a7841b95a5ddabf61fd7e26a89f..bfca88bd4ec47e8f7fc9d0469e6922239bbaf987 100644
+--- a/src/components/views/messages/TextualBody.tsx
++++ b/src/components/views/messages/TextualBody.tsx
+@@ -6,23 +6,18 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
+-import React, { createRef, type SyntheticEvent, type MouseEvent, StrictMode } from "react";
+-import { MsgType, PushRuleKind } from "matrix-js-sdk/src/matrix";
+-import { TooltipProvider } from "@vector-im/compound-web";
+-import { globToRegexp } from "matrix-js-sdk/src/utils";
++import React, { type JSX, createRef, type SyntheticEvent, type MouseEvent } from "react";
++import { MsgType } from "matrix-js-sdk/src/matrix";
+ 
+-import * as HtmlUtils from "../../../HtmlUtils";
++import EventContentBody from "./EventContentBody.tsx";
+ import { formatDate } from "../../../DateUtils";
+ import Modal from "../../../Modal";
+ import dis from "../../../dispatcher/dispatcher";
+ import { _t } from "../../../languageHandler";
+ import SettingsStore from "../../../settings/SettingsStore";
+-import { pillifyLinks } from "../../../utils/pillify";
+-import { tooltipifyLinks } from "../../../utils/tooltipify";
+ import { IntegrationManagers } from "../../../integrations/IntegrationManagers";
+ import { isPermalinkHost, tryTransformPermalinkToLocalHref } from "../../../utils/permalinks/Permalinks";
+ import { Action } from "../../../dispatcher/actions";
+-import Spoiler from "../elements/Spoiler";
+ import QuestionDialog from "../dialogs/QuestionDialog";
+ import MessageEditHistoryDialog from "../dialogs/MessageEditHistoryDialog";
+ import EditMessageComposer from "../rooms/EditMessageComposer";
+@@ -34,10 +29,6 @@ import { options as linkifyOpts } from "../../../linkify-matrix";
+ import { getParentEventId } from "../../../utils/Reply";
+ import { EditWysiwygComposer } from "../rooms/wysiwyg_composer";
+ import { type IEventTileOps } from "../rooms/EventTile";
+-import { MatrixClientPeg } from "../../../MatrixClientPeg";
+-import CodeBlock from "./CodeBlock";
+-import { Pill, PillType } from "../elements/Pill";
+-import { ReactRootManager } from "../../../utils/react";
+ 
+ interface IState {
+     // the URLs (if any) to be previewed with a LinkPreviewWidget inside this TextualBody.
+@@ -50,10 +41,6 @@ interface IState {
+ export default class TextualBody extends React.Component<IBodyProps, IState> {
+     private readonly contentRef = createRef<HTMLDivElement>();
+ 
+-    private pills = new ReactRootManager();
+-    private tooltips = new ReactRootManager();
+-    private reactRoots = new ReactRootManager();
+-
+     public static contextType = RoomContext;
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+@@ -69,71 +56,7 @@ export default class TextualBody extends React.Component<IBodyProps, IState> {
+     }
+ 
+     private applyFormatting(): void {
+-        // Function is only called from render / componentDidMount → contentRef is set
+-        const content = this.contentRef.current!;
+-
+-        this.activateSpoilers([content]);
+-
+-        HtmlUtils.linkifyElement(content);
+-        pillifyLinks(MatrixClientPeg.safeGet(), [content], this.props.mxEvent, this.pills);
+-
+         this.calculateUrlPreview();
+-
+-        // tooltipifyLinks AFTER calculateUrlPreview because the DOM inside the tooltip
+-        // container is empty before the internal component has mounted so calculateUrlPreview
+-        // won't find any anchors
+-        tooltipifyLinks([content], [...this.pills.elements, ...this.reactRoots.elements], this.tooltips);
+-
+-        if (this.props.mxEvent.getContent().format === "org.matrix.custom.html") {
+-            // Handle expansion and add buttons
+-            const pres = [...content.getElementsByTagName("pre")];
+-            if (pres && pres.length > 0) {
+-                for (let i = 0; i < pres.length; i++) {
+-                    // If there already is a div wrapping the codeblock we want to skip this.
+-                    // This happens after the codeblock was edited.
+-                    if (pres[i].parentElement?.className == "mx_EventTile_pre_container") continue;
+-                    // Add code element if it's missing since we depend on it
+-                    if (pres[i].getElementsByTagName("code").length == 0) {
+-                        this.addCodeElement(pres[i]);
+-                    }
+-                    // Wrap a div around <pre> so that the copy button can be correctly positioned
+-                    // when the <pre> overflows and is scrolled horizontally.
+-                    this.wrapPreInReact(pres[i]);
+-                }
+-            }
+-        }
+-
+-        // Highlight notification keywords using pills
+-        const pushDetails = this.props.mxEvent.getPushDetails();
+-        if (
+-            pushDetails.rule?.enabled &&
+-            pushDetails.rule.kind === PushRuleKind.ContentSpecific &&
+-            pushDetails.rule.pattern
+-        ) {
+-            this.pillifyNotificationKeywords([content], this.regExpForKeywordPattern(pushDetails.rule.pattern));
+-        }
+-    }
+-
+-    private addCodeElement(pre: HTMLPreElement): void {
+-        const code = document.createElement("code");
+-        code.append(...pre.childNodes);
+-        pre.appendChild(code);
+-    }
+-
+-    private wrapPreInReact(pre: HTMLPreElement): void {
+-        const root = document.createElement("div");
+-        root.className = "mx_EventTile_pre_container";
+-
+-        // Insert containing div in place of <pre> block
+-        pre.replaceWith(root);
+-
+-        this.reactRoots.render(
+-            <StrictMode>
+-                <CodeBlock onHeightChanged={this.props.onHeightChanged}>{pre}</CodeBlock>
+-            </StrictMode>,
+-            root,
+-            pre,
+-        );
+     }
+ 
+     public componentDidUpdate(prevProps: Readonly<IBodyProps>): void {
+@@ -147,12 +70,6 @@ export default class TextualBody extends React.Component<IBodyProps, IState> {
+         }
+     }
+ 
+-    public componentWillUnmount(): void {
+-        this.pills.unmount();
+-        this.tooltips.unmount();
+-        this.reactRoots.unmount();
+-    }
+-
+     public shouldComponentUpdate(nextProps: Readonly<IBodyProps>, nextState: Readonly<IState>): boolean {
+         //console.info("shouldComponentUpdate: ShowUrlPreview for %s is %s", this.props.mxEvent.getId(), this.props.showUrlPreview);
+ 
+@@ -192,85 +109,6 @@ export default class TextualBody extends React.Component<IBodyProps, IState> {
+         }
+     }
+ 
+-    private activateSpoilers(nodes: ArrayLike<Element>): void {
+-        let node = nodes[0];
+-        while (node) {
+-            if (node.tagName === "SPAN" && typeof node.getAttribute("data-mx-spoiler") === "string") {
+-                const spoilerContainer = document.createElement("span");
+-
+-                const reason = node.getAttribute("data-mx-spoiler") ?? undefined;
+-                node.removeAttribute("data-mx-spoiler"); // we don't want to recurse
+-                const spoiler = (
+-                    <StrictMode>
+-                        <TooltipProvider>
+-                            <Spoiler reason={reason} contentHtml={node.outerHTML} />
+-                        </TooltipProvider>
+-                    </StrictMode>
+-                );
+-
+-                this.reactRoots.render(spoiler, spoilerContainer, node);
+-
+-                node.replaceWith(spoilerContainer);
+-                node = spoilerContainer;
+-            }
+-
+-            if (node.childNodes && node.childNodes.length) {
+-                this.activateSpoilers(node.childNodes as NodeListOf<Element>);
+-            }
+-
+-            node = node.nextSibling as Element;
+-        }
+-    }
+-
+-    /**
+-     * Marks the text that activated a push-notification keyword pattern.
+-     */
+-    private pillifyNotificationKeywords(nodes: ArrayLike<Element>, exp: RegExp): void {
+-        let node: Node | null = nodes[0];
+-        while (node) {
+-            if (node.nodeType === Node.TEXT_NODE) {
+-                const text = node.nodeValue;
+-                if (!text) {
+-                    node = node.nextSibling;
+-                    continue;
+-                }
+-                const match = text.match(exp);
+-                if (!match || match.length < 3) {
+-                    node = node.nextSibling;
+-                    continue;
+-                }
+-                const keywordText = match[2];
+-                const idx = match.index! + match[1].length;
+-                const before = text.substring(0, idx);
+-                const after = text.substring(idx + keywordText.length);
+-
+-                const container = document.createElement("span");
+-                const newContent = (
+-                    <>
+-                        {before}
+-                        <TooltipProvider>
+-                            <Pill text={keywordText} type={PillType.Keyword} />
+-                        </TooltipProvider>
+-                        {after}
+-                    </>
+-                );
+-                this.reactRoots.render(newContent, container, node);
+-
+-                node.parentNode?.replaceChild(container, node);
+-            } else if (node.childNodes && node.childNodes.length) {
+-                this.pillifyNotificationKeywords(node.childNodes as NodeListOf<Element>, exp);
+-            }
+-
+-            node = node.nextSibling;
+-        }
+-    }
+-
+-    private regExpForKeywordPattern(pattern: string): RegExp {
+-        // Reflects the push notification pattern-matching implementation at
+-        // https://github.com/matrix-org/matrix-js-sdk/blob/dbd7d26968b94700827bac525c39afff2c198e61/src/pushprocessor.ts#L570
+-        return new RegExp("(^|\\W)(" + globToRegexp(pattern) + ")(\\W|$)", "i");
+-    }
+-
+     private findLinks(nodes: ArrayLike<Element>): string[] {
+         let links: string[] = [];
+ 
+@@ -482,18 +320,25 @@ export default class TextualBody extends React.Component<IBodyProps, IState> {
+ 
+         const willHaveWrapper =
+             this.props.replacingEventId || this.props.isSeeingThroughMessageHiddenForModeration || isEmote;
+-
+         // only strip reply if this is the original replying event, edits thereafter do not have the fallback
+         const stripReply = !mxEvent.replacingEvent() && !!getParentEventId(mxEvent);
+-
+-        const htmlOpts = {
+-            disableBigEmoji: isEmote || !SettingsStore.getValue("TextualBody.enableBigEmoji"),
+-            // Part of Replies fallback support
+-            stripReplyFallback: stripReply,
+-        };
+-        let body = willHaveWrapper
+-            ? HtmlUtils.bodyToSpan(content, this.props.highlights, htmlOpts, this.contentRef, false)
+-            : HtmlUtils.bodyToDiv(content, this.props.highlights, htmlOpts, this.contentRef);
++        let body = (
++            <EventContentBody
++                as={willHaveWrapper ? "span" : "div"}
++                includeDir={false}
++                mxEvent={mxEvent}
++                content={content}
++                stripReply={stripReply}
++                linkify
++                highlights={this.props.highlights}
++                onHeightChanged={this.props.onHeightChanged}
++                ref={this.contentRef}
++                renderKeywordPills
++                renderMentionPills
++                renderCodeBlocks
++                renderSpoilers
++            />
++        );
+ 
+         if (this.props.replacingEventId) {
+             body = (
+diff --git a/src/components/views/right_panel/TimelineCard.tsx b/src/components/views/right_panel/TimelineCard.tsx
+index 45891cfe5284b2c230bb38a8e82bd04ed05df5e7..a7683ae28ecfdf04ba486d21d1059be0088b0dc6 100644
+--- a/src/components/views/right_panel/TimelineCard.tsx
++++ b/src/components/views/right_panel/TimelineCard.tsx
+@@ -77,8 +77,8 @@ export default class TimelineCard extends React.Component<IProps, IState> {
+     private card = React.createRef<HTMLDivElement>();
+     private readReceiptsSettingWatcher: string | undefined;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+         this.state = {
+             showReadReceipts: SettingsStore.getValue("showReadReceipts", props.room.roomId),
+             layout: SettingsStore.getValue("layout"),
+diff --git a/src/components/views/room_settings/AliasSettings.tsx b/src/components/views/room_settings/AliasSettings.tsx
+index 36143dabe2ac2a88b7122d2de504b7b3762c4025..38030288f5bffca9c815a62a65ec2f50480bb1c9 100644
+--- a/src/components/views/room_settings/AliasSettings.tsx
++++ b/src/components/views/room_settings/AliasSettings.tsx
+@@ -101,8 +101,8 @@ export default class AliasSettings extends React.Component<IProps, IState> {
+         canSetCanonicalAlias: false,
+     };
+ 
+-    public constructor(props: IProps, context: ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         const state: IState = {
+             altAliases: [],
+diff --git a/src/components/views/rooms/Autocomplete.tsx b/src/components/views/rooms/Autocomplete.tsx
+index f884bd3946c63df104a637f6988b98ddfd3faf74..0b1569a688c4899e8c7f8ebf1d8e6941b366d6c9 100644
+--- a/src/components/views/rooms/Autocomplete.tsx
++++ b/src/components/views/rooms/Autocomplete.tsx
+@@ -55,8 +55,8 @@ export default class Autocomplete extends React.PureComponent<IProps, IState> {
+     public static contextType = RoomContext;
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             // list of completionResults, each containing completions
+diff --git a/src/components/views/rooms/LegacyRoomList.tsx b/src/components/views/rooms/LegacyRoomList.tsx
+index a940484b1645436253feb69d3dd79133d476ba0f..2470db179e353e0d8e4e3516ebf6992ca28cc058 100644
+--- a/src/components/views/rooms/LegacyRoomList.tsx
++++ b/src/components/views/rooms/LegacyRoomList.tsx
+@@ -437,8 +437,8 @@ export default class LegacyRoomList extends React.PureComponent<IProps, IState>
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             sublists: {},
+diff --git a/src/components/views/rooms/MessageComposer.tsx b/src/components/views/rooms/MessageComposer.tsx
+index ceeb1ddebf1757cee5734d98afc0ffedc88c0bac..2cfbc61017fcb11aee404a13da97a17cb1d7412b 100644
+--- a/src/components/views/rooms/MessageComposer.tsx
++++ b/src/components/views/rooms/MessageComposer.tsx
+@@ -124,9 +124,8 @@ export class MessageComposer extends React.Component<IProps, IState> {
+         isRichTextEnabled: true,
+     };
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
+-        this.context = context; // otherwise React will only set it prior to render due to type def above
++    public constructor(props: IProps) {
++        super(props);
+ 
+         const isWysiwygLabEnabled = SettingsStore.getValue("feature_wysiwyg_composer");
+         let isRichTextEnabled = true;
+diff --git a/src/components/views/rooms/RoomUpgradeWarningBar.tsx b/src/components/views/rooms/RoomUpgradeWarningBar.tsx
+index e29c8648df717671e8c8ae5415bebfb90376fc04..2de9eaf7500f6af2204152ac942143128299fe09 100644
+--- a/src/components/views/rooms/RoomUpgradeWarningBar.tsx
++++ b/src/components/views/rooms/RoomUpgradeWarningBar.tsx
+@@ -27,8 +27,8 @@ export default class RoomUpgradeWarningBar extends React.PureComponent<IProps, I
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         const tombstone = this.props.room.currentState.getStateEvents("m.room.tombstone", "");
+         this.state = {
+diff --git a/src/components/views/rooms/SearchResultTile.tsx b/src/components/views/rooms/SearchResultTile.tsx
+index f110ff17ea1cc65178fa47551cb2e141ddbcd6f0..289f3fb008d7d7b2f16d524f277bab8bbb4e7b03 100644
+--- a/src/components/views/rooms/SearchResultTile.tsx
++++ b/src/components/views/rooms/SearchResultTile.tsx
+@@ -42,8 +42,8 @@ export default class SearchResultTile extends React.Component<IProps> {
+     // A map of <callId, LegacyCallEventGrouper>
+     private callEventGroupers = new Map<string, LegacyCallEventGrouper>();
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.buildLegacyCallEventGroupers(this.props.timeline);
+     }
+diff --git a/src/components/views/rooms/VoiceRecordComposerTile.tsx b/src/components/views/rooms/VoiceRecordComposerTile.tsx
+index 14925297f0016efc990307bf63cc4905a274848e..b329cd84eab9714c6a577baf3eb81c9740da5336 100644
+--- a/src/components/views/rooms/VoiceRecordComposerTile.tsx
++++ b/src/components/views/rooms/VoiceRecordComposerTile.tsx
+@@ -56,8 +56,8 @@ export default class VoiceRecordComposerTile extends React.PureComponent<IProps,
+     declare public context: React.ContextType<typeof RoomContext>;
+     private voiceRecordingId: string;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof RoomContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {};
+ 
+diff --git a/src/components/views/settings/tabs/room/GeneralRoomSettingsTab.tsx b/src/components/views/settings/tabs/room/GeneralRoomSettingsTab.tsx
+index 3b5f3191ef2baad49427f19e91c6d1e1bb491a9b..2615c083c9f271a43f9afc96a2635cb496a2a7e7 100644
+--- a/src/components/views/settings/tabs/room/GeneralRoomSettingsTab.tsx
++++ b/src/components/views/settings/tabs/room/GeneralRoomSettingsTab.tsx
+@@ -35,8 +35,8 @@ export default class GeneralRoomSettingsTab extends React.Component<IProps, ISta
+     public static contextType = MatrixClientContext;
+     declare public context: ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: IProps, context: ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         this.state = {
+             isRoomPublished: false, // loaded async
+diff --git a/src/components/views/settings/tabs/room/SecurityRoomSettingsTab.tsx b/src/components/views/settings/tabs/room/SecurityRoomSettingsTab.tsx
+index 31f308809d16023e38deaa6e98b486fc8847a141..d08f548c4b5a3d49b7fa2565fcba3c5fa04abbbf 100644
+--- a/src/components/views/settings/tabs/room/SecurityRoomSettingsTab.tsx
++++ b/src/components/views/settings/tabs/room/SecurityRoomSettingsTab.tsx
+@@ -62,8 +62,8 @@ export default class SecurityRoomSettingsTab extends React.Component<IProps, ISt
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: IProps, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: IProps) {
++        super(props);
+ 
+         const state = this.props.room.currentState;
+ 
+diff --git a/src/components/views/settings/tabs/user/HelpUserSettingsTab.tsx b/src/components/views/settings/tabs/user/HelpUserSettingsTab.tsx
+index 5330d7452002e3fcb61f429b7d95a43a524289c4..1f77dcd5e1a2afdb28b75240e027c64369126e2d 100644
+--- a/src/components/views/settings/tabs/user/HelpUserSettingsTab.tsx
++++ b/src/components/views/settings/tabs/user/HelpUserSettingsTab.tsx
+@@ -33,8 +33,8 @@ export default class HelpUserSettingsTab extends React.Component<EmptyObject, IS
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: EmptyObject, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: EmptyObject) {
++        super(props);
+ 
+         this.state = {
+             appVersion: null,
+diff --git a/src/components/views/settings/tabs/user/VoiceUserSettingsTab.tsx b/src/components/views/settings/tabs/user/VoiceUserSettingsTab.tsx
+index c54b77e70acb491ecc59e90538b892cf110cde23..9237228b9700069fd25f49a3aecb5f0bb0727054 100644
+--- a/src/components/views/settings/tabs/user/VoiceUserSettingsTab.tsx
++++ b/src/components/views/settings/tabs/user/VoiceUserSettingsTab.tsx
+@@ -54,8 +54,8 @@ export default class VoiceUserSettingsTab extends React.Component<EmptyObject, I
+     public static contextType = MatrixClientContext;
+     declare public context: React.ContextType<typeof MatrixClientContext>;
+ 
+-    public constructor(props: EmptyObject, context: React.ContextType<typeof MatrixClientContext>) {
+-        super(props, context);
++    public constructor(props: EmptyObject) {
++        super(props);
+ 
+         this.state = {
+             mediaDevices: null,
+diff --git a/src/hooks/usePermalinkMember.ts b/src/hooks/usePermalinkMember.ts
+index 77267073ca5d127c55cb2ef2bc6c6c36ac1540e5..b5e751d28fd8da1e4a1fd9e778a6c135505d8cf9 100644
+--- a/src/hooks/usePermalinkMember.ts
++++ b/src/hooks/usePermalinkMember.ts
+@@ -7,10 +7,10 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import { type IMatrixProfile, type MatrixEvent, type Room, RoomMember } from "matrix-js-sdk/src/matrix";
+-import { useEffect, useState } from "react";
++import { useContext, useEffect, useState } from "react";
+ 
+ import { PillType } from "../components/views/elements/Pill";
+-import { SdkContextClass } from "../contexts/SDKContext";
++import { SDKContext, type SdkContextClass } from "../contexts/SDKContext";
+ import { type PermalinkParts } from "../utils/permalinks/PermalinkConstructor";
+ 
+ const createMemberFromProfile = (userId: string, profile: IMatrixProfile): RoomMember => {
+@@ -65,12 +65,12 @@ const determineUserId = (
+  *          If sharing at least one room with the user, then the result will be the profile fetched via API.
+  *          null in all other cases.
+  */
+-const determineMember = (userId: string, targetRoom: Room): RoomMember | null => {
++const determineMember = (userId: string, targetRoom: Room, context: SdkContextClass): RoomMember | null => {
+     const targetRoomMember = targetRoom.getMember(userId);
+ 
+     if (targetRoomMember) return targetRoomMember;
+ 
+-    const knownProfile = SdkContextClass.instance.userProfilesStore.getOnlyKnownProfile(userId);
++    const knownProfile = context.userProfilesStore.getOnlyKnownProfile(userId);
+ 
+     if (knownProfile) {
+         return createMemberFromProfile(userId, knownProfile);
+@@ -97,11 +97,12 @@ export const usePermalinkMember = (
+     targetRoom: Room | null,
+     event: MatrixEvent | null,
+ ): RoomMember | null => {
++    const context = useContext(SDKContext);
+     // User mentions and permalinks to events in the same room require to know the user.
+     // If it cannot be initially determined, it will be looked up later by a memo hook.
+     const shouldLookUpUser = type && [PillType.UserMention, PillType.EventInSameRoom].includes(type);
+     const userId = determineUserId(type, parseResult, event);
+-    const userInRoom = shouldLookUpUser && userId && targetRoom ? determineMember(userId, targetRoom) : null;
++    const userInRoom = shouldLookUpUser && userId && targetRoom ? determineMember(userId, targetRoom, context) : null;
+     const [member, setMember] = useState<RoomMember | null>(userInRoom);
+ 
+     useEffect(() => {
+@@ -111,7 +112,7 @@ export const usePermalinkMember = (
+         }
+ 
+         const doProfileLookup = async (): Promise<void> => {
+-            const fetchedProfile = await SdkContextClass.instance.userProfilesStore.fetchOnlyKnownProfile(userId);
++            const fetchedProfile = await context.userProfilesStore.fetchOnlyKnownProfile(userId);
+ 
+             if (fetchedProfile) {
+                 const newMember = createMemberFromProfile(userId, fetchedProfile);
+@@ -120,7 +121,7 @@ export const usePermalinkMember = (
+         };
+ 
+         doProfileLookup();
+-    }, [member, shouldLookUpUser, targetRoom, userId]);
++    }, [context, member, shouldLookUpUser, targetRoom, userId]);
+ 
+     return member;
+ };
+diff --git a/src/linkify-matrix.ts b/src/linkify-matrix.ts
+index aef4553140d6a16d59353f075f713a2c945fd9f2..c22445bb96b353d47f19c3885aded581b08617a7 100644
+--- a/src/linkify-matrix.ts
++++ b/src/linkify-matrix.ts
+@@ -9,7 +9,6 @@ Please see LICENSE files in the repository root for full details.
+ 
+ import * as linkifyjs from "linkifyjs";
+ import { type EventListeners, type Opts, registerCustomProtocol, registerPlugin } from "linkifyjs";
+-import linkifyElement from "linkify-element";
+ import linkifyString from "linkify-string";
+ import { getHttpUriForMxc, User } from "matrix-js-sdk/src/matrix";
+ 
+@@ -274,5 +273,4 @@ PERMITTED_URL_SCHEMES.forEach((scheme) => {
+ registerCustomProtocol("mxc", false);
+ 
+ export const linkify = linkifyjs;
+-export const _linkifyElement = linkifyElement;
+ export const _linkifyString = linkifyString;
+diff --git a/src/renderer/code-block.tsx b/src/renderer/code-block.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..af9e4faefb0a074a42cbcb580d6c01a1fd79ed08
+--- /dev/null
++++ b/src/renderer/code-block.tsx
+@@ -0,0 +1,20 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React from "react";
++
++import { type RendererMap } from "./utils.tsx";
++import CodeBlock from "../components/views/messages/CodeBlock.tsx";
++
++/**
++ * Replaces `pre` elements with a CodeBlock component
++ */
++export const codeBlockRenderer: RendererMap = {
++    pre: (pre, { onHeightChanged }) => {
++        return <CodeBlock onHeightChanged={onHeightChanged} preNode={pre} />;
++    },
++};
+diff --git a/src/renderer/index.ts b/src/renderer/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..eaed7b71c3a0c1de49b269648fe19825dd853a98
+--- /dev/null
++++ b/src/renderer/index.ts
+@@ -0,0 +1,18 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++export { ambiguousLinkTooltipRenderer } from "./link-tooltip";
++export { keywordPillRenderer, mentionPillRenderer } from "./pill";
++export { spoilerRenderer } from "./spoiler";
++export { codeBlockRenderer } from "./code-block";
++export {
++    applyReplacerOnString,
++    replacerToRenderFunction,
++    combineRenderers,
++    type RendererMap,
++    type Replacer,
++} from "./utils";
+diff --git a/src/renderer/link-tooltip.tsx b/src/renderer/link-tooltip.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c66b6d8e7bd19b35902bbd21602b6cecd38f299
+--- /dev/null
++++ b/src/renderer/link-tooltip.tsx
+@@ -0,0 +1,34 @@
++/*
++Copyright 2024-2025 New Vector Ltd.
++Copyright 2022 The Matrix.org Foundation C.I.C.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React from "react";
++import { domToReact } from "html-react-parser";
++
++import LinkWithTooltip from "../components/views/elements/LinkWithTooltip";
++import { getSingleTextContentNode, type RendererMap } from "./utils.tsx";
++
++/**
++ * Wraps ambiguous links in a tooltip trigger that shows the full URL.
++ */
++export const ambiguousLinkTooltipRenderer: RendererMap = {
++    a: (anchor, { isHtml }) => {
++        // Ambiguous URLs are only possible in HTML content
++        if (!isHtml) return;
++
++        const href = anchor.attribs["href"];
++        if (href && href !== getSingleTextContentNode(anchor)) {
++            let tooltip = href as string;
++            try {
++                tooltip = new URL(href, window.location.href).toString();
++            } catch {
++                // Not all hrefs will be valid URLs
++            }
++            return <LinkWithTooltip tooltip={tooltip}>{domToReact([anchor])}</LinkWithTooltip>;
++        }
++    },
++};
+diff --git a/src/renderer/pill.tsx b/src/renderer/pill.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..9157c1181aa517f201a957b61571a434f00b4c0c
+--- /dev/null
++++ b/src/renderer/pill.tsx
+@@ -0,0 +1,102 @@
++/*
++Copyright 2024-2025 New Vector Ltd.
++Copyright 2019-2023 The Matrix.org Foundation C.I.C.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React from "react";
++import { RuleId } from "matrix-js-sdk/src/matrix";
++import { type Element } from "html-react-parser";
++import { textContent } from "domutils";
++import reactStringReplace from "react-string-replace";
++import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
++
++import { Pill, PillType } from "../components/views/elements/Pill";
++import { parsePermalink } from "../utils/permalinks/Permalinks";
++import { type PermalinkParts } from "../utils/permalinks/PermalinkConstructor";
++import { hasParentMatching, type RendererMap, type ParentNode } from "./utils.tsx";
++
++const AT_ROOM_REGEX = PushProcessor.getPushRuleGlobRegex("@room", true, "gmi");
++
++/**
++ * A node here is an A element with a href attribute tag.
++ *
++ * It should be pillified if the permalink parser returns a result and one of the following conditions match:
++ * - Text content equals href. This is the case when sending a plain permalink inside a message.
++ * - The link is not from linkify (isHtml=true).
++ *   Composer completions already create an A tag.
++ */
++const shouldBePillified = (node: Element, href: string, parts: PermalinkParts | null, isHtml: boolean): boolean => {
++    // permalink parser didn't return any parts
++    if (!parts) return false;
++
++    const text = textContent(node);
++
++    // event permalink with custom label
++    if (parts.eventId && href !== text) return false;
++
++    return href === text || isHtml;
++};
++
++const isPreCode = (domNode: ParentNode | null): boolean =>
++    (domNode as Element)?.tagName === "PRE" || (domNode as Element)?.tagName === "CODE";
++
++/**
++ * Marks the text that activated a push-notification mention pattern.
++ */
++export const mentionPillRenderer: RendererMap = {
++    a: (anchor, { room, shouldShowPillAvatar, isHtml }) => {
++        if (!room) return;
++
++        const href = anchor.attribs["href"];
++        if (
++            href &&
++            !hasParentMatching(anchor, isPreCode) &&
++            shouldBePillified(anchor, href, parsePermalink(href), isHtml)
++        ) {
++            return <Pill url={href} inMessage={true} room={room} shouldShowPillAvatar={shouldShowPillAvatar} />;
++        }
++    },
++
++    [Node.TEXT_NODE]: (text, { room, mxEvent, shouldShowPillAvatar }) => {
++        if (!room || !mxEvent) return;
++
++        const atRoomRule = room.client.pushProcessor.getPushRuleById(
++            mxEvent.getContent()["m.mentions"] !== undefined ? RuleId.IsRoomMention : RuleId.AtRoomNotification,
++        );
++        if (atRoomRule && room.client.pushProcessor.ruleMatchesEvent(atRoomRule, mxEvent)) {
++            const parts = reactStringReplace(text.data, AT_ROOM_REGEX, (_match, i) => (
++                <Pill
++                    key={i}
++                    type={PillType.AtRoomMention}
++                    inMessage={true}
++                    room={room}
++                    shouldShowPillAvatar={shouldShowPillAvatar}
++                />
++            ));
++
++            if (parts.length <= 1) return; // no matches, skip replacing
++
++            return <>{parts}</>;
++        }
++    },
++};
++
++/**
++ * Marks the text that activated a push-notification keyword pattern.
++ */
++export const keywordPillRenderer: RendererMap = {
++    [Node.TEXT_NODE]: (text, { keywordRegexpPattern }) => {
++        if (!keywordRegexpPattern) return;
++
++        const parts = reactStringReplace(text.data, keywordRegexpPattern, (match, i) => (
++            <Pill key={i} text={match} type={PillType.Keyword} />
++        ));
++
++        if (parts.length <= 1) return; // no matches, skip replacing
++
++        return <>{parts}</>;
++    },
++};
+diff --git a/src/renderer/spoiler.tsx b/src/renderer/spoiler.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee7f45f48e70905ca5a0561e435706922e199d1f
+--- /dev/null
++++ b/src/renderer/spoiler.tsx
+@@ -0,0 +1,24 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React from "react";
++import { domToReact, type DOMNode } from "html-react-parser";
++
++import { type RendererMap } from "./utils.tsx";
++import Spoiler from "../components/views/elements/Spoiler.tsx";
++
++/**
++ * Replaces spans with `data-mx-spoiler` with a Spoiler component.
++ */
++export const spoilerRenderer: RendererMap = {
++    span: (span) => {
++        const reason = span.attribs["data-mx-spoiler"];
++        if (typeof reason === "string") {
++            return <Spoiler reason={reason}>{domToReact(span.children as DOMNode[])}</Spoiler>;
++        }
++    },
++};
+diff --git a/src/renderer/utils.tsx b/src/renderer/utils.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5c7d6959e588e016b3a733abc12b0b95e7a74b24
+--- /dev/null
++++ b/src/renderer/utils.tsx
+@@ -0,0 +1,141 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import React, { type JSX } from "react";
++import { type DOMNode, Element, type HTMLReactParserOptions, Text } from "html-react-parser";
++import { type MatrixEvent, type Room } from "matrix-js-sdk/src/matrix";
++import { type Opts } from "linkifyjs";
++
++/**
++ * The type of a parent node of an element, normally exported by domhandler but that is not a direct dependency of ours
++ */
++export type ParentNode = NonNullable<Element["parentNode"]>;
++
++/**
++ * Returns the text content of a node if it is the only child and that child is a text node
++ * @param node - the node to check
++ */
++export const getSingleTextContentNode = (node: Element): string | null => {
++    if (node.childNodes.length === 1 && node.childNodes[0].type === "text") {
++        return node.childNodes[0].data;
++    }
++    return null;
++};
++
++/**
++ * Returns true if the node has a parent that matches the given matcher
++ * @param node - the node to check
++ * @param matcher - a function that returns true if the node matches
++ */
++export const hasParentMatching = (node: Element, matcher: (node: ParentNode | null) => boolean): boolean => {
++    let parent = node.parentNode;
++    while (parent) {
++        if (matcher(parent)) return true;
++        parent = parent.parentNode;
++    }
++    return false;
++};
++
++/**
++ * A replacer function that can be used with html-react-parser
++ */
++export type Replacer = HTMLReactParserOptions["replace"];
++
++/**
++ * Passes through any non-string inputs verbatim, as such they should only be used for emoji bodies
++ */
++export function applyReplacerOnString(
++    input: string | JSX.Element[],
++    replacer: Replacer,
++): JSX.Element | JSX.Element[] | string {
++    if (!replacer) return input;
++
++    const arr = Array.isArray(input) ? input : [input];
++    return arr.map((input, index): JSX.Element => {
++        if (typeof input === "string") {
++            return (
++                <React.Fragment key={index}>{(replacer(new Text(input), 0) as JSX.Element) || input}</React.Fragment>
++            );
++        }
++        return input;
++    });
++}
++
++/**
++ * Converts a Replacer function to a render function for linkify-react
++ * So that we can use the same replacer functions for both
++ * @param replacer The replacer function to convert
++ */
++export function replacerToRenderFunction(replacer: Replacer): Opts["render"] {
++    if (!replacer) return;
++    return ({ tagName, attributes, content }) => {
++        const domNode = new Element(tagName, attributes, [new Text(content)], "tag" as Element["type"]);
++        const result = replacer(domNode, 0);
++        if (result) return result;
++
++        // This is cribbed from the default render function in linkify-react
++        if (attributes.class) {
++            attributes.className = attributes.class;
++            delete attributes.class;
++        }
++        return React.createElement(tagName, attributes, content);
++    };
++}
++
++interface Parameters {
++    isHtml: boolean;
++    onHeightChanged?: () => void;
++    // Required for keywordPillRenderer
++    keywordRegexpPattern?: RegExp;
++    // Required for mentionPillRenderer
++    mxEvent?: MatrixEvent;
++    room?: Room;
++    shouldShowPillAvatar?: boolean;
++}
++
++type SpecialisedReplacer<T extends DOMNode> = (
++    node: T,
++    parameters: Parameters,
++    index: number,
++) => JSX.Element | string | void;
++
++/**
++ * A map of replacer functions for different types of nodes/tags.
++ * When a function returns a JSX element, the element will be rendered in place of the node.
++ */
++export type RendererMap = Partial<
++    {
++        [tagName in keyof HTMLElementTagNameMap]: SpecialisedReplacer<Element>;
++    } & {
++        [Node.TEXT_NODE]: SpecialisedReplacer<Text>;
++    }
++>;
++
++type PreparedRenderer = (parameters: Parameters) => Replacer;
++
++/**
++ * Combines multiple renderers into a single Replacer function
++ * @param renderers - the list of renderers to combine
++ */
++export const combineRenderers =
++    (...renderers: RendererMap[]): PreparedRenderer =>
++    (parameters) =>
++    (node, index) => {
++        if (node.type === "text") {
++            for (const replacer of renderers) {
++                const result = replacer[Node.TEXT_NODE]?.(node, parameters, index);
++                if (result) return result;
++            }
++        }
++        if (node instanceof Element) {
++            const tagName = node.tagName.toLowerCase() as keyof HTMLElementTagNameMap;
++            for (const replacer of renderers) {
++                const result = replacer[tagName]?.(node, parameters, index);
++                if (result) return result;
++            }
++        }
++    };
+diff --git a/src/settings/controllers/NotificationControllers.ts b/src/settings/controllers/NotificationControllers.ts
+index 20b0d7cf7cebbf33e4cf31e100b07335cf2905db..8ec17977b52e0ab5b6ef62222becd65684455dc4 100644
+--- a/src/settings/controllers/NotificationControllers.ts
++++ b/src/settings/controllers/NotificationControllers.ts
+@@ -8,8 +8,6 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import { logger } from "matrix-js-sdk/src/logger";
+-// XXX: This feels wrong.
+-import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
+ import { PushRuleActionName } from "matrix-js-sdk/src/matrix";
+ 
+ import SettingController from "./SettingController";
+@@ -20,8 +18,7 @@ import { type SettingLevel } from "../SettingLevel";
+ // default action on this rule is dont_notify, but it could be something else
+ export function isPushNotifyDisabled(): boolean {
+     // Return the value of the master push rule as a default
+-    const processor = new PushProcessor(MatrixClientPeg.safeGet());
+-    const masterRule = processor.getPushRuleById(".m.rule.master");
++    const masterRule = MatrixClientPeg.safeGet().pushProcessor.getPushRuleById(".m.rule.master");
+ 
+     if (!masterRule) {
+         logger.warn("No master push rule! Notifications are disabled for this user.");
+diff --git a/src/utils/pillify.tsx b/src/utils/pillify.tsx
+deleted file mode 100644
+index e39fd813bb67a8fae3a096c550472e07dcb7249c..0000000000000000000000000000000000000000
+--- a/src/utils/pillify.tsx
++++ /dev/null
+@@ -1,165 +0,0 @@
+-/*
+-Copyright 2024 New Vector Ltd.
+-Copyright 2019-2023 The Matrix.org Foundation C.I.C.
+-
+-SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+-Please see LICENSE files in the repository root for full details.
+-*/
+-
+-import React, { StrictMode } from "react";
+-import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
+-import { type MatrixClient, type MatrixEvent, RuleId } from "matrix-js-sdk/src/matrix";
+-import { TooltipProvider } from "@vector-im/compound-web";
+-
+-import SettingsStore from "../settings/SettingsStore";
+-import { Pill, pillRoomNotifLen, pillRoomNotifPos, PillType } from "../components/views/elements/Pill";
+-import { parsePermalink } from "./permalinks/Permalinks";
+-import { type PermalinkParts } from "./permalinks/PermalinkConstructor";
+-import { type ReactRootManager } from "./react";
+-
+-/**
+- * A node here is an A element with a href attribute tag.
+- *
+- * It should be pillified if the permalink parser returns a result and one of the following conditions match:
+- * - Text content equals href. This is the case when sending a plain permalink inside a message.
+- * - The link does not have the "linkified" class.
+- *   Composer completions already create an A tag.
+- *   Linkify will not linkify things again. → There won't be a "linkified" class.
+- */
+-const shouldBePillified = (node: Element, href: string, parts: PermalinkParts | null): boolean => {
+-    // permalink parser didn't return any parts
+-    if (!parts) return false;
+-
+-    const textContent = node.textContent;
+-
+-    // event permalink with custom label
+-    if (parts.eventId && href !== textContent) return false;
+-
+-    return href === textContent || !node.classList.contains("linkified");
+-};
+-
+-/**
+- * Recurses depth-first through a DOM tree, converting matrix.to links
+- * into pills based on the context of a given room.  Returns a list of
+- * the resulting React nodes so they can be unmounted rather than leaking.
+- *
+- * @param matrixClient the client of the logged-in user
+- * @param {Element[]} nodes - a list of sibling DOM nodes to traverse to try
+- *   to turn into pills.
+- * @param {MatrixEvent} mxEvent - the matrix event which the DOM nodes are
+- *   part of representing.
+- * @param {ReactRootManager} pills - an accumulator of the DOM nodes which contain
+- *   React components which have been mounted as part of this.
+- *   The initial caller should pass in an empty array to seed the accumulator.
+- */
+-export function pillifyLinks(
+-    matrixClient: MatrixClient,
+-    nodes: ArrayLike<Element>,
+-    mxEvent: MatrixEvent,
+-    pills: ReactRootManager,
+-): void {
+-    const room = matrixClient.getRoom(mxEvent.getRoomId()) ?? undefined;
+-    const shouldShowPillAvatar = SettingsStore.getValue("Pill.shouldShowPillAvatar");
+-    let node = nodes[0];
+-    while (node) {
+-        let pillified = false;
+-
+-        if (node.tagName === "PRE" || node.tagName === "CODE" || pills.elements.includes(node)) {
+-            // Skip code blocks and existing pills
+-            node = node.nextSibling as Element;
+-            continue;
+-        } else if (node.tagName === "A" && node.getAttribute("href")) {
+-            const href = node.getAttribute("href")!;
+-            const parts = parsePermalink(href);
+-
+-            if (shouldBePillified(node, href, parts)) {
+-                const pillContainer = document.createElement("span");
+-
+-                const pill = (
+-                    <StrictMode>
+-                        <TooltipProvider>
+-                            <Pill url={href} inMessage={true} room={room} shouldShowPillAvatar={shouldShowPillAvatar} />
+-                        </TooltipProvider>
+-                    </StrictMode>
+-                );
+-
+-                pills.render(pill, pillContainer, node);
+-                node.replaceWith(pillContainer);
+-                // Pills within pills aren't going to go well, so move on
+-                pillified = true;
+-
+-                // update the current node with one that's now taken its place
+-                node = pillContainer;
+-            }
+-        } else if (
+-            node.nodeType === Node.TEXT_NODE &&
+-            // as applying pills happens outside of react, make sure we're not doubly
+-            // applying @room pills here, as a rerender with the same content won't touch the DOM
+-            // to clear the pills from the last run of pillifyLinks
+-            !node.parentElement?.classList.contains("mx_AtRoomPill")
+-        ) {
+-            let currentTextNode = node as Node as Text | null;
+-            const roomNotifTextNodes: Text[] = [];
+-
+-            // Take a textNode and break it up to make all the instances of @room their
+-            // own textNode, adding those nodes to roomNotifTextNodes
+-            while (currentTextNode !== null) {
+-                const roomNotifPos = pillRoomNotifPos(currentTextNode.textContent);
+-                let nextTextNode: Text | null = null;
+-                if (roomNotifPos > -1) {
+-                    let roomTextNode = currentTextNode;
+-
+-                    if (roomNotifPos > 0) roomTextNode = roomTextNode.splitText(roomNotifPos);
+-                    if (roomTextNode.textContent && roomTextNode.textContent.length > pillRoomNotifLen()) {
+-                        nextTextNode = roomTextNode.splitText(pillRoomNotifLen());
+-                    }
+-                    roomNotifTextNodes.push(roomTextNode);
+-                }
+-                currentTextNode = nextTextNode;
+-            }
+-
+-            if (roomNotifTextNodes.length > 0) {
+-                const pushProcessor = new PushProcessor(matrixClient);
+-                const atRoomRule = pushProcessor.getPushRuleById(
+-                    mxEvent.getContent()["m.mentions"] !== undefined ? RuleId.IsRoomMention : RuleId.AtRoomNotification,
+-                );
+-                if (atRoomRule && pushProcessor.ruleMatchesEvent(atRoomRule, mxEvent)) {
+-                    // Now replace all those nodes with Pills
+-                    for (const roomNotifTextNode of roomNotifTextNodes) {
+-                        // Set the next node to be processed to the one after the node
+-                        // we're adding now, since we've just inserted nodes into the structure
+-                        // we're iterating over.
+-                        // Note we've checked roomNotifTextNodes.length > 0 so we'll do this at least once
+-                        node = roomNotifTextNode.nextSibling as Element;
+-
+-                        const pillContainer = document.createElement("span");
+-                        const pill = (
+-                            <StrictMode>
+-                                <TooltipProvider>
+-                                    <Pill
+-                                        type={PillType.AtRoomMention}
+-                                        inMessage={true}
+-                                        room={room}
+-                                        shouldShowPillAvatar={shouldShowPillAvatar}
+-                                    />
+-                                </TooltipProvider>
+-                            </StrictMode>
+-                        );
+-
+-                        pills.render(pill, pillContainer, roomNotifTextNode);
+-                        roomNotifTextNode.replaceWith(pillContainer);
+-                    }
+-                    // Nothing else to do for a text node (and we don't need to advance
+-                    // the loop pointer because we did it above)
+-                    continue;
+-                }
+-            }
+-        }
+-
+-        if (node.childNodes && node.childNodes.length && !pillified) {
+-            pillifyLinks(matrixClient, node.childNodes as NodeListOf<Element>, mxEvent, pills);
+-        }
+-
+-        node = node.nextSibling as Element;
+-    }
+-}
+diff --git a/src/utils/pushRules/monitorSyncedPushRules.ts b/src/utils/pushRules/monitorSyncedPushRules.ts
+index 2c9684722c55aa638a8b5f5ea80e865e8155c200..0e9620fe1350b4c244206b9cd7384a99792ca40a 100644
+--- a/src/utils/pushRules/monitorSyncedPushRules.ts
++++ b/src/utils/pushRules/monitorSyncedPushRules.ts
+@@ -12,15 +12,16 @@ import {
+     EventType,
+     type RuleId,
+     type IAnnotatedPushRule,
++    type IPushRule,
++    type PushRuleKind,
+ } from "matrix-js-sdk/src/matrix";
+-import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
+ import { logger } from "matrix-js-sdk/src/logger";
+ 
+ import { VectorPushRulesDefinitions, type VectorPushRuleDefinition } from "../../notifications";
+ import { updateExistingPushRulesWithActions } from "./updatePushRuleActions";
+ 
+ const pushRuleAndKindToAnnotated = (
+-    ruleAndKind: ReturnType<PushProcessor["getPushRuleAndKindById"]>,
++    ruleAndKind: { rule: IPushRule; kind: PushRuleKind } | null,
+ ): IAnnotatedPushRule | undefined =>
+     ruleAndKind
+         ? {
+@@ -34,23 +35,21 @@ const pushRuleAndKindToAnnotated = (
+  * And updates any that are out of sync
+  * Ignores ruleIds that do not exist for the user
+  * @param matrixClient - cli
+- * @param pushProcessor - processor used to retrieve current state of rules
+  * @param ruleId - primary rule
+  * @param definition - VectorPushRuleDefinition of the primary rule
+  */
+ const monitorSyncedRule = async (
+     matrixClient: MatrixClient,
+-    pushProcessor: PushProcessor,
+     ruleId: RuleId | string,
+     definition: VectorPushRuleDefinition,
+ ): Promise<void> => {
+-    const primaryRule = pushRuleAndKindToAnnotated(pushProcessor.getPushRuleAndKindById(ruleId));
++    const primaryRule = pushRuleAndKindToAnnotated(matrixClient.pushProcessor.getPushRuleAndKindById(ruleId));
+ 
+     if (!primaryRule) {
+         return;
+     }
+     const syncedRules: IAnnotatedPushRule[] | undefined = definition.syncedRuleIds
+-        ?.map((ruleId) => pushRuleAndKindToAnnotated(pushProcessor.getPushRuleAndKindById(ruleId)))
++        ?.map((ruleId) => pushRuleAndKindToAnnotated(matrixClient.pushProcessor.getPushRuleAndKindById(ruleId)))
+         .filter((n?: IAnnotatedPushRule): n is IAnnotatedPushRule => Boolean(n));
+ 
+     // no synced rules to manage
+@@ -94,11 +93,10 @@ export const monitorSyncedPushRules = async (
+     if (accountDataEvent?.getType() !== EventType.PushRules) {
+         return;
+     }
+-    const pushProcessor = new PushProcessor(matrixClient);
+ 
+     Object.entries(VectorPushRulesDefinitions).forEach(async ([ruleId, definition]) => {
+         try {
+-            await monitorSyncedRule(matrixClient, pushProcessor, ruleId, definition);
++            await monitorSyncedRule(matrixClient, ruleId, definition);
+         } catch (error) {
+             logger.error(`Failed to fully synchronise push rules for ${ruleId}`, error);
+         }
+diff --git a/src/utils/pushRules/updatePushRuleActions.ts b/src/utils/pushRules/updatePushRuleActions.ts
+index 1d872e5207389fac4367bc9d752d06039a496ca8..8a383cace6988a22ce02efd1f59d89ad76dddd8a 100644
+--- a/src/utils/pushRules/updatePushRuleActions.ts
++++ b/src/utils/pushRules/updatePushRuleActions.ts
+@@ -7,7 +7,6 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import { type MatrixClient, type IPushRule, type PushRuleAction, type PushRuleKind } from "matrix-js-sdk/src/matrix";
+-import { PushProcessor } from "matrix-js-sdk/src/pushprocessor";
+ 
+ /**
+  * Sets the actions for a given push rule id and kind
+@@ -51,10 +50,8 @@ export const updateExistingPushRulesWithActions = async (
+     ruleIds?: IPushRule["rule_id"][],
+     actions?: PushRuleAction[],
+ ): Promise<void> => {
+-    const pushProcessor = new PushProcessor(matrixClient);
+-
+     const rules: PushRuleAndKind[] | undefined = ruleIds
+-        ?.map((ruleId) => pushProcessor.getPushRuleAndKindById(ruleId))
++        ?.map((ruleId) => matrixClient.pushProcessor.getPushRuleAndKindById(ruleId))
+         .filter((n: PushRuleAndKind | null): n is PushRuleAndKind => Boolean(n));
+ 
+     if (!rules?.length) {
+diff --git a/src/utils/react.tsx b/src/utils/react.tsx
+deleted file mode 100644
+index 1a633407176bebedc8a74461d1269debd52708de..0000000000000000000000000000000000000000
+--- a/src/utils/react.tsx
++++ /dev/null
+@@ -1,53 +0,0 @@
+-/*
+-Copyright 2024 New Vector Ltd.
+-
+-SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+-Please see LICENSE files in the repository root for full details.
+-*/
+-
+-import { type ReactNode } from "react";
+-import { createRoot, type Root } from "react-dom/client";
+-
+-/**
+- * Utility class to render & unmount additional React roots,
+- * e.g. for pills, tooltips and other components rendered atop user-generated events.
+- */
+-export class ReactRootManager {
+-    private roots: Root[] = [];
+-    private rootElements: Element[] = [];
+-    private revertElements: Array<Node | null> = [];
+-
+-    public get elements(): Element[] {
+-        return this.rootElements;
+-    }
+-
+-    /**
+-     * Render a React component into a new root based on the given root element
+-     * @param children the React component to render
+-     * @param rootElement the root element to render the component into
+-     * @param revertElement the element to replace the root element with when unmounting
+-     *     needed to support double-rendering in React 18 Strict Dev mode
+-     */
+-    public render(children: ReactNode, rootElement: Element, revertElement: Node | null): void {
+-        const root = createRoot(rootElement);
+-        this.roots.push(root);
+-        this.rootElements.push(rootElement);
+-        this.revertElements.push(revertElement);
+-        root.render(children);
+-    }
+-
+-    /**
+-     * Unmount all roots and revert the elements they were rendered into
+-     */
+-    public unmount(): void {
+-        while (this.roots.length) {
+-            const root = this.roots.pop()!;
+-            const rootElement = this.rootElements.pop();
+-            const revertElement = this.revertElements.pop();
+-            root.unmount();
+-            if (revertElement) {
+-                rootElement?.replaceWith(revertElement);
+-            }
+-        }
+-    }
+-}
+diff --git a/src/utils/tooltipify.tsx b/src/utils/tooltipify.tsx
+deleted file mode 100644
+index e2f8b89f29177190e511bc14853f536753bf3b8e..0000000000000000000000000000000000000000
+--- a/src/utils/tooltipify.tsx
++++ /dev/null
+@@ -1,76 +0,0 @@
+-/*
+-Copyright 2024 New Vector Ltd.
+-Copyright 2022 The Matrix.org Foundation C.I.C.
+-
+-SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
+-Please see LICENSE files in the repository root for full details.
+-*/
+-
+-import React, { StrictMode } from "react";
+-import { TooltipProvider } from "@vector-im/compound-web";
+-
+-import PlatformPeg from "../PlatformPeg";
+-import LinkWithTooltip from "../components/views/elements/LinkWithTooltip";
+-import { type ReactRootManager } from "./react";
+-
+-/**
+- * If the platform enabled needsUrlTooltips, recurses depth-first through a DOM tree, adding tooltip previews
+- * for link elements. Otherwise, does nothing.
+- *
+- * @param {Element[]} rootNodes - a list of sibling DOM nodes to traverse to try
+- *   to add tooltips.
+- * @param {Element[]} ignoredNodes - a list of nodes to not recurse into.
+- * @param {ReactRootManager} tooltips - an accumulator of the DOM nodes which contain
+- *   React components that have been mounted by this function. The initial caller
+- *   should pass in an empty array to seed the accumulator.
+- */
+-export function tooltipifyLinks(
+-    rootNodes: ArrayLike<Element>,
+-    ignoredNodes: Element[],
+-    tooltips: ReactRootManager,
+-): void {
+-    if (!PlatformPeg.get()?.needsUrlTooltips()) {
+-        return;
+-    }
+-
+-    let node = rootNodes[0];
+-
+-    while (node) {
+-        if (ignoredNodes.includes(node) || tooltips.elements.includes(node)) {
+-            node = node.nextSibling as Element;
+-            continue;
+-        }
+-
+-        if (
+-            node.tagName === "A" &&
+-            node.getAttribute("href") &&
+-            node.getAttribute("href") !== node.textContent?.trim()
+-        ) {
+-            let href = node.getAttribute("href")!;
+-            try {
+-                href = new URL(href, window.location.href).toString();
+-            } catch {
+-                // Not all hrefs will be valid URLs
+-            }
+-
+-            // The node's innerHTML was already sanitized before being rendered in the first place, here we are just
+-            // wrapping the link with the LinkWithTooltip component, keeping the same children. Ideally we'd do this
+-            // without the superfluous span but this is not something React trivially supports at this time.
+-            const tooltip = (
+-                <StrictMode>
+-                    <TooltipProvider>
+-                        <LinkWithTooltip tooltip={href}>
+-                            <span dangerouslySetInnerHTML={{ __html: node.innerHTML }} />
+-                        </LinkWithTooltip>
+-                    </TooltipProvider>
+-                </StrictMode>
+-            );
+-
+-            tooltips.render(tooltip, node, null);
+-        } else if (node.childNodes?.length) {
+-            tooltipifyLinks(node.childNodes as NodeListOf<Element>, ignoredNodes, tooltips);
+-        }
+-
+-        node = node.nextSibling as Element;
+-    }
+-}
+diff --git a/yarn.lock b/yarn.lock
+index 846fa922524033c7510e80f3327762d8512fa58f..1910f970031659c0ce1f2c24fa15ee5c8f106fd0 100644
+--- a/yarn.lock
++++ b/yarn.lock
+@@ -3621,7 +3621,7 @@
+   resolved "https://registry.yarnpkg.com/@vector-im/matrix-wysiwyg/-/matrix-wysiwyg-2.38.2.tgz#3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8"
+   integrity sha512-TUnLPgZ8/zGUccQZxjIP3MVHjqybgV4u0r6kXibs35wlXgomXjwcN5gchl3FpgGkiHbi8g3D2ao0oHaqi2GaIw==
+   dependencies:
+-    "@vector-im/matrix-wysiwyg-wasm" "link:../usr/local/share/.cache/yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm"
++    "@vector-im/matrix-wysiwyg-wasm" "link:../../../.cache/yarn/v6/npm-@vector-im-matrix-wysiwyg-2.38.2-3fa19a2a17fd12d955ef1e14fd63aecbcf3b95e8-integrity/node_modules/bindings/wysiwyg-wasm"
+ 
+ "@webassemblyjs/ast@1.14.1", "@webassemblyjs/ast@^1.14.1":
+   version "1.14.1"
+@@ -8548,11 +8548,6 @@ lines-and-columns@^1.1.6:
+   resolved "https://registry.yarnpkg.com/lines-and-columns/-/lines-and-columns-1.2.4.tgz#eca284f75d2965079309dc0ad9255abb2ebc1632"
+   integrity sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==
+ 
+-linkify-element@4.1.4:
+-  version "4.1.4"
+-  resolved "https://registry.yarnpkg.com/linkify-element/-/linkify-element-4.1.4.tgz#d4050b41fb47c44871e5eed93bc11865e403cc90"
+-  integrity sha512-XhSTTF7b7OoX4KIkwVG8MET5DSFEHohT0Gp5pjmsByYp+JCyZq5rSZGsar5dYzeuKUV6TqTSLtsH/NzBBwBxgQ==
+-
+ linkify-it@^4.0.1:
+   version "4.0.1"
+   resolved "https://registry.yarnpkg.com/linkify-it/-/linkify-it-4.0.1.tgz#01f1d5e508190d06669982ba31a7d9f56a5751ec"

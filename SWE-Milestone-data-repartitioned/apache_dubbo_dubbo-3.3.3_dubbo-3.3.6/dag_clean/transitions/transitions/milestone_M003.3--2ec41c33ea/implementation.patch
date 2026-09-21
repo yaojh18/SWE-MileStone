@@ -1,0 +1,1076 @@
+diff --git a/dubbo-plugin/dubbo-compiler/src/main/java/org/apache/dubbo/gen/tri/mutiny/MutinyDubbo3TripleGenerator.java b/dubbo-plugin/dubbo-compiler/src/main/java/org/apache/dubbo/gen/tri/mutiny/MutinyDubbo3TripleGenerator.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f95f439f0cc34864576b4fb83154d64aa0983000
+--- /dev/null
++++ b/dubbo-plugin/dubbo-compiler/src/main/java/org/apache/dubbo/gen/tri/mutiny/MutinyDubbo3TripleGenerator.java
+@@ -0,0 +1,57 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.gen.tri.mutiny;
++
++import org.apache.dubbo.gen.AbstractGenerator;
++import org.apache.dubbo.gen.DubboGeneratorPlugin;
++
++public class MutinyDubbo3TripleGenerator extends AbstractGenerator {
++
++    public static void main(String[] args) {
++        DubboGeneratorPlugin.generate(new MutinyDubbo3TripleGenerator());
++    }
++
++    @Override
++    protected String getClassPrefix() {
++        return "Dubbo";
++    }
++
++    @Override
++    protected String getClassSuffix() {
++        return "Triple";
++    }
++
++    @Override
++    protected String getTemplateFileName() {
++        return "MutinyDubbo3TripleStub.mustache";
++    }
++
++    @Override
++    protected String getInterfaceTemplateFileName() {
++        return "MutinyDubbo3TripleInterfaceStub.mustache";
++    }
++
++    @Override
++    protected String getSingleTemplateFileName() {
++        throw new IllegalStateException("Do not support single template!");
++    }
++
++    @Override
++    protected boolean useMultipleTemplate(boolean multipleFiles) {
++        return true;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinyPublisher.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinyPublisher.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..5ca8676a1b3f584c832b8dfcbc138faafd894ae0
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinyPublisher.java
+@@ -0,0 +1,161 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.protocol.tri.CancelableStreamObserver;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++
++import java.util.concurrent.Flow;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.function.Consumer;
++
++/**
++ * The middle layer between {@link org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver} and Mutiny API. <p>
++ * 1. passing the data received by CallStreamObserver to Mutiny consumer <br>
++ * 2. passing the request of Mutiny API to CallStreamObserver
++ */
++public abstract class AbstractTripleMutinyPublisher<T> extends CancelableStreamObserver<T>
++        implements Flow.Publisher<T>, Flow.Subscription {
++
++    private boolean canRequest;
++
++    private long requested;
++
++    // whether publisher has been subscribed
++    private final AtomicBoolean subscribed = new AtomicBoolean();
++
++    private volatile Flow.Subscriber<? super T> downstream;
++
++    protected volatile CallStreamObserver<?> subscription;
++
++    private final AtomicBoolean hasSub = new AtomicBoolean();
++
++    // cancel status
++    private volatile boolean cancelled;
++
++    // complete status
++    private volatile boolean done;
++
++    // to help bind TripleSubscriber
++    private volatile Consumer<CallStreamObserver<?>> onSubscribe;
++
++    private volatile Runnable shutdownHook;
++
++    private final AtomicBoolean calledShutdown = new AtomicBoolean();
++
++    public AbstractTripleMutinyPublisher() {}
++
++    public AbstractTripleMutinyPublisher(Consumer<CallStreamObserver<?>> onSubscribe, Runnable shutdownHook) {
++        this.onSubscribe = onSubscribe;
++        this.shutdownHook = shutdownHook;
++    }
++
++    protected void onSubscribe(CallStreamObserver<?> subscription) {
++        if (subscription != null && this.subscription == null && hasSub.compareAndSet(false, true)) {
++            this.subscription = subscription;
++            subscription.disableAutoFlowControl();
++            if (onSubscribe != null) {
++                onSubscribe.accept(subscription);
++            }
++            return;
++        }
++        throw new IllegalStateException(getClass().getSimpleName() + " supports only a single subscription");
++    }
++
++    @Override
++    public void subscribe(Flow.Subscriber<? super T> s) {
++        if (s == null) {
++            throw new NullPointerException();
++        }
++        if (subscribed.compareAndSet(false, true)) {
++            this.downstream = s;
++            s.onSubscribe(this);
++            if (cancelled) this.downstream = null;
++        }
++    }
++
++    @Override
++    public void request(long n) {
++        synchronized (this) {
++            if (subscribed.get() && canRequest) {
++                subscription.request(n >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n);
++            } else {
++                requested += n;
++            }
++        }
++    }
++
++    @Override
++    public void startRequest() {
++        synchronized (this) {
++            if (!canRequest) {
++                canRequest = true;
++                long n = requested;
++                subscription.request(n >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n);
++            }
++        }
++    }
++
++    @Override
++    public void cancel() {
++        if (!cancelled) {
++            cancelled = true;
++            doShutdown();
++        }
++    }
++
++    @Override
++    public void onNext(T item) {
++        if (done || cancelled) {
++            return;
++        }
++        downstream.onNext(item);
++    }
++
++    @Override
++    public void onError(Throwable t) {
++        if (done || cancelled) {
++            return;
++        }
++        done = true;
++        downstream.onError(t);
++        doShutdown();
++    }
++
++    @Override
++    public void onCompleted() {
++        if (done || cancelled) {
++            return;
++        }
++        done = true;
++        downstream.onComplete();
++        doShutdown();
++    }
++
++    private void doShutdown() {
++        Runnable r = shutdownHook;
++        // CAS to confirm shutdownHook will be run only once.
++        if (r != null && calledShutdown.compareAndSet(false, true)) {
++            shutdownHook = null;
++            r.run();
++        }
++    }
++
++    public boolean isCancelled() {
++        return cancelled;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinySubscriber.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinySubscriber.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..643d84e32bcb161253c692fe50754b23af666671
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/AbstractTripleMutinySubscriber.java
+@@ -0,0 +1,101 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++
++import java.util.concurrent.Flow;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++/**
++ * The middle layer between {@link CallStreamObserver} and Reactive API. <br>
++ * Passing the data from Reactive producer to CallStreamObserver.
++ */
++public abstract class AbstractTripleMutinySubscriber<T> implements Flow.Subscriber<T> {
++
++    private volatile boolean cancelled;
++
++    protected volatile CallStreamObserver<T> downstream;
++
++    private final AtomicBoolean subscribed = new AtomicBoolean();
++
++    private final AtomicBoolean hasSubscribed = new AtomicBoolean();
++
++    private volatile Flow.Subscription subscription;
++
++    // complete status
++    private volatile boolean done;
++
++    /**
++     * Binding the downstream, and call subscription#request(1).
++     *
++     * @param downstream downstream
++     */
++    public void subscribe(CallStreamObserver<T> downstream) {
++        if (downstream == null) {
++            throw new NullPointerException();
++        }
++        if (subscribed.compareAndSet(false, true)) {
++            this.downstream = downstream;
++            if (subscription != null) subscription.request(1);
++        }
++    }
++
++    @Override
++    public void onSubscribe(Flow.Subscription sub) {
++        if (this.subscription == null && hasSubscribed.compareAndSet(false, true)) {
++            this.subscription = sub;
++            return;
++        }
++        sub.cancel();
++    }
++
++    @Override
++    public void onNext(T item) {
++        if (!done && !cancelled) {
++            downstream.onNext(item);
++            subscription.request(1);
++        }
++    }
++
++    @Override
++    public void onError(Throwable t) {
++        if (!cancelled) {
++            done = true;
++            downstream.onError(t);
++        }
++    }
++
++    @Override
++    public void onComplete() {
++        if (!cancelled) {
++            done = true;
++            downstream.onCompleted();
++        }
++    }
++
++    public void cancel() {
++        if (!cancelled && subscription != null) {
++            cancelled = true;
++            subscription.cancel();
++        }
++    }
++
++    public boolean isCancelled() {
++        return cancelled;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinyPublisher.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinyPublisher.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..20fbe4aac76bcf2a882bce7dfd1f00a59797c9dc
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinyPublisher.java
+@@ -0,0 +1,42 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++import org.apache.dubbo.rpc.protocol.tri.observer.ClientCallToObserverAdapter;
++
++import java.util.function.Consumer;
++
++/**
++ * Used in OneToMany & ManyToOne & ManyToMany in client. <br>
++ * It is a Publisher for user subscriber to subscribe. <br>
++ * It is a StreamObserver for responseStream. <br>
++ * It is a Subscription for user subscriber to request and pass request to requestStream.
++ */
++public class ClientTripleMutinyPublisher<T> extends AbstractTripleMutinyPublisher<T> {
++
++    public ClientTripleMutinyPublisher() {}
++
++    public ClientTripleMutinyPublisher(Consumer<CallStreamObserver<?>> onSubscribe, Runnable shutdownHook) {
++        super(onSubscribe, shutdownHook);
++    }
++
++    @Override
++    public void beforeStart(ClientCallToObserverAdapter<T> clientCallToObserverAdapter) {
++        super.onSubscribe(clientCallToObserverAdapter);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinySubscriber.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinySubscriber.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..33627191a5337ad57685e05f79266ad7845db7db
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ClientTripleMutinySubscriber.java
+@@ -0,0 +1,33 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.protocol.tri.observer.ClientCallToObserverAdapter;
++
++/**
++ * The subscriber in client to subscribe user publisher and is subscribed by ClientStreamObserver.
++ */
++public class ClientTripleMutinySubscriber<T> extends AbstractTripleMutinySubscriber<T> {
++
++    @Override
++    public void cancel() {
++        if (!isCancelled()) {
++            super.cancel();
++            ((ClientCallToObserverAdapter<T>) downstream).cancel(new Exception("Cancelled"));
++        }
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinyPublisher.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinyPublisher.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb126492fff21c9e53f2d6bf41d72208dbc54a77
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinyPublisher.java
+@@ -0,0 +1,32 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++
++/**
++ * Used in ManyToOne and ManyToMany in server. <br>
++ * It is a Publisher for user subscriber to subscribe. <br>
++ * It is a StreamObserver for requestStream. <br>
++ * It is a Subscription for user subscriber to request and pass request to responseStream.
++ */
++public class ServerTripleMutinyPublisher<T> extends AbstractTripleMutinyPublisher<T> {
++
++    public ServerTripleMutinyPublisher(CallStreamObserver<?> callStreamObserver) {
++        super.onSubscribe(callStreamObserver);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinySubscriber.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinySubscriber.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..50963db3a181c1296463b2e6b3401b3756a7f4e3
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/ServerTripleMutinySubscriber.java
+@@ -0,0 +1,86 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny;
++
++import org.apache.dubbo.rpc.CancellationContext;
++import org.apache.dubbo.rpc.protocol.tri.CancelableStreamObserver;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.CompletableFuture;
++
++/**
++ * The Subscriber in server to passing the data produced by user publisher to responseStream.
++ */
++public class ServerTripleMutinySubscriber<T> extends AbstractTripleMutinySubscriber<T> {
++
++    /**
++     * The execution future of the current task, in order to be returned to stubInvoker
++     */
++    private final CompletableFuture<List<T>> executionFuture = new CompletableFuture<>();
++
++    /**
++     * The result elements collected by the current task.
++     * This class is a multi subscriber, which usually means there will be multiple elements, so it is declared as a list type.
++     */
++    private final List<T> collectedData = new ArrayList<>();
++
++    public ServerTripleMutinySubscriber() {}
++
++    public ServerTripleMutinySubscriber(CallStreamObserver<T> streamObserver) {
++        this.downstream = streamObserver;
++    }
++
++    @Override
++    public void subscribe(CallStreamObserver<T> downstream) {
++        super.subscribe(downstream);
++        if (downstream instanceof CancelableStreamObserver<?>) {
++            final CancelableStreamObserver<?> observer = (CancelableStreamObserver<?>) downstream;
++            final CancellationContext context;
++            if (observer.getCancellationContext() == null) {
++                context = new CancellationContext();
++                observer.setCancellationContext(context);
++            } else {
++                context = observer.getCancellationContext();
++            }
++            context.addListener(ctx -> super.cancel());
++        }
++    }
++
++    @Override
++    public void onNext(T t) {
++        super.onNext(t);
++        collectedData.add(t);
++    }
++
++    @Override
++    public void onError(Throwable throwable) {
++        super.onError(throwable);
++        executionFuture.completeExceptionally(throwable);
++    }
++
++    @Override
++    public void onComplete() {
++        super.onComplete();
++        executionFuture.complete(this.collectedData);
++    }
++
++    public CompletableFuture<List<T>> getExecutionFuture() {
++        return executionFuture;
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyClientCalls.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyClientCalls.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..296017ebc9f9f51febe3a77a1eed9cbb5375d0fb
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyClientCalls.java
+@@ -0,0 +1,142 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.calls;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.ClientTripleMutinyPublisher;
++import org.apache.dubbo.mutiny.ClientTripleMutinySubscriber;
++import org.apache.dubbo.rpc.Invoker;
++import org.apache.dubbo.rpc.model.StubMethodDescriptor;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++import org.apache.dubbo.rpc.stub.StubInvocationUtil;
++
++import io.smallrye.mutiny.Multi;
++import io.smallrye.mutiny.Uni;
++import io.smallrye.mutiny.subscription.UniEmitter;
++
++/**
++ * A collection of methods to convert client-side Mutiny calls to stream calls.
++ */
++public class MutinyClientCalls {
++
++    private MutinyClientCalls() {}
++
++    /**
++     * Implements a unary -> unary call as Uni -> Uni
++     *
++     * @param invoker invoker
++     * @param uniRequest the uni with request
++     * @param methodDescriptor the method descriptor
++     * @return the uni with response
++     */
++    public static <TRequest, TResponse, TInvoker> Uni<TResponse> oneToOne(
++            Invoker<TInvoker> invoker, Uni<TRequest> uniRequest, StubMethodDescriptor methodDescriptor) {
++        try {
++            return uniRequest.onItem().transformToUni(request -> Uni.createFrom()
++                    .emitter((UniEmitter<? super TResponse> emitter) -> {
++                        StubInvocationUtil.unaryCall(
++                                invoker, methodDescriptor, request, new StreamObserver<TResponse>() {
++                                    @Override
++                                    public void onNext(TResponse value) {
++                                        emitter.complete(value);
++                                    }
++
++                                    @Override
++                                    public void onError(Throwable t) {
++                                        emitter.fail(t);
++                                    }
++
++                                    @Override
++                                    public void onCompleted() {
++                                        // No-op
++                                    }
++                                });
++                    }));
++        } catch (Throwable throwable) {
++            return Uni.createFrom().failure(throwable);
++        }
++    }
++
++    /**
++     * Implements a unary -> stream call as Uni -> Multi
++     *
++     * @param invoker invoker
++     * @param uniRequest the uni with request
++     * @param methodDescriptor the method descriptor
++     * @return the multi with response
++     */
++    public static <TRequest, TResponse, TInvoker> Multi<TResponse> oneToMany(
++            Invoker<TInvoker> invoker, Uni<TRequest> uniRequest, StubMethodDescriptor methodDescriptor) {
++        try {
++            return uniRequest.onItem().transformToMulti(request -> {
++                ClientTripleMutinyPublisher<TResponse> clientPublisher = new ClientTripleMutinyPublisher<>();
++                StubInvocationUtil.serverStreamCall(invoker, methodDescriptor, request, clientPublisher);
++                return clientPublisher;
++            });
++        } catch (Throwable throwable) {
++            return Multi.createFrom().failure(throwable);
++        }
++    }
++
++    /**
++     * Implements a stream -> unary call as Multi -> Uni
++     *
++     * @param invoker invoker
++     * @param multiRequest the multi with request
++     * @param methodDescriptor the method descriptor
++     * @return the uni with response
++     */
++    public static <TRequest, TResponse, TInvoker> Uni<TResponse> manyToOne(
++            Invoker<TInvoker> invoker, Multi<TRequest> multiRequest, StubMethodDescriptor methodDescriptor) {
++        try {
++            ClientTripleMutinySubscriber<TRequest> clientSubscriber =
++                    multiRequest.subscribe().withSubscriber(new ClientTripleMutinySubscriber<>());
++            ClientTripleMutinyPublisher<TResponse> clientPublisher = new ClientTripleMutinyPublisher<>(
++                    s -> clientSubscriber.subscribe((CallStreamObserver<TRequest>) s), clientSubscriber::cancel);
++            return Uni.createFrom()
++                    .publisher(clientPublisher)
++                    .onSubscription()
++                    .invoke(() -> StubInvocationUtil.biOrClientStreamCall(invoker, methodDescriptor, clientPublisher));
++        } catch (Throwable err) {
++            return Uni.createFrom().failure(err);
++        }
++    }
++
++    /**
++     * Implements a stream -> stream call as Multi -> Multi
++     *
++     * @param invoker invoker
++     * @param multiRequest the multi with request
++     * @param methodDescriptor the method descriptor
++     * @return the multi with response
++     */
++    public static <TRequest, TResponse, TInvoker> Multi<TResponse> manyToMany(
++            Invoker<TInvoker> invoker, Multi<TRequest> multiRequest, StubMethodDescriptor methodDescriptor) {
++        try {
++            ClientTripleMutinySubscriber<TRequest> clientSubscriber =
++                    multiRequest.subscribe().withSubscriber(new ClientTripleMutinySubscriber<>());
++            ClientTripleMutinyPublisher<TResponse> clientPublisher = new ClientTripleMutinyPublisher<>(
++                    s -> clientSubscriber.subscribe((CallStreamObserver<TRequest>) s), clientSubscriber::cancel);
++            return Multi.createFrom()
++                    .publisher(clientPublisher)
++                    .onSubscription()
++                    .invoke(() -> StubInvocationUtil.biOrClientStreamCall(invoker, methodDescriptor, clientPublisher));
++        } catch (Throwable err) {
++            return Multi.createFrom().failure(err);
++        }
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyServerCalls.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyServerCalls.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..5364b26c3f5b3a648e93f41869ffacbd4e59b825
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/calls/MutinyServerCalls.java
+@@ -0,0 +1,153 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.calls;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.ServerTripleMutinyPublisher;
++import org.apache.dubbo.mutiny.ServerTripleMutinySubscriber;
++import org.apache.dubbo.rpc.StatusRpcException;
++import org.apache.dubbo.rpc.TriRpcStatus;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++
++import java.util.List;
++import java.util.concurrent.CompletableFuture;
++import java.util.function.Function;
++
++import io.smallrye.mutiny.Multi;
++import io.smallrye.mutiny.Uni;
++
++/**
++ * A collection of methods to convert server-side stream calls to Mutiny calls.
++ */
++public class MutinyServerCalls {
++
++    private MutinyServerCalls() {}
++
++    /**
++     * Implements a unary -> unary call as Uni -> Uni
++     *
++     * @param request request
++     * @param responseObserver response StreamObserver
++     * @param func service implementation
++     */
++    public static <T, R> void oneToOne(T request, StreamObserver<R> responseObserver, Function<Uni<T>, Uni<R>> func) {
++        try {
++            func.apply(Uni.createFrom().item(request))
++                    .onItem()
++                    .ifNull()
++                    .failWith(TriRpcStatus.NOT_FOUND.asException())
++                    .subscribe()
++                    .with(
++                            item -> {
++                                responseObserver.onNext(item);
++                                responseObserver.onCompleted();
++                            },
++                            throwable -> doOnResponseHasException(throwable, responseObserver));
++        } catch (Throwable throwable) {
++            doOnResponseHasException(throwable, responseObserver);
++        }
++    }
++
++    /**
++     * Implements a unary -> stream call as Uni -> Multi
++     *
++     * @param request request
++     * @param responseObserver response StreamObserver
++     * @param func service implementation
++     */
++    public static <T, R> CompletableFuture<List<R>> oneToMany(
++            T request, StreamObserver<R> responseObserver, Function<Uni<T>, Multi<R>> func) {
++        try {
++            CallStreamObserver<R> callStreamObserver = (CallStreamObserver<R>) responseObserver;
++            Multi<R> response = func.apply(Uni.createFrom().item(request));
++            ServerTripleMutinySubscriber<R> mutinySubscriber = new ServerTripleMutinySubscriber<>(callStreamObserver);
++            response.subscribe().withSubscriber(mutinySubscriber).subscribe(callStreamObserver);
++            return mutinySubscriber.getExecutionFuture();
++        } catch (Throwable throwable) {
++            doOnResponseHasException(throwable, responseObserver);
++            CompletableFuture<List<R>> failed = new CompletableFuture<>();
++            failed.completeExceptionally(throwable);
++            return failed;
++        }
++    }
++
++    /**
++     * Implements a stream -> unary call as Multi -> Uni
++     *
++     * @param responseObserver response StreamObserver
++     * @param func service implementation
++     * @return request StreamObserver
++     */
++    public static <T, R> StreamObserver<T> manyToOne(
++            StreamObserver<R> responseObserver, Function<Multi<T>, Uni<R>> func) {
++        CallStreamObserver<R> callStreamObserver = (CallStreamObserver<R>) responseObserver;
++        ServerTripleMutinyPublisher<T> serverPublisher = new ServerTripleMutinyPublisher<>(callStreamObserver);
++        try {
++            Uni<R> responseUni = func.apply(Multi.createFrom().publisher(serverPublisher))
++                    .onItem()
++                    .ifNull()
++                    .failWith(TriRpcStatus.NOT_FOUND.asException());
++            responseUni
++                    .subscribe()
++                    .with(
++                            value -> {
++                                if (!serverPublisher.isCancelled()) {
++                                    callStreamObserver.onNext(value);
++                                    callStreamObserver.onCompleted();
++                                }
++                            },
++                            throwable -> {
++                                if (!serverPublisher.isCancelled()) {
++                                    callStreamObserver.onError(throwable);
++                                }
++                            });
++            serverPublisher.startRequest();
++        } catch (Throwable throwable) {
++            responseObserver.onError(throwable);
++        }
++        return serverPublisher;
++    }
++
++    /**
++     * Implements a stream -> stream call as Multi -> Multi
++     *
++     * @param responseObserver response StreamObserver
++     * @param func service implementation
++     * @return request StreamObserver
++     */
++    public static <T, R> StreamObserver<T> manyToMany(
++            StreamObserver<R> responseObserver, Function<Multi<T>, Multi<R>> func) {
++        CallStreamObserver<R> callStreamObserver = (CallStreamObserver<R>) responseObserver;
++        ServerTripleMutinyPublisher<T> serverPublisher = new ServerTripleMutinyPublisher<>(callStreamObserver);
++        try {
++            Multi<R> responseMulti = func.apply(Multi.createFrom().publisher(serverPublisher));
++            ServerTripleMutinySubscriber<R> serverSubscriber =
++                    responseMulti.subscribe().withSubscriber(new ServerTripleMutinySubscriber<>());
++            serverSubscriber.subscribe(callStreamObserver);
++            serverPublisher.startRequest();
++        } catch (Throwable throwable) {
++            responseObserver.onError(throwable);
++        }
++        return serverPublisher;
++    }
++
++    private static void doOnResponseHasException(Throwable throwable, StreamObserver<?> responseObserver) {
++        StatusRpcException statusRpcException =
++                TriRpcStatus.getStatus(throwable).asException();
++        responseObserver.onError(statusRpcException);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToManyMethodHandler.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToManyMethodHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8915c2509259497073d32c61f11c7b1a396a010c
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToManyMethodHandler.java
+@@ -0,0 +1,47 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.handler;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.calls.MutinyServerCalls;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++import org.apache.dubbo.rpc.stub.StubMethodHandler;
++
++import java.util.concurrent.CompletableFuture;
++import java.util.function.Function;
++
++import io.smallrye.mutiny.Multi;
++
++/**
++ * The handler of ManyToMany() method for stub invocation.
++ */
++public class ManyToManyMethodHandler<T, R> implements StubMethodHandler<T, R> {
++
++    private final Function<Multi<T>, Multi<R>> func;
++
++    public ManyToManyMethodHandler(Function<Multi<T>, Multi<R>> func) {
++        this.func = func;
++    }
++
++    @SuppressWarnings("unchecked")
++    @Override
++    public CompletableFuture<StreamObserver<T>> invoke(Object[] arguments) {
++        CallStreamObserver<R> responseObserver = (CallStreamObserver<R>) arguments[0];
++        StreamObserver<T> requestObserver = MutinyServerCalls.manyToMany(responseObserver, func);
++        return CompletableFuture.completedFuture(requestObserver);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToOneMethodHandler.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToOneMethodHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..634f47ccfbee3edc1fc0c6b87a95c6cb3249296e
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/ManyToOneMethodHandler.java
+@@ -0,0 +1,48 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.handler;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.calls.MutinyServerCalls;
++import org.apache.dubbo.rpc.protocol.tri.observer.CallStreamObserver;
++import org.apache.dubbo.rpc.stub.StubMethodHandler;
++
++import java.util.concurrent.CompletableFuture;
++import java.util.function.Function;
++
++import io.smallrye.mutiny.Multi;
++import io.smallrye.mutiny.Uni;
++
++/**
++ * The handler of ManyToOne() method for stub invocation.
++ */
++public class ManyToOneMethodHandler<T, R> implements StubMethodHandler<T, R> {
++
++    private final Function<Multi<T>, Uni<R>> func;
++
++    public ManyToOneMethodHandler(Function<Multi<T>, Uni<R>> func) {
++        this.func = func;
++    }
++
++    @SuppressWarnings("unchecked")
++    @Override
++    public CompletableFuture<StreamObserver<T>> invoke(Object[] arguments) {
++        CallStreamObserver<R> responseObserver = (CallStreamObserver<R>) arguments[0];
++        StreamObserver<T> requestObserver = MutinyServerCalls.manyToOne(responseObserver, func);
++        return CompletableFuture.completedFuture(requestObserver);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToManyMethodHandler.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToManyMethodHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f070693a78164efefad33fd6b6a4e27437b5e493
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToManyMethodHandler.java
+@@ -0,0 +1,47 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.handler;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.calls.MutinyServerCalls;
++import org.apache.dubbo.rpc.stub.StubMethodHandler;
++
++import java.util.concurrent.CompletableFuture;
++import java.util.function.Function;
++
++import io.smallrye.mutiny.Multi;
++import io.smallrye.mutiny.Uni;
++
++/**
++ * The handler of OneToMany() method for stub invocation.
++ */
++public class OneToManyMethodHandler<T, R> implements StubMethodHandler<T, R> {
++
++    private final Function<Uni<T>, Multi<R>> func;
++
++    public OneToManyMethodHandler(Function<Uni<T>, Multi<R>> func) {
++        this.func = func;
++    }
++
++    @SuppressWarnings("unchecked")
++    @Override
++    public CompletableFuture<?> invoke(Object[] arguments) {
++        T request = (T) arguments[0];
++        StreamObserver<R> responseObserver = (StreamObserver<R>) arguments[1];
++        return MutinyServerCalls.oneToMany(request, responseObserver, func);
++    }
++}
+diff --git a/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToOneMethodHandler.java b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToOneMethodHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..0c9ec8d39d8e4b2c8972062bcb862141dccb040e
+--- /dev/null
++++ b/dubbo-plugin/dubbo-mutiny/src/main/java/org/apache/dubbo/mutiny/handler/OneToOneMethodHandler.java
+@@ -0,0 +1,49 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.dubbo.mutiny.handler;
++
++import org.apache.dubbo.common.stream.StreamObserver;
++import org.apache.dubbo.mutiny.calls.MutinyServerCalls;
++import org.apache.dubbo.rpc.stub.FutureToObserverAdaptor;
++import org.apache.dubbo.rpc.stub.StubMethodHandler;
++
++import java.util.concurrent.CompletableFuture;
++import java.util.function.Function;
++
++import io.smallrye.mutiny.Uni;
++
++/**
++ * The handler of OneToOne() method for stub invocation.
++ */
++public class OneToOneMethodHandler<T, R> implements StubMethodHandler<T, R> {
++
++    private final Function<Uni<T>, Uni<R>> func;
++
++    public OneToOneMethodHandler(Function<Uni<T>, Uni<R>> func) {
++        this.func = func;
++    }
++
++    @SuppressWarnings("unchecked")
++    @Override
++    public CompletableFuture<R> invoke(Object[] arguments) {
++        T request = (T) arguments[0];
++        CompletableFuture<R> future = new CompletableFuture<>();
++        StreamObserver<R> responseObserver = new FutureToObserverAdaptor<>(future);
++        MutinyServerCalls.oneToOne(request, responseObserver, func);
++        return future;
++    }
++}

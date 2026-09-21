@@ -1,0 +1,3531 @@
+diff --git a/cmd/wire_gen.go b/cmd/wire_gen.go
+index d876a48a820af28c1f9aa1dcec1f4d0f2cfc34a1..187ab488d91f03212b33b626b4f6b4a575a726a5 100644
+--- a/cmd/wire_gen.go
++++ b/cmd/wire_gen.go
+@@ -62,7 +62,17 @@ func CreateNativeAPIRouter(ctx context.Context) *nativeapi.Router {
+ 	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
+ 	manager := plugins.GetManager(dataStore, metricsMetrics)
+ 	insights := metrics.GetInstance(dataStore, manager)
+-	router := nativeapi.New(dataStore, share, playlists, insights)
++	fileCache := artwork.GetImageCache()
++	fFmpeg := ffmpeg.New()
++	agentsAgents := agents.GetAgents(dataStore, manager)
++	provider := external.NewProvider(dataStore, agentsAgents)
++	artworkArtwork := artwork.NewArtwork(dataStore, fileCache, fFmpeg, provider)
++	cacheWarmer := artwork.NewCacheWarmer(artworkArtwork, fileCache)
++	broker := events.GetBroker()
++	scannerScanner := scanner.New(ctx, dataStore, cacheWarmer, broker, playlists, metricsMetrics)
++	watcher := scanner.GetWatcher(dataStore, scannerScanner)
++	library := core.NewLibrary(dataStore, scannerScanner, watcher, broker)
++	router := nativeapi.New(dataStore, share, playlists, insights, library)
+ 	return router
+ }
+ 
+diff --git a/core/share.go b/core/share.go
+index add88322d60995f42ecdd60ba8fda271a1c0c43e..202c27d897c955099cc715473f41b056438a90fd 100644
+--- a/core/share.go
++++ b/core/share.go
+@@ -149,7 +149,7 @@ func (r *shareRepositoryWrapper) contentsLabelFromArtist(shareID string, ids str
+ 
+ func (r *shareRepositoryWrapper) contentsLabelFromAlbums(shareID string, ids string) string {
+ 	idList := strings.Split(ids, ",")
+-	all, err := r.ds.Album(r.ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"id": idList}})
++	all, err := r.ds.Album(r.ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album.id": idList}})
+ 	if err != nil {
+ 		log.Error(r.ctx, "Error retrieving album names for share", "share", shareID, err)
+ 		return ""
+diff --git a/model/searchable.go b/model/searchable.go
+index cc4f0b44ea7e11f1973f3d0c25572e46ece5d368..631a117268244c52a93e44c5f175828b572551c8 100644
+--- a/model/searchable.go
++++ b/model/searchable.go
+@@ -1,5 +1,5 @@
+ package model
+ 
+ type SearchableRepository[T any] interface {
+-	Search(q string, offset, size int, includeMissing bool, options ...QueryOptions) (T, error)
++	Search(q string, offset, size int, options ...QueryOptions) (T, error)
+ }
+diff --git a/model/tag.go b/model/tag.go
+index 8f9c60f37aa4bb3fe95b27f2723510c50513674f..674f688cae3b5a1a953ca2e214e89034f66a941b 100644
+--- a/model/tag.go
++++ b/model/tag.go
+@@ -12,11 +12,11 @@ import (
+ )
+ 
+ type Tag struct {
+-	ID             string  `json:"id,omitempty"`
+-	TagName        TagName `json:"tagName,omitempty"`
+-	TagValue       string  `json:"tagValue,omitempty"`
+-	AlbumCount     int     `json:"albumCount,omitempty"`
+-	MediaFileCount int     `json:"songCount,omitempty"`
++	ID         string  `json:"id,omitempty"`
++	TagName    TagName `json:"tagName,omitempty"`
++	TagValue   string  `json:"tagValue,omitempty"`
++	AlbumCount int     `json:"albumCount,omitempty"`
++	SongCount  int     `json:"songCount,omitempty"`
+ }
+ 
+ type TagList []Tag
+diff --git a/persistence/album_repository.go b/persistence/album_repository.go
+index 682a409a11c2420b1bb9d25bca9fc708e31cbfd9..6f9bb3b482f8d1a6580706d5f6727614e9b169d9 100644
+--- a/persistence/album_repository.go
++++ b/persistence/album_repository.go
+@@ -349,15 +349,15 @@ func (r *albumRepository) purgeEmpty() error {
+ 	return nil
+ }
+ 
+-func (r *albumRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Albums, error) {
++func (r *albumRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Albums, error) {
+ 	var res dbAlbums
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectAlbum(options...), q, []string{"mbz_album_id", "mbz_release_group_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectAlbum(options...), q, []string{"mbz_album_id", "mbz_release_group_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectAlbum(options...), q, offset, size, includeMissing, &res, "name")
++		err := r.doSearch(r.selectAlbum(options...), q, offset, size, &res, "album.rowid", "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching album by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/artist_repository.go b/persistence/artist_repository.go
+index 3f85ed6d75c48ee02cc024b997e8c8800971e40c..a7cf9272abee8cfb9245af198b89ecd149d82e55 100644
+--- a/persistence/artist_repository.go
++++ b/persistence/artist_repository.go
+@@ -156,7 +156,7 @@ func NewArtistRepository(ctx context.Context, db dbx.Builder) model.ArtistReposi
+ func roleFilter(_ string, role any) Sqlizer {
+ 	if role, ok := role.(string); ok {
+ 		if _, ok := model.AllRoles[role]; ok {
+-			return Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL)")
++			return Expr("JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL")
+ 		}
+ 	}
+ 	return Eq{"1": 2}
+@@ -170,15 +170,17 @@ func artistLibraryIdFilter(_ string, value interface{}) Sqlizer {
+ // applyLibraryFilterToArtistQuery applies library filtering to artist queries through the library_artist junction table
+ func (r *artistRepository) applyLibraryFilterToArtistQuery(query SelectBuilder) SelectBuilder {
+ 	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		// No user context - return empty result set
+-		return query.Where(Eq{"1": "0"})
++	// Join with library_artist first to ensure only artists with content in libraries are included
++	// Exclude artists with empty stats (no actual content in the library)
++	query = query.Join("library_artist on library_artist.artist_id = artist.id")
++	//query = query.Join("library_artist on library_artist.artist_id = artist.id AND library_artist.stats != '{}'")
++
++	// Admin users see all artists from all libraries, no additional filtering needed
++	if user.ID != invalidUserId && !user.IsAdmin {
++		// Apply library filtering only for non-admin users by joining with their accessible libraries
++		query = query.Join("user_library on user_library.library_id = library_artist.library_id AND user_library.user_id = ?", user.ID)
+ 	}
+ 
+-	// Apply library filtering by joining only with accessible libraries
+-	query = query.LeftJoin("library_artist on library_artist.artist_id = artist.id").
+-		Join("user_library on user_library.library_id = library_artist.library_id AND user_library.user_id = ?", user.ID)
+-
+ 	return query
+ }
+ 
+@@ -503,19 +505,29 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
+ 		totalRowsAffected += rowsAffected
+ 	}
+ 
++	// // Remove library_artist entries for artists that no longer have any content in any library
++	cleanupSQL := Delete("library_artist").Where("stats = '{}'")
++	cleanupRows, err := r.executeSQL(cleanupSQL)
++	if err != nil {
++		log.Warn(r.ctx, "Failed to cleanup empty library_artist entries", "error", err)
++	} else if cleanupRows > 0 {
++		log.Debug(r.ctx, "Cleaned up empty library_artist entries", "rowsDeleted", cleanupRows)
++	}
++
+ 	log.Debug(r.ctx, "RefreshStats: Successfully updated stats.", "totalArtistsProcessed", len(allTouchedArtistIDs), "totalDBRowsAffected", totalRowsAffected)
+ 	return totalRowsAffected, nil
+ }
+ 
+-func (r *artistRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.Artists, error) {
++func (r *artistRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Artists, error) {
+ 	var res dbArtists
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectArtist(options...), q, []string{"mbz_artist_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectArtist(options...), q, []string{"mbz_artist_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectArtist(options...), q, offset, size, includeMissing, &res,
++		// Natural order for artists is more performant by ID, due to GROUP BY clause in selectArtist
++		err := r.doSearch(r.selectArtist(options...), q, offset, size, &res, "artist.id",
+ 			"sum(json_extract(stats, '$.total.m')) desc", "name")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching artist by query %q: %w", q, err)
+diff --git a/persistence/artist_repository_test.go b/persistence/artist_repository_test.go
+index ed55a376e23ade9eaa7ed45dfca38cd07bcf4e18..dfaf499aca4d4be7717460f5d9d594ccf0966edc 100644
+--- a/persistence/artist_repository_test.go
++++ b/persistence/artist_repository_test.go
+@@ -7,7 +7,6 @@ import (
+ 	"github.com/Masterminds/squirrel"
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/conf/configtest"
+-	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/utils"
+@@ -15,481 +14,759 @@ import (
+ 	. "github.com/onsi/gomega"
+ )
+ 
+-var _ = Describe("ArtistRepository", func() {
+-	var repo model.ArtistRepository
++// Test helper functions to reduce duplication
++func createTestArtistWithMBID(id, name, mbid string) model.Artist {
++	return model.Artist{
++		ID:          id,
++		Name:        name,
++		MbzArtistID: mbid,
++	}
++}
++
++func createUserWithLibraries(userID string, libraryIDs []int) model.User {
++	user := model.User{
++		ID:       userID,
++		UserName: userID,
++		Name:     userID,
++		Email:    userID + "@test.com",
++		IsAdmin:  false,
++	}
++
++	if len(libraryIDs) > 0 {
++		user.Libraries = make(model.Libraries, len(libraryIDs))
++		for i, libID := range libraryIDs {
++			user.Libraries[i] = model.Library{ID: libID, Name: "Test Library", Path: "/test"}
++		}
++	}
++
++	return user
++}
+ 
+-	BeforeEach(func() {
+-		DeferCleanup(configtest.SetupConfig())
+-		ctx := log.NewContext(context.TODO())
+-		ctx = request.WithUser(ctx, model.User{ID: "userid"})
+-		repo = NewArtistRepository(ctx, GetDBXBuilder())
+-	})
++var _ = Describe("ArtistRepository", func() {
+ 
+-	Describe("Count", func() {
+-		It("returns the number of artists in the DB", func() {
+-			Expect(repo.CountAll()).To(Equal(int64(2)))
++	Context("Core Functionality", func() {
++		Describe("GetIndexKey", func() {
++			// Note: OrderArtistName should never be empty, so we don't need to test for that
++			r := artistRepository{indexGroups: utils.ParseIndexGroups(conf.Server.IndexGroups)}
++
++			DescribeTable("returns correct index key based on PreferSortTags setting",
++				func(preferSortTags bool, sortArtistName, orderArtistName, expectedKey string) {
++					DeferCleanup(configtest.SetupConfig())
++					conf.Server.PreferSortTags = preferSortTags
++					a := model.Artist{SortArtistName: sortArtistName, OrderArtistName: orderArtistName, Name: "Test"}
++					idx := GetIndexKey(&r, a)
++					Expect(idx).To(Equal(expectedKey))
++				},
++				Entry("PreferSortTags=false, SortArtistName empty -> uses OrderArtistName", false, "", "Bar", "B"),
++				Entry("PreferSortTags=false, SortArtistName not empty -> still uses OrderArtistName", false, "Foo", "Bar", "B"),
++				Entry("PreferSortTags=true, SortArtistName not empty -> uses SortArtistName", true, "Foo", "Bar", "F"),
++				Entry("PreferSortTags=true, SortArtistName empty -> falls back to OrderArtistName", true, "", "Bar", "B"),
++			)
+ 		})
+-	})
+ 
+-	Describe("Exists", func() {
+-		It("returns true for an artist that is in the DB", func() {
+-			Expect(repo.Exists("3")).To(BeTrue())
+-		})
+-		It("returns false for an artist that is in the DB", func() {
+-			Expect(repo.Exists("666")).To(BeFalse())
++		Describe("roleFilter", func() {
++			DescribeTable("validates roles and returns appropriate SQL expressions",
++				func(role string, shouldBeValid bool) {
++					result := roleFilter("", role)
++					if shouldBeValid {
++						expectedExpr := squirrel.Expr("JSON_EXTRACT(library_artist.stats, '$." + role + ".m') IS NOT NULL")
++						Expect(result).To(Equal(expectedExpr))
++					} else {
++						expectedInvalid := squirrel.Eq{"1": 2}
++						Expect(result).To(Equal(expectedInvalid))
++					}
++				},
++				// Valid roles from model.AllRoles
++				Entry("artist role", "artist", true),
++				Entry("albumartist role", "albumartist", true),
++				Entry("composer role", "composer", true),
++				Entry("conductor role", "conductor", true),
++				Entry("lyricist role", "lyricist", true),
++				Entry("arranger role", "arranger", true),
++				Entry("producer role", "producer", true),
++				Entry("director role", "director", true),
++				Entry("engineer role", "engineer", true),
++				Entry("mixer role", "mixer", true),
++				Entry("remixer role", "remixer", true),
++				Entry("djmixer role", "djmixer", true),
++				Entry("performer role", "performer", true),
++				Entry("maincredit role", "maincredit", true),
++				// Invalid roles
++				Entry("invalid role - wizard", "wizard", false),
++				Entry("invalid role - songanddanceman", "songanddanceman", false),
++				Entry("empty string", "", false),
++				Entry("SQL injection attempt", "artist') SELECT LIKE(CHAR(65,66,67,68,69,70,71),UPPER(HEX(RANDOMBLOB(500000000/2))))--", false),
++			)
++
++			It("handles non-string input types", func() {
++				expectedInvalid := squirrel.Eq{"1": 2}
++				Expect(roleFilter("", 123)).To(Equal(expectedInvalid))
++				Expect(roleFilter("", nil)).To(Equal(expectedInvalid))
++				Expect(roleFilter("", []string{"artist"})).To(Equal(expectedInvalid))
++			})
+ 		})
+-	})
+ 
+-	Describe("Get", func() {
+-		It("saves and retrieves data", func() {
+-			artist, err := repo.Get("2")
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(artist.Name).To(Equal(artistKraftwerk.Name))
+-		})
+-	})
++		Describe("dbArtist mapping", func() {
++			var (
++				artist *model.Artist
++				dba    *dbArtist
++			)
+ 
+-	Describe("GetIndexKey", func() {
+-		// Note: OrderArtistName should never be empty, so we don't need to test for that
+-		r := artistRepository{indexGroups: utils.ParseIndexGroups(conf.Server.IndexGroups)}
+-		When("PreferSortTags is false", func() {
+ 			BeforeEach(func() {
+-				conf.Server.PreferSortTags = false
++				artist = &model.Artist{ID: "1", Name: "Eddie Van Halen", SortArtistName: "Van Halen, Eddie"}
++				dba = &dbArtist{Artist: artist}
+ 			})
+-			It("returns the OrderArtistName key is SortArtistName is empty", func() {
+-				conf.Server.PreferSortTags = false
+-				a := model.Artist{SortArtistName: "", OrderArtistName: "Bar", Name: "Qux"}
+-				idx := GetIndexKey(&r, a)
+-				Expect(idx).To(Equal("B"))
++
++			Describe("PostScan", func() {
++				It("parses stats and similar artists correctly", func() {
++					stats := map[string]map[string]map[string]int64{
++						"1": {
++							"total":    {"s": 1000, "m": 10, "a": 2},
++							"composer": {"s": 500, "m": 5, "a": 1},
++						},
++					}
++					statsJSON, _ := json.Marshal(stats)
++					dba.LibraryStatsJSON = string(statsJSON)
++					dba.SimilarArtists = `[{"id":"2","Name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`
++
++					err := dba.PostScan()
++					Expect(err).ToNot(HaveOccurred())
++					Expect(dba.Artist.Size).To(Equal(int64(1000)))
++					Expect(dba.Artist.SongCount).To(Equal(10))
++					Expect(dba.Artist.AlbumCount).To(Equal(2))
++					Expect(dba.Artist.Stats).To(HaveLen(1))
++					Expect(dba.Artist.Stats[model.RoleFromString("composer")].Size).To(Equal(int64(500)))
++					Expect(dba.Artist.Stats[model.RoleFromString("composer")].SongCount).To(Equal(5))
++					Expect(dba.Artist.Stats[model.RoleFromString("composer")].AlbumCount).To(Equal(1))
++					Expect(dba.Artist.SimilarArtists).To(HaveLen(2))
++					Expect(dba.Artist.SimilarArtists[0].ID).To(Equal("2"))
++					Expect(dba.Artist.SimilarArtists[0].Name).To(Equal("AC/DC"))
++					Expect(dba.Artist.SimilarArtists[1].ID).To(BeEmpty())
++					Expect(dba.Artist.SimilarArtists[1].Name).To(Equal("Test;With:Sep,Chars"))
++				})
+ 			})
+-			It("returns the OrderArtistName key even if SortArtistName is not empty", func() {
+-				a := model.Artist{SortArtistName: "Foo", OrderArtistName: "Bar", Name: "Qux"}
+-				idx := GetIndexKey(&r, a)
+-				Expect(idx).To(Equal("B"))
++
++			Describe("PostMapArgs", func() {
++				It("maps empty similar artists correctly", func() {
++					m := make(map[string]any)
++					err := dba.PostMapArgs(m)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(m).To(HaveKeyWithValue("similar_artists", "[]"))
++				})
++
++				It("maps similar artists and full text correctly", func() {
++					artist.SimilarArtists = []model.Artist{
++						{ID: "2", Name: "AC/DC"},
++						{Name: "Test;With:Sep,Chars"},
++					}
++					m := make(map[string]any)
++					err := dba.PostMapArgs(m)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(m).To(HaveKeyWithValue("similar_artists", `[{"id":"2","name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`))
++					Expect(m).To(HaveKeyWithValue("full_text", " eddie halen van"))
++				})
++
++				It("does not override empty sort_artist_name and mbz_artist_id", func() {
++					m := map[string]any{
++						"sort_artist_name": "",
++						"mbz_artist_id":    "",
++					}
++					err := dba.PostMapArgs(m)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(m).ToNot(HaveKey("sort_artist_name"))
++					Expect(m).ToNot(HaveKey("mbz_artist_id"))
++				})
+ 			})
+ 		})
+-		When("PreferSortTags is true", func() {
+-			BeforeEach(func() {
+-				conf.Server.PreferSortTags = true
++	})
++
++	Context("Admin User Operations", func() {
++		var repo model.ArtistRepository
++
++		BeforeEach(func() {
++			ctx := GinkgoT().Context()
++			ctx = request.WithUser(ctx, adminUser)
++			repo = NewArtistRepository(ctx, GetDBXBuilder())
++		})
++
++		Describe("Basic Operations", func() {
++			Describe("Count", func() {
++				It("returns the number of artists in the DB", func() {
++					Expect(repo.CountAll()).To(Equal(int64(2)))
++				})
+ 			})
+-			It("returns the SortArtistName key if it is not empty", func() {
+-				a := model.Artist{SortArtistName: "Foo", OrderArtistName: "Bar", Name: "Qux"}
+-				idx := GetIndexKey(&r, a)
+-				Expect(idx).To(Equal("F"))
++
++			Describe("Exists", func() {
++				It("returns true for an artist that is in the DB", func() {
++					Expect(repo.Exists("3")).To(BeTrue())
++				})
++				It("returns false for an artist that is NOT in the DB", func() {
++					Expect(repo.Exists("666")).To(BeFalse())
++				})
+ 			})
+-			It("returns the OrderArtistName key if SortArtistName is empty", func() {
+-				a := model.Artist{SortArtistName: "", OrderArtistName: "Bar", Name: "Qux"}
+-				idx := GetIndexKey(&r, a)
+-				Expect(idx).To(Equal("B"))
++
++			Describe("Get", func() {
++				It("retrieves existing artist data", func() {
++					artist, err := repo.Get("2")
++					Expect(err).ToNot(HaveOccurred())
++					Expect(artist.Name).To(Equal(artistKraftwerk.Name))
++				})
+ 			})
+ 		})
+-	})
+ 
+-	Describe("GetIndex", func() {
+-		When("PreferSortTags is true", func() {
+-			BeforeEach(func() {
+-				conf.Server.PreferSortTags = true
+-			})
+-			It("returns the index when PreferSortTags is true and SortArtistName is not empty", func() {
+-				// Set SortArtistName to "Foo" for Beatles
+-				artistBeatles.SortArtistName = "Foo"
+-				er := repo.Put(&artistBeatles)
+-				Expect(er).To(BeNil())
++		Describe("GetIndex", func() {
++			When("PreferSortTags is true", func() {
++				BeforeEach(func() {
++					conf.Server.PreferSortTags = true
++				})
++				It("returns the index when PreferSortTags is true and SortArtistName is not empty", func() {
++					// Set SortArtistName to "Foo" for Beatles
++					artistBeatles.SortArtistName = "Foo"
++					er := repo.Put(&artistBeatles)
++					Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false, []int{1})
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(2))
+-				Expect(idx[0].ID).To(Equal("F"))
+-				Expect(idx[0].Artists).To(HaveLen(1))
+-				Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
+-				Expect(idx[1].ID).To(Equal("K"))
+-				Expect(idx[1].Artists).To(HaveLen(1))
+-				Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++					idx, err := repo.GetIndex(false, []int{1})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++					Expect(idx[0].ID).To(Equal("F"))
++					Expect(idx[0].Artists).To(HaveLen(1))
++					Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
++					Expect(idx[1].ID).To(Equal("K"))
++					Expect(idx[1].Artists).To(HaveLen(1))
++					Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++
++					// Restore the original value
++					artistBeatles.SortArtistName = ""
++					er = repo.Put(&artistBeatles)
++					Expect(er).To(BeNil())
++				})
+ 
+-				// Restore the original value
+-				artistBeatles.SortArtistName = ""
+-				er = repo.Put(&artistBeatles)
+-				Expect(er).To(BeNil())
++				// BFR Empty SortArtistName is not saved in the DB anymore
++				XIt("returns the index when PreferSortTags is true and SortArtistName is empty", func() {
++					idx, err := repo.GetIndex(false, []int{1})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++					Expect(idx[0].ID).To(Equal("B"))
++					Expect(idx[0].Artists).To(HaveLen(1))
++					Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
++					Expect(idx[1].ID).To(Equal("K"))
++					Expect(idx[1].Artists).To(HaveLen(1))
++					Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++				})
+ 			})
+ 
+-			// BFR Empty SortArtistName is not saved in the DB anymore
+-			XIt("returns the index when PreferSortTags is true and SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false, []int{1})
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(2))
+-				Expect(idx[0].ID).To(Equal("B"))
+-				Expect(idx[0].Artists).To(HaveLen(1))
+-				Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
+-				Expect(idx[1].ID).To(Equal("K"))
+-				Expect(idx[1].Artists).To(HaveLen(1))
+-				Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
+-			})
+-		})
++			When("PreferSortTags is false", func() {
++				BeforeEach(func() {
++					conf.Server.PreferSortTags = false
++				})
++				It("returns the index when SortArtistName is NOT empty", func() {
++					// Set SortArtistName to "Foo" for Beatles
++					artistBeatles.SortArtistName = "Foo"
++					er := repo.Put(&artistBeatles)
++					Expect(er).To(BeNil())
+ 
+-		When("PreferSortTags is false", func() {
+-			BeforeEach(func() {
+-				conf.Server.PreferSortTags = false
++					idx, err := repo.GetIndex(false, []int{1})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++					Expect(idx[0].ID).To(Equal("B"))
++					Expect(idx[0].Artists).To(HaveLen(1))
++					Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
++					Expect(idx[1].ID).To(Equal("K"))
++					Expect(idx[1].Artists).To(HaveLen(1))
++					Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++
++					// Restore the original value
++					artistBeatles.SortArtistName = ""
++					er = repo.Put(&artistBeatles)
++					Expect(er).To(BeNil())
++				})
++
++				It("returns the index when SortArtistName is empty", func() {
++					idx, err := repo.GetIndex(false, []int{1})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++					Expect(idx[0].ID).To(Equal("B"))
++					Expect(idx[0].Artists).To(HaveLen(1))
++					Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
++					Expect(idx[1].ID).To(Equal("K"))
++					Expect(idx[1].Artists).To(HaveLen(1))
++					Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++				})
+ 			})
+-			It("returns the index when SortArtistName is NOT empty", func() {
+-				// Set SortArtistName to "Foo" for Beatles
+-				artistBeatles.SortArtistName = "Foo"
+-				er := repo.Put(&artistBeatles)
+-				Expect(er).To(BeNil())
+ 
+-				idx, err := repo.GetIndex(false, []int{1})
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(2))
+-				Expect(idx[0].ID).To(Equal("B"))
+-				Expect(idx[0].Artists).To(HaveLen(1))
+-				Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
+-				Expect(idx[1].ID).To(Equal("K"))
+-				Expect(idx[1].Artists).To(HaveLen(1))
+-				Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++			When("filtering by role", func() {
++				var raw *artistRepository
++
++				BeforeEach(func() {
++					raw = repo.(*artistRepository)
++					// Add stats to library_artist table since stats are now stored per-library
++					composerStats := `{"composer": {"s": 1000, "m": 5, "a": 2}}`
++					producerStats := `{"producer": {"s": 500, "m": 3, "a": 1}}`
++
++					// Set Beatles as composer in library 1
++					_, err := raw.executeSQL(squirrel.Insert("library_artist").
++						Columns("library_id", "artist_id", "stats").
++						Values(1, artistBeatles.ID, composerStats).
++						Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
++					Expect(err).ToNot(HaveOccurred())
++
++					// Set Kraftwerk as producer in library 1
++					_, err = raw.executeSQL(squirrel.Insert("library_artist").
++						Columns("library_id", "artist_id", "stats").
++						Values(1, artistKraftwerk.ID, producerStats).
++						Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
++					Expect(err).ToNot(HaveOccurred())
++				})
+ 
+-				// Restore the original value
+-				artistBeatles.SortArtistName = ""
+-				er = repo.Put(&artistBeatles)
+-				Expect(er).To(BeNil())
++				AfterEach(func() {
++					// Clean up stats from library_artist table
++					_, _ = raw.executeSQL(squirrel.Update("library_artist").
++						Set("stats", "{}").
++						Where(squirrel.Eq{"artist_id": artistBeatles.ID, "library_id": 1}))
++					_, _ = raw.executeSQL(squirrel.Update("library_artist").
++						Set("stats", "{}").
++						Where(squirrel.Eq{"artist_id": artistKraftwerk.ID, "library_id": 1}))
++				})
++
++				It("returns only artists with the specified role", func() {
++					idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(1))
++					Expect(idx[0].ID).To(Equal("B"))
++					Expect(idx[0].Artists).To(HaveLen(1))
++					Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
++				})
++
++				It("returns artists with any of the specified roles", func() {
++					idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer, model.RoleProducer)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++
++					// Find Beatles and Kraftwerk in the results
++					var beatlesFound, kraftwerkFound bool
++					for _, index := range idx {
++						for _, artist := range index.Artists {
++							if artist.Name == artistBeatles.Name {
++								beatlesFound = true
++							}
++							if artist.Name == artistKraftwerk.Name {
++								kraftwerkFound = true
++							}
++						}
++					}
++					Expect(beatlesFound).To(BeTrue())
++					Expect(kraftwerkFound).To(BeTrue())
++				})
++
++				It("returns empty index when no artists have the specified role", func() {
++					idx, err := repo.GetIndex(false, []int{1}, model.RoleDirector)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(0))
++				})
+ 			})
+ 
+-			It("returns the index when SortArtistName is empty", func() {
+-				idx, err := repo.GetIndex(false, []int{1})
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(2))
+-				Expect(idx[0].ID).To(Equal("B"))
+-				Expect(idx[0].Artists).To(HaveLen(1))
+-				Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
+-				Expect(idx[1].ID).To(Equal("K"))
+-				Expect(idx[1].Artists).To(HaveLen(1))
+-				Expect(idx[1].Artists[0].Name).To(Equal(artistKraftwerk.Name))
++			When("validating library IDs", func() {
++				It("returns nil when no library IDs are provided", func() {
++					idx, err := repo.GetIndex(false, []int{})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(BeNil())
++				})
++
++				It("returns artists when library IDs are provided (admin user sees all content)", func() {
++					// Admin users can see all content when valid library IDs are provided
++					idx, err := repo.GetIndex(false, []int{1})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(2))
++
++					// With non-existent library ID, admin users see no content because no artists are associated with that library
++					idx, err = repo.GetIndex(false, []int{999})
++					Expect(err).ToNot(HaveOccurred())
++					Expect(idx).To(HaveLen(0)) // Even admin users need valid library associations
++				})
+ 			})
+ 		})
+ 
+-		When("filtering by role", func() {
+-			var raw *artistRepository
++		Describe("MBID and Text Search", func() {
++			var lib2 model.Library
++			var lr model.LibraryRepository
++			var restrictedUser model.User
++			var restrictedRepo model.ArtistRepository
++			var headlessRepo model.ArtistRepository
+ 
+ 			BeforeEach(func() {
+-				raw = repo.(*artistRepository)
+-				// Add stats to library_artist table since stats are now stored per-library
+-				composerStats := `{"composer": {"s": 1000, "m": 5, "a": 2}}`
+-				producerStats := `{"producer": {"s": 500, "m": 3, "a": 1}}`
++				// Set up headless repo (no user context)
++				headlessRepo = NewArtistRepository(context.Background(), GetDBXBuilder())
+ 
+-				// Set Beatles as composer in library 1
+-				_, err := raw.executeSQL(squirrel.Insert("library_artist").
+-					Columns("library_id", "artist_id", "stats").
+-					Values(1, artistBeatles.ID, composerStats).
+-					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
++				// Create library for testing access restrictions
++				lib2 = model.Library{ID: 0, Name: "Artist Test Library", Path: "/artist/test/lib"}
++				lr = NewLibraryRepository(request.WithUser(GinkgoT().Context(), adminUser), GetDBXBuilder())
++				err := lr.Put(&lib2)
+ 				Expect(err).ToNot(HaveOccurred())
+ 
+-				// Set Kraftwerk as producer in library 1
+-				_, err = raw.executeSQL(squirrel.Insert("library_artist").
+-					Columns("library_id", "artist_id", "stats").
+-					Values(1, artistKraftwerk.ID, producerStats).
+-					Suffix("ON CONFLICT(library_id, artist_id) DO UPDATE SET stats = excluded.stats"))
+-				Expect(err).ToNot(HaveOccurred())
+-			})
++				// Create a user with access to only library 1
++				restrictedUser = createUserWithLibraries("search_user", []int{1})
+ 
+-			AfterEach(func() {
+-				// Clean up stats from library_artist table
+-				_, _ = raw.executeSQL(squirrel.Update("library_artist").
+-					Set("stats", "{}").
+-					Where(squirrel.Eq{"artist_id": artistBeatles.ID, "library_id": 1}))
+-				_, _ = raw.executeSQL(squirrel.Update("library_artist").
+-					Set("stats", "{}").
+-					Where(squirrel.Eq{"artist_id": artistKraftwerk.ID, "library_id": 1}))
+-			})
++				// Create repository context for the restricted user
++				ctx := request.WithUser(GinkgoT().Context(), restrictedUser)
++				restrictedRepo = NewArtistRepository(ctx, GetDBXBuilder())
+ 
+-			It("returns only artists with the specified role", func() {
+-				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer)
++				// Ensure both test artists are associated with library 1
++				err = lr.AddArtist(1, artistBeatles.ID)
+ 				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(1))
+-				Expect(idx[0].ID).To(Equal("B"))
+-				Expect(idx[0].Artists).To(HaveLen(1))
+-				Expect(idx[0].Artists[0].Name).To(Equal(artistBeatles.Name))
+-			})
+-
+-			It("returns artists with any of the specified roles", func() {
+-				idx, err := repo.GetIndex(false, []int{1}, model.RoleComposer, model.RoleProducer)
++				err = lr.AddArtist(1, artistKraftwerk.ID)
+ 				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(2))
+ 
+-				// Find Beatles and Kraftwerk in the results
+-				var beatlesFound, kraftwerkFound bool
+-				for _, index := range idx {
+-					for _, artist := range index.Artists {
+-						if artist.Name == artistBeatles.Name {
+-							beatlesFound = true
+-						}
+-						if artist.Name == artistKraftwerk.Name {
+-							kraftwerkFound = true
+-						}
+-					}
+-				}
+-				Expect(beatlesFound).To(BeTrue())
+-				Expect(kraftwerkFound).To(BeTrue())
++				// Create the restricted user in the database
++				ur := NewUserRepository(request.WithUser(GinkgoT().Context(), adminUser), GetDBXBuilder())
++				err = ur.Put(&restrictedUser)
++				Expect(err).ToNot(HaveOccurred())
++				err = ur.SetUserLibraries(restrictedUser.ID, []int{1})
++				Expect(err).ToNot(HaveOccurred())
+ 			})
+ 
+-			It("returns empty index when no artists have the specified role", func() {
+-				idx, err := repo.GetIndex(false, []int{1}, model.RoleDirector)
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(idx).To(HaveLen(0))
++			AfterEach(func() {
++				// Clean up library 2
++				lr := NewLibraryRepository(request.WithUser(GinkgoT().Context(), adminUser), GetDBXBuilder())
++				_ = lr.(*libraryRepository).delete(squirrel.Eq{"id": lib2.ID})
+ 			})
+-		})
+-	})
+ 
+-	Describe("dbArtist mapping", func() {
+-		var (
+-			artist *model.Artist
+-			dba    *dbArtist
+-		)
++			DescribeTable("MBID search behavior across different user types",
++				func(testRepo *model.ArtistRepository, shouldFind bool, testDesc string) {
++					// Create test artist with MBID
++					artistWithMBID := createTestArtistWithMBID("test-mbid-artist", "Test MBID Artist", "550e8400-e29b-41d4-a716-446655440010")
+ 
+-		BeforeEach(func() {
+-			artist = &model.Artist{ID: "1", Name: "Eddie Van Halen", SortArtistName: "Van Halen, Eddie"}
+-			dba = &dbArtist{Artist: artist}
+-		})
++					err := createArtistWithLibrary(*testRepo, &artistWithMBID, 1)
++					Expect(err).ToNot(HaveOccurred())
+ 
+-		Describe("PostScan", func() {
+-			It("parses stats and similar artists correctly", func() {
+-				stats := map[string]map[string]map[string]int64{
+-					"1": {
+-						"total":    {"s": 1000, "m": 10, "a": 2},
+-						"composer": {"s": 500, "m": 5, "a": 1},
+-					},
+-				}
+-				statsJSON, _ := json.Marshal(stats)
+-				dba.LibraryStatsJSON = string(statsJSON)
+-				dba.SimilarArtists = `[{"id":"2","Name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`
+-
+-				err := dba.PostScan()
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(dba.Artist.Size).To(Equal(int64(1000)))
+-				Expect(dba.Artist.SongCount).To(Equal(10))
+-				Expect(dba.Artist.AlbumCount).To(Equal(2))
+-				Expect(dba.Artist.Stats).To(HaveLen(1))
+-				Expect(dba.Artist.Stats[model.RoleFromString("composer")].Size).To(Equal(int64(500)))
+-				Expect(dba.Artist.Stats[model.RoleFromString("composer")].SongCount).To(Equal(5))
+-				Expect(dba.Artist.Stats[model.RoleFromString("composer")].AlbumCount).To(Equal(1))
+-				Expect(dba.Artist.SimilarArtists).To(HaveLen(2))
+-				Expect(dba.Artist.SimilarArtists[0].ID).To(Equal("2"))
+-				Expect(dba.Artist.SimilarArtists[0].Name).To(Equal("AC/DC"))
+-				Expect(dba.Artist.SimilarArtists[1].ID).To(BeEmpty())
+-				Expect(dba.Artist.SimilarArtists[1].Name).To(Equal("Test;With:Sep,Chars"))
+-			})
+-		})
++					// Test the search
++					results, err := (*testRepo).Search("550e8400-e29b-41d4-a716-446655440010", 0, 10)
++					Expect(err).ToNot(HaveOccurred())
+ 
+-		Describe("PostMapArgs", func() {
+-			It("maps empty similar artists correctly", func() {
+-				m := make(map[string]any)
+-				err := dba.PostMapArgs(m)
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(m).To(HaveKeyWithValue("similar_artists", "[]"))
+-			})
++					if shouldFind {
++						Expect(results).To(HaveLen(1), testDesc)
++						Expect(results[0].ID).To(Equal("test-mbid-artist"))
++					} else {
++						Expect(results).To(BeEmpty(), testDesc)
++					}
+ 
+-			It("maps similar artists and full text correctly", func() {
+-				artist.SimilarArtists = []model.Artist{
+-					{ID: "2", Name: "AC/DC"},
+-					{Name: "Test;With:Sep,Chars"},
+-				}
+-				m := make(map[string]any)
+-				err := dba.PostMapArgs(m)
++					// Clean up
++					if raw, ok := (*testRepo).(*artistRepository); ok {
++						_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": artistWithMBID.ID}))
++					}
++				},
++				Entry("Admin user can find artist by MBID", &repo, true, "Admin should find MBID artist"),
++				Entry("Restricted user can find artist by MBID in accessible library", &restrictedRepo, true, "Restricted user should find MBID artist in accessible library"),
++				Entry("Headless process can find artist by MBID", &headlessRepo, true, "Headless process should find MBID artist"),
++			)
++
++			It("prevents restricted user from finding artist by MBID when not in accessible library", func() {
++				// Create an artist in library 2 (not accessible to restricted user)
++				inaccessibleArtist := createTestArtistWithMBID("inaccessible-mbid-artist", "Inaccessible MBID Artist", "a74b1b7f-71a5-4011-9441-d0b5e4122711")
++				err := repo.Put(&inaccessibleArtist)
+ 				Expect(err).ToNot(HaveOccurred())
+-				Expect(m).To(HaveKeyWithValue("similar_artists", `[{"id":"2","name":"AC/DC"},{"name":"Test;With:Sep,Chars"}]`))
+-				Expect(m).To(HaveKeyWithValue("full_text", " eddie halen van"))
+-			})
+ 
+-			It("does not override empty sort_artist_name and mbz_artist_id", func() {
+-				m := map[string]any{
+-					"sort_artist_name": "",
+-					"mbz_artist_id":    "",
+-				}
+-				err := dba.PostMapArgs(m)
++				// Add to library 2 (not accessible to restricted user)
++				err = lr.AddArtist(lib2.ID, inaccessibleArtist.ID)
+ 				Expect(err).ToNot(HaveOccurred())
+-				Expect(m).ToNot(HaveKey("sort_artist_name"))
+-				Expect(m).ToNot(HaveKey("mbz_artist_id"))
+-			})
+-		})
+-
+-		Describe("Missing artist visibility", func() {
+-			var raw *artistRepository
+-			var missing model.Artist
+ 
+-			insertMissing := func() {
+-				missing = model.Artist{ID: "m1", Name: "Missing", OrderArtistName: "missing"}
+-				Expect(repo.Put(&missing)).To(Succeed())
+-				raw = repo.(*artistRepository)
+-				_, err := raw.executeSQL(squirrel.Update(raw.tableName).Set("missing", true).Where(squirrel.Eq{"id": missing.ID}))
++				// Restricted user should not find this artist
++				results, err := restrictedRepo.Search("a74b1b7f-71a5-4011-9441-d0b5e4122711", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
++				Expect(results).To(BeEmpty())
+ 
+-				// Associate the existing fixture with library 1 for repository visibility.
+-				lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
+-				err = lr.AddArtist(1, missing.ID)
++				// But admin should find it
++				results, err = repo.Search("a74b1b7f-71a5-4011-9441-d0b5e4122711", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+-			}
++				Expect(results).To(HaveLen(1))
+ 
+-			removeMissing := func() {
+-				if raw != nil {
+-					_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": missing.ID}))
++				// Clean up
++				if raw, ok := repo.(*artistRepository); ok {
++					_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": inaccessibleArtist.ID}))
+ 				}
+-			}
++			})
+ 
+-			Context("regular user", func() {
+-				BeforeEach(func() {
+-					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, regularUser)
+-					repo = NewArtistRepository(ctx, GetDBXBuilder())
+-					insertMissing()
++			Context("Text Search", func() {
++				It("allows admin to find artists by name regardless of library", func() {
++					results, err := repo.Search("Beatles", 0, 10)
++					Expect(err).ToNot(HaveOccurred())
++					Expect(results).To(HaveLen(1))
++					Expect(results[0].Name).To(Equal("The Beatles"))
+ 				})
+ 
+-				AfterEach(func() { removeMissing() })
+-
+-				It("does not return missing artist in GetAll", func() {
+-					artists, err := repo.GetAll(model.QueryOptions{Filters: squirrel.Eq{"artist.missing": false}})
++				It("correctly prevents restricted user from finding artists by name when not in accessible library", func() {
++					// Create an artist in library 2 (not accessible to restricted user)
++					inaccessibleArtist := model.Artist{
++						ID:   "inaccessible-text-artist",
++						Name: "Unique Search Name Artist",
++					}
++					err := repo.Put(&inaccessibleArtist)
+ 					Expect(err).ToNot(HaveOccurred())
+-					Expect(artists).To(HaveLen(2))
+-				})
+ 
+-				It("does not return missing artist in Search", func() {
+-					res, err := repo.Search("missing", 0, 10, false)
++					// Add to library 2 (not accessible to restricted user)
++					err = lr.AddArtist(lib2.ID, inaccessibleArtist.ID)
+ 					Expect(err).ToNot(HaveOccurred())
+-					Expect(res).To(BeEmpty())
+-				})
+ 
+-				It("does not return missing artist in GetIndex", func() {
+-					idx, err := repo.GetIndex(false, []int{1})
++					// Restricted user should not find this artist
++					results, err := restrictedRepo.Search("Unique Search Name", 0, 10)
+ 					Expect(err).ToNot(HaveOccurred())
+-					// Only 2 artists should be present
+-					total := 0
+-					for _, ix := range idx {
+-						total += len(ix.Artists)
++					Expect(results).To(BeEmpty(), "Text search should respect library filtering")
++
++					// Clean up
++					if raw, ok := repo.(*artistRepository); ok {
++						_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": inaccessibleArtist.ID}))
+ 					}
+-					Expect(total).To(Equal(2))
+ 				})
+ 			})
+ 
+-			Context("admin user", func() {
+-				BeforeEach(func() {
+-					ctx := log.NewContext(context.TODO())
+-					ctx = request.WithUser(ctx, adminUser)
+-					repo = NewArtistRepository(ctx, GetDBXBuilder())
+-					insertMissing()
++			Context("Headless Processes (No User Context)", func() {
++				It("should see all artists from all libraries when no user is in context", func() {
++					// Add artists to different libraries
++					err := lr.AddArtist(lib2.ID, artistBeatles.ID)
++					Expect(err).ToNot(HaveOccurred())
++
++					// Headless processes should see all artists regardless of library
++					artists, err := headlessRepo.GetAll()
++					Expect(err).ToNot(HaveOccurred())
++
++					// Should see all artists from all libraries
++					found := false
++					for _, artist := range artists {
++						if artist.ID == artistBeatles.ID {
++							found = true
++							break
++						}
++					}
++					Expect(found).To(BeTrue(), "Headless process should see artists from all libraries")
+ 				})
+ 
+-				AfterEach(func() { removeMissing() })
++				It("should allow headless processes to apply explicit library_id filters", func() {
++					// Add artists to different libraries
++					err := lr.AddArtist(lib2.ID, artistBeatles.ID)
++					Expect(err).ToNot(HaveOccurred())
+ 
+-				It("returns missing artist in GetAll", func() {
+-					artists, err := repo.GetAll()
++					// Filter by specific library
++					artists, err := headlessRepo.GetAll(model.QueryOptions{
++						Filters: squirrel.Eq{"library_id": lib2.ID},
++					})
+ 					Expect(err).ToNot(HaveOccurred())
+-					Expect(artists).To(HaveLen(3))
++
++					// Should see only artists from the specified library
++					for _, artist := range artists {
++						if artist.ID == artistBeatles.ID {
++							return // Found the expected artist
++						}
++					}
++					Expect(false).To(BeTrue(), "Should find artist from specified library")
+ 				})
+ 
+-				It("returns missing artist in Search", func() {
+-					res, err := repo.Search("missing", 0, 10, true)
++				It("should get individual artists when no user is in context", func() {
++					// Add artist to a library
++					err := lr.AddArtist(lib2.ID, artistBeatles.ID)
+ 					Expect(err).ToNot(HaveOccurred())
+-					Expect(res).To(HaveLen(1))
+-				})
+ 
+-				It("returns missing artist in GetIndex when included", func() {
+-					idx, err := repo.GetIndex(true, []int{1})
++					// Headless process should be able to get the artist
++					artist, err := headlessRepo.Get(artistBeatles.ID)
+ 					Expect(err).ToNot(HaveOccurred())
+-					total := 0
+-					for _, ix := range idx {
+-						total += len(ix.Artists)
+-					}
+-					Expect(total).To(Equal(3))
++					Expect(artist.ID).To(Equal(artistBeatles.ID))
+ 				})
+ 			})
+ 		})
+-	})
+ 
+-	Describe("roleFilter", func() {
+-		It("filters out roles not present in the participants model", func() {
+-			Expect(roleFilter("", "artist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.artist.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "albumartist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.albumartist.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "composer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.composer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "conductor")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.conductor.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "lyricist")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.lyricist.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "arranger")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.arranger.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "producer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.producer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "director")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.director.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "engineer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.engineer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "mixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.mixer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "remixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.remixer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "djmixer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.djmixer.m') IS NOT NULL)")))
+-			Expect(roleFilter("", "performer")).To(Equal(squirrel.Expr("EXISTS (SELECT 1 FROM library_artist WHERE library_artist.artist_id = artist.id AND JSON_EXTRACT(library_artist.stats, '$.performer.m') IS NOT NULL)")))
+-
+-			Expect(roleFilter("", "wizard")).To(Equal(squirrel.Eq{"1": 2}))
+-			Expect(roleFilter("", "songanddanceman")).To(Equal(squirrel.Eq{"1": 2}))
+-			Expect(roleFilter("", "artist') SELECT LIKE(CHAR(65,66,67,68,69,70,71),UPPER(HEX(RANDOMBLOB(500000000/2))))--")).To(Equal(squirrel.Eq{"1": 2}))
++		Describe("Admin User Library Access", func() {
++			It("sees all artists regardless of library permissions", func() {
++				count, err := repo.CountAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(count).To(Equal(int64(2)))
++
++				artists, err := repo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(artists).To(HaveLen(2))
++
++				exists, err := repo.Exists(artistBeatles.ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(exists).To(BeTrue())
++			})
++		})
++
++		Describe("Missing Artist Handling", func() {
++			var missingArtist model.Artist
++			var raw *artistRepository
++
++			BeforeEach(func() {
++				raw = repo.(*artistRepository)
++				missingArtist = model.Artist{ID: "missing_test", Name: "Missing Artist", OrderArtistName: "missing artist"}
++
++				// Create and mark as missing
++				err := createArtistWithLibrary(repo, &missingArtist, 1)
++				Expect(err).ToNot(HaveOccurred())
++
++				_, err = raw.executeSQL(squirrel.Update(raw.tableName).Set("missing", true).Where(squirrel.Eq{"id": missingArtist.ID}))
++				Expect(err).ToNot(HaveOccurred())
++			})
++
++			AfterEach(func() {
++				_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": missingArtist.ID}))
++			})
++
++			It("missing artists are never returned by search", func() {
++				// Should see missing artist in GetAll by default for admin users
++				artists, err := repo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(artists).To(HaveLen(3)) // Including the missing artist
++
++				// Search never returns missing artists (hardcoded behavior)
++				results, err := repo.Search("Missing Artist", 0, 10)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(results).To(BeEmpty())
++			})
+ 		})
+ 	})
+ 
+-	Context("MBID Search", func() {
+-		var artistWithMBID model.Artist
+-		var raw *artistRepository
++	Context("Regular User Operations", func() {
++		var restrictedRepo model.ArtistRepository
++		var unauthorizedUser model.User
+ 
+ 		BeforeEach(func() {
+-			raw = repo.(*artistRepository)
+-			// Create a test artist with MBID
+-			artistWithMBID = model.Artist{
+-				ID:          "test-mbid-artist",
+-				Name:        "Test MBID Artist",
+-				MbzArtistID: "550e8400-e29b-41d4-a716-446655440010", // Valid UUID v4
+-			}
+-
+-			// Insert the test artist with its canonical library association.
+-			err := repo.Put(&artistWithMBID)
+-			Expect(err).ToNot(HaveOccurred())
+-			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
+-			err = lr.AddArtist(1, artistWithMBID.ID)
+-			Expect(err).ToNot(HaveOccurred())
+-		})
++			// Create a user without access to any libraries
++			unauthorizedUser = model.User{ID: "restricted_user", UserName: "restricted", Name: "Restricted User", Email: "restricted@test.com", IsAdmin: false}
+ 
+-		AfterEach(func() {
+-			// Clean up test data using direct SQL
+-			_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": artistWithMBID.ID}))
++			// Create repository context for the unauthorized user
++			ctx := GinkgoT().Context()
++			ctx = request.WithUser(ctx, unauthorizedUser)
++			restrictedRepo = NewArtistRepository(ctx, GetDBXBuilder())
+ 		})
+ 
+-		It("finds artist by mbz_artist_id", func() {
+-			results, err := repo.Search("550e8400-e29b-41d4-a716-446655440010", 0, 10, false)
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(results).To(HaveLen(1))
+-			Expect(results[0].ID).To(Equal("test-mbid-artist"))
+-			Expect(results[0].Name).To(Equal("Test MBID Artist"))
+-		})
++		Describe("Library Access Restrictions", func() {
++			It("CountAll returns 0 for users without library access", func() {
++				count, err := restrictedRepo.CountAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(count).To(Equal(int64(0)))
++			})
++
++			It("GetAll returns empty list for users without library access", func() {
++				artists, err := restrictedRepo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(artists).To(BeEmpty())
++			})
++
++			It("Exists returns false for existing artists when user has no library access", func() {
++				// These artists exist in the DB but the user has no access to them
++				exists, err := restrictedRepo.Exists(artistBeatles.ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(exists).To(BeFalse())
++
++				exists, err = restrictedRepo.Exists(artistKraftwerk.ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(exists).To(BeFalse())
++			})
++
++			It("Get returns ErrNotFound for existing artists when user has no library access", func() {
++				_, err := restrictedRepo.Get(artistBeatles.ID)
++				Expect(err).To(Equal(model.ErrNotFound))
++
++				_, err = restrictedRepo.Get(artistKraftwerk.ID)
++				Expect(err).To(Equal(model.ErrNotFound))
++			})
+ 
+-		It("returns empty result when MBID is not found", func() {
+-			results, err := repo.Search("550e8400-e29b-41d4-a716-446655440099", 0, 10, false)
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(results).To(BeEmpty())
++			It("Search returns empty results for users without library access", func() {
++				results, err := restrictedRepo.Search("Beatles", 0, 10)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(results).To(BeEmpty())
++
++				results, err = restrictedRepo.Search("Kraftwerk", 0, 10)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(results).To(BeEmpty())
++			})
++
++			It("GetIndex returns empty index for users without library access", func() {
++				idx, err := restrictedRepo.GetIndex(false, []int{1})
++				Expect(err).ToNot(HaveOccurred())
++				Expect(idx).To(HaveLen(0))
++			})
+ 		})
+ 
+-		It("handles includeMissing parameter for MBID search", func() {
+-			// Create a missing artist with MBID
+-			missingArtist := model.Artist{
+-				ID:          "test-missing-mbid-artist",
+-				Name:        "Test Missing MBID Artist",
+-				MbzArtistID: "550e8400-e29b-41d4-a716-446655440012",
+-				Missing:     true,
+-			}
+-
+-			err := repo.Put(&missingArtist)
+-			Expect(err).ToNot(HaveOccurred())
+-			lr := NewLibraryRepository(request.WithUser(log.NewContext(context.TODO()), adminUser), GetDBXBuilder())
+-			err = lr.AddArtist(1, missingArtist.ID)
+-			Expect(err).ToNot(HaveOccurred())
+-
+-			// Should not find missing artist when includeMissing is false
+-			results, err := repo.Search("550e8400-e29b-41d4-a716-446655440012", 0, 10, false)
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(results).To(BeEmpty())
+-
+-			// Should find missing artist when includeMissing is true
+-			results, err = repo.Search("550e8400-e29b-41d4-a716-446655440012", 0, 10, true)
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(results).To(HaveLen(1))
+-			Expect(results[0].ID).To(Equal("test-missing-mbid-artist"))
+-
+-			// Clean up
+-			_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": missingArtist.ID}))
++		Context("when user gains library access", func() {
++			BeforeEach(func() {
++				ctx := GinkgoT().Context()
++				// Give the user access to library 1
++				ur := NewUserRepository(request.WithUser(ctx, adminUser), GetDBXBuilder())
++
++				// First create the user if not exists
++				err := ur.Put(&unauthorizedUser)
++				Expect(err).ToNot(HaveOccurred())
++
++				// Then add library access
++				err = ur.SetUserLibraries(unauthorizedUser.ID, []int{1})
++				Expect(err).ToNot(HaveOccurred())
++
++				// Update the user object with the libraries to simulate middleware behavior
++				libraries, err := ur.GetUserLibraries(unauthorizedUser.ID)
++				Expect(err).ToNot(HaveOccurred())
++				unauthorizedUser.Libraries = libraries
++
++				// Recreate repository context with updated user
++				ctx = request.WithUser(ctx, unauthorizedUser)
++				restrictedRepo = NewArtistRepository(ctx, GetDBXBuilder())
++			})
++
++			AfterEach(func() {
++				// Clean up: remove the user's library access
++				ur := NewUserRepository(request.WithUser(GinkgoT().Context(), adminUser), GetDBXBuilder())
++				_ = ur.SetUserLibraries(unauthorizedUser.ID, []int{})
++			})
++
++			It("CountAll returns correct count after gaining access", func() {
++				count, err := restrictedRepo.CountAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(count).To(Equal(int64(2))) // Beatles and Kraftwerk
++			})
++
++			It("GetAll returns artists after gaining access", func() {
++				artists, err := restrictedRepo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(artists).To(HaveLen(2))
++
++				var names []string
++				for _, artist := range artists {
++					names = append(names, artist.Name)
++				}
++				Expect(names).To(ContainElements("The Beatles", "Kraftwerk"))
++			})
++
++			It("Exists returns true for accessible artists", func() {
++				exists, err := restrictedRepo.Exists(artistBeatles.ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(exists).To(BeTrue())
++
++				exists, err = restrictedRepo.Exists(artistKraftwerk.ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(exists).To(BeTrue())
++			})
++
++			It("GetIndex returns artists with proper library filtering", func() {
++				// With valid library access, should see artists
++				idx, err := restrictedRepo.GetIndex(false, []int{1})
++				Expect(err).ToNot(HaveOccurred())
++				Expect(idx).To(HaveLen(2))
++
++				// With non-existent library ID, should see nothing (non-admin user)
++				idx, err = restrictedRepo.GetIndex(false, []int{999})
++				Expect(err).ToNot(HaveOccurred())
++				Expect(idx).To(HaveLen(0))
++			})
+ 		})
+ 	})
+ })
++
++// Helper function to create an artist with proper library association.
++// This ensures test artists always have library_artist associations to avoid orphaned artists in tests.
++func createArtistWithLibrary(repo model.ArtistRepository, artist *model.Artist, libraryID int) error {
++	err := repo.Put(artist)
++	if err != nil {
++		return err
++	}
++
++	// Add the artist to the specified library
++	lr := NewLibraryRepository(request.WithUser(GinkgoT().Context(), adminUser), GetDBXBuilder())
++	return lr.AddArtist(libraryID, artist.ID)
++}
+diff --git a/persistence/genre_repository.go b/persistence/genre_repository.go
+index 311eb0a68d97c09515d00b1f9621214cd9e46719..5857350a68696d86f96d6f296afaab181a8391c9 100644
+--- a/persistence/genre_repository.go
++++ b/persistence/genre_repository.go
+@@ -21,7 +21,7 @@ func NewGenreRepository(ctx context.Context, db dbx.Builder) model.GenreReposito
+ }
+ 
+ func (r *genreRepository) selectGenre(opt ...model.QueryOptions) SelectBuilder {
+-	return r.newSelect(opt...)
++	return r.newSelect(opt...).Columns("tag.tag_value as name")
+ }
+ 
+ func (r *genreRepository) GetAll(opt ...model.QueryOptions) (model.Genres, error) {
+diff --git a/persistence/genre_repository_test.go b/persistence/genre_repository_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..67e84ce513108fb86ef6c3a66da26a1413244f59
+--- /dev/null
++++ b/persistence/genre_repository_test.go
+@@ -0,0 +1,329 @@
++package persistence
++
++import (
++	"context"
++	"slices"
++	"strings"
++
++	"github.com/Masterminds/squirrel"
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/id"
++	"github.com/navidrome/navidrome/model/request"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++var _ = Describe("GenreRepository", func() {
++	var repo model.GenreRepository
++	var restRepo model.ResourceRepository
++	var tagRepo model.TagRepository
++	var ctx context.Context
++
++	BeforeEach(func() {
++		ctx = request.WithUser(GinkgoT().Context(), model.User{ID: "userid", UserName: "johndoe", IsAdmin: true})
++		genreRepo := NewGenreRepository(ctx, GetDBXBuilder())
++		repo = genreRepo
++		restRepo = genreRepo.(model.ResourceRepository)
++		tagRepo = NewTagRepository(ctx, GetDBXBuilder())
++
++		// Clear any existing tags to ensure test isolation
++		db := GetDBXBuilder()
++		_, err := db.NewQuery("DELETE FROM tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Ensure library 1 exists and user has access to it
++		_, err = db.NewQuery("INSERT OR IGNORE INTO library (id, name, path, default_new_users) VALUES (1, 'Test Library', '/test', true)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("INSERT OR IGNORE INTO user_library (user_id, library_id) VALUES ('userid', 1)").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Add comprehensive test data that covers all test scenarios
++		newTag := func(name, value string) model.Tag {
++			return model.Tag{ID: id.NewTagID(name, value), TagName: model.TagName(name), TagValue: value}
++		}
++
++		err = tagRepo.Add(1,
++			newTag("genre", "rock"),
++			newTag("genre", "pop"),
++			newTag("genre", "jazz"),
++			newTag("genre", "electronic"),
++			newTag("genre", "classical"),
++			newTag("genre", "ambient"),
++			newTag("genre", "techno"),
++			newTag("genre", "house"),
++			newTag("genre", "trance"),
++			newTag("genre", "Alternative Rock"),
++			newTag("genre", "Blues"),
++			newTag("genre", "Country"),
++			// These should not be counted as genres
++			newTag("mood", "happy"),
++			newTag("mood", "ambient"),
++		)
++		Expect(err).ToNot(HaveOccurred())
++	})
++
++	Describe("GetAll", func() {
++		It("should return all genres", func() {
++			genres, err := repo.GetAll()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(genres).To(HaveLen(12))
++
++			// Verify that all returned items are genres (TagName = "genre")
++			genreNames := make([]string, len(genres))
++			for i, genre := range genres {
++				genreNames[i] = genre.Name
++			}
++			Expect(genreNames).To(ContainElement("rock"))
++			Expect(genreNames).To(ContainElement("pop"))
++			Expect(genreNames).To(ContainElement("jazz"))
++			// Should not contain mood tags
++			Expect(genreNames).ToNot(ContainElement("happy"))
++		})
++
++		It("should support query options", func() {
++			// Test with limiting results
++			genres, err := repo.GetAll(model.QueryOptions{Max: 1})
++			Expect(err).ToNot(HaveOccurred())
++			Expect(genres).To(HaveLen(1))
++		})
++
++		It("should handle empty results gracefully", func() {
++			// Clear all genre tags
++			_, err := GetDBXBuilder().NewQuery("DELETE FROM tag WHERE tag_name = 'genre'").Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			genres, err := repo.GetAll()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(genres).To(BeEmpty())
++		})
++		Describe("filtering and sorting", func() {
++			It("should filter by name using like match", func() {
++				// Test filtering by partial name match using the "name" filter which maps to containsFilter("tag_value")
++				options := model.QueryOptions{
++					Filters: squirrel.Like{"tag_value": "%rock%"}, // Direct field access
++				}
++				genres, err := repo.GetAll(options)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(genres).To(HaveLen(2)) // Should match "rock" and "Alternative Rock"
++
++				// Verify all returned genres contain "rock" in their name
++				for _, genre := range genres {
++					Expect(strings.ToLower(genre.Name)).To(ContainSubstring("rock"))
++				}
++			})
++
++			It("should sort by name in ascending order", func() {
++				// Test sorting by name with the fixed mapping
++				options := model.QueryOptions{
++					Filters: squirrel.Like{"tag_value": "%e%"}, // Should match genres containing "e"
++					Sort:    "name",
++				}
++				genres, err := repo.GetAll(options)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(genres).To(HaveLen(7))
++
++				Expect(slices.IsSortedFunc(genres, func(a, b model.Genre) int {
++					return strings.Compare(b.Name, a.Name) // Inverted to check descending order
++				}))
++			})
++
++			It("should sort by name in descending order", func() {
++				// Test sorting by name in descending order
++				options := model.QueryOptions{
++					Filters: squirrel.Like{"tag_value": "%e%"}, // Should match genres containing "e"
++					Sort:    "name",
++					Order:   "desc",
++				}
++				genres, err := repo.GetAll(options)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(genres).To(HaveLen(7))
++
++				Expect(slices.IsSortedFunc(genres, func(a, b model.Genre) int {
++					return strings.Compare(a.Name, b.Name)
++				}))
++			})
++		})
++	})
++
++	Describe("Count", func() {
++		It("should return correct count of genres", func() {
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(Equal(int64(12))) // We have 12 genre tags
++		})
++
++		It("should handle zero count", func() {
++			// Clear all genre tags
++			_, err := GetDBXBuilder().NewQuery("DELETE FROM tag WHERE tag_name = 'genre'").Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(BeZero())
++		})
++
++		It("should only count genre tags", func() {
++			// Add a non-genre tag
++			nonGenreTag := model.Tag{
++				ID:       id.NewTagID("mood", "energetic"),
++				TagName:  "mood",
++				TagValue: "energetic",
++			}
++			err := tagRepo.Add(1, nonGenreTag)
++			Expect(err).ToNot(HaveOccurred())
++
++			count, err := restRepo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			// Count should not include the mood tag
++			Expect(count).To(Equal(int64(12))) // Should still be 12 genre tags
++		})
++
++		It("should filter by name using like match", func() {
++			// Test filtering by partial name match using the "name" filter which maps to containsFilter("tag_value")
++			options := rest.QueryOptions{
++				Filters: map[string]interface{}{"name": "%rock%"},
++			}
++			count, err := restRepo.Count(options)
++			Expect(err).ToNot(HaveOccurred())
++			Expect(count).To(BeNumerically("==", 2))
++		})
++	})
++
++	Describe("Read", func() {
++		It("should return existing genre", func() {
++			// Use one of the existing genres from our consolidated dataset
++			genreID := id.NewTagID("genre", "rock")
++			result, err := restRepo.Read(genreID)
++			Expect(err).ToNot(HaveOccurred())
++			genre := result.(*model.Genre)
++			Expect(genre.ID).To(Equal(genreID))
++			Expect(genre.Name).To(Equal("rock"))
++		})
++
++		It("should return error for non-existent genre", func() {
++			_, err := restRepo.Read("non-existent-id")
++			Expect(err).To(HaveOccurred())
++		})
++
++		It("should not return non-genre tags", func() {
++			moodID := id.NewTagID("mood", "happy") // This exists as a mood tag, not genre
++			_, err := restRepo.Read(moodID)
++			Expect(err).To(HaveOccurred()) // Should not find it as a genre
++		})
++	})
++
++	Describe("ReadAll", func() {
++		It("should return all genres through ReadAll", func() {
++			result, err := restRepo.ReadAll()
++			Expect(err).ToNot(HaveOccurred())
++			genres := result.(model.Genres)
++			Expect(genres).To(HaveLen(12)) // We have 12 genre tags
++
++			genreNames := make([]string, len(genres))
++			for i, genre := range genres {
++				genreNames[i] = genre.Name
++			}
++			// Check for some of our consolidated dataset genres
++			Expect(genreNames).To(ContainElement("rock"))
++			Expect(genreNames).To(ContainElement("pop"))
++			Expect(genreNames).To(ContainElement("jazz"))
++		})
++
++		It("should support rest query options", func() {
++			result, err := restRepo.ReadAll()
++			Expect(err).ToNot(HaveOccurred())
++			Expect(result).ToNot(BeNil())
++		})
++	})
++
++	Describe("Library Filtering", func() {
++		Context("Headless Processes (No User Context)", func() {
++			var headlessRepo model.GenreRepository
++			var headlessRestRepo model.ResourceRepository
++
++			BeforeEach(func() {
++				// Create a repository with no user context (headless)
++				headlessGenreRepo := NewGenreRepository(context.Background(), GetDBXBuilder())
++				headlessRepo = headlessGenreRepo
++				headlessRestRepo = headlessGenreRepo.(model.ResourceRepository)
++
++				// Add genres to different libraries
++				db := GetDBXBuilder()
++				_, err := db.NewQuery("INSERT OR IGNORE INTO library (id, name, path) VALUES (2, 'Test Library 2', '/test2')").Execute()
++				Expect(err).ToNot(HaveOccurred())
++
++				// Add tags to different libraries
++				newTag := func(name, value string) model.Tag {
++					return model.Tag{ID: id.NewTagID(name, value), TagName: model.TagName(name), TagValue: value}
++				}
++
++				err = tagRepo.Add(2, newTag("genre", "jazz"))
++				Expect(err).ToNot(HaveOccurred())
++			})
++
++			It("should see all genres from all libraries when no user is in context", func() {
++				// Headless processes should see all genres regardless of library
++				genres, err := headlessRepo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++
++				// Should see genres from all libraries
++				var genreNames []string
++				for _, genre := range genres {
++					genreNames = append(genreNames, genre.Name)
++				}
++
++				// Should include both rock (library 1) and jazz (library 2)
++				Expect(genreNames).To(ContainElement("rock"))
++				Expect(genreNames).To(ContainElement("jazz"))
++			})
++
++			It("should count all genres from all libraries when no user is in context", func() {
++				count, err := headlessRestRepo.Count()
++				Expect(err).ToNot(HaveOccurred())
++
++				// Should count all genres from all libraries
++				Expect(count).To(BeNumerically(">=", 2))
++			})
++
++			It("should allow headless processes to apply explicit library_id filters", func() {
++				// Filter by specific library
++				genres, err := headlessRestRepo.ReadAll(rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": 2},
++				})
++				Expect(err).ToNot(HaveOccurred())
++
++				genreList := genres.(model.Genres)
++				// Should see only genres from library 2
++				Expect(genreList).To(HaveLen(1))
++				Expect(genreList[0].Name).To(Equal("jazz"))
++			})
++
++			It("should get individual genres when no user is in context", func() {
++				// Get all genres first to find an ID
++				genres, err := headlessRepo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++				Expect(genres).ToNot(BeEmpty())
++
++				// Headless process should be able to get the genre
++				genre, err := headlessRestRepo.Read(genres[0].ID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(genre).ToNot(BeNil())
++			})
++		})
++	})
++
++	Describe("EntityName", func() {
++		It("should return correct entity name", func() {
++			name := restRepo.EntityName()
++			Expect(name).To(Equal("tag")) // Genre repository uses tag table
++		})
++	})
++
++	Describe("NewInstance", func() {
++		It("should return new genre instance", func() {
++			instance := restRepo.NewInstance()
++			Expect(instance).To(BeAssignableToTypeOf(&model.Genre{}))
++		})
++	})
++})
+diff --git a/persistence/mediafile_repository.go b/persistence/mediafile_repository.go
+index 7c2ac577815303ef1300d7953b9bd29460d04d80..e7883947a73e27650201f487fd75b4390b64dabf 100644
+--- a/persistence/mediafile_repository.go
++++ b/persistence/mediafile_repository.go
+@@ -339,15 +339,15 @@ func (r *mediaFileRepository) FindRecentFilesByProperties(missing model.MediaFil
+ 	return res.toModels(), nil
+ }
+ 
+-func (r *mediaFileRepository) Search(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (model.MediaFiles, error) {
++func (r *mediaFileRepository) Search(q string, offset int, size int, options ...model.QueryOptions) (model.MediaFiles, error) {
+ 	var res dbMediaFiles
+ 	if uuid.Validate(q) == nil {
+-		err := r.searchByMBID(r.selectMediaFile(options...), q, []string{"mbz_recording_id", "mbz_release_track_id"}, includeMissing, &res)
++		err := r.searchByMBID(r.selectMediaFile(options...), q, []string{"mbz_recording_id", "mbz_release_track_id"}, &res)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by MBID %q: %w", q, err)
+ 		}
+ 	} else {
+-		err := r.doSearch(r.selectMediaFile(options...), q, offset, size, includeMissing, &res, "title")
++		err := r.doSearch(r.selectMediaFile(options...), q, offset, size, &res, "media_file.rowid", "title")
+ 		if err != nil {
+ 			return nil, fmt.Errorf("searching media_file by query %q: %w", q, err)
+ 		}
+diff --git a/persistence/mediafile_repository_test.go b/persistence/mediafile_repository_test.go
+index b1153b3177caf3abfa9df6c37a1fe9a20143eded..002b82499944fd12e747be3f86a66f09b8502de7 100644
+--- a/persistence/mediafile_repository_test.go
++++ b/persistence/mediafile_repository_test.go
+@@ -314,7 +314,7 @@ var _ = Describe("MediaRepository", func() {
+ 	Describe("Search", func() {
+ 		Context("text search", func() {
+ 			It("finds media files by title", func() {
+-				results, err := mr.Search("Antenna", 0, 10, false)
++				results, err := mr.Search("Antenna", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(HaveLen(3)) // songAntenna, songAntennaWithLyrics, songAntenna2
+ 				for _, result := range results {
+@@ -323,7 +323,7 @@ var _ = Describe("MediaRepository", func() {
+ 			})
+ 
+ 			It("finds media files case insensitively", func() {
+-				results, err := mr.Search("antenna", 0, 10, false)
++				results, err := mr.Search("antenna", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(HaveLen(3))
+ 				for _, result := range results {
+@@ -332,7 +332,7 @@ var _ = Describe("MediaRepository", func() {
+ 			})
+ 
+ 			It("returns empty result when no matches found", func() {
+-				results, err := mr.Search("nonexistent", 0, 10, false)
++				results, err := mr.Search("nonexistent", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(BeEmpty())
+ 			})
+@@ -365,7 +365,7 @@ var _ = Describe("MediaRepository", func() {
+ 			})
+ 
+ 			It("finds media file by mbz_recording_id", func() {
+-				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440020", 0, 10, false)
++				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440020", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(HaveLen(1))
+ 				Expect(results[0].ID).To(Equal("test-mbid-mediafile"))
+@@ -373,7 +373,7 @@ var _ = Describe("MediaRepository", func() {
+ 			})
+ 
+ 			It("finds media file by mbz_release_track_id", func() {
+-				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440021", 0, 10, false)
++				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440021", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(HaveLen(1))
+ 				Expect(results[0].ID).To(Equal("test-mbid-mediafile"))
+@@ -381,12 +381,12 @@ var _ = Describe("MediaRepository", func() {
+ 			})
+ 
+ 			It("returns empty result when MBID is not found", func() {
+-				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440099", 0, 10, false)
++				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440099", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(BeEmpty())
+ 			})
+ 
+-			It("handles includeMissing parameter for MBID search", func() {
++			It("missing media files are never returned by search", func() {
+ 				// Create a missing media file with MBID
+ 				missingMediaFile := model.MediaFile{
+ 					ID:             "test-missing-mbid-mediafile",
+@@ -400,17 +400,11 @@ var _ = Describe("MediaRepository", func() {
+ 				err := mr.Put(&missingMediaFile)
+ 				Expect(err).ToNot(HaveOccurred())
+ 
+-				// Should not find missing media file when includeMissing is false
+-				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440022", 0, 10, false)
++				// Search never returns missing media files (hardcoded behavior)
++				results, err := mr.Search("550e8400-e29b-41d4-a716-446655440022", 0, 10)
+ 				Expect(err).ToNot(HaveOccurred())
+ 				Expect(results).To(BeEmpty())
+ 
+-				// Should find missing media file when includeMissing is true
+-				results, err = mr.Search("550e8400-e29b-41d4-a716-446655440022", 0, 10, true)
+-				Expect(err).ToNot(HaveOccurred())
+-				Expect(results).To(HaveLen(1))
+-				Expect(results[0].ID).To(Equal("test-missing-mbid-mediafile"))
+-
+ 				// Clean up
+ 				_, _ = raw.executeSQL(squirrel.Delete(raw.tableName).Where(squirrel.Eq{"id": missingMediaFile.ID}))
+ 			})
+diff --git a/persistence/persistence_suite_test.go b/persistence/persistence_suite_test.go
+index a3d5ebc74d23121177622c13d7c35063e0e5aae4..1007d84fe8b84c63969e29f829391413c0b2929f 100644
+--- a/persistence/persistence_suite_test.go
++++ b/persistence/persistence_suite_test.go
+@@ -218,7 +218,13 @@ var _ = BeforeSuite(func() {
+ 	if err := arr.SetStar(true, artistBeatles.ID); err != nil {
+ 		panic(err)
+ 	}
+-	ar, _ := arr.Get(artistBeatles.ID)
++	ar, err := arr.Get(artistBeatles.ID)
++	if err != nil {
++		panic(err)
++	}
++	if ar == nil {
++		panic("artist not found after SetStar")
++	}
+ 	artistBeatles.Starred = true
+ 	artistBeatles.StarredAt = ar.StarredAt
+ 	testArtists[1] = artistBeatles
+@@ -230,6 +236,9 @@ var _ = BeforeSuite(func() {
+ 	if err != nil {
+ 		panic(err)
+ 	}
++	if al == nil {
++		panic("album not found after SetStar")
++	}
+ 	albumRadioactivity.Starred = true
+ 	albumRadioactivity.StarredAt = al.StarredAt
+ 	testAlbums[2] = albumRadioactivity
+diff --git a/persistence/scrobble_buffer_repository.go b/persistence/scrobble_buffer_repository.go
+index ac0d8adebdf3d22a17257f57ffd4c577f66bb422..d0f88903ee12158b8ee5b7ee366e954201f8b39d 100644
+--- a/persistence/scrobble_buffer_repository.go
++++ b/persistence/scrobble_buffer_repository.go
+@@ -8,7 +8,6 @@ import (
+ 	. "github.com/Masterminds/squirrel"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/id"
+-	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/pocketbase/dbx"
+ )
+ 
+@@ -83,20 +82,7 @@ func (r *scrobbleBufferRepository) Next(service string, userId string) (*model.S
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-
+-	// Create context with user information for getParticipants call
+-	// This is needed because the artist repository requires user context for multi-library support
+-	userRepo := NewUserRepository(r.ctx, r.db)
+-	user, err := userRepo.Get(res.ScrobbleEntry.UserID)
+-	if err != nil {
+-		return nil, err
+-	}
+-	// Temporarily use user context for getParticipants
+-	originalCtx := r.ctx
+-	r.ctx = request.WithUser(r.ctx, *user)
+ 	res.ScrobbleEntry.Participants, err = r.getParticipants(&res.ScrobbleEntry.MediaFile)
+-	r.ctx = originalCtx // Restore original context
+-
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/persistence/share_repository.go b/persistence/share_repository.go
+index abe1ea6e6bfeb351da57b8bac3ab2dec328fb70a..d943943e007d47f244a54d70b4ce84c3e7736906 100644
+--- a/persistence/share_repository.go
++++ b/persistence/share_repository.go
+@@ -95,7 +95,7 @@ func (r *shareRepository) loadMedia(share *model.Share) error {
+ 		return err
+ 	case "album":
+ 		albumRepo := NewAlbumRepository(r.ctx, r.db)
+-		share.Albums, err = albumRepo.GetAll(model.QueryOptions{Filters: noMissing(Eq{"id": ids})})
++		share.Albums, err = albumRepo.GetAll(model.QueryOptions{Filters: noMissing(Eq{"album.id": ids})})
+ 		if err != nil {
+ 			return err
+ 		}
+diff --git a/persistence/share_repository_test.go b/persistence/share_repository_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..25211517524d8744f6c71b94bcac64e7882100bd
+--- /dev/null
++++ b/persistence/share_repository_test.go
+@@ -0,0 +1,133 @@
++package persistence
++
++import (
++	"context"
++	"time"
++
++	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/request"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++var _ = Describe("ShareRepository", func() {
++	var repo model.ShareRepository
++	var ctx context.Context
++	var adminUser = model.User{ID: "admin", UserName: "admin", IsAdmin: true}
++
++	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++		ctx = request.WithUser(log.NewContext(context.TODO()), adminUser)
++		repo = NewShareRepository(ctx, GetDBXBuilder())
++
++		// Insert the admin user into the database (required for foreign key constraint)
++		ur := NewUserRepository(ctx, GetDBXBuilder())
++		err := ur.Put(&adminUser)
++		Expect(err).ToNot(HaveOccurred())
++
++		// Clean up shares
++		db := GetDBXBuilder()
++		_, err = db.NewQuery("DELETE FROM share").Execute()
++		Expect(err).ToNot(HaveOccurred())
++	})
++
++	Describe("Headless Access", func() {
++		Context("Repository creation and basic operations", func() {
++			It("should create repository successfully with no user context", func() {
++				// Create repository with no user context (headless)
++				headlessRepo := NewShareRepository(context.Background(), GetDBXBuilder())
++				Expect(headlessRepo).ToNot(BeNil())
++			})
++
++			It("should handle GetAll for headless processes", func() {
++				// Create a simple share directly in database
++				shareID := "headless-test-share"
++				_, err := GetDBXBuilder().NewQuery(`
++					INSERT INTO share (id, user_id, description, resource_type, resource_ids, created_at, updated_at) 
++					VALUES ({:id}, {:user}, {:desc}, {:type}, {:ids}, {:created}, {:updated})
++				`).Bind(map[string]interface{}{
++					"id":      shareID,
++					"user":    adminUser.ID,
++					"desc":    "Headless Test Share",
++					"type":    "song",
++					"ids":     "song-1",
++					"created": time.Now(),
++					"updated": time.Now(),
++				}).Execute()
++				Expect(err).ToNot(HaveOccurred())
++
++				// Headless process should see all shares
++				headlessRepo := NewShareRepository(context.Background(), GetDBXBuilder())
++				shares, err := headlessRepo.GetAll()
++				Expect(err).ToNot(HaveOccurred())
++
++				found := false
++				for _, s := range shares {
++					if s.ID == shareID {
++						found = true
++						break
++					}
++				}
++				Expect(found).To(BeTrue(), "Headless process should see all shares")
++			})
++
++			It("should handle individual share retrieval for headless processes", func() {
++				// Create a simple share
++				shareID := "headless-get-share"
++				_, err := GetDBXBuilder().NewQuery(`
++					INSERT INTO share (id, user_id, description, resource_type, resource_ids, created_at, updated_at) 
++					VALUES ({:id}, {:user}, {:desc}, {:type}, {:ids}, {:created}, {:updated})
++				`).Bind(map[string]interface{}{
++					"id":      shareID,
++					"user":    adminUser.ID,
++					"desc":    "Headless Get Share",
++					"type":    "song",
++					"ids":     "song-2",
++					"created": time.Now(),
++					"updated": time.Now(),
++				}).Execute()
++				Expect(err).ToNot(HaveOccurred())
++
++				// Headless process should be able to get the share
++				headlessRepo := NewShareRepository(context.Background(), GetDBXBuilder())
++				share, err := headlessRepo.Get(shareID)
++				Expect(err).ToNot(HaveOccurred())
++				Expect(share.ID).To(Equal(shareID))
++				Expect(share.Description).To(Equal("Headless Get Share"))
++			})
++		})
++	})
++
++	Describe("SQL ambiguity fix verification", func() {
++		It("should handle share operations without SQL ambiguity errors", func() {
++			// This test verifies that the loadMedia function doesn't cause SQL ambiguity
++			// The key fix was using "album.id" instead of "id" in the album query filters
++
++			// Create a share that would trigger the loadMedia function
++			shareID := "sql-test-share"
++			_, err := GetDBXBuilder().NewQuery(`
++				INSERT INTO share (id, user_id, description, resource_type, resource_ids, created_at, updated_at) 
++				VALUES ({:id}, {:user}, {:desc}, {:type}, {:ids}, {:created}, {:updated})
++			`).Bind(map[string]interface{}{
++				"id":      shareID,
++				"user":    adminUser.ID,
++				"desc":    "SQL Test Share",
++				"type":    "album",
++				"ids":     "non-existent-album", // Won't find albums, but shouldn't cause SQL errors
++				"created": time.Now(),
++				"updated": time.Now(),
++			}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++
++			// The Get operation should work without SQL ambiguity errors
++			// even if no albums are found
++			share, err := repo.Get(shareID)
++			Expect(err).ToNot(HaveOccurred())
++			Expect(share.ID).To(Equal(shareID))
++			// Albums array should be empty since we used non-existent album ID
++			Expect(share.Albums).To(BeEmpty())
++		})
++	})
++})
+diff --git a/persistence/sql_base_repository.go b/persistence/sql_base_repository.go
+index 9e7a58713da0281768eb56d38e60b9ef8dce8e28..ce026a3c39f7e2547d8525fe9e1bed53c5a77087 100644
+--- a/persistence/sql_base_repository.go
++++ b/persistence/sql_base_repository.go
+@@ -205,27 +205,20 @@ func libraryIdFilter(_ string, value interface{}) Sqlizer {
+ func (r sqlRepository) applyLibraryFilter(sq SelectBuilder, tableName ...string) SelectBuilder {
+ 	user := loggedUser(r.ctx)
+ 
+-	// Admin users see all content
+-	if user.IsAdmin {
++	// If the user is an admin, or the user ID is invalid (e.g., when no user is logged in), skip the library filter
++	if user.IsAdmin || user.ID == invalidUserId {
+ 		return sq
+ 	}
+ 
+-	// Get user's accessible library IDs
+-	userID := loggedUser(r.ctx).ID
+-	if userID == invalidUserId {
+-		// No user context - return empty result set
+-		return sq.Where(Eq{"1": "0"})
+-	}
+-
+ 	table := r.tableName
+ 	if len(tableName) > 0 {
+ 		table = tableName[0]
+ 	}
+ 
++	// Get user's accessible library IDs
+ 	// Use subquery to filter by user's library access
+-	// This approach doesn't require DataStore in context
+ 	return sq.Where(Expr(table+".library_id IN ("+
+-		"SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)", userID))
++		"SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)", user.ID))
+ }
+ 
+ func (r sqlRepository) seedKey() string {
+diff --git a/persistence/sql_base_repository_test.go b/persistence/sql_base_repository_test.go
+index 7ba2a0021f65817c770adf7306514623769052f3..b46e2066b294a5641f702e71f32e8a75365b60db 100644
+--- a/persistence/sql_base_repository_test.go
++++ b/persistence/sql_base_repository_test.go
+@@ -223,4 +223,62 @@ var _ = Describe("sqlRepository", func() {
+ 			Expect(hasher.CurrentSeed(id)).To(Equal("seed"))
+ 		})
+ 	})
++
++	Describe("applyLibraryFilter", func() {
++		var sq squirrel.SelectBuilder
++
++		BeforeEach(func() {
++			sq = squirrel.Select("*").From("test_table")
++		})
++
++		Context("Admin User", func() {
++			BeforeEach(func() {
++				r.ctx = request.WithUser(context.Background(), model.User{ID: "admin", IsAdmin: true})
++			})
++
++			It("should not apply library filter for admin users", func() {
++				result := r.applyLibraryFilter(sq)
++				sql, _, _ := result.ToSql()
++				Expect(sql).To(Equal("SELECT * FROM test_table"))
++			})
++		})
++
++		Context("Regular User", func() {
++			BeforeEach(func() {
++				r.ctx = request.WithUser(context.Background(), model.User{ID: "user123", IsAdmin: false})
++			})
++
++			It("should apply library filter for regular users", func() {
++				result := r.applyLibraryFilter(sq)
++				sql, args, _ := result.ToSql()
++				Expect(sql).To(ContainSubstring("IN (SELECT ul.library_id FROM user_library ul WHERE ul.user_id = ?)"))
++				Expect(args).To(ContainElement("user123"))
++			})
++
++			It("should use custom table name when provided", func() {
++				result := r.applyLibraryFilter(sq, "custom_table")
++				sql, args, _ := result.ToSql()
++				Expect(sql).To(ContainSubstring("custom_table.library_id IN"))
++				Expect(args).To(ContainElement("user123"))
++			})
++		})
++
++		Context("Headless Process (No User Context)", func() {
++			BeforeEach(func() {
++				r.ctx = context.Background() // No user context
++			})
++
++			It("should not apply library filter for headless processes", func() {
++				result := r.applyLibraryFilter(sq)
++				sql, _, _ := result.ToSql()
++				Expect(sql).To(Equal("SELECT * FROM test_table"))
++			})
++
++			It("should not apply library filter even with custom table name", func() {
++				result := r.applyLibraryFilter(sq, "custom_table")
++				sql, _, _ := result.ToSql()
++				Expect(sql).To(Equal("SELECT * FROM test_table"))
++			})
++		})
++	})
+ })
+diff --git a/persistence/sql_participations.go b/persistence/sql_participations.go
+index 006b7063bf35d0b4e2b2917f9dfdde4dc00239fb..4345184f156c69f79bfd9b6e907ae002c05ae4ed 100644
+--- a/persistence/sql_participations.go
++++ b/persistence/sql_participations.go
+@@ -68,7 +68,7 @@ func (r sqlRepository) updateParticipants(itemID string, participants model.Part
+ func (r *sqlRepository) getParticipants(m *model.MediaFile) (model.Participants, error) {
+ 	ar := NewArtistRepository(r.ctx, r.db)
+ 	ids := m.Participants.AllIDs()
+-	artists, err := ar.GetAll(model.QueryOptions{Filters: Eq{"id": ids}})
++	artists, err := ar.GetAll(model.QueryOptions{Filters: Eq{"artist.id": ids}})
+ 	if err != nil {
+ 		return nil, fmt.Errorf("getting participants: %w", err)
+ 	}
+diff --git a/persistence/sql_search.go b/persistence/sql_search.go
+index d4d068945b134ae1f214890315ed428de18bdce3..0d3bfb7434232967d9cfb7937394a5addc124bae 100644
+--- a/persistence/sql_search.go
++++ b/persistence/sql_search.go
+@@ -15,7 +15,11 @@ func formatFullText(text ...string) string {
+ 	return " " + fullText
+ }
+ 
+-func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, includeMissing bool, results any, orderBys ...string) error {
++// doSearch performs a full-text search with the specified parameters.
++// The naturalOrder is used to sort results when no full-text filter is applied. It is useful for cases like
++// OpenSubsonic, where an empty search query should return all results in a natural order. Normally the parameter
++// should be `tableName + ".rowid"`, but some repositories (ex: artist) may use a different natural order.
++func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, results any, naturalOrder string, orderBys ...string) error {
+ 	q = strings.TrimSpace(q)
+ 	q = strings.TrimSuffix(q, "*")
+ 	if len(q) < 2 {
+@@ -27,23 +31,18 @@ func (r sqlRepository) doSearch(sq SelectBuilder, q string, offset, size int, in
+ 		sq = sq.Where(filter)
+ 		sq = sq.OrderBy(orderBys...)
+ 	} else {
+-		// If the filter is empty, we sort by id.
+ 		// This is to speed up the results of `search3?query=""`, for OpenSubsonic
+-		sq = sq.OrderBy(r.tableName + ".id")
+-	}
+-	if !includeMissing {
+-		sq = sq.Where(Eq{r.tableName + ".missing": false})
++		// If the filter is empty, we sort by the specified natural order.
++		sq = sq.OrderBy(naturalOrder)
+ 	}
++	sq = sq.Where(Eq{r.tableName + ".missing": false})
+ 	sq = sq.Limit(uint64(size)).Offset(uint64(offset))
+ 	return r.queryAll(sq, results, model.QueryOptions{Offset: offset})
+ }
+ 
+-func (r sqlRepository) searchByMBID(sq SelectBuilder, mbid string, mbidFields []string, includeMissing bool, results any) error {
++func (r sqlRepository) searchByMBID(sq SelectBuilder, mbid string, mbidFields []string, results any) error {
+ 	sq = sq.Where(mbidExpr(r.tableName, mbid, mbidFields...))
+-
+-	if !includeMissing {
+-		sq = sq.Where(Eq{r.tableName + ".missing": false})
+-	}
++	sq = sq.Where(Eq{r.tableName + ".missing": false})
+ 
+ 	return r.queryAll(sq, results)
+ }
+diff --git a/persistence/sql_tags.go b/persistence/sql_tags.go
+index b92e18e60a8bc365132ef531e1353c9e957f1dca..8c3c1e89ddfc52ae94e65341baa15103bb390526 100644
+--- a/persistence/sql_tags.go
++++ b/persistence/sql_tags.go
+@@ -91,61 +91,66 @@ func newBaseTagRepository(ctx context.Context, db dbx.Builder, tagFilter *model.
+ 	return r
+ }
+ 
+-// newSelect overrides the base implementation to apply tag name filtering and library filtering.
+-func (r *baseTagRepository) newSelect(options ...model.QueryOptions) SelectBuilder {
++// applyLibraryFiltering adds the appropriate library joins based on user context
++func (r *baseTagRepository) applyLibraryFiltering(sq SelectBuilder) SelectBuilder {
++	// Add library_tag join
++	sq = sq.LeftJoin("library_tag on library_tag.tag_id = tag.id")
++
++	// For authenticated users, also join with user_library to filter by accessible libraries
+ 	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		// No user context - return empty result set
+-		return SelectBuilder{}.Where(Eq{"1": "0"})
++	if user.ID != invalidUserId {
++		sq = sq.Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID)
+ 	}
++
++	return sq
++}
++
++// newSelect overrides the base implementation to apply tag name filtering and library filtering.
++func (r *baseTagRepository) newSelect(options ...model.QueryOptions) SelectBuilder {
+ 	sq := r.sqlRepository.newSelect(options...)
++
++	// Apply tag name filtering if specified
+ 	if r.tagFilter != nil {
+ 		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
+ 	}
+-	sq = sq.Columns(
++
++	// Apply library filtering and set up aggregation columns
++	sq = r.applyLibraryFiltering(sq).Columns(
+ 		"tag.id",
+-		"tag.tag_value as name",
++		"tag.tag_name",
++		"tag.tag_value",
+ 		"COALESCE(SUM(library_tag.album_count), 0) as album_count",
+ 		"COALESCE(SUM(library_tag.media_file_count), 0) as song_count",
+-	).
+-		LeftJoin("library_tag on library_tag.tag_id = tag.id").
+-		// Apply library filtering by joining only with accessible libraries
+-		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID).
+-		GroupBy("tag.id", "tag.tag_value")
++	).GroupBy("tag.id", "tag.tag_name", "tag.tag_value")
++
+ 	return sq
+ }
+ 
+ // ResourceRepository interface implementation
+ 
+ func (r *baseTagRepository) Count(options ...rest.QueryOptions) (int64, error) {
+-	// Create a query that counts distinct tags without GROUP BY
+-	user := loggedUser(r.ctx)
+-	if user.ID == invalidUserId {
+-		return 0, nil
+-	}
++	sq := Select("COUNT(DISTINCT tag.id)").From("tag")
+ 
+-	// Build the same base query as newSelect but for counting
+-	sq := Select()
++	// Apply tag name filtering if specified
+ 	if r.tagFilter != nil {
+ 		sq = sq.Where(Eq{"tag.tag_name": *r.tagFilter})
+ 	}
+ 
+-	// Apply the same joins as newSelect
+-	sq = sq.LeftJoin("library_tag on library_tag.tag_id = tag.id").
+-		Join("user_library on user_library.library_id = library_tag.library_id AND user_library.user_id = ?", user.ID)
++	// Apply library filtering
++	sq = r.applyLibraryFiltering(sq)
+ 
+ 	return r.count(sq, r.parseRestOptions(r.ctx, options...))
+ }
+ 
+ func (r *baseTagRepository) Read(id string) (interface{}, error) {
+-	query := r.newSelect().Columns("*").Where(Eq{"id": id})
++	query := r.newSelect().Where(Eq{"id": id})
+ 	var res model.Tag
+ 	err := r.queryOne(query, &res)
+ 	return &res, err
+ }
+ 
+ func (r *baseTagRepository) ReadAll(options ...rest.QueryOptions) (interface{}, error) {
+-	query := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns("*")
++	query := r.newSelect(r.parseRestOptions(r.ctx, options...))
+ 	var res model.TagList
+ 	err := r.queryAll(query, &res)
+ 	return res, err
+diff --git a/persistence/tag_library_filtering_test.go b/persistence/tag_library_filtering_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab0d57d52cd4d60e97c95a542d22b24e645606a7
+--- /dev/null
++++ b/persistence/tag_library_filtering_test.go
+@@ -0,0 +1,259 @@
++package persistence
++
++import (
++	"context"
++
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/id"
++	"github.com/navidrome/navidrome/model/request"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"github.com/pocketbase/dbx"
++)
++
++const (
++	adminUserID   = "userid"
++	regularUserID = "2222"
++	libraryID1    = 1
++	libraryID2    = 2
++	libraryID3    = 3
++
++	tagNameGenre = "genre"
++	tagValueRock = "rock"
++	tagValuePop  = "pop"
++	tagValueJazz = "jazz"
++)
++
++var _ = Describe("Tag Library Filtering", func() {
++	var (
++		tagRockID = id.NewTagID(tagNameGenre, tagValueRock)
++		tagPopID  = id.NewTagID(tagNameGenre, tagValuePop)
++		tagJazzID = id.NewTagID(tagNameGenre, tagValueJazz)
++	)
++
++	expectTagValues := func(tagList model.TagList, expected []string) {
++		tagValues := make([]string, len(tagList))
++		for i, tag := range tagList {
++			tagValues[i] = tag.TagValue
++		}
++		Expect(tagValues).To(ContainElements(expected))
++	}
++
++	BeforeEach(func() {
++		DeferCleanup(configtest.SetupConfig())
++
++		// Clean up database
++		db := GetDBXBuilder()
++		_, err := db.NewQuery("DELETE FROM library_tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("DELETE FROM tag").Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("DELETE FROM user_library WHERE user_id != {:admin} AND user_id != {:regular}").
++			Bind(dbx.Params{"admin": adminUserID, "regular": regularUserID}).Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("DELETE FROM library WHERE id > 1").Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Create test libraries
++		_, err = db.NewQuery("INSERT INTO library (id, name, path) VALUES ({:id}, {:name}, {:path})").
++			Bind(dbx.Params{"id": libraryID2, "name": "Library 2", "path": "/music/lib2"}).Execute()
++		Expect(err).ToNot(HaveOccurred())
++		_, err = db.NewQuery("INSERT INTO library (id, name, path) VALUES ({:id}, {:name}, {:path})").
++			Bind(dbx.Params{"id": libraryID3, "name": "Library 3", "path": "/music/lib3"}).Execute()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Give admin access to all libraries
++		for _, libID := range []int{libraryID1, libraryID2, libraryID3} {
++			_, err = db.NewQuery("INSERT OR IGNORE INTO user_library (user_id, library_id) VALUES ({:user}, {:lib})").
++				Bind(dbx.Params{"user": adminUserID, "lib": libID}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		}
++
++		// Create test tags
++		adminCtx := request.WithUser(log.NewContext(context.TODO()), adminUser)
++		tagRepo := NewTagRepository(adminCtx, GetDBXBuilder())
++
++		createTag := func(libraryID int, name, value string) {
++			tag := model.Tag{ID: id.NewTagID(name, value), TagName: model.TagName(name), TagValue: value}
++			err := tagRepo.Add(libraryID, tag)
++			Expect(err).ToNot(HaveOccurred())
++		}
++
++		createTag(libraryID1, tagNameGenre, tagValueRock)
++		createTag(libraryID2, tagNameGenre, tagValuePop)
++		createTag(libraryID3, tagNameGenre, tagValueJazz)
++		createTag(libraryID2, tagNameGenre, tagValueRock) // Rock appears in both lib1 and lib2
++
++		// Set tag counts (manually for testing)
++		setCounts := func(tagID string, libID, albums, songs int) {
++			_, err := db.NewQuery("UPDATE library_tag SET album_count = {:albums}, media_file_count = {:songs} WHERE tag_id = {:tag} AND library_id = {:lib}").
++				Bind(dbx.Params{"albums": albums, "songs": songs, "tag": tagID, "lib": libID}).Execute()
++			Expect(err).ToNot(HaveOccurred())
++		}
++
++		setCounts(tagRockID, libraryID1, 5, 20)
++		setCounts(tagPopID, libraryID2, 3, 10)
++		setCounts(tagJazzID, libraryID3, 2, 8)
++		setCounts(tagRockID, libraryID2, 1, 4)
++
++		// Give regular user access to library 2 only
++		_, err = db.NewQuery("INSERT INTO user_library (user_id, library_id) VALUES ({:user}, {:lib})").
++			Bind(dbx.Params{"user": regularUserID, "lib": libraryID2}).Execute()
++		Expect(err).ToNot(HaveOccurred())
++	})
++
++	Describe("TagRepository Library Filtering", func() {
++		// Helper to create repository and read all tags
++		readAllTags := func(user *model.User, filters ...rest.QueryOptions) model.TagList {
++			var ctx context.Context
++			if user != nil {
++				ctx = request.WithUser(log.NewContext(context.TODO()), *user)
++			} else {
++				ctx = context.Background() // Headless context
++			}
++
++			tagRepo := NewTagRepository(ctx, GetDBXBuilder())
++			repo := tagRepo.(model.ResourceRepository)
++
++			var opts rest.QueryOptions
++			if len(filters) > 0 {
++				opts = filters[0]
++			}
++
++			tags, err := repo.ReadAll(opts)
++			Expect(err).ToNot(HaveOccurred())
++			return tags.(model.TagList)
++		}
++
++		// Helper to count tags
++		countTags := func(user *model.User) int64 {
++			var ctx context.Context
++			if user != nil {
++				ctx = request.WithUser(log.NewContext(context.TODO()), *user)
++			} else {
++				ctx = context.Background()
++			}
++
++			tagRepo := NewTagRepository(ctx, GetDBXBuilder())
++			repo := tagRepo.(model.ResourceRepository)
++
++			count, err := repo.Count()
++			Expect(err).ToNot(HaveOccurred())
++			return count
++		}
++
++		Context("Admin User", func() {
++			It("should see all tags regardless of library", func() {
++				tags := readAllTags(&adminUser)
++				Expect(tags).To(HaveLen(3))
++			})
++		})
++
++		Context("Regular User with Limited Library Access", func() {
++			It("should only see tags from accessible libraries", func() {
++				tags := readAllTags(&regularUser)
++				// Should see rock (libraries 1,2) and pop (library 2), but not jazz (library 3)
++				Expect(tags).To(HaveLen(2))
++			})
++
++			It("should respect explicit library_id filters within accessible libraries", func() {
++				tags := readAllTags(&regularUser, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID2},
++				})
++				// Should see only tags from library 2: pop and rock(lib2)
++				Expect(tags).To(HaveLen(2))
++				expectTagValues(tags, []string{tagValuePop, tagValueRock})
++			})
++
++			It("should not return tags when filtering by inaccessible library", func() {
++				tags := readAllTags(&regularUser, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID3},
++				})
++				// Should return no tags since user can't access library 3
++				Expect(tags).To(HaveLen(0))
++			})
++
++			It("should filter by library 1 correctly", func() {
++				tags := readAllTags(&regularUser, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID1},
++				})
++				// Should see only rock from library 1
++				Expect(tags).To(HaveLen(1))
++				Expect(tags[0].TagValue).To(Equal(tagValueRock))
++			})
++		})
++
++		Context("Headless Processes (No User Context)", func() {
++			It("should see all tags from all libraries when no user is in context", func() {
++				tags := readAllTags(nil) // nil = headless context
++				// Should see all tags from all libraries (no filtering applied)
++				Expect(tags).To(HaveLen(3))
++				expectTagValues(tags, []string{tagValueRock, tagValuePop, tagValueJazz})
++			})
++
++			It("should count all tags from all libraries when no user is in context", func() {
++				count := countTags(nil)
++				// Should count all tags from all libraries
++				Expect(count).To(Equal(int64(3)))
++			})
++
++			It("should calculate proper statistics from all libraries for headless processes", func() {
++				tags := readAllTags(nil)
++
++				// Find the rock tag (appears in libraries 1 and 2)
++				var rockTag *model.Tag
++				for _, tag := range tags {
++					if tag.TagValue == tagValueRock {
++						rockTag = &tag
++						break
++					}
++				}
++				Expect(rockTag).ToNot(BeNil())
++
++				// Should have stats from all libraries where rock appears
++				// Library 1: 5 albums, 20 songs
++				// Library 2: 1 album, 4 songs
++				// Total: 6 albums, 24 songs
++				Expect(rockTag.AlbumCount).To(Equal(6))
++				Expect(rockTag.SongCount).To(Equal(24))
++			})
++
++			It("should allow headless processes to apply explicit library_id filters", func() {
++				tags := readAllTags(nil, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID3},
++				})
++				// Should see only jazz from library 3
++				Expect(tags).To(HaveLen(1))
++				Expect(tags[0].TagValue).To(Equal(tagValueJazz))
++			})
++		})
++
++		Context("Admin User with Explicit Library Filtering", func() {
++			It("should see all tags when no filter is applied", func() {
++				tags := readAllTags(&adminUser)
++				Expect(tags).To(HaveLen(3))
++			})
++
++			It("should respect explicit library_id filters", func() {
++				tags := readAllTags(&adminUser, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID3},
++				})
++				// Should see only jazz from library 3
++				Expect(tags).To(HaveLen(1))
++				Expect(tags[0].TagValue).To(Equal(tagValueJazz))
++			})
++
++			It("should filter by library 2 correctly", func() {
++				tags := readAllTags(&adminUser, rest.QueryOptions{
++					Filters: map[string]interface{}{"library_id": libraryID2},
++				})
++				// Should see pop and rock from library 2
++				Expect(tags).To(HaveLen(2))
++				expectTagValues(tags, []string{tagValuePop, tagValueRock})
++			})
++		})
++	})
++})
+diff --git a/server/nativeapi/config.go b/server/nativeapi/config.go
+index d708d72f90a2946dfc2a514959fe052aabd8a581..9a86a9add7ffad93d077732123949666017c62ed 100644
+--- a/server/nativeapi/config.go
++++ b/server/nativeapi/config.go
+@@ -9,7 +9,6 @@ import (
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/log"
+-	"github.com/navidrome/navidrome/model/request"
+ )
+ 
+ // sensitiveFieldsPartialMask contains configuration field names that should be redacted
+@@ -99,11 +98,6 @@ func applySensitiveFieldMasking(ctx context.Context, config map[string]interface
+ 
+ func getConfig(w http.ResponseWriter, r *http.Request) {
+ 	ctx := r.Context()
+-	user, _ := request.UserFrom(ctx)
+-	if !user.IsAdmin {
+-		http.Error(w, "Config endpoint is only available to admin users", http.StatusUnauthorized)
+-		return
+-	}
+ 
+ 	// Marshal the actual configuration struct to preserve original field names
+ 	configBytes, err := json.Marshal(*conf.Server)
+diff --git a/server/nativeapi/config_test.go b/server/nativeapi/config_test.go
+index 52baef83a19dcdeed2c188e64c29ca6970b39576..ee04d395d139c38ee520439115cde08ed8ad063d 100644
+--- a/server/nativeapi/config_test.go
++++ b/server/nativeapi/config_test.go
+@@ -1,14 +1,20 @@
+ package nativeapi
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"net/http"
+ 	"net/http/httptest"
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/consts"
++	"github.com/navidrome/navidrome/core"
++	"github.com/navidrome/navidrome/core/auth"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/model/request"
++	"github.com/navidrome/navidrome/server"
++	"github.com/navidrome/navidrome/tests"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+ )
+@@ -19,14 +25,28 @@ var _ = Describe("getConfig", func() {
+ 	})
+ 
+ 	Context("when user is not admin", func() {
+-		It("returns unauthorized", func() {
+-			req := httptest.NewRequest("GET", "/config", nil)
++		It("returns forbidden through the authenticated route", func() {
++			conf.Server.DevUIShowConfig = true
++			ds := &tests.MockDataStore{}
++			auth.Init(ds)
++			regularUser := model.User{
++				ID:          "user-1",
++				UserName:    "regular",
++				Name:        "Regular User",
++				IsAdmin:     false,
++				NewPassword: "userpass",
++			}
++			Expect(ds.User(context.TODO()).Put(&regularUser)).To(Succeed())
++			token, err := auth.CreateToken(&regularUser)
++			Expect(err).ToNot(HaveOccurred())
++			router := server.JWTVerifier(New(ds, nil, nil, nil, core.NewMockLibraryService()))
++			req := httptest.NewRequest(http.MethodGet, "/config/config", nil)
++			req.Header.Set(consts.UIAuthorizationHeader, "Bearer "+token)
+ 			w := httptest.NewRecorder()
+-			ctx := request.WithUser(req.Context(), model.User{IsAdmin: false})
+ 
+-			getConfig(w, req.WithContext(ctx))
++			router.ServeHTTP(w, req)
+ 
+-			Expect(w.Code).To(Equal(http.StatusUnauthorized))
++			Expect(w.Code).To(Equal(http.StatusForbidden))
+ 		})
+ 	})
+ 
+diff --git a/server/nativeapi/inspect.go b/server/nativeapi/inspect.go
+index e74dc99c08ec8835e8e5b17b436a6370ef18835b..3178395cedf840947da5efede248053fdac84440 100644
+--- a/server/nativeapi/inspect.go
++++ b/server/nativeapi/inspect.go
+@@ -9,7 +9,6 @@ import (
+ 	"github.com/navidrome/navidrome/core"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+-	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/utils/req"
+ )
+ 
+@@ -30,11 +29,6 @@ func inspect(ds model.DataStore) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		ctx := r.Context()
+ 
+-		user, _ := request.UserFrom(ctx)
+-		if !user.IsAdmin {
+-			http.Error(w, "Inspect is only available to admin users", http.StatusUnauthorized)
+-		}
+-
+ 		p := req.Params(r)
+ 		id, err := p.String("id")
+ 
+diff --git a/server/nativeapi/library.go b/server/nativeapi/library.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f081eca789cc1f0951c666b8f9894a14a0132f4a
+--- /dev/null
++++ b/server/nativeapi/library.go
+@@ -0,0 +1,101 @@
++package nativeapi
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++
++	"github.com/go-chi/chi/v5"
++	"github.com/navidrome/navidrome/core"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++)
++
++// User-library association endpoints (admin only)
++func (n *Router) addUserLibraryRoute(r chi.Router) {
++	r.Route("/user/{id}/library", func(r chi.Router) {
++		r.Use(parseUserIDMiddleware)
++		r.Get("/", getUserLibraries(n.libs))
++		r.Put("/", setUserLibraries(n.libs))
++	})
++}
++
++// Middleware to parse user ID from URL
++func parseUserIDMiddleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		userID := chi.URLParam(r, "id")
++		if userID == "" {
++			http.Error(w, "Invalid user ID", http.StatusBadRequest)
++			return
++		}
++		ctx := context.WithValue(r.Context(), "userID", userID)
++		next.ServeHTTP(w, r.WithContext(ctx))
++	})
++}
++
++// User-library association handlers
++
++func getUserLibraries(service core.Library) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		userID := r.Context().Value("userID").(string)
++
++		libraries, err := service.GetUserLibraries(r.Context(), userID)
++		if err != nil {
++			if errors.Is(err, model.ErrNotFound) {
++				http.Error(w, "User not found", http.StatusNotFound)
++				return
++			}
++			log.Error(r.Context(), "Error getting user libraries", "userID", userID, err)
++			http.Error(w, "Internal server error", http.StatusInternalServerError)
++			return
++		}
++
++		w.Header().Set("Content-Type", "application/json")
++		if err := json.NewEncoder(w).Encode(libraries); err != nil {
++			log.Error(r.Context(), "Error encoding user libraries response", err)
++		}
++	}
++}
++
++func setUserLibraries(service core.Library) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		userID := r.Context().Value("userID").(string)
++
++		var request struct {
++			LibraryIDs []int `json:"libraryIds"`
++		}
++		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
++			log.Error(r.Context(), "Error decoding request", err)
++			http.Error(w, "Invalid request body", http.StatusBadRequest)
++			return
++		}
++
++		if err := service.SetUserLibraries(r.Context(), userID, request.LibraryIDs); err != nil {
++			log.Error(r.Context(), "Error setting user libraries", "userID", userID, err)
++			if errors.Is(err, model.ErrNotFound) {
++				http.Error(w, "User not found", http.StatusNotFound)
++				return
++			}
++			if errors.Is(err, model.ErrValidation) {
++				http.Error(w, err.Error(), http.StatusBadRequest)
++				return
++			}
++			http.Error(w, "Failed to set user libraries", http.StatusInternalServerError)
++			return
++		}
++
++		// Return updated user libraries
++		libraries, err := service.GetUserLibraries(r.Context(), userID)
++		if err != nil {
++			log.Error(r.Context(), "Error getting updated user libraries", "userID", userID, err)
++			http.Error(w, "Internal server error", http.StatusInternalServerError)
++			return
++		}
++
++		w.Header().Set("Content-Type", "application/json")
++		if err := json.NewEncoder(w).Encode(libraries); err != nil {
++			log.Error(r.Context(), "Error encoding user libraries response", err)
++		}
++	}
++}
+diff --git a/server/nativeapi/native_api.go b/server/nativeapi/native_api.go
+index aed24e9631a6d99313616f18c242fa526626ba52..370bdbd1e0f1691198cf94b76101ba933c955128 100644
+--- a/server/nativeapi/native_api.go
++++ b/server/nativeapi/native_api.go
+@@ -16,6 +16,7 @@ import (
+ 	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/server"
+ )
+ 
+@@ -25,10 +26,11 @@ type Router struct {
+ 	share     core.Share
+ 	playlists core.Playlists
+ 	insights  metrics.Insights
++	libs      core.Library
+ }
+ 
+-func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights) *Router {
+-	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights}
++func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights, libraryService core.Library) *Router {
++	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights, libs: libraryService}
+ 	r.Handler = r.routes()
+ 	return r
+ }
+@@ -62,10 +64,15 @@ func (n *Router) routes() http.Handler {
+ 		n.addSongPlaylistsRoute(r)
+ 		n.addQueueRoute(r)
+ 		n.addMissingFilesRoute(r)
+-		n.addInspectRoute(r)
+-		n.addConfigRoute(r)
+ 		n.addKeepAliveRoute(r)
+ 		n.addInsightsRoute(r)
++
++		r.With(adminOnlyMiddleware).Group(func(r chi.Router) {
++			n.addInspectRoute(r)
++			n.addConfigRoute(r)
++			n.addUserLibraryRoute(r)
++			n.RX(r, "/library", n.libs.NewRepository, true)
++		})
+ 	})
+ 
+ 	return r
+@@ -227,3 +234,15 @@ func (n *Router) addInsightsRoute(r chi.Router) {
+ 		}
+ 	})
+ }
++
++// Middleware to ensure only admin users can access endpoints
++func adminOnlyMiddleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		user, ok := request.UserFrom(r.Context())
++		if !ok || !user.IsAdmin {
++			http.Error(w, "Access denied: admin privileges required", http.StatusForbidden)
++			return
++		}
++		next.ServeHTTP(w, r)
++	})
++}
+diff --git a/server/nativeapi/native_api_song_test.go b/server/nativeapi/native_api_song_test.go
+index 0b183c1d9ee98b1e11a874c19e635e1f37619cc1..a8495fd9ddb9329989bbd577f51ad7f8919f9e1b 100644
+--- a/server/nativeapi/native_api_song_test.go
++++ b/server/nativeapi/native_api_song_test.go
+@@ -128,7 +128,7 @@ var _ = Describe("Song Endpoints", func() {
+ 		mockInsightsImpl := &mockInsights{}
+ 
+ 		// Create the native API router and wrap it with the JWTVerifier middleware
+-		nativeRouter := New(ds, mockShareImpl, mockPlaylistsImpl, mockInsightsImpl)
++		nativeRouter := New(ds, mockShareImpl, mockPlaylistsImpl, mockInsightsImpl, core.NewMockLibraryService())
+ 		router = server.JWTVerifier(nativeRouter)
+ 		w = httptest.NewRecorder()
+ 	})
+diff --git a/server/subsonic/album_lists.go b/server/subsonic/album_lists.go
+index 39a1645009c034802725abebe20b56628c15bcc9..56cf469c55480a6575069a4ea176e0ef8f7a4ca7 100644
+--- a/server/subsonic/album_lists.go
++++ b/server/subsonic/album_lists.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/navidrome/navidrome/server/subsonic/filter"
+ 	"github.com/navidrome/navidrome/server/subsonic/responses"
+ 	"github.com/navidrome/navidrome/utils/req"
++	"github.com/navidrome/navidrome/utils/run"
+ 	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+@@ -61,6 +62,13 @@ func (api *Router) getAlbumList(r *http.Request) (model.Albums, int64, error) {
+ 		return nil, 0, newError(responses.ErrorGeneric, "type '%s' not implemented", typ)
+ 	}
+ 
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, 0, err
++	}
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
+ 	opts.Offset = p.IntOr("offset", 0)
+ 	opts.Max = min(p.IntOr("size", 10), 500)
+ 	albums, err := api.ds.Album(r.Context()).GetAll(opts)
+@@ -109,57 +117,87 @@ func (api *Router) GetAlbumList2(w http.ResponseWriter, r *http.Request) (*respo
+ 	return response, nil
+ }
+ 
+-func (api *Router) GetStarred(r *http.Request) (*responses.Subsonic, error) {
++func (api *Router) getStarredItems(r *http.Request) (model.Artists, model.Albums, model.MediaFiles, error) {
+ 	ctx := r.Context()
+-	artists, err := api.ds.Artist(ctx).GetAll(filter.ArtistsByStarred())
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred artists", err)
+-		return nil, err
++		return nil, nil, nil, err
+ 	}
+-	options := filter.ByStarred()
+-	albums, err := api.ds.Album(ctx).GetAll(options)
++
++	// Prepare variables to capture results from parallel execution
++	var artists model.Artists
++	var albums model.Albums
++	var mediaFiles model.MediaFiles
++
++	// Execute all three queries in parallel for better performance
++	err = run.Parallel(
++		// Query starred artists
++		func() error {
++			artistOpts := filter.ApplyArtistLibraryFilter(filter.ArtistsByStarred(), musicFolderIds)
++			var err error
++			artists, err = api.ds.Artist(ctx).GetAll(artistOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred artists", err)
++			}
++			return err
++		},
++		// Query starred albums
++		func() error {
++			albumOpts := filter.ApplyLibraryFilter(filter.ByStarred(), musicFolderIds)
++			var err error
++			albums, err = api.ds.Album(ctx).GetAll(albumOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred albums", err)
++			}
++			return err
++		},
++		// Query starred media files
++		func() error {
++			mediaFileOpts := filter.ApplyLibraryFilter(filter.ByStarred(), musicFolderIds)
++			var err error
++			mediaFiles, err = api.ds.MediaFile(ctx).GetAll(mediaFileOpts)
++			if err != nil {
++				log.Error(r, "Error retrieving starred mediaFiles", err)
++			}
++			return err
++		},
++	)()
++
++	// Return the first error if any occurred
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred albums", err)
+-		return nil, err
++		return nil, nil, nil, err
+ 	}
+-	mediaFiles, err := api.ds.MediaFile(ctx).GetAll(options)
++
++	return artists, albums, mediaFiles, nil
++}
++
++func (api *Router) GetStarred(r *http.Request) (*responses.Subsonic, error) {
++	artists, albums, mediaFiles, err := api.getStarredItems(r)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred mediaFiles", err)
+ 		return nil, err
+ 	}
+ 
+ 	response := newResponse()
+ 	response.Starred = &responses.Starred{}
+ 	response.Starred.Artist = slice.MapWithArg(artists, r, toArtist)
+-	response.Starred.Album = slice.MapWithArg(albums, ctx, childFromAlbum)
+-	response.Starred.Song = slice.MapWithArg(mediaFiles, ctx, childFromMediaFile)
++	response.Starred.Album = slice.MapWithArg(albums, r.Context(), childFromAlbum)
++	response.Starred.Song = slice.MapWithArg(mediaFiles, r.Context(), childFromMediaFile)
+ 	return response, nil
+ }
+ 
+ func (api *Router) GetStarred2(r *http.Request) (*responses.Subsonic, error) {
+-	ctx := r.Context()
+-	artists, err := api.ds.Artist(ctx).GetAll(filter.ArtistsByStarred())
+-	if err != nil {
+-		log.Error(r, "Error retrieving starred artists", err)
+-		return nil, err
+-	}
+-	options := filter.ByStarred()
+-	albums, err := api.ds.Album(ctx).GetAll(options)
++	artists, albums, mediaFiles, err := api.getStarredItems(r)
+ 	if err != nil {
+-		log.Error(r, "Error retrieving starred albums", err)
+-		return nil, err
+-	}
+-	mediaFiles, err := api.ds.MediaFile(ctx).GetAll(options)
+-	if err != nil {
+-		log.Error(r, "Error retrieving starred mediaFiles", err)
+ 		return nil, err
+ 	}
+ 
+ 	response := newResponse()
+ 	response.Starred2 = &responses.Starred2{}
+ 	response.Starred2.Artist = slice.MapWithArg(artists, r, toArtistID3)
+-	response.Starred2.Album = slice.MapWithArg(albums, ctx, buildAlbumID3)
+-	response.Starred2.Song = slice.MapWithArg(mediaFiles, ctx, childFromMediaFile)
++	response.Starred2.Album = slice.MapWithArg(albums, r.Context(), buildAlbumID3)
++	response.Starred2.Song = slice.MapWithArg(mediaFiles, r.Context(), childFromMediaFile)
+ 	return response, nil
+ }
+ 
+@@ -193,7 +231,15 @@ func (api *Router) GetRandomSongs(r *http.Request) (*responses.Subsonic, error)
+ 	fromYear := p.IntOr("fromYear", 0)
+ 	toYear := p.IntOr("toYear", 0)
+ 
+-	songs, err := api.getSongs(r.Context(), 0, size, filter.SongsByRandom(genre, fromYear, toYear))
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	opts := filter.SongsByRandom(genre, fromYear, toYear)
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
++	songs, err := api.getSongs(r.Context(), 0, size, opts)
+ 	if err != nil {
+ 		log.Error(r, "Error retrieving random songs", err)
+ 		return nil, err
+@@ -211,8 +257,16 @@ func (api *Router) GetSongsByGenre(r *http.Request) (*responses.Subsonic, error)
+ 	offset := p.IntOr("offset", 0)
+ 	genre, _ := p.String("genre")
+ 
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	opts := filter.ByGenre(genre)
++	opts = filter.ApplyLibraryFilter(opts, musicFolderIds)
++
+ 	ctx := r.Context()
+-	songs, err := api.getSongs(ctx, offset, count, filter.ByGenre(genre))
++	songs, err := api.getSongs(ctx, offset, count, opts)
+ 	if err != nil {
+ 		log.Error(r, "Error retrieving random songs", err)
+ 		return nil, err
+diff --git a/server/subsonic/browsing.go b/server/subsonic/browsing.go
+index cd77041e091bdda1436646fcb086d85917e43257..c8584543d448a9b5cd9bb3e58b5dd0ba5f8520bf 100644
+--- a/server/subsonic/browsing.go
++++ b/server/subsonic/browsing.go
+@@ -7,6 +7,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
++	"github.com/navidrome/navidrome/consts"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/server/public"
+@@ -17,7 +18,8 @@ import (
+ )
+ 
+ func (api *Router) GetMusicFolders(r *http.Request) (*responses.Subsonic, error) {
+-	libraries, _ := api.ds.Library(r.Context()).GetAll()
++	libraries := getUserAccessibleLibraries(r.Context())
++
+ 	folders := make([]responses.MusicFolder, len(libraries))
+ 	for i, f := range libraries {
+ 		folders[i].Id = int32(f.ID)
+@@ -28,28 +30,37 @@ func (api *Router) GetMusicFolders(r *http.Request) (*responses.Subsonic, error)
+ 	return response, nil
+ }
+ 
+-func (api *Router) getArtist(r *http.Request, libId int, ifModifiedSince time.Time) (model.ArtistIndexes, int64, error) {
++func (api *Router) getArtist(r *http.Request, libIds []int, ifModifiedSince time.Time) (model.ArtistIndexes, int64, error) {
+ 	ctx := r.Context()
+-	lib, err := api.ds.Library(ctx).Get(libId)
++
++	lastScanStr, err := api.ds.Property(ctx).DefaultGet(consts.LastScanStartTimeKey, "")
+ 	if err != nil {
+-		log.Error(ctx, "Error retrieving Library", "id", libId, err)
++		log.Error(ctx, "Error retrieving last scan start time", err)
+ 		return nil, 0, err
+ 	}
++	lastScan := time.Now()
++	if lastScanStr != "" {
++		lastScan, err = time.Parse(time.RFC3339, lastScanStr)
++	}
+ 
+ 	var indexes model.ArtistIndexes
+-	if lib.LastScanAt.After(ifModifiedSince) {
+-		indexes, err = api.ds.Artist(ctx).GetIndex(false, []int{libId}, model.RoleAlbumArtist)
++	if lastScan.After(ifModifiedSince) {
++		indexes, err = api.ds.Artist(ctx).GetIndex(false, libIds, model.RoleAlbumArtist)
+ 		if err != nil {
+ 			log.Error(ctx, "Error retrieving Indexes", err)
+ 			return nil, 0, err
+ 		}
++		if len(indexes) == 0 {
++			log.Debug(ctx, "No artists found in library", "libId", libIds)
++			return nil, 0, newError(responses.ErrorDataNotFound, "Library not found or empty")
++		}
+ 	}
+ 
+-	return indexes, lib.LastScanAt.UnixMilli(), err
++	return indexes, lastScan.UnixMilli(), err
+ }
+ 
+-func (api *Router) getArtistIndex(r *http.Request, libId int, ifModifiedSince time.Time) (*responses.Indexes, error) {
+-	indexes, modified, err := api.getArtist(r, libId, ifModifiedSince)
++func (api *Router) getArtistIndex(r *http.Request, libIds []int, ifModifiedSince time.Time) (*responses.Indexes, error) {
++	indexes, modified, err := api.getArtist(r, libIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -67,8 +78,8 @@ func (api *Router) getArtistIndex(r *http.Request, libId int, ifModifiedSince ti
+ 	return res, nil
+ }
+ 
+-func (api *Router) getArtistIndexID3(r *http.Request, libId int, ifModifiedSince time.Time) (*responses.Artists, error) {
+-	indexes, modified, err := api.getArtist(r, libId, ifModifiedSince)
++func (api *Router) getArtistIndexID3(r *http.Request, libIds []int, ifModifiedSince time.Time) (*responses.Artists, error) {
++	indexes, modified, err := api.getArtist(r, libIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -88,10 +99,10 @@ func (api *Router) getArtistIndexID3(r *http.Request, libId int, ifModifiedSince
+ 
+ func (api *Router) GetIndexes(r *http.Request) (*responses.Subsonic, error) {
+ 	p := req.Params(r)
+-	musicFolderId := p.IntOr("musicFolderId", 1)
++	musicFolderIds, _ := selectedMusicFolderIds(r, false)
+ 	ifModifiedSince := p.TimeOr("ifModifiedSince", time.Time{})
+ 
+-	res, err := api.getArtistIndex(r, musicFolderId, ifModifiedSince)
++	res, err := api.getArtistIndex(r, musicFolderIds, ifModifiedSince)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -102,9 +113,9 @@ func (api *Router) GetIndexes(r *http.Request) (*responses.Subsonic, error) {
+ }
+ 
+ func (api *Router) GetArtists(r *http.Request) (*responses.Subsonic, error) {
+-	p := req.Params(r)
+-	musicFolderId := p.IntOr("musicFolderId", 1)
+-	res, err := api.getArtistIndexID3(r, musicFolderId, time.Time{})
++	musicFolderIds, _ := selectedMusicFolderIds(r, false)
++
++	res, err := api.getArtistIndexID3(r, musicFolderIds, time.Time{})
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/server/subsonic/filter/filters.go b/server/subsonic/filter/filters.go
+index 656973a4b15b04e91a662ee0386f22f07244656b..a0bce9041db6958b457a9a74cff8803a25533803 100644
+--- a/server/subsonic/filter/filters.go
++++ b/server/subsonic/filter/filters.go
+@@ -123,6 +123,38 @@ func SongsByArtistTitleWithLyricsFirst(artist, title string) Options {
+ 	})
+ }
+ 
++func ApplyLibraryFilter(opts Options, musicFolderIds []int) Options {
++	if len(musicFolderIds) == 0 {
++		return opts
++	}
++
++	libraryFilter := Eq{"library_id": musicFolderIds}
++	if opts.Filters == nil {
++		opts.Filters = libraryFilter
++	} else {
++		opts.Filters = And{opts.Filters, libraryFilter}
++	}
++
++	return opts
++}
++
++// ApplyArtistLibraryFilter applies a filter to the given Options to ensure that only artists
++// that are associated with the specified music folders are included in the results.
++func ApplyArtistLibraryFilter(opts Options, musicFolderIds []int) Options {
++	if len(musicFolderIds) == 0 {
++		return opts
++	}
++
++	artistLibraryFilter := Eq{"library_artist.library_id": musicFolderIds}
++	if opts.Filters == nil {
++		opts.Filters = artistLibraryFilter
++	} else {
++		opts.Filters = And{opts.Filters, artistLibraryFilter}
++	}
++
++	return opts
++}
++
+ func ByGenre(genre string) Options {
+ 	return addDefaultFilters(Options{
+ 		Sort:    "name",
+diff --git a/server/subsonic/helpers.go b/server/subsonic/helpers.go
+index 58834587d155085058164719a2375e21170b91a1..f9733bb3f41b0c61cf9ca94496cc5e61383d3bd0 100644
+--- a/server/subsonic/helpers.go
++++ b/server/subsonic/helpers.go
+@@ -7,6 +7,7 @@ import (
+ 	"fmt"
+ 	"mime"
+ 	"net/http"
++	"slices"
+ 	"sort"
+ 	"strings"
+ 
+@@ -17,6 +18,7 @@ import (
+ 	"github.com/navidrome/navidrome/server/public"
+ 	"github.com/navidrome/navidrome/server/subsonic/responses"
+ 	"github.com/navidrome/navidrome/utils/number"
++	"github.com/navidrome/navidrome/utils/req"
+ 	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+@@ -474,3 +476,40 @@ func buildLyricsList(mf *model.MediaFile, lyricsList model.LyricList) *responses
+ 	}
+ 	return res
+ }
++
++// getUserAccessibleLibraries returns the list of libraries the current user has access to.
++func getUserAccessibleLibraries(ctx context.Context) []model.Library {
++	user := getUser(ctx)
++	return user.Libraries
++}
++
++// selectedMusicFolderIds retrieves the music folder IDs from the request parameters.
++// If no IDs are provided, it returns all libraries the user has access to (based on the user found in the context).
++// If the parameter is required and not present, it returns an error.
++// If any of the provided library IDs are invalid (don't exist or user doesn't have access), returns ErrorDataNotFound.
++func selectedMusicFolderIds(r *http.Request, required bool) ([]int, error) {
++	p := req.Params(r)
++	musicFolderIds, err := p.Ints("musicFolderId")
++
++	// If the parameter is not present, it returns an error if it is required.
++	if errors.Is(err, req.ErrMissingParam) && required {
++		return nil, err
++	}
++
++	// Get user's accessible libraries for validation
++	libraries := getUserAccessibleLibraries(r.Context())
++	accessibleLibraryIds := slice.Map(libraries, func(lib model.Library) int { return lib.ID })
++
++	if len(musicFolderIds) > 0 {
++		// Validate all provided library IDs - if any are invalid, return an error
++		for _, id := range musicFolderIds {
++			if !slices.Contains(accessibleLibraryIds, id) {
++				return nil, newError(responses.ErrorDataNotFound, "Library %d not found or not accessible", id)
++			}
++		}
++		return musicFolderIds, nil
++	}
++
++	// If no musicFolderId is provided, return all libraries the user has access to.
++	return accessibleLibraryIds, nil
++}
+diff --git a/server/subsonic/searching.go b/server/subsonic/searching.go
+index 809c4eeef368bb9114687cc86dcdd336d12b8ff4..ba1071320678d80c26413e0a29f8cb19e49a943a 100644
+--- a/server/subsonic/searching.go
++++ b/server/subsonic/searching.go
+@@ -8,6 +8,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	. "github.com/Masterminds/squirrel"
+ 	"github.com/deluan/sanitize"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+@@ -41,9 +42,9 @@ func (api *Router) getSearchParams(r *http.Request) (*searchParams, error) {
+ 	return sp, nil
+ }
+ 
+-type searchFunc[T any] func(q string, offset int, size int, includeMissing bool, options ...model.QueryOptions) (T, error)
++type searchFunc[T any] func(q string, offset int, size int, options ...model.QueryOptions) (T, error)
+ 
+-func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, size int, result *T) func() error {
++func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, size int, result *T, options ...model.QueryOptions) func() error {
+ 	return func() error {
+ 		if size == 0 {
+ 			return nil
+@@ -51,7 +52,7 @@ func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, s
+ 		typ := strings.TrimPrefix(reflect.TypeOf(*result).String(), "model.")
+ 		var err error
+ 		start := time.Now()
+-		*result, err = s(q, offset, size, false)
++		*result, err = s(q, offset, size, options...)
+ 		if err != nil {
+ 			log.Error(ctx, "Error searching "+typ, "query", q, "elapsed", time.Since(start), err)
+ 		} else {
+@@ -61,15 +62,31 @@ func callSearch[T any](ctx context.Context, s searchFunc[T], q string, offset, s
+ 	}
+ }
+ 
+-func (api *Router) searchAll(ctx context.Context, sp *searchParams) (mediaFiles model.MediaFiles, albums model.Albums, artists model.Artists) {
++func (api *Router) searchAll(ctx context.Context, sp *searchParams, musicFolderIds []int) (mediaFiles model.MediaFiles, albums model.Albums, artists model.Artists) {
+ 	start := time.Now()
+ 	q := sanitize.Accents(strings.ToLower(strings.TrimSuffix(sp.query, "*")))
+ 
++	// Create query options for library filtering
++	var options []model.QueryOptions
++	var artistOptions []model.QueryOptions
++	if len(musicFolderIds) > 0 {
++		// For MediaFiles and Albums, use direct library_id filter
++		options = append(options, model.QueryOptions{
++			Filters: Eq{"library_id": musicFolderIds},
++		})
++		// For Artists, use the repository's built-in library filtering mechanism
++		// which properly handles the library_artist table joins
++		// TODO Revisit library filtering in sql_base_repository.go
++		artistOptions = append(artistOptions, model.QueryOptions{
++			Filters: Eq{"library_artist.library_id": musicFolderIds},
++		})
++	}
++
+ 	// Run searches in parallel
+ 	g, ctx := errgroup.WithContext(ctx)
+-	g.Go(callSearch(ctx, api.ds.MediaFile(ctx).Search, q, sp.songOffset, sp.songCount, &mediaFiles))
+-	g.Go(callSearch(ctx, api.ds.Album(ctx).Search, q, sp.albumOffset, sp.albumCount, &albums))
+-	g.Go(callSearch(ctx, api.ds.Artist(ctx).Search, q, sp.artistOffset, sp.artistCount, &artists))
++	g.Go(callSearch(ctx, api.ds.MediaFile(ctx).Search, q, sp.songOffset, sp.songCount, &mediaFiles, options...))
++	g.Go(callSearch(ctx, api.ds.Album(ctx).Search, q, sp.albumOffset, sp.albumCount, &albums, options...))
++	g.Go(callSearch(ctx, api.ds.Artist(ctx).Search, q, sp.artistOffset, sp.artistCount, &artists, artistOptions...))
+ 	err := g.Wait()
+ 	if err == nil {
+ 		log.Debug(ctx, fmt.Sprintf("Search resulted in %d songs, %d albums and %d artists",
+@@ -86,7 +103,13 @@ func (api *Router) Search2(r *http.Request) (*responses.Subsonic, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	mfs, als, as := api.searchAll(ctx, sp)
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	mfs, als, as := api.searchAll(ctx, sp, musicFolderIds)
+ 
+ 	response := newResponse()
+ 	searchResult2 := &responses.SearchResult2{}
+@@ -115,7 +138,13 @@ func (api *Router) Search3(r *http.Request) (*responses.Subsonic, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	mfs, als, as := api.searchAll(ctx, sp)
++
++	// Get optional library IDs from musicFolderId parameter
++	musicFolderIds, err := selectedMusicFolderIds(r, false)
++	if err != nil {
++		return nil, err
++	}
++	mfs, als, as := api.searchAll(ctx, sp, musicFolderIds)
+ 
+ 	response := newResponse()
+ 	searchResult3 := &responses.SearchResult3{}
+diff --git a/tests/mock_album_repo.go b/tests/mock_album_repo.go
+index 58c33c97f3875c3050627262b1af3149003f81a0..642ce6b412ecc3d9b4d630693f9f8b6f1f39dd9e 100644
+--- a/tests/mock_album_repo.go
++++ b/tests/mock_album_repo.go
+@@ -16,10 +16,11 @@ func CreateMockAlbumRepo() *MockAlbumRepo {
+ 
+ type MockAlbumRepo struct {
+ 	model.AlbumRepository
+-	Data    map[string]*model.Album
+-	All     model.Albums
+-	Err     bool
+-	Options model.QueryOptions
++	Data                    map[string]*model.Album
++	All                     model.Albums
++	Err                     bool
++	Options                 model.QueryOptions
++	ReassignAnnotationCalls map[string]string // prevID -> newID
+ }
+ 
+ func (m *MockAlbumRepo) SetError(err bool) {
+@@ -117,4 +118,44 @@ func (m *MockAlbumRepo) UpdateExternalInfo(album *model.Album) error {
+ 	return nil
+ }
+ 
++func (m *MockAlbumRepo) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Albums, error) {
++	if len(options) > 0 {
++		m.Options = options[0]
++	}
++	if m.Err {
++		return nil, errors.New("unexpected error")
++	}
++	// Simple mock implementation - just return all albums for testing
++	return m.All, nil
++}
++
++// ReassignAnnotation reassigns annotations from one album to another
++func (m *MockAlbumRepo) ReassignAnnotation(prevID string, newID string) error {
++	if m.Err {
++		return errors.New("unexpected error")
++	}
++	// Mock implementation - track the reassignment calls
++	if m.ReassignAnnotationCalls == nil {
++		m.ReassignAnnotationCalls = make(map[string]string)
++	}
++	m.ReassignAnnotationCalls[prevID] = newID
++	return nil
++}
++
++// SetRating sets the rating for an album
++func (m *MockAlbumRepo) SetRating(rating int, itemID string) error {
++	if m.Err {
++		return errors.New("unexpected error")
++	}
++	return nil
++}
++
++// SetStar sets the starred status for albums
++func (m *MockAlbumRepo) SetStar(starred bool, itemIDs ...string) error {
++	if m.Err {
++		return errors.New("unexpected error")
++	}
++	return nil
++}
++
+ var _ model.AlbumRepository = (*MockAlbumRepo)(nil)
+diff --git a/tests/mock_artist_repo.go b/tests/mock_artist_repo.go
+index da5851061831f18c4ba0c7963df5b7165c418a4c..6d4792f838377116d96b53590bcbf3ccb721856c 100644
+--- a/tests/mock_artist_repo.go
++++ b/tests/mock_artist_repo.go
+@@ -16,8 +16,9 @@ func CreateMockArtistRepo() *MockArtistRepo {
+ 
+ type MockArtistRepo struct {
+ 	model.ArtistRepository
+-	Data map[string]*model.Artist
+-	Err  bool
++	Data    map[string]*model.Artist
++	Err     bool
++	Options model.QueryOptions
+ }
+ 
+ func (m *MockArtistRepo) SetError(err bool) {
+@@ -73,6 +74,9 @@ func (m *MockArtistRepo) IncPlayCount(id string, timestamp time.Time) error {
+ }
+ 
+ func (m *MockArtistRepo) GetAll(options ...model.QueryOptions) (model.Artists, error) {
++	if len(options) > 0 {
++		m.Options = options[0]
++	}
+ 	if m.Err {
+ 		return nil, errors.New("mock repo error")
+ 	}
+@@ -108,4 +112,49 @@ func (m *MockArtistRepo) RefreshPlayCounts() (int64, error) {
+ 	return int64(len(m.Data)), nil
+ }
+ 
++func (m *MockArtistRepo) GetIndex(includeMissing bool, libraryIds []int, roles ...model.Role) (model.ArtistIndexes, error) {
++	if m.Err {
++		return nil, errors.New("mock repo error")
++	}
++
++	artists, err := m.GetAll()
++	if err != nil {
++		return nil, err
++	}
++
++	// For mock purposes, if no artists available, return empty result
++	if len(artists) == 0 {
++		return model.ArtistIndexes{}, nil
++	}
++
++	// Simple index grouping by first letter (simplified implementation for mocks)
++	indexMap := make(map[string]model.Artists)
++	for _, artist := range artists {
++		key := "#"
++		if len(artist.Name) > 0 {
++			key = string(artist.Name[0])
++		}
++		indexMap[key] = append(indexMap[key], artist)
++	}
++
++	var result model.ArtistIndexes
++	for k, artists := range indexMap {
++		result = append(result, model.ArtistIndex{ID: k, Artists: artists})
++	}
++
++	return result, nil
++}
++
++func (m *MockArtistRepo) Search(q string, offset int, size int, options ...model.QueryOptions) (model.Artists, error) {
++	if len(options) > 0 {
++		m.Options = options[0]
++	}
++	if m.Err {
++		return nil, errors.New("unexpected error")
++	}
++	// Simple mock implementation - just return all artists for testing
++	allArtists, err := m.GetAll()
++	return allArtists, err
++}
++
+ var _ model.ArtistRepository = (*MockArtistRepo)(nil)
+diff --git a/tests/mock_mediafile_repo.go b/tests/mock_mediafile_repo.go
+index 7bba8eda8d22932062c36120d5443ea777a4d08b..5b38a7187fc5e7dc6e91c74ce6cf7bde99314dfd 100644
+--- a/tests/mock_mediafile_repo.go
++++ b/tests/mock_mediafile_repo.go
+@@ -27,6 +27,10 @@ type MockMediaFileRepo struct {
+ 	CountAllValue         int64
+ 	CountAllOptions       model.QueryOptions
+ 	DeleteAllMissingValue int64
++	Options               model.QueryOptions
++	// Add fields for cross-library move detection tests
++	FindRecentFilesByMBZTrackIDFunc func(missing model.MediaFile, since time.Time) (model.MediaFiles, error)
++	FindRecentFilesByPropertiesFunc func(missing model.MediaFile, since time.Time) (model.MediaFiles, error)
+ }
+ 
+ func (m *MockMediaFileRepo) SetError(err bool) {
+@@ -72,7 +76,10 @@ func (m *MockMediaFileRepo) GetWithParticipants(id string) (*model.MediaFile, er
+ 	return nil, model.ErrNotFound
+ }
+ 
+-func (m *MockMediaFileRepo) GetAll(...model.QueryOptions) (model.MediaFiles, error) {
++func (m *MockMediaFileRepo) GetAll(qo ...model.QueryOptions) (model.MediaFiles, error) {
++	if len(qo) > 0 {
++		m.Options = qo[0]
++	}
+ 	if m.Err {
+ 		return nil, errors.New("error")
+ 	}
+@@ -227,5 +234,66 @@ func (m *MockMediaFileRepo) NewInstance() interface{} {
+ 	return &model.MediaFile{}
+ }
+ 
++func (m *MockMediaFileRepo) Search(q string, offset int, size int, options ...model.QueryOptions) (model.MediaFiles, error) {
++	if len(options) > 0 {
++		m.Options = options[0]
++	}
++	if m.Err {
++		return nil, errors.New("unexpected error")
++	}
++	// Simple mock implementation - just return all media files for testing
++	allFiles, err := m.GetAll()
++	return allFiles, err
++}
++
++// Cross-library move detection mock methods
++func (m *MockMediaFileRepo) FindRecentFilesByMBZTrackID(missing model.MediaFile, since time.Time) (model.MediaFiles, error) {
++	if m.Err {
++		return nil, errors.New("error")
++	}
++	if m.FindRecentFilesByMBZTrackIDFunc != nil {
++		return m.FindRecentFilesByMBZTrackIDFunc(missing, since)
++	}
++	// Default implementation: find files with same MBZ Track ID in other libraries
++	var result model.MediaFiles
++	for _, mf := range m.Data {
++		if mf.LibraryID != missing.LibraryID &&
++			mf.MbzReleaseTrackID == missing.MbzReleaseTrackID &&
++			mf.MbzReleaseTrackID != "" &&
++			mf.Suffix == missing.Suffix &&
++			mf.CreatedAt.After(since) &&
++			!mf.Missing {
++			result = append(result, *mf)
++		}
++	}
++	return result, nil
++}
++
++func (m *MockMediaFileRepo) FindRecentFilesByProperties(missing model.MediaFile, since time.Time) (model.MediaFiles, error) {
++	if m.Err {
++		return nil, errors.New("error")
++	}
++	if m.FindRecentFilesByPropertiesFunc != nil {
++		return m.FindRecentFilesByPropertiesFunc(missing, since)
++	}
++	// Default implementation: find files with same properties in other libraries
++	var result model.MediaFiles
++	for _, mf := range m.Data {
++		if mf.LibraryID != missing.LibraryID &&
++			mf.Title == missing.Title &&
++			mf.Size == missing.Size &&
++			mf.Suffix == missing.Suffix &&
++			mf.DiscNumber == missing.DiscNumber &&
++			mf.TrackNumber == missing.TrackNumber &&
++			mf.Album == missing.Album &&
++			mf.MbzReleaseTrackID == "" && // Exclude files with MBZ Track ID
++			mf.CreatedAt.After(since) &&
++			!mf.Missing {
++			result = append(result, *mf)
++		}
++	}
++	return result, nil
++}
++
+ var _ model.MediaFileRepository = (*MockMediaFileRepo)(nil)
+ var _ model.ResourceRepository = (*MockMediaFileRepo)(nil)
+diff --git a/ui/src/artist/ArtistList.jsx b/ui/src/artist/ArtistList.jsx
+index 7a14e9efe53b1cea93441cca09c54525b62d6a2a..e175763e3bd364a1dbad8007c17a1f6c15d2510c 100644
+--- a/ui/src/artist/ArtistList.jsx
++++ b/ui/src/artist/ArtistList.jsx
+@@ -132,8 +132,10 @@ const ArtistListView = ({ hasShow, hasEdit, hasList, width, ...rest }) => {
+   useResourceRefresh('artist')
+ 
+   const role = filterValues?.role
+-  const getCounter = (record, counter) =>
+-    role ? record?.stats[role]?.[counter] : record?.[counter]
++  const getCounter = (record, counter) => {
++    if (!record) return undefined
++    return role ? record?.stats?.[role]?.[counter] : record?.[counter]
++  }
+   const getAlbumCount = (record) => getCounter(record, 'albumCount')
+   const getSongCount = (record) => getCounter(record, 'songCount')
+   const getSize = (record) => {

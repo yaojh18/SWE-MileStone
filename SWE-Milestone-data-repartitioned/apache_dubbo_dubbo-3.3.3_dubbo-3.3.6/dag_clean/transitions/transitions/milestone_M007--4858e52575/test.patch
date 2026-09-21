@@ -1,0 +1,58 @@
+diff --git a/dubbo-rpc/dubbo-rpc-api/src/test/java/org/apache/dubbo/rpc/filter/tps/DefaultTPSLimiterTest.java b/dubbo-rpc/dubbo-rpc-api/src/test/java/org/apache/dubbo/rpc/filter/tps/DefaultTPSLimiterTest.java
+index 188631f8dc439e66021f9af6456e91c64cd3a45f..6c6219967dee1e2d7da9769911cde6cc094f34c8 100644
+--- a/dubbo-rpc/dubbo-rpc-api/src/test/java/org/apache/dubbo/rpc/filter/tps/DefaultTPSLimiterTest.java
++++ b/dubbo-rpc/dubbo-rpc-api/src/test/java/org/apache/dubbo/rpc/filter/tps/DefaultTPSLimiterTest.java
+@@ -65,12 +65,52 @@ class DefaultTPSLimiterTest {
+     }
+ 
+     @Test
+-    void testTPSLimiterForMethodLevelConfig() {
++    void testMethodLevelTpsOverridesServiceLevel() {
+         Invocation invocation = new MockInvocation();
+         URL url = URL.valueOf("test://test");
+         url = url.addParameter(INTERFACE_KEY, "org.apache.dubbo.rpc.file.TpsService");
+         url = url.addParameter(TPS_LIMIT_RATE_KEY, TEST_LIMIT_RATE);
+         int tpsConfigForMethodLevel = 3;
++        url = url.addParameter("tps", 1);
++        url = url.addParameter("echo.tps", tpsConfigForMethodLevel);
++        url = url.addParameter(TPS_LIMIT_INTERVAL_KEY, 1000);
++        for (int i = 1; i <= tpsConfigForMethodLevel + 1; i++) {
++            if (i == tpsConfigForMethodLevel + 1) {
++                Assertions.assertFalse(defaultTPSLimiter.isAllowable(url, invocation));
++            } else {
++                Assertions.assertTrue(defaultTPSLimiter.isAllowable(url, invocation));
++            }
++        }
++    }
++
++    @Test
++    void testServiceLevelTpsWhenOtherMethodsHaveTps() {
++        Invocation invocation = new MockInvocation();
++        URL url = URL.valueOf("test://test");
++        url = url.addParameter(INTERFACE_KEY, "org.apache.dubbo.rpc.file.TpsService");
++        url = url.addParameter(TPS_LIMIT_RATE_KEY, TEST_LIMIT_RATE);
++        int tpsConfigForServiceLevel = 3;
++        url = url.addParameter("tps", tpsConfigForServiceLevel);
++        url = url.addParameter("otherMethod.tps", 1);
++        url = url.addParameter(TPS_LIMIT_INTERVAL_KEY, 1000);
++        for (int i = 1; i <= tpsConfigForServiceLevel + 1; i++) {
++            if (i == tpsConfigForServiceLevel + 1) {
++                Assertions.assertFalse(defaultTPSLimiter.isAllowable(url, invocation));
++            } else {
++                Assertions.assertTrue(defaultTPSLimiter.isAllowable(url, invocation));
++            }
++        }
++    }
++
++    @Test
++    void testMethodLevelTpsIsolation() {
++        Invocation invocation = new MockInvocation();
++        URL url = URL.valueOf("test://test");
++        url = url.addParameter(INTERFACE_KEY, "org.apache.dubbo.rpc.file.TpsService");
++        url = url.addParameter(TPS_LIMIT_RATE_KEY, TEST_LIMIT_RATE);
++        int tpsConfigForMethodLevel = 3;
++        url = url.addParameter("tps", 1);
++        url = url.addParameter("otherMethod.tps", 2);
+         url = url.addParameter("echo.tps", tpsConfigForMethodLevel);
+         url = url.addParameter(TPS_LIMIT_INTERVAL_KEY, 1000);
+         for (int i = 1; i <= tpsConfigForMethodLevel + 1; i++) {

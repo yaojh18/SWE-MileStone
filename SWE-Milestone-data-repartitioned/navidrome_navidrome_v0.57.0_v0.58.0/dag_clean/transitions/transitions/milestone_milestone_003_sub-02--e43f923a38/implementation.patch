@@ -1,0 +1,1667 @@
+diff --git a/cmd/root.go b/cmd/root.go
+index df39f50a6883787869e14b3d746ebfc61dec3050..9618b16e6d4e1aecc8a510ecf6087a6c4ff40d3a 100644
+--- a/cmd/root.go
++++ b/cmd/root.go
+@@ -110,7 +110,7 @@ func mainContext(ctx context.Context) (context.Context, context.CancelFunc) {
+ func startServer(ctx context.Context) func() error {
+ 	return func() error {
+ 		a := CreateServer()
+-		a.MountRouter("Native API", consts.URLPathNativeAPI, CreateNativeAPIRouter())
++		a.MountRouter("Native API", consts.URLPathNativeAPI, CreateNativeAPIRouter(ctx))
+ 		a.MountRouter("Subsonic API", consts.URLPathSubsonicAPI, CreateSubsonicAPIRouter(ctx))
+ 		a.MountRouter("Public Endpoints", consts.URLPathPublic, CreatePublicRouter())
+ 		if conf.Server.LastFM.Enabled {
+diff --git a/cmd/wire_gen.go b/cmd/wire_gen.go
+index dc558c393352565ed09ca3d5106254c71b545b65..d876a48a820af28c1f9aa1dcec1f4d0f2cfc34a1 100644
+--- a/cmd/wire_gen.go
++++ b/cmd/wire_gen.go
+@@ -47,17 +47,21 @@ func CreateServer() *server.Server {
+ 	sqlDB := db.Db()
+ 	dataStore := persistence.New(sqlDB)
+ 	broker := events.GetBroker()
+-	insights := metrics.GetInstance(dataStore)
++	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
++	manager := plugins.GetManager(dataStore, metricsMetrics)
++	insights := metrics.GetInstance(dataStore, manager)
+ 	serverServer := server.New(dataStore, broker, insights)
+ 	return serverServer
+ }
+ 
+-func CreateNativeAPIRouter() *nativeapi.Router {
++func CreateNativeAPIRouter(ctx context.Context) *nativeapi.Router {
+ 	sqlDB := db.Db()
+ 	dataStore := persistence.New(sqlDB)
+ 	share := core.NewShare(dataStore)
+ 	playlists := core.NewPlaylists(dataStore)
+-	insights := metrics.GetInstance(dataStore)
++	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
++	manager := plugins.GetManager(dataStore, metricsMetrics)
++	insights := metrics.GetInstance(dataStore, manager)
+ 	router := nativeapi.New(dataStore, share, playlists, insights)
+ 	return router
+ }
+@@ -122,7 +126,9 @@ func CreateListenBrainzRouter() *listenbrainz.Router {
+ func CreateInsights() metrics.Insights {
+ 	sqlDB := db.Db()
+ 	dataStore := persistence.New(sqlDB)
+-	insights := metrics.GetInstance(dataStore)
++	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
++	manager := plugins.GetManager(dataStore, metricsMetrics)
++	insights := metrics.GetInstance(dataStore, manager)
+ 	return insights
+ }
+ 
+@@ -164,7 +170,7 @@ func CreateScanWatcher(ctx context.Context) scanner.Watcher {
+ 	broker := events.GetBroker()
+ 	playlists := core.NewPlaylists(dataStore)
+ 	scannerScanner := scanner.New(ctx, dataStore, cacheWarmer, broker, playlists, metricsMetrics)
+-	watcher := scanner.NewWatcher(dataStore, scannerScanner)
++	watcher := scanner.GetWatcher(dataStore, scannerScanner)
+ 	return watcher
+ }
+ 
+@@ -185,7 +191,7 @@ func getPluginManager() plugins.Manager {
+ 
+ // wire_injectors.go:
+ 
+-var allProviders = wire.NewSet(core.Set, artwork.Set, server.New, subsonic.New, nativeapi.New, public.New, persistence.New, lastfm.NewRouter, listenbrainz.NewRouter, events.GetBroker, scanner.New, scanner.NewWatcher, plugins.GetManager, metrics.GetPrometheusInstance, db.Db, wire.Bind(new(agents.PluginLoader), new(plugins.Manager)), wire.Bind(new(scrobbler.PluginLoader), new(plugins.Manager)))
++var allProviders = wire.NewSet(core.Set, artwork.Set, server.New, subsonic.New, nativeapi.New, public.New, persistence.New, lastfm.NewRouter, listenbrainz.NewRouter, events.GetBroker, scanner.New, scanner.GetWatcher, plugins.GetManager, metrics.GetPrometheusInstance, db.Db, wire.Bind(new(agents.PluginLoader), new(plugins.Manager)), wire.Bind(new(scrobbler.PluginLoader), new(plugins.Manager)), wire.Bind(new(metrics.PluginLoader), new(plugins.Manager)), wire.Bind(new(core.Scanner), new(scanner.Scanner)), wire.Bind(new(core.Watcher), new(scanner.Watcher)))
+ 
+ func GetPluginManager(ctx context.Context) plugins.Manager {
+ 	manager := getPluginManager()
+diff --git a/cmd/wire_injectors.go b/cmd/wire_injectors.go
+index e2bc6cd1baba1fe5ed92dd1c316fd2640a5400bc..e8759ac539d631ad20481089801838b7cd63a88e 100644
+--- a/cmd/wire_injectors.go
++++ b/cmd/wire_injectors.go
+@@ -38,12 +38,15 @@ var allProviders = wire.NewSet(
+ 	listenbrainz.NewRouter,
+ 	events.GetBroker,
+ 	scanner.New,
+-	scanner.NewWatcher,
++	scanner.GetWatcher,
+ 	plugins.GetManager,
+ 	metrics.GetPrometheusInstance,
+ 	db.Db,
+ 	wire.Bind(new(agents.PluginLoader), new(plugins.Manager)),
+ 	wire.Bind(new(scrobbler.PluginLoader), new(plugins.Manager)),
++	wire.Bind(new(metrics.PluginLoader), new(plugins.Manager)),
++	wire.Bind(new(core.Scanner), new(scanner.Scanner)),
++	wire.Bind(new(core.Watcher), new(scanner.Watcher)),
+ )
+ 
+ func CreateDataStore() model.DataStore {
+@@ -58,7 +61,7 @@ func CreateServer() *server.Server {
+ 	))
+ }
+ 
+-func CreateNativeAPIRouter() *nativeapi.Router {
++func CreateNativeAPIRouter(ctx context.Context) *nativeapi.Router {
+ 	panic(wire.Build(
+ 		allProviders,
+ 	))
+diff --git a/conf/configuration.go b/conf/configuration.go
+index bb1ae120b087c456dc7dc2f8b78f1064059cd1f6..7292c7dfe9e35ae67e72d3b908940380e3078d94 100644
+--- a/conf/configuration.go
++++ b/conf/configuration.go
+@@ -127,6 +127,7 @@ type configOptions struct {
+ 	DevScannerThreads                uint
+ 	DevInsightsInitialDelay          time.Duration
+ 	DevEnablePlayerInsights          bool
++	DevEnablePluginsInsights         bool
+ 	DevPluginCompilationTimeout      time.Duration
+ 	DevExternalArtistFetchMultiplier float64
+ }
+@@ -601,6 +602,7 @@ func setViperDefaults() {
+ 	viper.SetDefault("devscannerthreads", 5)
+ 	viper.SetDefault("devinsightsinitialdelay", consts.InsightsInitialDelay)
+ 	viper.SetDefault("devenableplayerinsights", true)
++	viper.SetDefault("devenablepluginsinsights", true)
+ 	viper.SetDefault("devplugincompilationtimeout", time.Minute)
+ 	viper.SetDefault("devexternalartistfetchmultiplier", 1.5)
+ }
+diff --git a/core/agents/agents.go b/core/agents/agents.go
+index efa9f383d4a893430c5c644bde589788aac7df3f..50f8f289005cd04d0f0caae3cddfaad2d5a216a3 100644
+--- a/core/agents/agents.go
++++ b/core/agents/agents.go
+@@ -18,7 +18,7 @@ import (
+ // PluginLoader defines an interface for loading plugins
+ type PluginLoader interface {
+ 	// PluginNames returns the names of all plugins that implement a particular service
+-	PluginNames(serviceName string) []string
++	PluginNames(capability string) []string
+ 	// LoadMediaAgent loads and returns a media agent plugin
+ 	LoadMediaAgent(name string) (Interface, bool)
+ }
+diff --git a/core/artwork/cache_warmer.go b/core/artwork/cache_warmer.go
+index 2e60ca00ba3f2e4411ba19cc3388953b69de8010..909d299d82bc32dcccd2f3e06e8d2fe8ac5f07fe 100644
+--- a/core/artwork/cache_warmer.go
++++ b/core/artwork/cache_warmer.go
+@@ -96,8 +96,11 @@ func (a *cacheWarmer) run(ctx context.Context) {
+ 
+ 		// If cache not available, keep waiting
+ 		if !a.cache.Available(ctx) {
+-			if len(a.buffer) > 0 {
+-				log.Trace(ctx, "Cache not available, buffering precache request", "bufferLen", len(a.buffer))
++			a.mutex.Lock()
++			bufferLen := len(a.buffer)
++			a.mutex.Unlock()
++			if bufferLen > 0 {
++				log.Trace(ctx, "Cache not available, buffering precache request", "bufferLen", bufferLen)
+ 			}
+ 			continue
+ 		}
+diff --git a/core/library.go b/core/library.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..7abd35c8f962ae6fc8e961ecf5d30c0cd4797fd4
+--- /dev/null
++++ b/core/library.go
+@@ -0,0 +1,412 @@
++package core
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/Masterminds/squirrel"
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/core/storage"
++	"github.com/navidrome/navidrome/log"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/model/request"
++	"github.com/navidrome/navidrome/server/events"
++	"github.com/navidrome/navidrome/utils/slice"
++)
++
++// Scanner interface for triggering scans
++type Scanner interface {
++	ScanAll(ctx context.Context, fullScan bool) (warnings []string, err error)
++}
++
++// Watcher interface for managing file system watchers
++type Watcher interface {
++	Watch(ctx context.Context, lib *model.Library) error
++	StopWatching(ctx context.Context, libraryID int) error
++}
++
++// Library provides business logic for library management and user-library associations
++type Library interface {
++	GetUserLibraries(ctx context.Context, userID string) (model.Libraries, error)
++	SetUserLibraries(ctx context.Context, userID string, libraryIDs []int) error
++	ValidateLibraryAccess(ctx context.Context, userID string, libraryID int) error
++
++	NewRepository(ctx context.Context) rest.Repository
++}
++
++type libraryService struct {
++	ds      model.DataStore
++	scanner Scanner
++	watcher Watcher
++	broker  events.Broker
++}
++
++// NewLibrary creates a new Library service
++func NewLibrary(ds model.DataStore, scanner Scanner, watcher Watcher, broker events.Broker) Library {
++	return &libraryService{
++		ds:      ds,
++		scanner: scanner,
++		watcher: watcher,
++		broker:  broker,
++	}
++}
++
++// User-library association operations
++
++func (s *libraryService) GetUserLibraries(ctx context.Context, userID string) (model.Libraries, error) {
++	// Verify user exists
++	if _, err := s.ds.User(ctx).Get(userID); err != nil {
++		return nil, err
++	}
++
++	return s.ds.User(ctx).GetUserLibraries(userID)
++}
++
++func (s *libraryService) SetUserLibraries(ctx context.Context, userID string, libraryIDs []int) error {
++	// Verify user exists
++	user, err := s.ds.User(ctx).Get(userID)
++	if err != nil {
++		return err
++	}
++
++	// Admin users get all libraries automatically - don't allow manual assignment
++	if user.IsAdmin {
++		return fmt.Errorf("%w: cannot manually assign libraries to admin users", model.ErrValidation)
++	}
++
++	// Regular users must have at least one library
++	if len(libraryIDs) == 0 {
++		return fmt.Errorf("%w: at least one library must be assigned to non-admin users", model.ErrValidation)
++	}
++
++	// Validate all library IDs exist
++	if len(libraryIDs) > 0 {
++		if err := s.validateLibraryIDs(ctx, libraryIDs); err != nil {
++			return err
++		}
++	}
++
++	// Set user libraries
++	err = s.ds.User(ctx).SetUserLibraries(userID, libraryIDs)
++	if err != nil {
++		return fmt.Errorf("error setting user libraries: %w", err)
++	}
++
++	// Send refresh event to all clients
++	event := &events.RefreshResource{}
++	libIDs := slice.Map(libraryIDs, func(id int) string { return strconv.Itoa(id) })
++	event = event.With("user", userID).With("library", libIDs...)
++	s.broker.SendBroadcastMessage(ctx, event)
++	return nil
++}
++
++func (s *libraryService) ValidateLibraryAccess(ctx context.Context, userID string, libraryID int) error {
++	user, ok := request.UserFrom(ctx)
++	if !ok {
++		return fmt.Errorf("user not found in context")
++	}
++
++	// Admin users have access to all libraries
++	if user.IsAdmin {
++		return nil
++	}
++
++	// Check if user has explicit access to this library
++	libraries, err := s.ds.User(ctx).GetUserLibraries(userID)
++	if err != nil {
++		log.Error(ctx, "Error checking library access", "userID", userID, "libraryID", libraryID, err)
++		return fmt.Errorf("error checking library access: %w", err)
++	}
++
++	for _, lib := range libraries {
++		if lib.ID == libraryID {
++			return nil
++		}
++	}
++
++	return fmt.Errorf("%w: user does not have access to library %d", model.ErrNotAuthorized, libraryID)
++}
++
++// REST repository wrapper
++
++func (s *libraryService) NewRepository(ctx context.Context) rest.Repository {
++	repo := s.ds.Library(ctx)
++	wrapper := &libraryRepositoryWrapper{
++		ctx:               ctx,
++		LibraryRepository: repo,
++		Repository:        repo.(rest.Repository),
++		ds:                s.ds,
++		scanner:           s.scanner,
++		watcher:           s.watcher,
++		broker:            s.broker,
++	}
++	return wrapper
++}
++
++type libraryRepositoryWrapper struct {
++	rest.Repository
++	model.LibraryRepository
++	ctx     context.Context
++	ds      model.DataStore
++	scanner Scanner
++	watcher Watcher
++	broker  events.Broker
++}
++
++func (r *libraryRepositoryWrapper) Save(entity interface{}) (string, error) {
++	lib := entity.(*model.Library)
++	if err := r.validateLibrary(lib); err != nil {
++		return "", err
++	}
++
++	err := r.LibraryRepository.Put(lib)
++	if err != nil {
++		return "", r.mapError(err)
++	}
++
++	// Start watcher and trigger scan after successful library creation
++	if r.watcher != nil {
++		if err := r.watcher.Watch(r.ctx, lib); err != nil {
++			log.Warn(r.ctx, "Failed to start watcher for new library", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path, err)
++		}
++	}
++
++	if r.scanner != nil {
++		go r.triggerScan(lib, "new")
++	}
++
++	// Send library refresh event to all clients
++	if r.broker != nil {
++		event := &events.RefreshResource{}
++		r.broker.SendBroadcastMessage(r.ctx, event.With("library", strconv.Itoa(lib.ID)))
++		log.Debug(r.ctx, "Library created - sent refresh event", "libraryID", lib.ID, "name", lib.Name)
++	}
++
++	return strconv.Itoa(lib.ID), nil
++}
++
++func (r *libraryRepositoryWrapper) Update(id string, entity interface{}, cols ...string) error {
++	lib := entity.(*model.Library)
++	libID, err := strconv.Atoi(id)
++	if err != nil {
++		return fmt.Errorf("invalid library ID: %s", id)
++	}
++
++	lib.ID = libID
++	if err := r.validateLibrary(lib); err != nil {
++		return err
++	}
++
++	// Get the original library to check if path changed
++	originalLib, err := r.Get(libID)
++	if err != nil {
++		return r.mapError(err)
++	}
++
++	pathChanged := originalLib.Path != lib.Path
++
++	err = r.LibraryRepository.Put(lib)
++	if err != nil {
++		return r.mapError(err)
++	}
++
++	// Restart watcher and trigger scan if path was updated
++	if pathChanged {
++		if r.watcher != nil {
++			if err := r.watcher.Watch(r.ctx, lib); err != nil {
++				log.Warn(r.ctx, "Failed to restart watcher for updated library", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path, err)
++			}
++		}
++
++		if r.scanner != nil {
++			go r.triggerScan(lib, "updated")
++		}
++	}
++
++	// Send library refresh event to all clients
++	if r.broker != nil {
++		event := &events.RefreshResource{}
++		r.broker.SendBroadcastMessage(r.ctx, event.With("library", id))
++		log.Debug(r.ctx, "Library updated - sent refresh event", "libraryID", libID, "name", lib.Name)
++	}
++
++	return nil
++}
++
++func (r *libraryRepositoryWrapper) Delete(id string) error {
++	libID, err := strconv.Atoi(id)
++	if err != nil {
++		return &rest.ValidationError{Errors: map[string]string{
++			"id": "invalid library ID format",
++		}}
++	}
++
++	// Get library info before deletion for logging
++	lib, err := r.Get(libID)
++	if err != nil {
++		return r.mapError(err)
++	}
++
++	err = r.LibraryRepository.Delete(libID)
++	if err != nil {
++		return r.mapError(err)
++	}
++
++	// Stop watcher and trigger scan after successful library deletion to clean up orphaned data
++	if r.watcher != nil {
++		if err := r.watcher.StopWatching(r.ctx, libID); err != nil {
++			log.Warn(r.ctx, "Failed to stop watcher for deleted library", "libraryID", libID, "name", lib.Name, "path", lib.Path, err)
++		}
++	}
++
++	if r.scanner != nil {
++		go r.triggerScan(lib, "deleted")
++	}
++
++	// Send library refresh event to all clients
++	if r.broker != nil {
++		event := &events.RefreshResource{}
++		r.broker.SendBroadcastMessage(r.ctx, event.With("library", id))
++		log.Debug(r.ctx, "Library deleted - sent refresh event", "libraryID", libID, "name", lib.Name)
++	}
++
++	return nil
++}
++
++// Helper methods
++
++func (r *libraryRepositoryWrapper) mapError(err error) error {
++	if err == nil {
++		return nil
++	}
++
++	errStr := err.Error()
++
++	// Handle database constraint violations.
++	// TODO: Being tied to react-admin translations is not ideal, but this will probably go away with the new UI/API
++	if strings.Contains(errStr, "UNIQUE constraint failed") {
++		if strings.Contains(errStr, "library.name") {
++			return &rest.ValidationError{Errors: map[string]string{"name": "ra.validation.unique"}}
++		}
++		if strings.Contains(errStr, "library.path") {
++			return &rest.ValidationError{Errors: map[string]string{"path": "ra.validation.unique"}}
++		}
++	}
++
++	switch {
++	case errors.Is(err, model.ErrNotFound):
++		return rest.ErrNotFound
++	case errors.Is(err, model.ErrNotAuthorized):
++		return rest.ErrPermissionDenied
++	default:
++		return err
++	}
++}
++
++func (r *libraryRepositoryWrapper) validateLibrary(library *model.Library) error {
++	validationErrors := make(map[string]string)
++
++	if library.Name == "" {
++		validationErrors["name"] = "ra.validation.required"
++	}
++
++	if library.Path == "" {
++		validationErrors["path"] = "ra.validation.required"
++	} else {
++		// Validate path format and accessibility
++		if err := r.validateLibraryPath(library); err != nil {
++			validationErrors["path"] = err.Error()
++		}
++	}
++
++	if len(validationErrors) > 0 {
++		return &rest.ValidationError{Errors: validationErrors}
++	}
++
++	return nil
++}
++
++func (r *libraryRepositoryWrapper) validateLibraryPath(library *model.Library) error {
++	// Validate path format
++	if !filepath.IsAbs(library.Path) {
++		return fmt.Errorf("library path must be absolute")
++	}
++
++	// Clean the path to normalize it
++	cleanPath := filepath.Clean(library.Path)
++	library.Path = cleanPath
++
++	// Check if path exists and is accessible using storage abstraction
++	fileStore, err := storage.For(library.Path)
++	if err != nil {
++		return fmt.Errorf("invalid storage scheme: %w", err)
++	}
++
++	fsys, err := fileStore.FS()
++	if err != nil {
++		log.Warn(r.ctx, "Error validating library.path", "path", library.Path, err)
++		return fmt.Errorf("resources.library.validation.pathInvalid")
++	}
++
++	// Check if root directory exists
++	info, err := fs.Stat(fsys, ".")
++	if err != nil {
++		// Parse the error message to check for "not a directory"
++		log.Warn(r.ctx, "Error stating library.path", "path", library.Path, err)
++		errStr := err.Error()
++		if strings.Contains(errStr, "not a directory") ||
++			strings.Contains(errStr, "The directory name is invalid.") {
++			return fmt.Errorf("resources.library.validation.pathNotDirectory")
++		} else if os.IsNotExist(err) {
++			return fmt.Errorf("resources.library.validation.pathNotFound")
++		} else if os.IsPermission(err) {
++			return fmt.Errorf("resources.library.validation.pathNotAccessible")
++		} else {
++			return fmt.Errorf("resources.library.validation.pathInvalid")
++		}
++	}
++
++	if !info.IsDir() {
++		return fmt.Errorf("resources.library.validation.pathNotDirectory")
++	}
++
++	return nil
++}
++
++func (s *libraryService) validateLibraryIDs(ctx context.Context, libraryIDs []int) error {
++	if len(libraryIDs) == 0 {
++		return nil
++	}
++
++	// Use CountAll to efficiently validate library IDs exist
++	count, err := s.ds.Library(ctx).CountAll(model.QueryOptions{
++		Filters: squirrel.Eq{"id": libraryIDs},
++	})
++	if err != nil {
++		return fmt.Errorf("error validating library IDs: %w", err)
++	}
++
++	if int(count) != len(libraryIDs) {
++		return fmt.Errorf("%w: one or more library IDs are invalid", model.ErrValidation)
++	}
++
++	return nil
++}
++
++func (r *libraryRepositoryWrapper) triggerScan(lib *model.Library, action string) {
++	log.Info(r.ctx, fmt.Sprintf("Triggering scan for %s library", action), "libraryID", lib.ID, "name", lib.Name, "path", lib.Path)
++	start := time.Now()
++	warnings, err := r.scanner.ScanAll(r.ctx, false) // Quick scan for new library
++	if err != nil {
++		log.Error(r.ctx, fmt.Sprintf("Error scanning %s library", action), "libraryID", lib.ID, "name", lib.Name, err)
++	} else {
++		log.Info(r.ctx, fmt.Sprintf("Scan completed for %s library", action), "libraryID", lib.ID, "name", lib.Name, "warnings", len(warnings), "elapsed", time.Since(start))
++	}
++}
+diff --git a/core/metrics/insights.go b/core/metrics/insights.go
+index 29284a908667c5388efe4f87ccf5a207be589d58..f4f8738e706cfa87769cbbdafe0ad68588c3f2b3 100644
+--- a/core/metrics/insights.go
++++ b/core/metrics/insights.go
+@@ -21,6 +21,7 @@ import (
+ 	"github.com/navidrome/navidrome/core/metrics/insights"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/plugins/schema"
+ 	"github.com/navidrome/navidrome/utils/singleton"
+ )
+ 
+@@ -34,12 +35,18 @@ var (
+ )
+ 
+ type insightsCollector struct {
+-	ds         model.DataStore
+-	lastRun    atomic.Int64
+-	lastStatus atomic.Bool
++	ds           model.DataStore
++	pluginLoader PluginLoader
++	lastRun      atomic.Int64
++	lastStatus   atomic.Bool
+ }
+ 
+-func GetInstance(ds model.DataStore) Insights {
++// PluginLoader defines an interface for loading plugins
++type PluginLoader interface {
++	PluginList() map[string]schema.PluginManifest
++}
++
++func GetInstance(ds model.DataStore, pluginLoader PluginLoader) Insights {
+ 	return singleton.GetInstance(func() *insightsCollector {
+ 		id, err := ds.Property(context.TODO()).Get(consts.InsightsIDKey)
+ 		if err != nil {
+@@ -51,7 +58,7 @@ func GetInstance(ds model.DataStore) Insights {
+ 			}
+ 		}
+ 		insightsID = id
+-		return &insightsCollector{ds: ds}
++		return &insightsCollector{ds: ds, pluginLoader: pluginLoader}
+ 	})
+ }
+ 
+@@ -180,10 +187,11 @@ var staticData = sync.OnceValue(func() insights.Data {
+ 	data.Config.EnableDownloads = conf.Server.EnableDownloads
+ 	data.Config.EnableSharing = conf.Server.EnableSharing
+ 	data.Config.EnableStarRating = conf.Server.EnableStarRating
+-	data.Config.EnableLastFM = conf.Server.LastFM.Enabled
++	data.Config.EnableLastFM = conf.Server.LastFM.Enabled && conf.Server.LastFM.ApiKey != "" && conf.Server.LastFM.Secret != ""
++	data.Config.EnableSpotify = conf.Server.Spotify.ID != "" && conf.Server.Spotify.Secret != ""
+ 	data.Config.EnableListenBrainz = conf.Server.ListenBrainz.Enabled
++	data.Config.EnableDeezer = conf.Server.Deezer.Enabled
+ 	data.Config.EnableMediaFileCoverArt = conf.Server.EnableMediaFileCoverArt
+-	data.Config.EnableSpotify = conf.Server.Spotify.ID != ""
+ 	data.Config.EnableJukebox = conf.Server.Jukebox.Enabled
+ 	data.Config.EnablePrometheus = conf.Server.Prometheus.Enabled
+ 	data.Config.TranscodingCacheSize = conf.Server.TranscodingCacheSize
+@@ -199,6 +207,9 @@ var staticData = sync.OnceValue(func() insights.Data {
+ 	data.Config.ScanSchedule = conf.Server.Scanner.Schedule
+ 	data.Config.ScanWatcherWait = uint64(math.Trunc(conf.Server.Scanner.WatcherWait.Seconds()))
+ 	data.Config.ScanOnStartup = conf.Server.Scanner.ScanOnStartup
++	data.Config.ReverseProxyConfigured = conf.Server.ReverseProxyWhitelist != ""
++	data.Config.HasCustomPID = conf.Server.PID.Track != "" || conf.Server.PID.Album != ""
++	data.Config.HasCustomTags = len(conf.Server.Tags) > 0
+ 
+ 	return data
+ })
+@@ -233,12 +244,29 @@ func (c *insightsCollector) collect(ctx context.Context) []byte {
+ 	if err != nil {
+ 		log.Trace(ctx, "Error reading radios count", err)
+ 	}
++	data.Library.Libraries, err = c.ds.Library(ctx).CountAll()
++	if err != nil {
++		log.Trace(ctx, "Error reading libraries count", err)
++	}
+ 	data.Library.ActiveUsers, err = c.ds.User(ctx).CountAll(model.QueryOptions{
+ 		Filters: squirrel.Gt{"last_access_at": time.Now().Add(-7 * 24 * time.Hour)},
+ 	})
+ 	if err != nil {
+ 		log.Trace(ctx, "Error reading active users count", err)
+ 	}
++
++	// Check for smart playlists
++	data.Config.HasSmartPlaylists, err = c.hasSmartPlaylists(ctx)
++	if err != nil {
++		log.Trace(ctx, "Error checking for smart playlists", err)
++	}
++
++	// Collect plugins if permitted and enabled
++	if conf.Server.DevEnablePluginsInsights && conf.Server.Plugins.Enabled {
++		data.Plugins = c.collectPlugins(ctx)
++	}
++
++	// Collect active players if permitted
+ 	if conf.Server.DevEnablePlayerInsights {
+ 		data.Library.ActivePlayers, err = c.ds.Player(ctx).CountByClient(model.QueryOptions{
+ 			Filters: squirrel.Gt{"last_seen": time.Now().Add(-7 * 24 * time.Hour)},
+@@ -264,3 +292,23 @@ func (c *insightsCollector) collect(ctx context.Context) []byte {
+ 	}
+ 	return resp
+ }
++
++// hasSmartPlaylists checks if there are any smart playlists (playlists with rules)
++func (c *insightsCollector) hasSmartPlaylists(ctx context.Context) (bool, error) {
++	count, err := c.ds.Playlist(ctx).CountAll(model.QueryOptions{
++		Filters: squirrel.And{squirrel.NotEq{"rules": ""}, squirrel.NotEq{"rules": nil}},
++	})
++	return count > 0, err
++}
++
++// collectPlugins collects information about installed plugins
++func (c *insightsCollector) collectPlugins(_ context.Context) map[string]insights.PluginInfo {
++	plugins := make(map[string]insights.PluginInfo)
++	for id, manifest := range c.pluginLoader.PluginList() {
++		plugins[id] = insights.PluginInfo{
++			Name:    manifest.Name,
++			Version: manifest.Version,
++		}
++	}
++	return plugins
++}
+diff --git a/core/metrics/insights/data.go b/core/metrics/insights/data.go
+index 85c1ad18b909aa25a622cd96efa7363d0b768cda..105a6218e8dd4be03ccb178e9b5d058c90082124 100644
+--- a/core/metrics/insights/data.go
++++ b/core/metrics/insights/data.go
+@@ -36,6 +36,7 @@ type Data struct {
+ 		Playlists     int64            `json:"playlists"`
+ 		Shares        int64            `json:"shares"`
+ 		Radios        int64            `json:"radios"`
++		Libraries     int64            `json:"libraries"`
+ 		ActiveUsers   int64            `json:"activeUsers"`
+ 		ActivePlayers map[string]int64 `json:"activePlayers,omitempty"`
+ 	} `json:"library"`
+@@ -55,6 +56,7 @@ type Data struct {
+ 		EnableStarRating        bool   `json:"enableStarRating,omitempty"`
+ 		EnableLastFM            bool   `json:"enableLastFM,omitempty"`
+ 		EnableListenBrainz      bool   `json:"enableListenBrainz,omitempty"`
++		EnableDeezer            bool   `json:"enableDeezer,omitempty"`
+ 		EnableMediaFileCoverArt bool   `json:"enableMediaFileCoverArt,omitempty"`
+ 		EnableSpotify           bool   `json:"enableSpotify,omitempty"`
+ 		EnableJukebox           bool   `json:"enableJukebox,omitempty"`
+@@ -69,7 +71,17 @@ type Data struct {
+ 		BackupCount             int    `json:"backupCount,omitempty"`
+ 		DevActivityPanel        bool   `json:"devActivityPanel,omitempty"`
+ 		DefaultBackgroundURLSet bool   `json:"defaultBackgroundURL,omitempty"`
++		HasSmartPlaylists       bool   `json:"hasSmartPlaylists,omitempty"`
++		ReverseProxyConfigured  bool   `json:"reverseProxyConfigured,omitempty"`
++		HasCustomPID            bool   `json:"hasCustomPID,omitempty"`
++		HasCustomTags           bool   `json:"hasCustomTags,omitempty"`
+ 	} `json:"config"`
++	Plugins map[string]PluginInfo `json:"plugins,omitempty"`
++}
++
++type PluginInfo struct {
++	Name    string `json:"name"`
++	Version string `json:"version"`
+ }
+ 
+ type FSInfo struct {
+diff --git a/core/mock_library_service.go b/core/mock_library_service.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..56f2abd4c813006b08ac1d84a7d4f18c2a2d87fe
+--- /dev/null
++++ b/core/mock_library_service.go
+@@ -0,0 +1,46 @@
++package core
++
++import (
++	"context"
++
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/tests"
++)
++
++// MockLibraryWrapper provides a simple wrapper around MockLibraryRepo
++// that implements the core.Library interface for testing
++type MockLibraryWrapper struct {
++	*tests.MockLibraryRepo
++}
++
++// MockLibraryRestAdapter adapts MockLibraryRepo to rest.Repository interface
++type MockLibraryRestAdapter struct {
++	*tests.MockLibraryRepo
++}
++
++// NewMockLibraryService creates a new mock library service for testing
++func NewMockLibraryService() Library {
++	repo := &tests.MockLibraryRepo{
++		Data: make(map[int]model.Library),
++	}
++	// Set up default test data
++	repo.SetData(model.Libraries{
++		{ID: 1, Name: "Test Library 1", Path: "/music/library1"},
++		{ID: 2, Name: "Test Library 2", Path: "/music/library2"},
++	})
++	return &MockLibraryWrapper{MockLibraryRepo: repo}
++}
++
++func (m *MockLibraryWrapper) NewRepository(ctx context.Context) rest.Repository {
++	return &MockLibraryRestAdapter{MockLibraryRepo: m.MockLibraryRepo}
++}
++
++// rest.Repository interface implementation
++
++func (a *MockLibraryRestAdapter) Delete(id string) error {
++	return a.DeleteByStringID(id)
++}
++
++var _ Library = (*MockLibraryWrapper)(nil)
++var _ rest.Repository = (*MockLibraryRestAdapter)(nil)
+diff --git a/core/scrobbler/play_tracker.go b/core/scrobbler/play_tracker.go
+index e4e052779d899467c6d200f5b84ce8ebb4d9b274..3b71a21002d96168f019a928c4c27ac7e559cfba 100644
+--- a/core/scrobbler/play_tracker.go
++++ b/core/scrobbler/play_tracker.go
+@@ -40,7 +40,7 @@ type PlayTracker interface {
+ // PluginLoader is a minimal interface for plugin manager usage in PlayTracker
+ // (avoids import cycles)
+ type PluginLoader interface {
+-	PluginNames(service string) []string
++	PluginNames(capability string) []string
+ 	LoadScrobbler(name string) (Scrobbler, bool)
+ }
+ 
+@@ -74,8 +74,7 @@ func newPlayTracker(ds model.DataStore, broker events.Broker, pluginManager Plug
+ 	}
+ 	if conf.Server.EnableNowPlaying {
+ 		m.OnExpiration(func(_ string, _ NowPlayingInfo) {
+-			ctx := events.BroadcastToAll(context.Background())
+-			broker.SendMessage(ctx, &events.NowPlayingCount{Count: m.Len()})
++			broker.SendBroadcastMessage(context.Background(), &events.NowPlayingCount{Count: m.Len()})
+ 		})
+ 	}
+ 
+@@ -195,8 +194,7 @@ func (p *playTracker) NowPlaying(ctx context.Context, playerId string, playerNam
+ 	ttl := time.Duration(remaining+5) * time.Second
+ 	_ = p.playMap.AddWithTTL(playerId, info, ttl)
+ 	if conf.Server.EnableNowPlaying {
+-		ctx = events.BroadcastToAll(ctx)
+-		p.broker.SendMessage(ctx, &events.NowPlayingCount{Count: p.playMap.Len()})
++		p.broker.SendBroadcastMessage(ctx, &events.NowPlayingCount{Count: p.playMap.Len()})
+ 	}
+ 	player, _ := request.PlayerFrom(ctx)
+ 	if player.ScrobbleEnabled {
+diff --git a/core/wire_providers.go b/core/wire_providers.go
+index 482cfbefe4f6f734d1d5b07842fe8c4422279180..ae365156a2e77338acbbf52b954ee40a6f913efb 100644
+--- a/core/wire_providers.go
++++ b/core/wire_providers.go
+@@ -17,6 +17,7 @@ var Set = wire.NewSet(
+ 	NewPlayers,
+ 	NewShare,
+ 	NewPlaylists,
++	NewLibrary,
+ 	agents.GetAgents,
+ 	external.NewProvider,
+ 	wire.Bind(new(external.Agents), new(*agents.Agents)),
+diff --git a/plugins/manager.go b/plugins/manager.go
+index 7c735c740af9cf0476cf53dfd198a97f6af7f536..35a1130fdc847e5ab7df07e7e99a569b2e2314ba 100644
+--- a/plugins/manager.go
++++ b/plugins/manager.go
+@@ -87,7 +87,8 @@ type SubsonicRouter http.Handler
+ type Manager interface {
+ 	SetSubsonicRouter(router SubsonicRouter)
+ 	EnsureCompiled(name string) error
+-	PluginNames(serviceName string) []string
++	PluginList() map[string]schema.PluginManifest
++	PluginNames(capability string) []string
+ 	LoadPlugin(name string, capability string) WasmPlugin
+ 	LoadMediaAgent(name string) (agents.Interface, bool)
+ 	LoadScrobbler(name string) (scrobbler.Scrobbler, bool)
+@@ -97,7 +98,7 @@ type Manager interface {
+ // managerImpl is a singleton that manages plugins
+ type managerImpl struct {
+ 	plugins          map[string]*plugin             // Map of plugin folder name to plugin info
+-	mu               sync.RWMutex                   // Protects plugins map
++	pluginsMu        sync.RWMutex                   // Protects plugins map
+ 	subsonicRouter   atomic.Pointer[SubsonicRouter] // Subsonic API router
+ 	schedulerService *schedulerService              // Service for handling scheduled tasks
+ 	websocketService *websocketService              // Service for handling WebSocket connections
+@@ -166,7 +167,7 @@ func (m *managerImpl) registerPlugin(pluginID, pluginDir, wasmPath string, manif
+ 	}
+ 
+ 	// Register the plugin first
+-	m.mu.Lock()
++	m.pluginsMu.Lock()
+ 	m.plugins[pluginID] = p
+ 
+ 	// Register one plugin adapter for each capability
+@@ -187,7 +188,7 @@ func (m *managerImpl) registerPlugin(pluginID, pluginDir, wasmPath string, manif
+ 		}
+ 		m.adapters[pluginID+"_"+capabilityStr] = adapter
+ 	}
+-	m.mu.Unlock()
++	m.pluginsMu.Unlock()
+ 
+ 	log.Info("Discovered plugin", "folder", pluginID, "name", manifest.Name, "capabilities", manifest.Capabilities, "wasm", wasmPath, "dev_mode", isSymlink)
+ 	return m.plugins[pluginID]
+@@ -210,8 +211,8 @@ func (m *managerImpl) initializePluginIfNeeded(plugin *plugin) {
+ 
+ // unregisterPlugin removes a plugin from the manager
+ func (m *managerImpl) unregisterPlugin(pluginID string) {
+-	m.mu.Lock()
+-	defer m.mu.Unlock()
++	m.pluginsMu.Lock()
++	defer m.pluginsMu.Unlock()
+ 
+ 	plugin, ok := m.plugins[pluginID]
+ 	if !ok {
+@@ -234,10 +235,10 @@ func (m *managerImpl) unregisterPlugin(pluginID string) {
+ // ScanPlugins scans the plugins directory, discovers all valid plugins, and registers them for use.
+ func (m *managerImpl) ScanPlugins() {
+ 	// Clear existing plugins
+-	m.mu.Lock()
++	m.pluginsMu.Lock()
+ 	m.plugins = make(map[string]*plugin)
+ 	m.adapters = make(map[string]WasmPlugin)
+-	m.mu.Unlock()
++	m.pluginsMu.Unlock()
+ 
+ 	// Get plugins directory from config
+ 	root := conf.Server.Plugins.Folder
+@@ -297,10 +298,24 @@ func (m *managerImpl) ScanPlugins() {
+ 	log.Debug("Found valid plugins", "count", len(validPluginNames), "plugins", validPluginNames)
+ }
+ 
++// PluginList returns a map of all registered plugins with their manifests
++func (m *managerImpl) PluginList() map[string]schema.PluginManifest {
++	m.pluginsMu.RLock()
++	defer m.pluginsMu.RUnlock()
++
++	// Create a map to hold the plugin manifests
++	pluginList := make(map[string]schema.PluginManifest, len(m.plugins))
++	for name, plugin := range m.plugins {
++		// Use the plugin ID as the key and the manifest as the value
++		pluginList[name] = *plugin.Manifest
++	}
++	return pluginList
++}
++
+ // PluginNames returns the folder names of all plugins that implement the specified capability
+ func (m *managerImpl) PluginNames(capability string) []string {
+-	m.mu.RLock()
+-	defer m.mu.RUnlock()
++	m.pluginsMu.RLock()
++	defer m.pluginsMu.RUnlock()
+ 
+ 	var names []string
+ 	for name, plugin := range m.plugins {
+@@ -315,8 +330,8 @@ func (m *managerImpl) PluginNames(capability string) []string {
+ }
+ 
+ func (m *managerImpl) getPlugin(name string, capability string) (*plugin, WasmPlugin, error) {
+-	m.mu.RLock()
+-	defer m.mu.RUnlock()
++	m.pluginsMu.RLock()
++	defer m.pluginsMu.RUnlock()
+ 	info, infoOk := m.plugins[name]
+ 	adapter, adapterOk := m.adapters[name+"_"+capability]
+ 
+@@ -356,9 +371,9 @@ func (m *managerImpl) LoadPlugin(name string, capability string) WasmPlugin {
+ // This is useful when you need to wait for compilation without loading a specific capability,
+ // such as during plugin refresh operations or health checks.
+ func (m *managerImpl) EnsureCompiled(name string) error {
+-	m.mu.RLock()
++	m.pluginsMu.RLock()
+ 	plugin, ok := m.plugins[name]
+-	m.mu.RUnlock()
++	m.pluginsMu.RUnlock()
+ 
+ 	if !ok {
+ 		return fmt.Errorf("plugin not found: %s", name)
+@@ -393,7 +408,9 @@ func (n noopManager) SetSubsonicRouter(router SubsonicRouter) {}
+ 
+ func (n noopManager) EnsureCompiled(name string) error { return nil }
+ 
+-func (n noopManager) PluginNames(serviceName string) []string { return nil }
++func (n noopManager) PluginList() map[string]schema.PluginManifest { return nil }
++
++func (n noopManager) PluginNames(capability string) []string { return nil }
+ 
+ func (n noopManager) LoadPlugin(name string, capability string) WasmPlugin { return nil }
+ 
+diff --git a/scanner/controller.go b/scanner/controller.go
+index f3fdd593fc17562dfa0d861b62b0949b9dcdd55e..c1347077a0f68b5865adf534cc9554ec37f97163 100644
+--- a/scanner/controller.go
++++ b/scanner/controller.go
+@@ -116,6 +116,24 @@ type controller struct {
+ 	changesDetected bool
+ }
+ 
++// getLastScanTime returns the most recent scan time across all libraries
++func (s *controller) getLastScanTime(ctx context.Context) (time.Time, error) {
++	libs, err := s.ds.Library(ctx).GetAll(model.QueryOptions{
++		Sort:  "last_scan_at",
++		Order: "desc",
++		Max:   1,
++	})
++	if err != nil {
++		return time.Time{}, fmt.Errorf("getting libraries: %w", err)
++	}
++
++	if len(libs) == 0 {
++		return time.Time{}, nil
++	}
++
++	return libs[0].LastScanAt, nil
++}
++
+ // getScanInfo retrieves scan status from the database
+ func (s *controller) getScanInfo(ctx context.Context) (scanType string, elapsed time.Duration, lastErr string) {
+ 	lastErr, _ = s.ds.Property(ctx).DefaultGet(consts.LastScanErrorKey, "")
+@@ -128,10 +146,10 @@ func (s *controller) getScanInfo(ctx context.Context) (scanType string, elapsed
+ 			if running.Load() {
+ 				elapsed = time.Since(startTime)
+ 			} else {
+-				// If scan is not running, try to get the last scan time for the library
+-				lib, err := s.ds.Library(ctx).Get(1) //TODO Multi-library
+-				if err == nil {
+-					elapsed = lib.LastScanAt.Sub(startTime)
++				// If scan is not running, calculate elapsed time using the most recent scan time
++				lastScanTime, err := s.getLastScanTime(ctx)
++				if err == nil && !lastScanTime.IsZero() {
++					elapsed = lastScanTime.Sub(startTime)
+ 				}
+ 			}
+ 		}
+@@ -141,9 +159,9 @@ func (s *controller) getScanInfo(ctx context.Context) (scanType string, elapsed
+ }
+ 
+ func (s *controller) Status(ctx context.Context) (*StatusInfo, error) {
+-	lib, err := s.ds.Library(ctx).Get(1) //TODO Multi-library
++	lastScanTime, err := s.getLastScanTime(ctx)
+ 	if err != nil {
+-		return nil, fmt.Errorf("getting library: %w", err)
++		return nil, fmt.Errorf("getting last scan time: %w", err)
+ 	}
+ 
+ 	scanType, elapsed, lastErr := s.getScanInfo(ctx)
+@@ -151,7 +169,7 @@ func (s *controller) Status(ctx context.Context) (*StatusInfo, error) {
+ 	if running.Load() {
+ 		status := &StatusInfo{
+ 			Scanning:    true,
+-			LastScan:    lib.LastScanAt,
++			LastScan:    lastScanTime,
+ 			Count:       s.count.Load(),
+ 			FolderCount: s.folderCount.Load(),
+ 			LastError:   lastErr,
+@@ -167,7 +185,7 @@ func (s *controller) Status(ctx context.Context) (*StatusInfo, error) {
+ 	}
+ 	return &StatusInfo{
+ 		Scanning:    false,
+-		LastScan:    lib.LastScanAt,
++		LastScan:    lastScanTime,
+ 		Count:       uint32(count),
+ 		FolderCount: uint32(folderCount),
+ 		LastError:   lastErr,
+@@ -198,7 +216,6 @@ func (s *controller) ScanAll(requestCtx context.Context, fullScan bool) ([]strin
+ 
+ 	// Prepare the context for the scan
+ 	ctx := request.AddValues(s.rootCtx, requestCtx)
+-	ctx = events.BroadcastToAll(ctx)
+ 	ctx = auth.WithAdminUser(ctx, s.ds)
+ 
+ 	// Send the initial scan status event
+@@ -218,7 +235,7 @@ func (s *controller) ScanAll(requestCtx context.Context, fullScan bool) ([]strin
+ 	// If changes were detected, send a refresh event to all clients
+ 	if s.changesDetected {
+ 		log.Debug(ctx, "Library changes imported. Sending refresh event")
+-		s.broker.SendMessage(ctx, &events.RefreshResource{})
++		s.broker.SendBroadcastMessage(ctx, &events.RefreshResource{})
+ 	}
+ 	// Send the final scan status event, with totals
+ 	if count, folderCount, err := s.getCounters(ctx); err != nil {
+@@ -297,5 +314,5 @@ func (s *controller) trackProgress(ctx context.Context, progress <-chan *Progres
+ }
+ 
+ func (s *controller) sendMessage(ctx context.Context, status *events.ScanStatus) {
+-	s.broker.SendMessage(ctx, status)
++	s.broker.SendBroadcastMessage(ctx, status)
+ }
+diff --git a/scanner/phase_1_folders.go b/scanner/phase_1_folders.go
+index 32a4d99bfba3b4678af57d80fa1569ddf9983e57..e04f10c700cda920addf9e50eb5abf5482bc3214 100644
+--- a/scanner/phase_1_folders.go
++++ b/scanner/phase_1_folders.go
+@@ -28,6 +28,7 @@ import (
+ 
+ func createPhaseFolders(ctx context.Context, state *scanState, ds model.DataStore, cw artwork.CacheWarmer, libs []model.Library) *phaseFolders {
+ 	var jobs []*scanJob
++	var updatedLibs []model.Library
+ 	for _, lib := range libs {
+ 		if lib.LastScanStartedAt.IsZero() {
+ 			err := ds.Library(ctx).ScanBegin(lib.ID, state.fullScan)
+@@ -54,7 +55,12 @@ func createPhaseFolders(ctx context.Context, state *scanState, ds model.DataStor
+ 			continue
+ 		}
+ 		jobs = append(jobs, job)
++		updatedLibs = append(updatedLibs, lib)
+ 	}
++
++	// Update the state with the libraries that have been processed and have their scan timestamps set
++	state.libraries = updatedLibs
++
+ 	return &phaseFolders{jobs: jobs, ctx: ctx, ds: ds, state: state}
+ }
+ 
+@@ -418,12 +424,14 @@ func (p *phaseFolders) persistAlbum(repo model.AlbumRepository, a *model.Album,
+ 	if prevID == "" {
+ 		return nil
+ 	}
++
+ 	// Reassign annotation from previous album to new album
+ 	log.Trace(p.ctx, "Reassigning album annotations", "from", prevID, "to", a.ID, "album", a.Name)
+ 	if err := repo.ReassignAnnotation(prevID, a.ID); err != nil {
+ 		log.Warn(p.ctx, "Scanner: Could not reassign annotations", "from", prevID, "to", a.ID, "album", a.Name, err)
+ 		p.state.sendWarning(fmt.Sprintf("Could not reassign annotations from %s to %s ('%s'): %v", prevID, a.ID, a.Name, err))
+ 	}
++
+ 	// Keep created_at field from previous instance of the album
+ 	if err := repo.CopyAttributes(prevID, a.ID, "created_at"); err != nil {
+ 		// Silently ignore when the previous album is not found
+diff --git a/scanner/phase_2_missing_tracks.go b/scanner/phase_2_missing_tracks.go
+index 6f56f6a520fd951ff789cf13acf42303d2b0713b..a6c0e261e3d43b4c2adc8c1349d1d35f296ca72d 100644
+--- a/scanner/phase_2_missing_tracks.go
++++ b/scanner/phase_2_missing_tracks.go
+@@ -3,6 +3,7 @@ package scanner
+ import (
+ 	"context"
+ 	"fmt"
++	"sync"
+ 	"sync/atomic"
+ 
+ 	ppl "github.com/google/go-pipeline/pkg/pipeline"
+@@ -31,14 +32,21 @@ type missingTracks struct {
+ // 4. Updates the database with the new locations of the matched files and removes the old entries.
+ // 5. Logs the results and finalizes the phase by reporting the total number of matched files.
+ type phaseMissingTracks struct {
+-	ctx          context.Context
+-	ds           model.DataStore
+-	totalMatched atomic.Uint32
+-	state        *scanState
++	ctx                       context.Context
++	ds                        model.DataStore
++	totalMatched              atomic.Uint32
++	state                     *scanState
++	processedAlbumAnnotations map[string]bool // Track processed album annotation reassignments
++	annotationMutex           sync.RWMutex    // Protects processedAlbumAnnotations
+ }
+ 
+ func createPhaseMissingTracks(ctx context.Context, state *scanState, ds model.DataStore) *phaseMissingTracks {
+-	return &phaseMissingTracks{ctx: ctx, ds: ds, state: state}
++	return &phaseMissingTracks{
++		ctx:                       ctx,
++		ds:                        ds,
++		state:                     state,
++		processedAlbumAnnotations: make(map[string]bool),
++	}
+ }
+ 
+ func (p *phaseMissingTracks) description() string {
+@@ -52,17 +60,15 @@ func (p *phaseMissingTracks) producer() ppl.Producer[*missingTracks] {
+ func (p *phaseMissingTracks) produce(put func(tracks *missingTracks)) error {
+ 	count := 0
+ 	var putIfMatched = func(mt missingTracks) {
+-		if mt.pid != "" && len(mt.matched) > 0 {
+-			log.Trace(p.ctx, "Scanner: Found missing and matching tracks", "pid", mt.pid, "missing", len(mt.missing), "matched", len(mt.matched), "lib", mt.lib.Name)
++		if mt.pid != "" && len(mt.missing) > 0 {
++			log.Trace(p.ctx, "Scanner: Found missing tracks", "pid", mt.pid, "missing", "title", mt.missing[0].Title,
++				len(mt.missing), "matched", len(mt.matched), "lib", mt.lib.Name,
++			)
+ 			count++
+ 			put(&mt)
+ 		}
+ 	}
+-	libs, err := p.ds.Library(p.ctx).GetAll()
+-	if err != nil {
+-		return fmt.Errorf("loading libraries: %w", err)
+-	}
+-	for _, lib := range libs {
++	for _, lib := range p.state.libraries {
+ 		if lib.LastScanStartedAt.IsZero() {
+ 			continue
+ 		}
+@@ -104,10 +110,13 @@ func (p *phaseMissingTracks) produce(put func(tracks *missingTracks)) error {
+ func (p *phaseMissingTracks) stages() []ppl.Stage[*missingTracks] {
+ 	return []ppl.Stage[*missingTracks]{
+ 		ppl.NewStage(p.processMissingTracks, ppl.Name("process missing tracks")),
++		ppl.NewStage(p.processCrossLibraryMoves, ppl.Name("process cross-library moves")),
+ 	}
+ }
+ 
+ func (p *phaseMissingTracks) processMissingTracks(in *missingTracks) (*missingTracks, error) {
++	hasMatches := false
++
+ 	for _, ms := range in.missing {
+ 		var exactMatch model.MediaFile
+ 		var equivalentMatch model.MediaFile
+@@ -132,6 +141,7 @@ func (p *phaseMissingTracks) processMissingTracks(in *missingTracks) (*missingTr
+ 				return nil, err
+ 			}
+ 			p.totalMatched.Add(1)
++			hasMatches = true
+ 			continue
+ 		}
+ 
+@@ -145,6 +155,7 @@ func (p *phaseMissingTracks) processMissingTracks(in *missingTracks) (*missingTr
+ 				return nil, err
+ 			}
+ 			p.totalMatched.Add(1)
++			hasMatches = true
+ 			continue
+ 		}
+ 
+@@ -157,23 +168,141 @@ func (p *phaseMissingTracks) processMissingTracks(in *missingTracks) (*missingTr
+ 				return nil, err
+ 			}
+ 			p.totalMatched.Add(1)
++			hasMatches = true
+ 		}
+ 	}
++
++	// If any matches were found in this missingTracks group, return nil
++	// This signals the next stage to skip processing this group
++	if hasMatches {
++		return nil, nil
++	}
++
++	// If no matches found, pass through to next stage
+ 	return in, nil
+ }
+ 
+-func (p *phaseMissingTracks) moveMatched(mt, ms model.MediaFile) error {
++// processCrossLibraryMoves processes files that weren't matched within their library
++// and attempts to find matches in other libraries
++func (p *phaseMissingTracks) processCrossLibraryMoves(in *missingTracks) (*missingTracks, error) {
++	// Skip if input is nil (meaning previous stage found matches)
++	if in == nil {
++		return nil, nil
++	}
++
++	log.Debug(p.ctx, "Scanner: Processing cross-library moves", "pid", in.pid, "missing", len(in.missing), "lib", in.lib.Name)
++
++	for _, missing := range in.missing {
++		found, err := p.findCrossLibraryMatch(missing)
++		if err != nil {
++			log.Error(p.ctx, "Scanner: Error searching for cross-library matches", "missing", missing.Path, "lib", in.lib.Name, err)
++			continue
++		}
++
++		if found.ID != "" {
++			log.Debug(p.ctx, "Scanner: Found cross-library moved track", "missing", missing.Path, "movedTo", found.Path, "fromLib", in.lib.Name, "toLib", found.LibraryName)
++			err := p.moveMatched(found, missing)
++			if err != nil {
++				log.Error(p.ctx, "Scanner: Error moving cross-library track", "missing", missing.Path, "movedTo", found.Path, err)
++				continue
++			}
++			p.totalMatched.Add(1)
++		}
++	}
++
++	return in, nil
++}
++
++// findCrossLibraryMatch searches for a missing file in other libraries using two-tier matching
++func (p *phaseMissingTracks) findCrossLibraryMatch(missing model.MediaFile) (model.MediaFile, error) {
++	// First tier: Search by MusicBrainz Track ID if available
++	if missing.MbzReleaseTrackID != "" {
++		matches, err := p.ds.MediaFile(p.ctx).FindRecentFilesByMBZTrackID(missing, missing.CreatedAt)
++		if err != nil {
++			log.Error(p.ctx, "Scanner: Error searching for recent files by MBZ Track ID", "mbzTrackID", missing.MbzReleaseTrackID, err)
++		} else {
++			// Apply the same matching logic as within-library matching
++			for _, match := range matches {
++				if missing.Equals(match) {
++					return match, nil // Exact match found
++				}
++			}
++
++			// If only one match and it's equivalent, use it
++			if len(matches) == 1 && missing.IsEquivalent(matches[0]) {
++				return matches[0], nil
++			}
++		}
++	}
++
++	// Second tier: Search by intrinsic properties (title, size, suffix, etc.)
++	matches, err := p.ds.MediaFile(p.ctx).FindRecentFilesByProperties(missing, missing.CreatedAt)
++	if err != nil {
++		log.Error(p.ctx, "Scanner: Error searching for recent files by properties", "missing", missing.Path, err)
++		return model.MediaFile{}, err
++	}
++
++	// Apply the same matching logic as within-library matching
++	for _, match := range matches {
++		if missing.Equals(match) {
++			return match, nil // Exact match found
++		}
++	}
++
++	// If only one match and it's equivalent, use it
++	if len(matches) == 1 && missing.IsEquivalent(matches[0]) {
++		return matches[0], nil
++	}
++
++	return model.MediaFile{}, nil
++}
++
++func (p *phaseMissingTracks) moveMatched(target, missing model.MediaFile) error {
+ 	return p.ds.WithTx(func(tx model.DataStore) error {
+-		discardedID := mt.ID
+-		mt.ID = ms.ID
+-		err := tx.MediaFile(p.ctx).Put(&mt)
++		discardedID := target.ID
++		oldAlbumID := missing.AlbumID
++		newAlbumID := target.AlbumID
++
++		// Update the target media file with the missing file's ID. This effectively "moves" the track
++		// to the new location while keeping its annotations and references intact.
++		target.ID = missing.ID
++		err := tx.MediaFile(p.ctx).Put(&target)
+ 		if err != nil {
+ 			return fmt.Errorf("update matched track: %w", err)
+ 		}
++
++		// Discard the new mediafile row (the one that was moved to)
+ 		err = tx.MediaFile(p.ctx).Delete(discardedID)
+ 		if err != nil {
+ 			return fmt.Errorf("delete discarded track: %w", err)
+ 		}
++
++		// Handle album annotation reassignment if AlbumID changed
++		if oldAlbumID != newAlbumID {
++			// Use newAlbumID as key since we only care about avoiding duplicate reassignments to the same target
++			p.annotationMutex.RLock()
++			alreadyProcessed := p.processedAlbumAnnotations[newAlbumID]
++			p.annotationMutex.RUnlock()
++
++			if !alreadyProcessed {
++				p.annotationMutex.Lock()
++				// Double-check pattern to avoid race conditions
++				if !p.processedAlbumAnnotations[newAlbumID] {
++					// Reassign direct album annotations (starred, rating)
++					log.Debug(p.ctx, "Scanner: Reassigning album annotations", "from", oldAlbumID, "to", newAlbumID)
++					if err := tx.Album(p.ctx).ReassignAnnotation(oldAlbumID, newAlbumID); err != nil {
++						log.Warn(p.ctx, "Scanner: Could not reassign album annotations", "from", oldAlbumID, "to", newAlbumID, err)
++					}
++
++					// Note: RefreshPlayCounts will be called in later phases, so we don't need to call it here
++					p.processedAlbumAnnotations[newAlbumID] = true
++				}
++				p.annotationMutex.Unlock()
++			} else {
++				log.Trace(p.ctx, "Scanner: Skipping album annotation reassignment", "from", oldAlbumID, "to", newAlbumID)
++			}
++		}
++
+ 		p.state.changesDetected.Store(true)
+ 		return nil
+ 	})
+diff --git a/scanner/scanner.go b/scanner/scanner.go
+index 7ddc78b173f1ec2880d8311eea9e949eed1ea0c5..04a5c2456d84be750aab3c66cf81cc2dae548f57 100644
+--- a/scanner/scanner.go
++++ b/scanner/scanner.go
+@@ -28,6 +28,7 @@ type scanState struct {
+ 	progress        chan<- *ProgressInfo
+ 	fullScan        bool
+ 	changesDetected atomic.Bool
++	libraries       model.Libraries // Store libraries list for consistency across phases
+ }
+ 
+ func (s *scanState) sendProgress(info *ProgressInfo) {
+@@ -63,6 +64,7 @@ func (s *scannerImpl) scanAll(ctx context.Context, fullScan bool, progress chan<
+ 		state.sendWarning(fmt.Sprintf("getting libraries: %s", err))
+ 		return
+ 	}
++	state.libraries = libs
+ 
+ 	log.Info(ctx, "Scanner: Starting scan", "fullScan", state.fullScan, "numLibraries", len(libs))
+ 
+@@ -111,7 +113,7 @@ func (s *scannerImpl) scanAll(ctx context.Context, fullScan bool, progress chan<
+ 		s.runRefreshStats(ctx, &state),
+ 
+ 		// Update last_scan_completed_at for all libraries
+-		s.runUpdateLibraries(ctx, libs, &state),
++		s.runUpdateLibraries(ctx, &state),
+ 
+ 		// Optimize DB
+ 		s.runOptimize(ctx),
+@@ -186,11 +188,11 @@ func (s *scannerImpl) runOptimize(ctx context.Context) func() error {
+ 	}
+ }
+ 
+-func (s *scannerImpl) runUpdateLibraries(ctx context.Context, libs model.Libraries, state *scanState) func() error {
++func (s *scannerImpl) runUpdateLibraries(ctx context.Context, state *scanState) func() error {
+ 	return func() error {
+ 		start := time.Now()
+ 		return s.ds.WithTx(func(tx model.DataStore) error {
+-			for _, lib := range libs {
++			for _, lib := range state.libraries {
+ 				err := tx.Library(ctx).ScanEnd(lib.ID)
+ 				if err != nil {
+ 					log.Error(ctx, "Scanner: Error updating last scan completed", "lib", lib.Name, err)
+@@ -216,7 +218,7 @@ func (s *scannerImpl) runUpdateLibraries(ctx context.Context, libs model.Librari
+ 					log.Debug(ctx, "Scanner: No changes detected, skipping library stats refresh", "lib", lib.Name)
+ 				}
+ 			}
+-			log.Debug(ctx, "Scanner: Updated libraries after scan", "elapsed", time.Since(start), "numLibraries", len(libs))
++			log.Debug(ctx, "Scanner: Updated libraries after scan", "elapsed", time.Since(start), "numLibraries", len(state.libraries))
+ 			return nil
+ 		}, "scanner: update libraries")
+ 	}
+diff --git a/scanner/watcher.go b/scanner/watcher.go
+index bf4f7f9d0f54635207d8c8751ec1f24c0d118e5e..37cfb5e2213052f1b57c4d8d7df66e7dbbdfac05 100644
+--- a/scanner/watcher.go
++++ b/scanner/watcher.go
+@@ -5,42 +5,67 @@ import (
+ 	"fmt"
+ 	"io/fs"
+ 	"path/filepath"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/core/storage"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/utils/singleton"
+ )
+ 
+ type Watcher interface {
+ 	Run(ctx context.Context) error
++	Watch(ctx context.Context, lib *model.Library) error
++	StopWatching(ctx context.Context, libraryID int) error
+ }
+ 
+ type watcher struct {
+-	ds          model.DataStore
+-	scanner     Scanner
+-	triggerWait time.Duration
++	mainCtx         context.Context
++	ds              model.DataStore
++	scanner         Scanner
++	triggerWait     time.Duration
++	watcherNotify   chan model.Library
++	libraryWatchers map[int]*libraryWatcherInstance
++	mu              sync.RWMutex
+ }
+ 
+-func NewWatcher(ds model.DataStore, s Scanner) Watcher {
+-	return &watcher{ds: ds, scanner: s, triggerWait: conf.Server.Scanner.WatcherWait}
++type libraryWatcherInstance struct {
++	library *model.Library
++	cancel  context.CancelFunc
++}
++
++// GetWatcher returns the watcher singleton
++func GetWatcher(ds model.DataStore, s Scanner) Watcher {
++	return singleton.GetInstance(func() *watcher {
++		return &watcher{
++			ds:              ds,
++			scanner:         s,
++			triggerWait:     conf.Server.Scanner.WatcherWait,
++			watcherNotify:   make(chan model.Library, 1),
++			libraryWatchers: make(map[int]*libraryWatcherInstance),
++		}
++	})
+ }
+ 
+ func (w *watcher) Run(ctx context.Context) error {
++	// Keep the main context to be used in all watchers added later
++	w.mainCtx = ctx
++
++	// Start watchers for all existing libraries
+ 	libs, err := w.ds.Library(ctx).GetAll()
+ 	if err != nil {
+ 		return fmt.Errorf("getting libraries: %w", err)
+ 	}
+ 
+-	watcherChan := make(chan struct{})
+-	defer close(watcherChan)
+-
+-	// Start a watcher for each library
+ 	for _, lib := range libs {
+-		go watchLib(ctx, lib, watcherChan)
++		if err := w.Watch(ctx, &lib); err != nil {
++			log.Warn(ctx, "Failed to start watcher for existing library", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path, err)
++		}
+ 	}
+ 
++	// Main scan triggering loop
+ 	trigger := time.NewTimer(w.triggerWait)
+ 	trigger.Stop()
+ 	waiting := false
+@@ -68,61 +93,137 @@ func (w *watcher) Run(ctx context.Context) error {
+ 				}
+ 			}()
+ 		case <-ctx.Done():
++			// Stop all library watchers
++			w.mu.Lock()
++			for libraryID, instance := range w.libraryWatchers {
++				log.Debug(ctx, "Stopping library watcher due to context cancellation", "libraryID", libraryID)
++				instance.cancel()
++			}
++			w.libraryWatchers = make(map[int]*libraryWatcherInstance)
++			w.mu.Unlock()
+ 			return nil
+-		case <-watcherChan:
++		case lib := <-w.watcherNotify:
+ 			if !waiting {
+-				log.Debug(ctx, "Watcher: Detected changes. Waiting for more changes before triggering scan")
++				log.Debug(ctx, "Watcher: Detected changes. Waiting for more changes before triggering scan",
++					"libraryID", lib.ID, "name", lib.Name, "path", lib.Path)
+ 				waiting = true
+ 			}
+-
+ 			trigger.Reset(w.triggerWait)
+ 		}
+ 	}
+ }
+ 
+-func watchLib(ctx context.Context, lib model.Library, watchChan chan struct{}) {
++func (w *watcher) Watch(ctx context.Context, lib *model.Library) error {
++	w.mu.Lock()
++	defer w.mu.Unlock()
++
++	// Stop existing watcher if any
++	if existingInstance, exists := w.libraryWatchers[lib.ID]; exists {
++		log.Debug(ctx, "Stopping existing watcher before starting new one", "libraryID", lib.ID, "name", lib.Name)
++		existingInstance.cancel()
++	}
++
++	// Start new watcher
++	watcherCtx, cancel := context.WithCancel(w.mainCtx)
++	instance := &libraryWatcherInstance{
++		library: lib,
++		cancel:  cancel,
++	}
++
++	w.libraryWatchers[lib.ID] = instance
++
++	// Start watching in a goroutine
++	go func() {
++		defer func() {
++			w.mu.Lock()
++			if currentInstance, exists := w.libraryWatchers[lib.ID]; exists && currentInstance == instance {
++				delete(w.libraryWatchers, lib.ID)
++			}
++			w.mu.Unlock()
++		}()
++
++		err := w.watchLibrary(watcherCtx, lib)
++		if err != nil && watcherCtx.Err() == nil { // Only log error if not due to cancellation
++			log.Error(ctx, "Watcher error", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path, err)
++		}
++	}()
++
++	log.Info(ctx, "Started watcher for library", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path)
++	return nil
++}
++
++func (w *watcher) StopWatching(ctx context.Context, libraryID int) error {
++	w.mu.Lock()
++	defer w.mu.Unlock()
++
++	instance, exists := w.libraryWatchers[libraryID]
++	if !exists {
++		log.Debug(ctx, "No watcher found to stop", "libraryID", libraryID)
++		return nil
++	}
++
++	instance.cancel()
++	delete(w.libraryWatchers, libraryID)
++
++	log.Info(ctx, "Stopped watcher for library", "libraryID", libraryID, "name", instance.library.Name)
++	return nil
++}
++
++// watchLibrary implements the core watching logic for a single library (extracted from old watchLib function)
++func (w *watcher) watchLibrary(ctx context.Context, lib *model.Library) error {
+ 	s, err := storage.For(lib.Path)
+ 	if err != nil {
+-		log.Error(ctx, "Watcher: Error creating storage", "library", lib.ID, "path", lib.Path, err)
+-		return
++		return fmt.Errorf("creating storage: %w", err)
+ 	}
++
+ 	fsys, err := s.FS()
+ 	if err != nil {
+-		log.Error(ctx, "Watcher: Error getting FS", "library", lib.ID, "path", lib.Path, err)
+-		return
++		return fmt.Errorf("getting FS: %w", err)
+ 	}
++
+ 	watcher, ok := s.(storage.Watcher)
+ 	if !ok {
+-		log.Info(ctx, "Watcher not supported", "library", lib.ID, "path", lib.Path)
+-		return
++		log.Info(ctx, "Watcher not supported for storage type", "libraryID", lib.ID, "path", lib.Path)
++		return nil
+ 	}
++
+ 	c, err := watcher.Start(ctx)
+ 	if err != nil {
+-		log.Error(ctx, "Watcher: Error watching library", "library", lib.ID, "path", lib.Path, err)
+-		return
++		return fmt.Errorf("starting watcher: %w", err)
+ 	}
++
+ 	absLibPath, err := filepath.Abs(lib.Path)
+ 	if err != nil {
+-		log.Error(ctx, "Watcher: Error converting lib.Path to absolute", "library", lib.ID, "path", lib.Path, err)
+-		return
++		return fmt.Errorf("converting to absolute path: %w", err)
+ 	}
+-	log.Info(ctx, "Watcher started", "library", lib.ID, "libPath", lib.Path, "absoluteLibPath", absLibPath)
++
++	log.Info(ctx, "Watcher started for library", "libraryID", lib.ID, "name", lib.Name, "path", lib.Path, "absoluteLibPath", absLibPath)
++
+ 	for {
+ 		select {
+ 		case <-ctx.Done():
+-			return
++			log.Debug(ctx, "Watcher stopped due to context cancellation", "libraryID", lib.ID, "name", lib.Name)
++			return nil
+ 		case path := <-c:
+ 			path, err = filepath.Rel(absLibPath, path)
+ 			if err != nil {
+-				log.Error(ctx, "Watcher: Error getting relative path", "library", lib.ID, "libPath", absLibPath, "path", path, err)
++				log.Error(ctx, "Error getting relative path", "libraryID", lib.ID, "absolutePath", absLibPath, "path", path, err)
+ 				continue
+ 			}
++
+ 			if isIgnoredPath(ctx, fsys, path) {
+-				log.Trace(ctx, "Watcher: Ignoring change", "library", lib.ID, "path", path)
++				log.Trace(ctx, "Ignoring change", "libraryID", lib.ID, "path", path)
+ 				continue
+ 			}
+-			log.Trace(ctx, "Watcher: Detected change", "library", lib.ID, "path", path, "libPath", absLibPath)
+-			watchChan <- struct{}{}
++
++			log.Trace(ctx, "Detected change", "libraryID", lib.ID, "path", path, "absoluteLibPath", absLibPath)
++
++			// Notify the main watcher of changes
++			select {
++			case w.watcherNotify <- *lib:
++			default:
++				// Channel is full, notification already pending
++			}
+ 		}
+ 	}
+ }
+diff --git a/server/events/events.go b/server/events/events.go
+index e8dcd81f06d1c62d160f8cb886a1446d95801b72..ff0a8a40a95abd23ca2aa01b5f253e3853145360 100644
+--- a/server/events/events.go
++++ b/server/events/events.go
+@@ -13,8 +13,8 @@ type eventCtxKey string
+ 
+ const broadcastToAllKey eventCtxKey = "broadcastToAll"
+ 
+-// BroadcastToAll is a context key that can be used to broadcast an event to all clients
+-func BroadcastToAll(ctx context.Context) context.Context {
++// broadcastToAll is a context key that can be used to broadcast an event to all clients
++func broadcastToAll(ctx context.Context) context.Context {
+ 	return context.WithValue(ctx, broadcastToAllKey, true)
+ }
+ 
+diff --git a/server/events/sse.go b/server/events/sse.go
+index 690c79937f72ba059c6d737f8104c22064271e5e..54a6029856a5d7ecc1e55a7361c52d041a9f9188 100644
+--- a/server/events/sse.go
++++ b/server/events/sse.go
+@@ -19,6 +19,7 @@ import (
+ type Broker interface {
+ 	http.Handler
+ 	SendMessage(ctx context.Context, event Event)
++	SendBroadcastMessage(ctx context.Context, event Event)
+ }
+ 
+ const (
+@@ -77,6 +78,11 @@ func GetBroker() Broker {
+ 	})
+ }
+ 
++func (b *broker) SendBroadcastMessage(ctx context.Context, evt Event) {
++	ctx = broadcastToAll(ctx)
++	b.SendMessage(ctx, evt)
++}
++
+ func (b *broker) SendMessage(ctx context.Context, evt Event) {
+ 	msg := b.prepareMessage(ctx, evt)
+ 	log.Trace("Broker received new event", "type", msg.event, "data", msg.data)
+@@ -280,4 +286,6 @@ type noopBroker struct {
+ 	http.Handler
+ }
+ 
++func (b noopBroker) SendBroadcastMessage(context.Context, Event) {}
++
+ func (noopBroker) SendMessage(context.Context, Event) {}

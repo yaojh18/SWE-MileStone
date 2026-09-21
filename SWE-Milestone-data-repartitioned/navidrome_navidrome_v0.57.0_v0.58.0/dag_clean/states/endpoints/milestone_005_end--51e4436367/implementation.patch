@@ -1,0 +1,109 @@
+diff --git a/adapters/taglib/taglib_wrapper.cpp b/adapters/taglib/taglib_wrapper.cpp
+index 17c95bfc077ba8acd8ef7c83b3fb7a0a670c5599..78921b671662d4cdfc8d016e3bcc32b8af3980f9 100644
+--- a/adapters/taglib/taglib_wrapper.cpp
++++ b/adapters/taglib/taglib_wrapper.cpp
+@@ -174,7 +174,14 @@ int taglib_read(const FILENAME_CHAR_T *filename, unsigned long id) {
+     const TagLib::ASF::Tag *asfTags{asfFile->tag()};
+     const auto itemListMap = asfTags->attributeListMap();
+     for (const auto item : itemListMap) {
+-      tags.insert(item.first, item.second.front().toString());
++      char *key = const_cast<char*>(item.first.toCString(true));
++
++      for (auto j = item.second.begin();
++           j != item.second.end(); ++j) {
++
++        char *val = const_cast<char*>(j->toString().toCString(true));
++        goPutStr(id, key, val);
++      }
+     }
+   }
+ 
+diff --git a/core/playlists.go b/core/playlists.go
+index 4cdab0d383e4b296819e2ba96b6292f39f4c751a..8ff7b979f7f531c37876249d7bc2959d314dc92e 100644
+--- a/core/playlists.go
++++ b/core/playlists.go
+@@ -21,6 +21,7 @@ import (
+ 	"github.com/navidrome/navidrome/model/criteria"
+ 	"github.com/navidrome/navidrome/model/request"
+ 	"github.com/navidrome/navidrome/utils/slice"
++	"golang.org/x/text/unicode/norm"
+ )
+ 
+ type Playlists interface {
+@@ -203,10 +204,10 @@ func (s *playlists) parseM3U(ctx context.Context, pls *model.Playlist, folder *m
+ 		}
+ 		existing := make(map[string]int, len(found))
+ 		for idx := range found {
+-			existing[strings.ToLower(found[idx].Path)] = idx
++			existing[normalizePathForComparison(found[idx].Path)] = idx
+ 		}
+ 		for _, path := range paths {
+-			idx, ok := existing[strings.ToLower(path)]
++			idx, ok := existing[normalizePathForComparison(path)]
+ 			if ok {
+ 				mfs = append(mfs, found[idx])
+ 			} else {
+@@ -223,6 +224,13 @@ func (s *playlists) parseM3U(ctx context.Context, pls *model.Playlist, folder *m
+ 	return nil
+ }
+ 
++// normalizePathForComparison normalizes a file path to NFC form and converts to lowercase
++// for consistent comparison. This fixes Unicode normalization issues on macOS where
++// Apple Music creates playlists with NFC-encoded paths but the filesystem uses NFD.
++func normalizePathForComparison(path string) string {
++	return strings.ToLower(norm.NFC.String(path))
++}
++
+ // TODO This won't work for multiple libraries
+ func (s *playlists) normalizePaths(ctx context.Context, pls *model.Playlist, folder *model.Folder, lines []string) ([]string, error) {
+ 	libRegex, err := s.compileLibraryPaths(ctx)
+diff --git a/core/storage/storage.go b/core/storage/storage.go
+index 84bcae0d6b58dda6c2255293dc964b8f60110aaf..b9fceb1fd3c7fc6f17d7a340c4ec32f44eba1fb4 100644
+--- a/core/storage/storage.go
++++ b/core/storage/storage.go
+@@ -6,6 +6,8 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"sync"
++
++	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+ const LocalSchemaID = "file"
+@@ -36,7 +38,14 @@ func For(uri string) (Storage, error) {
+ 	if len(parts) < 2 {
+ 		uri, _ = filepath.Abs(uri)
+ 		uri = filepath.ToSlash(uri)
+-		uri = LocalSchemaID + "://" + uri
++
++		// Properly escape each path component using URL standards
++		pathParts := strings.Split(uri, "/")
++		escapedParts := slice.Map(pathParts, func(s string) string {
++			return url.PathEscape(s)
++		})
++
++		uri = LocalSchemaID + "://" + strings.Join(escapedParts, "/")
+ 	}
+ 
+ 	u, err := url.Parse(uri)
+diff --git a/model/metadata/metadata.go b/model/metadata/metadata.go
+index aea4238a4be916b9152d485ebea2d91bae7df050..1372d0034aa2f8edd00f2708da3ef8f24c7be22a 100644
+--- a/model/metadata/metadata.go
++++ b/model/metadata/metadata.go
+@@ -245,10 +245,14 @@ func processPairMapping(name model.TagName, mapping model.TagConf, lowered model
+ 		}
+ 	}
+ 
++	// always parse id3 pairs. For lyrics, Taglib appears to always provide lyrics:xxx
++	// Prefer that over format-specific tags
++	id3Base := parseID3Pairs(name, lowered)
++
+ 	if len(aliasValues) > 0 {
+-		return parseVorbisPairs(aliasValues)
++		id3Base = append(id3Base, parseVorbisPairs(aliasValues)...)
+ 	}
+-	return parseID3Pairs(name, lowered)
++	return id3Base
+ }
+ 
+ func parseID3Pairs(name model.TagName, lowered model.Tags) []string {

@@ -1,0 +1,265 @@
+diff --git a/crates/nu-cli/tests/completions/support/completions_helpers.rs b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+index ba762c3cbd8dbe0ca5633f714ebabfbf10de3544..45a76aa852cdcb62cb0d1485a0ac77efdc367314 100644
+--- a/crates/nu-cli/tests/completions/support/completions_helpers.rs
++++ b/crates/nu-cli/tests/completions/support/completions_helpers.rs
+@@ -76,10 +76,16 @@ pub fn new_external_engine() -> EngineState {
+     let mut engine = create_default_context();
+     let dir = fs::fixtures().join("external_completions").join("path");
+     let dir_str = dir.to_string_lossy().to_string();
+-    let span = nu_protocol::Span::new(0, dir_str.len());
++    let internal_span = nu_protocol::Span::new(0, dir_str.len());
+     engine.add_env_var(
+         "PATH".to_string(),
+-        Value::list(vec![Value::string(dir_str, span)], span),
++        Value::List {
++            vals: vec![Value::String {
++                val: dir_str,
++                internal_span,
++            }],
++            internal_span,
++        },
+     );
+     engine
+ }
+@@ -193,7 +199,7 @@ pub fn merge_input(
+             engine_state,
+             stack,
+             &block,
+-            PipelineData::Value(Value::nothing(Span::unknown()), None),
++            PipelineData::value(Value::nothing(Span::unknown()), None),
+         )
+         .is_ok()
+     );
+diff --git a/crates/nu-command/tests/commands/config_env_default.rs b/crates/nu-command/tests/commands/config_env_default.rs
+index d9b1185ffb1a2d74c66d68a21499a7abc9211ba6..1d1282838b468b2e7ce6e10e2e1ee09db689583e 100644
+--- a/crates/nu-command/tests/commands/config_env_default.rs
++++ b/crates/nu-command/tests/commands/config_env_default.rs
+@@ -5,7 +5,9 @@ fn print_config_env_default_to_stdout() {
+     let actual = nu!("config env --default");
+     assert_eq!(
+         actual.out,
+-        nu_utils::get_default_env().replace(['\n', '\r'], "")
++        nu_utils::ConfigFileKind::Env
++            .default()
++            .replace(['\n', '\r'], "")
+     );
+     assert!(actual.err.is_empty());
+ }
+diff --git a/crates/nu-command/tests/commands/config_nu_default.rs b/crates/nu-command/tests/commands/config_nu_default.rs
+index 7366031810ada4da3e2c350df385bc465dde1d01..c4391d6fbec28c07c96035d0197ac2ba30887dc9 100644
+--- a/crates/nu-command/tests/commands/config_nu_default.rs
++++ b/crates/nu-command/tests/commands/config_nu_default.rs
+@@ -5,7 +5,9 @@ fn print_config_nu_default_to_stdout() {
+     let actual = nu!("config nu --default");
+     assert_eq!(
+         actual.out,
+-        nu_utils::get_default_config().replace(['\n', '\r'], "")
++        nu_utils::ConfigFileKind::Config
++            .default()
++            .replace(['\n', '\r'], "")
+     );
+     assert!(actual.err.is_empty());
+ }
+diff --git a/crates/nu-parser/tests/test_parser.rs b/crates/nu-parser/tests/test_parser.rs
+index b0f3e856f269c08c3e7bbb3ac763e3ff8dcf4e48..c1668d8993d1914d5d9d028bf6114efa0d7255e4 100644
+--- a/crates/nu-parser/tests/test_parser.rs
++++ b/crates/nu-parser/tests/test_parser.rs
+@@ -494,47 +494,47 @@ pub fn parse_binary_with_incomplete_octal_format() {
+     assert_eq!(element.expr.expr, Expr::Binary(vec![0o2]));
+ }
+ 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_invalid_octal_format() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, b"0o[90]", true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)));
+-// [ENV-PATCH] }
+-// [ENV-PATCH] 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_multi_byte_char() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     // found using fuzzing, Rust can panic if you slice into this string
+-// [ENV-PATCH]     let contents = b"0x[\xEF\xBF\xBD]";
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, contents, true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)))
+-// [ENV-PATCH] }
++#[test]
++pub fn parse_binary_with_invalid_octal_format() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    let block = parse(&mut working_set, None, b"0o[90]", true);
++
++    assert_eq!(working_set.parse_errors.len(), 1);
++    assert!(matches!(
++        working_set.parse_errors.first(),
++        Some(ParseError::InvalidBinaryString(_, _))
++    ));
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)));
++}
++
++#[test]
++pub fn parse_binary_with_multi_byte_char() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    // found using fuzzing, Rust can panic if you slice into this string
++    let contents = b"0x[\xEF\xBF\xBD]";
++    let block = parse(&mut working_set, None, contents, true);
++
++    assert_eq!(working_set.parse_errors.len(), 1);
++    assert!(matches!(
++        working_set.parse_errors.first(),
++        Some(ParseError::InvalidBinaryString(_, _))
++    ));
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)))
++}
+ 
+ #[test]
+ pub fn parse_call() {
+diff --git a/crates/nu-plugin-core/src/interface/tests.rs b/crates/nu-plugin-core/src/interface/tests.rs
+index b398b39290f0c605c8dcf119e3309e5e29e1f8ce..34c3a722dd09707b9cfad6c05adbee342e882f99 100644
+--- a/crates/nu-plugin-core/src/interface/tests.rs
++++ b/crates/nu-plugin-core/src/interface/tests.rs
+@@ -324,7 +324,7 @@ fn write_pipeline_data_value() -> Result<(), ShellError> {
+     let value = Value::test_int(7);
+ 
+     let (header, writer) =
+-        interface.init_write_pipeline_data(PipelineData::Value(value.clone(), None), &())?;
++        interface.init_write_pipeline_data(PipelineData::value(value.clone(), None), &())?;
+ 
+     match header {
+         PipelineDataHeader::Value(read_value, _) => assert_eq!(value, read_value),
+@@ -349,7 +349,7 @@ fn write_pipeline_data_prepared_properly() {
+     // Sending a binary should be an error in our test scenario
+     let value = Value::test_binary(vec![7, 8]);
+ 
+-    match interface.init_write_pipeline_data(PipelineData::Value(value, None), &()) {
++    match interface.init_write_pipeline_data(PipelineData::value(value, None), &()) {
+         Ok(_) => panic!("prepare_pipeline_data was not called"),
+         Err(err) => {
+             assert_eq!(
+@@ -376,7 +376,7 @@ fn write_pipeline_data_list_stream() -> Result<(), ShellError> {
+     ];
+ 
+     // Set up pipeline data for a list stream
+-    let pipe = PipelineData::ListStream(
++    let pipe = PipelineData::list_stream(
+         ListStream::new(
+             values.clone().into_iter(),
+             Span::test_data(),
+@@ -430,7 +430,7 @@ fn write_pipeline_data_byte_stream() -> Result<(), ShellError> {
+     let span = Span::new(400, 500);
+ 
+     // Set up pipeline data for a byte stream
+-    let data = PipelineData::ByteStream(
++    let data = PipelineData::byte_stream(
+         ByteStream::read(
+             std::io::Cursor::new(expected),
+             span,
+diff --git a/crates/nu-plugin-test-support/tests/custom_value/mod.rs b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+index 26f755eed081713220acf609db23a15b4df0d24f..7497063e046f85262dafd1f000233403c8edf8b3 100644
+--- a/crates/nu-plugin-test-support/tests/custom_value/mod.rs
++++ b/crates/nu-plugin-test-support/tests/custom_value/mod.rs
+@@ -145,7 +145,7 @@ fn test_into_int_from_u32() -> Result<(), ShellError> {
+     let result = PluginTest::new("custom_u32", CustomU32Plugin.into())?
+         .eval_with(
+             "into int from u32",
+-            PipelineData::Value(CustomU32(42).into_value(Span::test_data()), None),
++            PipelineData::value(CustomU32(42).into_value(Span::test_data()), None),
+         )?
+         .into_value(Span::test_data())?;
+     assert_eq!(Value::test_int(42), result);
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 011607959a8fb30bdd3a378a9f079b8c4b7dde88..e2d0d3b9c074faf86e8351bcec0f471d170d16e3 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,6 +45,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -55,6 +56,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -65,6 +67,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ 
+@@ -78,6 +81,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ 
+@@ -91,6 +95,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
++            completion: None,
+         })
+     );
+ }
+diff --git a/tests/shell/pipeline/commands/external.rs b/tests/shell/pipeline/commands/external.rs
+index d29e9e18aa6e61eacf9318727aca3f5bde9c885f..f7585fb2d2fa27eb740186c9ced2b37f7915dab0 100644
+--- a/tests/shell/pipeline/commands/external.rs
++++ b/tests/shell/pipeline/commands/external.rs
+@@ -745,7 +745,7 @@ fn sub_external_expression_with_and_op_should_raise_proper_error() {
+ #[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
+ fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
+     let actual = nu!(
+-        // [ENV-PATCH] experimental: vec!["pipefail".to_string()],
++        experimental: vec!["pipefail".to_string()],
+         inp
+     );
+     assert_eq!(

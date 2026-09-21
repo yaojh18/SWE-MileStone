@@ -1,0 +1,1681 @@
+diff --git a/package.json b/package.json
+index 47995c1127bf2f7e9e36ca07619958e42bc94a3b..a62686b89d593a44913b5737ad062e1653d0e75b 100644
+--- a/package.json
++++ b/package.json
+@@ -68,12 +68,12 @@
+         "update:jitsi": "curl -s https://meet.element.io/libs/external_api.min.js > ./res/jitsi_external_api.min.js"
+     },
+     "resolutions": {
+-        "@playwright/test": "1.51.1",
++        "@playwright/test": "1.51.0",
+         "@types/react": "18.3.18",
+         "@types/react-dom": "18.3.5",
+-        "oidc-client-ts": "3.2.0",
++        "oidc-client-ts": "3.1.0",
+         "jwt-decode": "4.0.0",
+-        "caniuse-lite": "1.0.30001704",
++        "caniuse-lite": "1.0.30001701",
+         "testcontainers": "10.21.0",
+         "wrap-ansi-cjs": "npm:wrap-ansi@^7.0.0",
+         "wrap-ansi": "npm:wrap-ansi@^7.0.0"
+@@ -274,7 +274,7 @@
+         "postcss-preset-env": "^10.0.0",
+         "postcss-scss": "^4.0.4",
+         "postcss-simple-vars": "^7.0.1",
+-        "prettier": "3.5.3",
++        "prettier": "3.5.2",
+         "process": "^0.11.10",
+         "raw-loader": "^4.0.2",
+         "rimraf": "^6.0.0",
+diff --git a/src/components/structures/RoomView.tsx b/src/components/structures/RoomView.tsx
+index ed54161b35c4969e69f9127caf4870b48b64dac9..23558fc3dfda5414cfd1ecf0f3a77979f273c618 100644
+--- a/src/components/structures/RoomView.tsx
++++ b/src/components/structures/RoomView.tsx
+@@ -118,8 +118,6 @@ import { RoomStatusBarUnsentMessages } from "./RoomStatusBarUnsentMessages";
+ import { LargeLoader } from "./LargeLoader";
+ import { isVideoRoom } from "../../utils/video-rooms";
+ import { SDKContext } from "../../contexts/SDKContext";
+-import { CallStore, CallStoreEvent } from "../../stores/CallStore";
+-import { type Call } from "../../models/Call";
+ import { RoomSearchView } from "./RoomSearchView";
+ import eventSearch, { type SearchInfo, SearchScope } from "../../Searching";
+ import VoipUserMapper from "../../VoipUserMapper";
+@@ -190,7 +188,6 @@ export interface IRoomState {
+      */
+     search?: SearchInfo;
+     callState?: CallState;
+-    activeCall: Call | null;
+     canPeek: boolean;
+     canSelfRedact: boolean;
+     showApps: boolean;
+@@ -401,7 +398,6 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+             membersLoaded: !llMembers,
+             numUnreadMessages: 0,
+             callState: undefined,
+-            activeCall: null,
+             canPeek: false,
+             canSelfRedact: false,
+             showApps: false,
+@@ -577,7 +573,6 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+             mainSplitContentType: room ? this.getMainSplitContentType(room) : undefined,
+             initialEventId: undefined, // default to clearing this, will get set later in the method if needed
+             showRightPanel: roomId ? this.context.rightPanelStore.isOpenForRoom(roomId) : false,
+-            activeCall: roomId ? CallStore.instance.getActiveCall(roomId) : null,
+             promptAskToJoin: this.context.roomViewStore.promptAskToJoin(),
+             viewRoomOpts: this.context.roomViewStore.getViewRoomOpts(),
+         };
+@@ -727,23 +722,17 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+         });
+     };
+ 
+-    private onConnectedCalls = (): void => {
+-        if (this.state.roomId === undefined) return;
+-        const activeCall = CallStore.instance.getActiveCall(this.state.roomId);
+-        if (activeCall === null) {
+-            // We disconnected from the call, so stop viewing it
+-            defaultDispatcher.dispatch<ViewRoomPayload>(
+-                {
+-                    action: Action.ViewRoom,
+-                    room_id: this.state.roomId,
+-                    view_call: false,
+-                    metricsTrigger: undefined,
+-                },
+-                true,
+-            ); // Synchronous so that CallView disappears immediately
+-        }
+-
+-        this.setState({ activeCall });
++    private onCallClose = (): void => {
++        // Stop viewing the call
++        defaultDispatcher.dispatch<ViewRoomPayload>(
++            {
++                action: Action.ViewRoom,
++                room_id: this.state.roomId,
++                view_call: false,
++                metricsTrigger: undefined,
++            },
++            true,
++        ); // Synchronous so that CallView disappears immediately
+     };
+ 
+     private getRoomId = (): string | undefined => {
+@@ -900,8 +889,6 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+         WidgetEchoStore.on(UPDATE_EVENT, this.onWidgetEchoStoreUpdate);
+         this.context.widgetStore.on(UPDATE_EVENT, this.onWidgetStoreUpdate);
+ 
+-        CallStore.instance.on(CallStoreEvent.ConnectedCalls, this.onConnectedCalls);
+-
+         this.props.resizeNotifier.on("isResizing", this.onIsResizing);
+ 
+         this.settingWatchers = [
+@@ -1027,7 +1014,6 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+             );
+         }
+ 
+-        CallStore.instance.off(CallStoreEvent.ConnectedCalls, this.onConnectedCalls);
+         this.context.legacyCallHandler.off(LegacyCallHandlerEvent.CallState, this.onCallState);
+ 
+         // cancel any pending calls to the throttled updated
+@@ -2562,9 +2548,9 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
+                         <CallView
+                             room={this.state.room}
+                             resizing={this.state.resizing}
+-                            waitForCall={isVideoRoom(this.state.room)}
+                             skipLobby={this.context.roomViewStore.skipCallLobby() ?? false}
+                             role="main"
++                            onClose={this.onCallClose}
+                         />
+                         {previewBar}
+                     </>
+diff --git a/src/components/views/messages/CallEvent.tsx b/src/components/views/messages/CallEvent.tsx
+index 010d9f092c2c9386330aad3911272bd40db965bb..b3185921bbea13791e12eb4516c2e323b5f1cdf5 100644
+--- a/src/components/views/messages/CallEvent.tsx
++++ b/src/components/views/messages/CallEvent.tsx
+@@ -126,10 +126,6 @@ const ActiveLoadedCallEvent = forwardRef<any, ActiveLoadedCallEventProps>(({ mxE
+                 return [_t("action|leave"), "danger", disconnect];
+             case ConnectionState.Disconnecting:
+                 return [_t("action|leave"), "danger", null];
+-            case ConnectionState.Connecting:
+-            case ConnectionState.Lobby:
+-            case ConnectionState.WidgetLoading:
+-                return [_t("action|join"), "primary", null];
+         }
+     }, [connectionState, connect, disconnect]);
+ 
+diff --git a/src/components/views/rooms/RoomTileCallSummary.tsx b/src/components/views/rooms/RoomTileCallSummary.tsx
+index 21975fc49dbe52060f6e586d9d78593321e73ab6..eed7d012e215cd072459ae873f0e5c73c6b9bccd 100644
+--- a/src/components/views/rooms/RoomTileCallSummary.tsx
++++ b/src/components/views/rooms/RoomTileCallSummary.tsx
+@@ -27,18 +27,6 @@ export const RoomTileCallSummary: FC<Props> = ({ call }) => {
+             text = _t("common|video");
+             active = false;
+             break;
+-        case ConnectionState.WidgetLoading:
+-            text = _t("common|loading");
+-            active = false;
+-            break;
+-        case ConnectionState.Lobby:
+-            text = _t("common|lobby");
+-            active = false;
+-            break;
+-        case ConnectionState.Connecting:
+-            text = _t("room|joining");
+-            active = true;
+-            break;
+         case ConnectionState.Connected:
+         case ConnectionState.Disconnecting:
+             text = _t("common|joined");
+diff --git a/src/components/views/voip/CallView.tsx b/src/components/views/voip/CallView.tsx
+index 78249f56de9f0f201c5bd0ecaf58fd43b56bfaef..87bf84d8c4a6a4116a07cd2b56d4727d481d9c73 100644
+--- a/src/components/views/voip/CallView.tsx
++++ b/src/components/views/voip/CallView.tsx
+@@ -9,12 +9,13 @@ Please see LICENSE files in the repository root for full details.
+ import React, { type FC, useContext, useEffect, type AriaRole, useCallback } from "react";
+ 
+ import type { Room } from "matrix-js-sdk/src/matrix";
+-import { type Call, ConnectionState, ElementCall } from "../../../models/Call";
+-import { useCall } from "../../../hooks/useCall";
++import { type Call, CallEvent } from "../../../models/Call";
+ import MatrixClientContext from "../../../contexts/MatrixClientContext";
+ import AppTile from "../elements/AppTile";
+ import { CallStore } from "../../../stores/CallStore";
+ import { SdkContextClass } from "../../../contexts/SDKContext";
++import { useTypedEventEmitter } from "../../../hooks/useEventEmitter";
++import { useCall } from "../../../hooks/useCall";
+ 
+ interface JoinCallViewProps {
+     room: Room;
+@@ -22,10 +23,12 @@ interface JoinCallViewProps {
+     call: Call;
+     skipLobby?: boolean;
+     role?: AriaRole;
++    onClose: () => void;
+ }
+ 
+-const JoinCallView: FC<JoinCallViewProps> = ({ room, resizing, call, skipLobby, role }) => {
++const JoinCallView: FC<JoinCallViewProps> = ({ room, resizing, call, skipLobby, role, onClose }) => {
+     const cli = useContext(MatrixClientContext);
++    useTypedEventEmitter(call, CallEvent.Close, onClose);
+ 
+     useEffect(() => {
+         // We'll take this opportunity to tidy up our room state
+@@ -38,17 +41,6 @@ const JoinCallView: FC<JoinCallViewProps> = ({ room, resizing, call, skipLobby,
+         call.widget.data.skipLobby = skipLobby;
+     }, [call.widget, skipLobby]);
+ 
+-    useEffect(() => {
+-        if (call.connectionState === ConnectionState.Disconnected) {
+-            // immediately start the call
+-            // (this will start the lobby view in the widget and connect to all required widget events)
+-            call.start();
+-        }
+-        return (): void => {
+-            // If we are connected the widget is sticky and we do not want to destroy the call.
+-            if (!call.connected) call.destroy();
+-        };
+-    }, [call]);
+     const disconnectAllOtherCalls: () => Promise<void> = useCallback(async () => {
+         // The stickyPromise has to resolve before the widget actually becomes sticky.
+         // We only let the widget become sticky after disconnecting all other active calls.
+@@ -57,6 +49,7 @@ const JoinCallView: FC<JoinCallViewProps> = ({ room, resizing, call, skipLobby,
+         );
+         await Promise.all(calls.map(async (call) => await call.disconnect()));
+     }, []);
++
+     return (
+         <div className="mx_CallView" role={role}>
+             <AppTile
+@@ -76,26 +69,27 @@ const JoinCallView: FC<JoinCallViewProps> = ({ room, resizing, call, skipLobby,
+ interface CallViewProps {
+     room: Room;
+     resizing: boolean;
+-    /**
+-     * If true, the view will be blank until a call appears. Otherwise, the join
+-     * button will create a call if there isn't already one.
+-     */
+-    waitForCall: boolean;
+     skipLobby?: boolean;
+     role?: AriaRole;
++    /**
++     * Callback for when the user closes the call.
++     */
++    onClose: () => void;
+ }
+ 
+-export const CallView: FC<CallViewProps> = ({ room, resizing, waitForCall, skipLobby, role }) => {
++export const CallView: FC<CallViewProps> = ({ room, resizing, skipLobby, role, onClose }) => {
+     const call = useCall(room.roomId);
+ 
+-    useEffect(() => {
+-        if (call === null && !waitForCall) {
+-            ElementCall.create(room, skipLobby);
+-        }
+-    }, [call, room, skipLobby, waitForCall]);
+-    if (call === null) {
+-        return null;
+-    } else {
+-        return <JoinCallView room={room} resizing={resizing} call={call} skipLobby={skipLobby} role={role} />;
+-    }
++    return (
++        call && (
++            <JoinCallView
++                room={room}
++                resizing={resizing}
++                call={call}
++                skipLobby={skipLobby}
++                role={role}
++                onClose={onClose}
++            />
++        )
++    );
+ };
+diff --git a/src/contexts/RoomContext.ts b/src/contexts/RoomContext.ts
+index 2082f70bab54760459d5fa21f553fab691697063..95e21fb0b8e1a564c9cfb2abf3afd02c44f5d7c4 100644
+--- a/src/contexts/RoomContext.ts
++++ b/src/contexts/RoomContext.ts
+@@ -70,7 +70,6 @@ const RoomContext = createContext<
+     threadId: undefined,
+     liveTimeline: undefined,
+     narrow: false,
+-    activeCall: null,
+     msc3946ProcessDynamicPredecessor: false,
+     canAskToJoin: false,
+     promptAskToJoin: false,
+diff --git a/src/createRoom.ts b/src/createRoom.ts
+index d8c9cb23407dd07b18b5bd85b560ff65e1068bde..f226f68011d42b1dcd9fa4d82f3591fb75d492f1 100644
+--- a/src/createRoom.ts
++++ b/src/createRoom.ts
+@@ -343,7 +343,7 @@ export default async function createRoom(client: MatrixClient, opts: IOpts): Pro
+                 await client.setPowerLevel(roomId, client.getUserId()!, 100);
+             } else if (opts.roomType === RoomType.UnstableCall) {
+                 // Set up this video room with an Element call
+-                await ElementCall.create(await room);
++                ElementCall.create(await room);
+ 
+                 // Reset our power level back to admin so that the call becomes immutable
+                 await client.setPowerLevel(roomId, client.getUserId()!, 100);
+diff --git a/src/hooks/useCall.ts b/src/hooks/useCall.ts
+index 19b54fe8ea2a48468a3001f8889f66695e9b9876..687b7c014e9964a4bda95cc54ec378e58385b56b 100644
+--- a/src/hooks/useCall.ts
++++ b/src/hooks/useCall.ts
+@@ -75,9 +75,5 @@ export const useFull = (call: Call | null): boolean => {
+ 
+ export const useJoinCallButtonDisabledTooltip = (call: Call | null): string | null => {
+     const isFull = useFull(call);
+-    const state = useConnectionState(call);
+-
+-    if (state === ConnectionState.Connecting) return _t("voip|join_button_tooltip_connecting");
+-    if (isFull) return _t("voip|join_button_tooltip_call_full");
+-    return null;
++    return isFull ? _t("voip|join_button_tooltip_call_full") : null;
+ };
+diff --git a/src/i18n/strings/cy.json b/src/i18n/strings/cy.json
+index 4cfd2a8921df042826cab261c889d98625d81440..a5614f8cd58dc46a9dc0810585daf1a161e765c3 100644
+--- a/src/i18n/strings/cy.json
++++ b/src/i18n/strings/cy.json
+@@ -447,7 +447,6 @@
+         "access_token": "Tocyn Mynediad",
+         "accessibility": "Hygyrchedd",
+         "advanced": "Uwch",
+-        "all_chats": "Pob Sgwrs",
+         "analytics": "Dadansoddi Gwe",
+         "appearance": "Gwedd",
+         "application": "Rhaglen",
+@@ -1984,19 +1983,6 @@
+         "add_space_label": "Ychwanegu gofod",
+         "breadcrumbs_empty": "Dim ystafelloedd yr ymwelwyd â nhw yn ddiweddar",
+         "breadcrumbs_label": "Ymwelwyd ag ystafelloedd yn ddiweddar",
+-        "empty": {
+-            "no_chats": "Dim sgyrsiau eto",
+-            "no_chats_description": "Dechreuwch drwy anfon neges at rywun neu drwy greu ystafell",
+-            "no_chats_description_no_room_rights": "Dechreuwch trwy anfon neges at rywun",
+-            "no_favourites": "Nid oes gennych hoff sgwrs eto",
+-            "no_favourites_description": "Gallwch ychwanegu sgwrs at eich ffefrynnau yn y gosodiadau sgwrsio",
+-            "no_people": "Nid oes gennych chi sgyrsiau uniongyrchol gydag unrhyw un eto",
+-            "no_people_description": "Gallwch ddad-ddewis hidlwyr er mwyn gweld eich sgyrsiau eraill",
+-            "no_rooms": "Nid ydych mewn unrhyw ystafell eto",
+-            "no_rooms_description": "Gallwch ddad-ddewis hidlwyr er mwyn gweld eich sgyrsiau eraill",
+-            "no_unread": "Llongyfarchiadau! Nid oes gennych unrhyw negeseuon heb eu darllen",
+-            "show_chats": "Dangos pob sgwrs"
+-        },
+         "failed_add_tag": "Wedi methu ag ychwanegu tag %(tagName)s i'r ystafell",
+         "failed_remove_tag": "Wedi methu â thynnu'r tag %(tagName)s o'r ystafell",
+         "failed_set_dm_tag": "Wedi methu gosod tag neges uniongyrchol",
+@@ -2009,19 +1995,10 @@
+         "home_menu_label": "Dewisiadau cartref",
+         "join_public_room_label": "Ymuno â'r ystafell gyhoeddus",
+         "list_title": "Rhestr ystafelloedd",
+-        "more_options": {
+-            "copy_link": "Copïo dolen ystafell",
+-            "favourited": "Ffafrio",
+-            "leave_room": "Gadael yr ystafell",
+-            "low_priority": "Blaenoriaeth isel",
+-            "mark_read": "Marcio fel wedi'i ddarllen",
+-            "mark_unread": "Marcio fel heb ei ddarllen"
+-        },
+         "notification_options": "Dewisiadau hysbysu",
+         "open_space_menu": "Agor dewislen gofod",
+         "primary_filters": "Hidlau rhestr ystafelloedd",
+         "room": {
+-            "more_options": "Rhagor o Ddewisiadau",
+             "open_room": "Agor ystafell %(roomName)s"
+         },
+         "show_less": "Dangos llai",
+@@ -2525,7 +2502,6 @@
+         "inline_url_previews_room": "Galluogi rhagolygon URL fel rhagosodiad ar gyfer cyfranogwyr yn yr ystafell hon",
+         "inline_url_previews_room_account": "Galluogi rhagolygon URL ar gyfer yr ystafell hon (yn effeithio arnoch chi yn unig)",
+         "insert_trailing_colon_mentions": "Mewnosod colon sy'n llusgo ar ôl i'r defnyddiwr sôn amdano ar ddechrau neges",
+-        "invite_avatars": "Dangos afatarau ystafelloedd y cawsoch eich gwahodd iddynn nhw",
+         "jump_to_bottom_on_send": "Neidio i waelod y llinell amser pan fyddwch chi'n anfon neges",
+         "key_backup": {
+             "backup_in_progress": "Mae copi wrth gefn o'ch allweddi (gallai'r copi wrth gefn cyntaf gymryd ychydig funudau).",
+diff --git a/src/i18n/strings/en_EN.json b/src/i18n/strings/en_EN.json
+index 19fd6475d8a52e893b64e7771df805d99d437c95..5607a613eb7e90cecf391a9a66c2247ff8b21f59 100644
+--- a/src/i18n/strings/en_EN.json
++++ b/src/i18n/strings/en_EN.json
+@@ -104,7 +104,6 @@
+         "reply": "Reply",
+         "reply_in_thread": "Reply in thread",
+         "report_content": "Report Content",
+-        "report_room": "Report room",
+         "resend": "Resend",
+         "reset": "Reset",
+         "resume": "Resume",
+@@ -1811,12 +1810,6 @@
+         "spam_or_propaganda": "Spam or propaganda",
+         "toxic_behaviour": "Toxic Behaviour"
+     },
+-    "report_room": {
+-        "description": "Report this room to your homeserver admin. This will send the room's unique ID, but if messages are encrypted, the administrator won't be able to read them or view shared files.",
+-        "reason_placeholder": " Reason for reporting...",
+-        "sent": "Your report was sent.",
+-        "title": "Report Room"
+-    },
+     "restore_key_backup_dialog": {
+         "count_of_decryption_failures": "Failed to decrypt %(failedCount)s sessions!",
+         "count_of_successfully_restored_keys": "Successfully restored %(sessionCount)s keys",
+diff --git a/src/i18n/strings/fr.json b/src/i18n/strings/fr.json
+index d816ea9c25b98437e90815da7a718fe363709efe..f4edcccf82509cc627ecaeb1a44cef606514c44a 100644
+--- a/src/i18n/strings/fr.json
++++ b/src/i18n/strings/fr.json
+@@ -64,7 +64,6 @@
+         "go": "C’est parti",
+         "go_back": "Revenir en arrière",
+         "got_it": "Compris",
+-        "hide": "Masquer",
+         "hide_advanced": "Masquer les paramètres avancés",
+         "hold": "Mettre en pause",
+         "ignore": "Ignorer",
+@@ -2096,19 +2095,6 @@
+         "add_space_label": "Ajouter un espace",
+         "breadcrumbs_empty": "Aucun salon visité récemment",
+         "breadcrumbs_label": "Salons visités récemment",
+-        "empty": {
+-            "no_chats": "Pas encore de discussions",
+-            "no_chats_description": "Commencez par envoyer un message à quelqu'un ou en créant un salon",
+-            "no_chats_description_no_room_rights": "Commencez par envoyer un message à quelqu'un",
+-            "no_favourites": "Vous n'avez pas encore de discussion favorite",
+-            "no_favourites_description": "Vous pouvez ajouter une discussion à vos favoris dans les paramètres de discussion",
+-            "no_people": "Vous n'avez encore de discussions",
+-            "no_people_description": "Veuillez désélectionner des filtres pour voir vos discussions",
+-            "no_rooms": "Vous n’êtes membre d’aucun salon",
+-            "no_rooms_description": "Veuillez désélectionner des filtres pour voir vos discussions",
+-            "no_unread": "Félicitations ! Vous n'avez aucun message non lu",
+-            "show_chats": "Afficher toutes les discussions"
+-        },
+         "failed_add_tag": "Échec de l’ajout de l’étiquette %(tagName)s au salon",
+         "failed_remove_tag": "Échec de la suppression de l’étiquette %(tagName)s du salon",
+         "failed_set_dm_tag": "Échec de l’ajout de l’étiquette de conversation privée",
+@@ -2125,14 +2111,6 @@
+             "other": "Vous êtes en train de rejoindre %(count)s salons"
+         },
+         "list_title": "Liste de salons",
+-        "more_options": {
+-            "copy_link": "Copier le lien du salon",
+-            "favourited": "Favorisé",
+-            "leave_room": "Quitter le salon",
+-            "low_priority": "Priorité basse",
+-            "mark_read": "Marquer comme lu",
+-            "mark_unread": "Marquer comme non lu"
+-        },
+         "notification_options": "Paramètres de notifications",
+         "open_space_menu": "Ouvrir le menu de l’espace",
+         "primary_filters": "Filtre de la liste des salons",
+@@ -2141,7 +2119,6 @@
+             "other": "Actuellement en train de supprimer les messages dans %(count)s salons"
+         },
+         "room": {
+-            "more_options": "Plus d’options",
+             "open_room": "Ouvrir salon %(roomName)s"
+         },
+         "show_less": "En voir moins",
+@@ -3147,7 +3124,6 @@
+         "view": "Affiche le salon avec cette adresse",
+         "whois": "Affiche des informations à propos de l’utilisateur"
+     },
+-    "sliding_sync_legacy_no_longer_supported": "L'ancienne fonctionnalité Sliding Sync n'est plus prise en charge : veuillez vous déconnecter puis vous reconnecter pour activer la nouvelle fonctionnalité Sliding Sync",
+     "space": {
+         "add_existing_room_space": {
+             "create": "Voulez-vous plutôt ajouter un nouveau salon ?",
+diff --git a/src/i18n/strings/hu.json b/src/i18n/strings/hu.json
+index 86c6b1909b3a006cb158eacb1435c7769aa8568e..c7b62ed03f861c496d303752ce10bb25164d2669 100644
+--- a/src/i18n/strings/hu.json
++++ b/src/i18n/strings/hu.json
+@@ -1235,7 +1235,6 @@
+         "change": "Azonosítási kiszolgáló módosítása",
+         "change_prompt": "Bontja a kapcsolatot a(z) <current /> azonosítási kiszolgálóval, és inkább ehhez kapcsolódik: <new />?",
+         "change_server_prompt": "Ha nem szeretné a(z) <server /> kiszolgálót használnia kapcsolatok kereséséhez, és hogy megtalálják az ismerősei, akkor adjon meg egy másik azonosítási kiszolgálót.",
+-        "changed": "Az azonosítási kiszolgáló megváltozott",
+         "checking": "Kiszolgáló ellenőrzése",
+         "description_connected": "Jelenleg a(z) <server></server> kiszolgálót használja a kapcsolatok kereséséhez, és hogy megtalálják az ismerősei. A használt azonosítási kiszolgálót alább tudja megváltoztatni.",
+         "description_disconnected": "Jelenleg nem használ azonosítási kiszolgálót. A kapcsolatok kereséséhez, és hogy megtalálják az ismerősei, adjon hozzá egy azonosítási kiszolgálót.",
+@@ -4028,7 +4027,7 @@
+         "error_need_to_be_logged_in": "Be kell jelentkeznie.",
+         "error_unable_start_audio_stream_description": "A hangközvetítés indítása sikertelen.",
+         "error_unable_start_audio_stream_title": "Az élő adás indítása sikertelen",
+-        "modal_data_warning": "A lenti adatok megosztásra kerülnek ezzel: %(widgetDomain)s",
++        "modal_data_warning": "Az ezen a képernyőn látható adatok megosztásra kerülnek ezzel: %(widgetDomain)s",
+         "modal_title_default": "Előugró kisalkalmazás",
+         "no_name": "Ismeretlen alkalmazás",
+         "open_id_permissions_dialog": {
+diff --git a/src/i18n/strings/nb_NO.json b/src/i18n/strings/nb_NO.json
+index 791a4bddd2fe9505667df6841322a46d9082f687..d609580baaa47eea62bd565c9ff503028dd5ddb9 100644
+--- a/src/i18n/strings/nb_NO.json
++++ b/src/i18n/strings/nb_NO.json
+@@ -64,7 +64,6 @@
+         "go": "Gå",
+         "go_back": "Gå tilbake",
+         "got_it": "Jeg forstår",
+-        "hide": "Skjul",
+         "hide_advanced": "Skjul avansert",
+         "hold": "Hold",
+         "ignore": "Ignorer",
+@@ -456,11 +455,10 @@
+         "access_token": "Tilgangstoken",
+         "accessibility": "Tilgjengelighet",
+         "advanced": "Avansert",
+-        "all_chats": "Alle chatter",
+         "analytics": "Statistikk",
+         "and_n_others": {
+-            "one": "og en annen...",
+-            "other": "og %(count)s andre..."
++            "og %(count)s andre …": "other",
++            "og én annen …": "one"
+         },
+         "appearance": "Utseende",
+         "application": "Applikasjon",
+@@ -1378,8 +1376,8 @@
+         "other": "Invitere %(user)s og %(count)s andre"
+     },
+     "items_and_n_others": {
+-        "one": "<Items/> og en annen",
+-        "other": "<Items/> og %(count)s andre"
++        "<Items/> og %(count)s andre": "other",
++        "<Items/> og én annen": "one"
+     },
+     "keyboard": {
+         "activate_button": "Aktiver valgt knapp",
+@@ -2097,19 +2095,6 @@
+         "add_space_label": "Legg til område",
+         "breadcrumbs_empty": "Ingen nylig besøkte rom",
+         "breadcrumbs_label": "Nylig besøkte rom",
+-        "empty": {
+-            "no_chats": "Ingen chatter ennå",
+-            "no_chats_description": "Kom i gang ved å sende meldinger til noen eller ved å opprette et rom",
+-            "no_chats_description_no_room_rights": "Kom i gang med å sende meldinger til noen",
+-            "no_favourites": "Du har ikke favorittchat ennå",
+-            "no_favourites_description": "Du kan legge til en chat til dine favoritter i chat-innstillingene",
+-            "no_people": "Du har ikke direkte chatter med noen ennå",
+-            "no_people_description": "Du kan fjerne merket for filtre for å se de andre chattene dine",
+-            "no_rooms": "Du er ikke med i noen rom ennå",
+-            "no_rooms_description": "Du kan fjerne merket for filtre for å se de andre chattene dine",
+-            "no_unread": "Gratulerer! Du har ingen uleste meldinger",
+-            "show_chats": "Vis alle chatter"
+-        },
+         "failed_add_tag": "Kunne ikke legge til tagg %(tagName)s til rom",
+         "failed_remove_tag": "Kunne ikke fjerne tagg %(tagName)s fra rommet",
+         "failed_set_dm_tag": "Kan ikke sette kode på direktemeldingen",
+@@ -2126,14 +2111,6 @@
+             "other": "Blir for øyeblikket med i %(count)s rom"
+         },
+         "list_title": "Romliste",
+-        "more_options": {
+-            "copy_link": "Kopier romlenke",
+-            "favourited": "Favorittmerket",
+-            "leave_room": "Forlat rommet",
+-            "low_priority": "Lav prioritet",
+-            "mark_read": "Marker som lest",
+-            "mark_unread": "Marker som ulest"
+-        },
+         "notification_options": "Varselsinnstillinger",
+         "open_space_menu": "Åpne Område-meny",
+         "primary_filters": "Filtre for romliste",
+@@ -2142,7 +2119,6 @@
+             "other": "Fjerner for øyeblikket meldinger i %(count)s rom"
+         },
+         "room": {
+-            "more_options": "Flere alternativer",
+             "open_room": "Åpne rom %(roomName)s"
+         },
+         "show_less": "Vis mindre",
+@@ -2534,9 +2510,7 @@
+                 "title": "Avansert"
+             },
+             "delete_key_storage": {
+-                "breadcrumb_page": "Slett nøkkellagring",
+                 "confirm": "Slett nøkkellagring",
+-                "description": "Hvis du sletter nøkkellagring, fjernes den kryptografiske identiteten og meldingsnøklene fra serveren og deaktivere følgende sikkerhetsfunksjoner:",
+                 "list_first": "Du vil ikke ha kryptert meldingshistorikk på nye enheter",
+                 "list_second": "Du vil miste tilgangen til de krypterte meldingene dine hvis du logger av %(brand)s overalt",
+                 "title": "Er du sikker på at du vil slå av nøkkellagring og slette den?"
+@@ -2546,9 +2520,7 @@
+             "device_not_verified_title": "Enhet er ikke verifisert",
+             "dialog_title": "<strong>Innstillinger:</strong> Kryptering",
+             "key_storage": {
+-                "allow_key_storage": "Tillat lagring av nøkler",
+-                "description": "Lagre din kryptografiske identitet og meldingsnøkler sikkert på serveren. Dette lar deg se meldingsloggen din på alle nye enheter. <a>Lær mer </a>",
+-                "title": "Nøkkellager"
++                "allow_key_storage": "Tillat lagring av nøkler"
+             },
+             "recovery": {
+                 "change_recovery_confirm_button": "Bekreft ny gjenopprettingsnøkkel",
+@@ -3643,12 +3615,12 @@
+         "send_state_sent": "Meldingen ble sendt",
+         "summary": {
+             "banned": {
+-                "one": "ble utestengt",
+-                "other": "ble utestengt %(count)s ganger"
++                "ble bannlyst": "one",
++                "ble bannlyst %(count)s ganger": "other"
+             },
+             "banned_multiple": {
+-                "one": "ble utestengt",
+-                "other": "ble utestengt %(count)s ganger"
++                "ble bannlyst": "one",
++                "ble bannlyst %(count)s ganger": "other"
+             },
+             "changed_avatar": {
+                 "one": "%(oneUser)sendret profilbildet deres",
+@@ -3659,8 +3631,8 @@
+                 "other": "%(severalUsers)sendret profilbildet deres %(count)s ganger"
+             },
+             "changed_name": {
+-                "one": "%(oneUser)s endret navn",
+-                "other": "%(oneUser)s endret navn %(count)s ganger"
++                "%(oneUser)s endret navnet sitt": "one",
++                "%(oneUser)sendret navnet sitt %(count)s ganger": "other"
+             },
+             "changed_name_multiple": {
+                 "%(severalUsers)s endret navnene sine": "one"
+@@ -3713,12 +3685,12 @@
+                 "other": "ble fjernet %(count)s ganger"
+             },
+             "left": {
+-                "one": "%(oneUser)s forlot",
+-                "other": "%(oneUser)s forlot %(count)s ganger"
++                "%(oneUser)s forlot rommet %(count)s ganger": "other",
++                "%(oneUser)s forlot rommet": "one"
+             },
+             "left_multiple": {
+-                "one": "%(severalUsers)s forlot",
+-                "other": "%(severalUsers)s forlot %(count)s ganger"
++                "%(severalUsers)s forlot rommet %(count)s ganger": "other",
++                "%(severalUsers)s forlot rommet": "one"
+             },
+             "no_change": {
+                 "one": "%(oneUser)sgjorde ingen endringer",
+@@ -3769,12 +3741,12 @@
+                 "other": "%(severalUsers)sendret serverens ACLer %(count)s ganger"
+             },
+             "unbanned": {
+-                "one": "fikk opphevet forbudet",
+-                "other": "fikk opphevet forbudet %(count)s ganger"
++                "fikk bannlysningen sin opphevet %(count)s ganger": "other",
++                "fikk bannlysningen sin opphevet": "one"
+             },
+             "unbanned_multiple": {
+-                "one": "fikk opphevet forbudet",
+-                "other": "fikk opphevet forbudet %(count)s ganger"
++                "fikk bannlysningene sine opphevet %(count)s ganger": "other",
++                "fikk bannlysningene sine opphevet": "one"
+             }
+         },
+         "thread_info_basic": "Fra en tråd",
+diff --git a/src/i18n/strings/pl.json b/src/i18n/strings/pl.json
+index 249902cc703a6aa5ae66ee27583c3cb66f609f0b..2f96ced9e5e3d3ffb24e9df588cfb98ba199f552 100644
+--- a/src/i18n/strings/pl.json
++++ b/src/i18n/strings/pl.json
+@@ -64,7 +64,6 @@
+         "go": "Przejdź",
+         "go_back": "Wróć",
+         "got_it": "Rozumiem",
+-        "hide": "Ukryj",
+         "hide_advanced": "Ukryj zaawansowane",
+         "hold": "Wstrzymaj",
+         "ignore": "Ignoruj",
+@@ -408,15 +407,6 @@
+         "download_logs": "Pobierz dzienniki",
+         "downloading_logs": "Pobieranie logów",
+         "error_empty": "Powiedz nam, co poszło nie tak, lub nawet lepiej - utwórz zgłoszenie na platformie GitHub, które opisuje problem.",
+-        "failed_download_logs": "Nie udało się pobrać dzienników debugowania: ",
+-        "failed_send_logs_causes": {
+-            "disallowed_app": "Twój raport o błędzie został odrzucony. Serwer gniewnego potrząśnięcia nie obsługuje tej aplikacji.",
+-            "rejected_generic": "Twój raport o błędzie został odrzucony. Serwer gniewnego potrząśnięcia odrzucił zawartość zgłoszenia ze względu na jej politykę.",
+-            "rejected_recovery_key": "Twój raport o błędzie został odrzucony ze względów bezpieczeństwa, ponieważ zawierał on klucz przywracania.",
+-            "rejected_version": "Twój raport o błędzie został odrzucony, ponieważ wersja aplikacji jest zbyt stara.",
+-            "server_unknown_error": "Serwer gniewnego potrząśnięcia napotkał nieznany błąd i nie mógł obsłużyć raportu.",
+-            "unknown_error": "Nie udało się wysłać logów."
+-        },
+         "github_issue": "Zgłoszenie GitHub",
+         "introduction": "Jeśli zgłosiłeś błąd za pomocą serwisu GitHub, dzienniki debugowania mogą pomóc nam w namierzeniu problemu. ",
+         "log_request": "Aby uniknąć tego problemu w przyszłości, <a>wyślij nam dzienniki</a>.",
+@@ -456,7 +446,6 @@
+         "access_token": "Token dostępu",
+         "accessibility": "Ułatwienia dostępu",
+         "advanced": "Zaawansowane",
+-        "all_chats": "Wszystkie czaty",
+         "analytics": "Analityka",
+         "and_n_others": {
+             "one": "i jeden inny...",
+@@ -1316,7 +1305,6 @@
+         "error_connecting_heading": "Nie udało się połączyć z menedżerem integracji",
+         "explainer": "Zarządcy integracji otrzymują dane konfiguracji, mogą modyfikować widżety, wysyłać zaproszenia do pokojów i ustawiać poziom uprawnień w Twoim imieniu.",
+         "manage_title": "Zarządzaj integracjami",
+-        "toggle_label": "Włącz menedżer integracji",
+         "use_im": "Użyj zarządcy integracji aby zarządzać botami, widżetami i pakietami naklejek.",
+         "use_im_default": "Użyj zarządcy Integracji <b>%(serverName)s</b> aby zarządzać botami, widżetami i pakietami naklejek."
+     },
+@@ -2110,54 +2098,20 @@
+         "add_space_label": "Dodaj przestrzeń",
+         "breadcrumbs_empty": "Brak ostatnio odwiedzonych pokojów",
+         "breadcrumbs_label": "Ostatnio odwiedzane pokoje",
+-        "empty": {
+-            "no_chats": "Nie ma jeszcze czatów",
+-            "no_chats_description": "Zacznij od wysłania wiadomości lub utworzenia pokoju",
+-            "no_chats_description_no_room_rights": "Wyślij komuś wiadomość, aby rozpocząć.",
+-            "no_favourites": "Nie masz jeszcze ulubionego czatu",
+-            "no_favourites_description": "Dodaj czat do ulubionych w ustawieniach czatu",
+-            "no_people": "Nie prowadzisz jeszcze z nikim czatów prywatnych",
+-            "no_people_description": "Wyczyść filtry, aby zobaczyć pozostałe czaty",
+-            "no_rooms": "Nie jesteś jeszcze w żadnym pokoju",
+-            "no_rooms_description": "Wyczyść filtry, aby zobaczyć pozostałe czaty",
+-            "no_unread": "Brawo! Nie masz żadnych nieprzeczytanych wiadomości",
+-            "show_chats": "Pokaż wszystkie czaty"
+-        },
+         "failed_add_tag": "Nie można dodać tagu %(tagName)s do pokoju",
+         "failed_remove_tag": "Nie udało się usunąć tagu %(tagName)s z pokoju",
+         "failed_set_dm_tag": "Nie udało się ustawić tagu wiadomości prywatnych",
+-        "filters": {
+-            "favourite": "Ulubione",
+-            "people": "Osoby",
+-            "rooms": "Pokoje",
+-            "unread": "Nieprzeczytane"
+-        },
+         "home_menu_label": "Opcje głównej",
+         "join_public_room_label": "Dołącz do publicznego pokoju",
+         "joining_rooms_status": {
+             "one": "Aktualnie dołączanie do %(count)s pokoju",
+             "other": "Aktualnie dołączanie do %(count)s pokoi"
+         },
+-        "list_title": "Lista pokoi",
+-        "more_options": {
+-            "copy_link": "Kopiuj link pokoju",
+-            "favourited": "Ulubiony",
+-            "leave_room": "Opuść pokój",
+-            "low_priority": "Niski priorytet",
+-            "mark_read": "Oznacz jako przeczytane",
+-            "mark_unread": "Oznacz jako nieprzeczytane"
+-        },
+         "notification_options": "Opcje powiadomień",
+-        "open_space_menu": "Otwórz menu przestrzeni",
+-        "primary_filters": "Filtry listy pokoi",
+         "redacting_messages_status": {
+             "one": "Aktualnie usuwanie wiadomości z %(count)s pokoju",
+             "other": "Aktualnie usuwanie wiadomości z %(count)s pokoi"
+         },
+-        "room": {
+-            "more_options": "Więcej opcji",
+-            "open_room": "Pokój otwarty %(roomName)s"
+-        },
+         "show_less": "Pokaż mniej",
+         "show_n_more": {
+             "one": "Pokaż %(count)s więcej",
+@@ -2169,10 +2123,6 @@
+         "sort_by_activity": "Aktywności",
+         "sort_by_alphabet": "A-Z",
+         "sort_unread_first": "Pokazuj najpierw pokoje z nieprzeczytanymi wiadomościami",
+-        "space_menu": {
+-            "home": "Główna przestrzeni",
+-            "space_settings": "Ustawienia przestrzeni"
+-        },
+         "space_menu_label": "menu %(spaceName)s",
+         "sublist_options": "Ustawienia listy",
+         "suggested_rooms_heading": "Sugerowane pokoje"
+@@ -2535,35 +2485,20 @@
+                 "breadcrumb_title_forgot": "Nie pamiętasz klucza przywracania? Musisz zresetować swoją tożsamość.",
+                 "breadcrumb_warning": "Zrób to tylko wtedy, gdy uważasz, że Twoje konto zostało naruszone.",
+                 "details_title": "Szczegóły szyfrowania",
+-                "do_not_close_warning": "Nie zamykaj tego okna, dopóki reset nie zostanie zakończony",
+                 "export_keys": "Eksportuj klucze",
+                 "import_keys": "Importuj klucze",
+                 "other_people_device_description": "Domyślnie w pokojach szyfrowanych nie będziesz mógł wysyłać wiadomości, jeśli nie zweryfikujesz członków w pokoju",
+                 "other_people_device_label": "Nigdy nie wysyłaj wiadomości szyfrowanych do niezweryfikowanych urządzeń",
+                 "other_people_device_title": "Urządzenia innych osób",
+                 "reset_identity": "Zresetuj tożsamość kryptograficzną",
+-                "reset_in_progress": "Resetowanie w toku...",
+                 "session_id": "ID sesji:",
+                 "session_key": "Klucz sesji:",
+                 "title": "Zaawansowane"
+             },
+-            "delete_key_storage": {
+-                "breadcrumb_page": "Usuń magazyn kluczy",
+-                "confirm": "Usuń magazyn kluczy",
+-                "description": "Usunięcie magazynu kluczy usunie Twoją tożsamość kryptograficzną, klucze wiadomości z serwera i wyłączy następujące funkcje bezpieczeństwa:",
+-                "list_first": "Nowe urządzenia nie będą posiadały Twojej historii wiadomości szyfrowanych",
+-                "list_second": "Utracisz dostęp do swoich wiadomości szyfrowanych, jeśli wylogujesz się wszędzie z %(brand)s",
+-                "title": "Czy na pewno chcesz wyłączyć magazyn kluczy i go wyłączyć?"
+-            },
+             "device_not_verified_button": "Zweryfikuj to urządzenie",
+             "device_not_verified_description": "Aby wyświetlić ustawienia szyfrowania, musisz zweryfikować to urządzenie.",
+             "device_not_verified_title": "Urządzenie niezweryfikowane",
+             "dialog_title": "<strong>Ustawienia:</strong> Szyfrowanie",
+-            "key_storage": {
+-                "allow_key_storage": "Zezwól na magazynowanie kluczy",
+-                "description": "Przechowuj swoją tożsamość kryptograficzną i klucze wiadomości bezpiecznie na serwerze. Umożliwi Ci to przeglądanie historii wiadomości na wszystkich nowych urządzeniach.<a>Dowiedz się więcej</a>",
+-                "title": "Magazyn kluczy"
+-            },
+             "recovery": {
+                 "change_recovery_confirm_button": "Potwierdź nowy klucz przywracania",
+                 "change_recovery_confirm_description": "Wprowadź poniżej nowy klucz przywracania, aby zakończyć. Stary klucz przestanie działać.",
+@@ -2680,7 +2615,6 @@
+         "inline_url_previews_room": "Włącz domyślny podgląd URL dla uczestników w tym pokoju",
+         "inline_url_previews_room_account": "Włącz podgląd URL dla tego pokoju (dotyczy tylko Ciebie)",
+         "insert_trailing_colon_mentions": "Wstawiaj dwukropek po wzmiance użytkownika na początku wiadomości",
+-        "invite_avatars": "Pokaż awatary pokoi, do których zostałeś zaproszony",
+         "jump_to_bottom_on_send": "Przejdź na dół osi czasu po wysłaniu wiadomości",
+         "key_backup": {
+             "backup_in_progress": "Tworzy się kopia zapasowa Twoich kluczy (pierwsza kopia może potrwać kilka minut).",
+@@ -3162,7 +3096,6 @@
+         "view": "Przegląda pokój z podanym adresem",
+         "whois": "Pokazuje informacje na temat użytkownika"
+     },
+-    "sliding_sync_legacy_no_longer_supported": "Starsza metoda synchronizacji sliding sync nie jest już obsługiwana: zaloguj się ponownie, aby włączyć nową flagę synchronizacji sliding sync",
+     "space": {
+         "add_existing_room_space": {
+             "create": "Chcesz zamiast tego dodać nowy pokój?",
+@@ -4136,7 +4069,7 @@
+         "error_need_to_be_logged_in": "Musisz być zalogowany.",
+         "error_unable_start_audio_stream_description": "Nie można rozpocząć przesyłania strumienia audio.",
+         "error_unable_start_audio_stream_title": "Nie udało się rozpocząć transmisji na żywo",
+-        "modal_data_warning": "Poniższe dane są współdzielone z %(widgetDomain)s",
++        "modal_data_warning": "Dane na tym ekranie są współdzielone z %(widgetDomain)s",
+         "modal_title_default": "Widżet modalny",
+         "no_name": "Nieznana aplikacja",
+         "open_id_permissions_dialog": {
+diff --git a/src/i18n/strings/uk.json b/src/i18n/strings/uk.json
+index 6a5156a14a815516c5a9e56c604ed9bf5ccda86d..3081cdd219236cc0b9773d15eba7e3d991e53074 100644
+--- a/src/i18n/strings/uk.json
++++ b/src/i18n/strings/uk.json
+@@ -64,7 +64,6 @@
+         "go": "Уперед",
+         "go_back": "Назад",
+         "got_it": "Зрозуміло",
+-        "hide": "Сховати",
+         "hide_advanced": "Сховати розширені",
+         "hold": "Утримувати",
+         "ignore": "Ігнорувати",
+@@ -456,7 +455,6 @@
+         "access_token": "Токен доступу",
+         "accessibility": "Доступність",
+         "advanced": "Подробиці",
+-        "all_chats": "Усі бесіди",
+         "analytics": "Аналітика",
+         "and_n_others": {
+             "one": "і інше...",
+@@ -2101,19 +2099,6 @@
+         "add_space_label": "Додати простір",
+         "breadcrumbs_empty": "Немає недавно відвіданих кімнат",
+         "breadcrumbs_label": "Недавно відвідані кімнати",
+-        "empty": {
+-            "no_chats": "Ще немає бесід",
+-            "no_chats_description": "Почніть користування, надіславши комусь повідомлення або створивши кімнату",
+-            "no_chats_description_no_room_rights": "Розпочніть користування, написавши комусь повідомлення",
+-            "no_favourites": "У вас ще немає обраних бесід",
+-            "no_favourites_description": "Ви можете додати бесіду до обраних у її налаштуваннях",
+-            "no_people": "У вас ще немає особистих бесід",
+-            "no_people_description": "Ви можете очистити фільтри, щоб побачити інші ваші бесіди",
+-            "no_rooms": "Ви ще не входили до кімнат",
+-            "no_rooms_description": "Ви можете очистити фільтри, щоб побачити інші ваші бесіди",
+-            "no_unread": "Вітаємо! У вас немає непрочитаних повідомлень",
+-            "show_chats": "Показати всі бесіди"
+-        },
+         "failed_add_tag": "Не вдалось додати до кімнати мітку %(tagName)s",
+         "failed_remove_tag": "Не вдалося прибрати з кімнати мітку %(tagName)s",
+         "failed_set_dm_tag": "Не вдалося встановити мітку особистого повідомлення",
+@@ -2130,23 +2115,13 @@
+             "other": "Приєднання до %(count)s кімнат"
+         },
+         "list_title": "Список кімнат",
+-        "more_options": {
+-            "copy_link": "Копіювати посилання на кімнату",
+-            "favourited": "Обране",
+-            "leave_room": "Вийти з кімнати",
+-            "low_priority": "Неважливі",
+-            "mark_read": "Позначити прочитаним",
+-            "mark_unread": "Позначити непрочитаним"
+-        },
+         "notification_options": "Параметри сповіщень",
+         "open_space_menu": "Відкрити меню простору",
+-        "primary_filters": "Фільтри списку кімнат",
+         "redacting_messages_status": {
+             "one": "Триває видалення повідомлень в %(count)s кімнаті",
+             "other": "Триває видалення повідомлень у %(count)s кімнатах"
+         },
+         "room": {
+-            "more_options": "Інші опції",
+             "open_room": "Відкрити кімнату %(roomName)s"
+         },
+         "show_less": "Згорнути",
+@@ -2537,23 +2512,10 @@
+                 "session_key": "Ключ сеансу:",
+                 "title": "Додатково"
+             },
+-            "delete_key_storage": {
+-                "breadcrumb_page": "Видалити сховище ключів",
+-                "confirm": "Видалити сховище ключів",
+-                "description": "Видалення сховища ключів вилучить вашу криптографічну ідентичність і ключі повідомлень з сервера, а також вимкне такі функції безпеки:",
+-                "list_first": "Ви не матимете історії зашифрованих повідомлень на нових пристроях",
+-                "list_second": "Ви втратите доступ до своїх зашифрованих повідомлень, якщо ви вийдете з %(brand)s на всіх пристроях",
+-                "title": "Ви впевнені, що хочете вимкнути зберігання ключів і видалити їх?"
+-            },
+             "device_not_verified_button": "Верифікувати цей пристрій",
+             "device_not_verified_description": "Верифікуйте цей пристрій, щоб переглянути налаштування шифрування.",
+             "device_not_verified_title": "Пристрій не верифіковано",
+             "dialog_title": "<strong>Налаштування:</strong> Шифрування",
+-            "key_storage": {
+-                "allow_key_storage": "Дозволити зберігання ключів",
+-                "description": "Надійно зберігайте свою криптографічну ідентичність і ключі повідомлень на сервері. Це дозволить вам переглядати історію повідомлень на будь-яких нових пристроях. <a>Докладніше</a>",
+-                "title": "Сховище ключів"
+-            },
+             "recovery": {
+                 "change_recovery_confirm_button": "Підтвердити новий ключ відновлення",
+                 "change_recovery_confirm_description": "Введіть новий ключ відновлення нижче, щоб завершити. Ваш старий ключ більше не працюватиме.",
+@@ -2670,7 +2632,6 @@
+         "inline_url_previews_room": "Увімкнути попередній перегляд гіперпосилань за умовчанням для учасників цієї кімнати",
+         "inline_url_previews_room_account": "Увімкнути попередній перегляд гіперпосилань в цій кімнаті (стосується тільки вас)",
+         "insert_trailing_colon_mentions": "Додавати двокрапку після згадки користувача на початку повідомлення",
+-        "invite_avatars": "Показувати аватари кімнат, до яких вас запросили",
+         "jump_to_bottom_on_send": "Переходити вниз стрічки під час надсилання повідомлення",
+         "key_backup": {
+             "backup_in_progress": "Створюється резервна копія ваших ключів (перше копіювання може тривати кілька хвилин).",
+@@ -3152,7 +3113,6 @@
+         "view": "Перегляд кімнати з вказаною адресою",
+         "whois": "Показує відомості про користувача"
+     },
+-    "sliding_sync_legacy_no_longer_supported": "Застаріла ковзна синхронізація більше не підтримується: вийдіть і ввійдіть знову, щоб увімкнути новий прапорець ковзної синхронізації",
+     "space": {
+         "add_existing_room_space": {
+             "create": "Хочете додати нову кімнату натомість?",
+@@ -4124,7 +4084,7 @@
+         "error_need_to_be_logged_in": "Вам потрібно увійти.",
+         "error_unable_start_audio_stream_description": "Не вдалося почати аудіотрансляцію.",
+         "error_unable_start_audio_stream_title": "Не вдалося почати живу трансляцію",
+-        "modal_data_warning": "Наведені далі дані надсилаються на %(widgetDomain)s",
++        "modal_data_warning": "Дані на цьому екрані надсилаються до %(widgetDomain)s",
+         "modal_title_default": "Модальний віджет",
+         "no_name": "Невідомий додаток",
+         "open_id_permissions_dialog": {
+diff --git a/src/models/Call.ts b/src/models/Call.ts
+index 8ce5a1d2ca40ea986fe683b852e2019dee036878..3497dc01c6c7eb8de7297474b4ef72435be38242 100644
+--- a/src/models/Call.ts
++++ b/src/models/Call.ts
+@@ -77,13 +77,7 @@ const waitForEvent = async (
+ };
+ 
+ export enum ConnectionState {
+-    // Widget related states that are equivalent to disconnected,
+-    // but hold additional information about the state of the widget.
+-    Lobby = "lobby",
+-    WidgetLoading = "widget_loading",
+     Disconnected = "disconnected",
+-
+-    Connecting = "connecting",
+     Connected = "connected",
+     Disconnecting = "disconnecting",
+ }
+@@ -100,6 +94,7 @@ export enum CallEvent {
+     ConnectionState = "connection_state",
+     Participants = "participants",
+     Layout = "layout",
++    Close = "close",
+     Destroy = "destroy",
+ }
+ 
+@@ -110,6 +105,7 @@ interface CallEventHandlerMap {
+         prevParticipants: Map<RoomMember, Set<string>>,
+     ) => void;
+     [CallEvent.Layout]: (layout: Layout) => void;
++    [CallEvent.Close]: () => void;
+     [CallEvent.Destroy]: () => void;
+ }
+ 
+@@ -167,6 +163,17 @@ export abstract class Call extends TypedEventEmitter<CallEvent, CallEventHandler
+         this.emit(CallEvent.Participants, value, prevValue);
+     }
+ 
++    private _presented = false;
++    /**
++     * Whether the call widget is currently being presented in the user interface.
++     */
++    public get presented(): boolean {
++        return this._presented;
++    }
++    public set presented(value: boolean) {
++        this._presented = value;
++    }
++
+     protected constructor(
+         /**
+          * The widget used to access this call.
+@@ -177,6 +184,7 @@ export abstract class Call extends TypedEventEmitter<CallEvent, CallEventHandler
+         super();
+         this.widgetUid = WidgetUtils.getWidgetUid(this.widget);
+         this.room = this.client.getRoom(this.roomId)!;
++        WidgetMessagingStore.instance.on(WidgetMessagingStoreEvent.StopMessaging, this.onStopMessaging);
+     }
+ 
+     /**
+@@ -221,8 +229,6 @@ export abstract class Call extends TypedEventEmitter<CallEvent, CallEventHandler
+      * Only call this if the call state is: ConnectionState.Disconnected.
+      */
+     public async start(): Promise<void> {
+-        this.connectionState = ConnectionState.WidgetLoading;
+-
+         const { [MediaDeviceKindEnum.AudioInput]: audioInputs, [MediaDeviceKindEnum.VideoInput]: videoInputs } =
+             (await MediaDeviceHandler.getDevices())!;
+ 
+@@ -257,16 +263,9 @@ export abstract class Call extends TypedEventEmitter<CallEvent, CallEventHandler
+                 throw new Error(`Failed to bind call widget in room ${this.roomId}: ${e}`);
+             }
+         }
+-        this.connectionState = ConnectionState.Connecting;
+-        try {
+-            await this.performConnection(audioInput, videoInput);
+-        } catch (e) {
+-            this.connectionState = ConnectionState.Disconnected;
+-            throw e;
+-        }
++        await this.performConnection(audioInput, videoInput);
+ 
+         this.room.on(RoomEvent.MyMembership, this.onMyMembership);
+-        WidgetMessagingStore.instance.on(WidgetMessagingStoreEvent.StopMessaging, this.onStopMessaging);
+         window.addEventListener("beforeunload", this.beforeUnload);
+         this.connectionState = ConnectionState.Connected;
+     }
+@@ -280,39 +279,54 @@ export abstract class Call extends TypedEventEmitter<CallEvent, CallEventHandler
+         this.connectionState = ConnectionState.Disconnecting;
+         await this.performDisconnection();
+         this.setDisconnected();
++        this.close();
+     }
+ 
+     /**
+-     * Manually marks the call as disconnected and cleans up.
++     * Manually marks the call as disconnected.
+      */
+     public setDisconnected(): void {
+         this.room.off(RoomEvent.MyMembership, this.onMyMembership);
+-        WidgetMessagingStore.instance.off(WidgetMessagingStoreEvent.StopMessaging, this.onStopMessaging);
+         window.removeEventListener("beforeunload", this.beforeUnload);
+-        this.messaging = null;
+         this.connectionState = ConnectionState.Disconnected;
+     }
+ 
++    /**
++     * Stops further communication with the widget and tells the UI to close.
++     */
++    protected close(): void {
++        this.messaging = null;
++        this.emit(CallEvent.Close);
++    }
++
+     /**
+      * Stops all internal timers and tasks to prepare for garbage collection.
+      */
+     public destroy(): void {
+-        if (this.connected) this.setDisconnected();
++        if (this.connected) {
++            this.setDisconnected();
++            this.close();
++        }
++        WidgetMessagingStore.instance.off(WidgetMessagingStoreEvent.StopMessaging, this.onStopMessaging);
+         this.emit(CallEvent.Destroy);
+     }
+ 
+-    private onMyMembership = async (_room: Room, membership: Membership): Promise<void> => {
++    private readonly onMyMembership = async (_room: Room, membership: Membership): Promise<void> => {
+         if (membership !== KnownMembership.Join) this.setDisconnected();
+     };
+ 
+-    private onStopMessaging = (uid: string): void => {
+-        if (uid === this.widgetUid) {
++    private readonly onStopMessaging = (uid: string): void => {
++        if (uid === this.widgetUid && this.connected) {
+             logger.log("The widget died; treating this as a user hangup");
+             this.setDisconnected();
++            this.close();
+         }
+     };
+ 
+-    private beforeUnload = (): void => this.setDisconnected();
++    private beforeUnload = (): void => {
++        this.setDisconnected();
++        this.close();
++    };
+ }
+ 
+ export type { JitsiCallMemberContent };
+@@ -466,7 +480,6 @@ export class JitsiCall extends Call {
+         audioInput: MediaDeviceInfo | null,
+         videoInput: MediaDeviceInfo | null,
+     ): Promise<void> {
+-        this.connectionState = ConnectionState.Lobby;
+         // Ensure that the messaging doesn't get stopped while we're waiting for responses
+         const dontStopMessaging = new Promise<void>((resolve, reject) => {
+             const messagingStore = WidgetMessagingStore.instance;
+@@ -569,9 +582,9 @@ export class JitsiCall extends Call {
+         super.destroy();
+     }
+ 
+-    private onRoomState = (): void => this.updateParticipants();
++    private readonly onRoomState = (): void => this.updateParticipants();
+ 
+-    private onConnectionState = async (state: ConnectionState, prevState: ConnectionState): Promise<void> => {
++    private readonly onConnectionState = async (state: ConnectionState, prevState: ConnectionState): Promise<void> => {
+         if (state === ConnectionState.Connected && !isConnected(prevState)) {
+             this.updateParticipants(); // Local echo
+ 
+@@ -597,18 +610,18 @@ export class JitsiCall extends Call {
+         }
+     };
+ 
+-    private onDock = async (): Promise<void> => {
++    private readonly onDock = async (): Promise<void> => {
+         // The widget is no longer a PiP, so let's restore the default layout
+         await this.messaging!.transport.send(ElementWidgetActions.TileLayout, {});
+     };
+ 
+-    private onUndock = async (): Promise<void> => {
++    private readonly onUndock = async (): Promise<void> => {
+         // The widget has become a PiP, so let's switch Jitsi to spotlight mode
+         // to only show the active speaker and economize on space
+         await this.messaging!.transport.send(ElementWidgetActions.SpotlightLayout, {});
+     };
+ 
+-    private onHangup = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
++    private readonly onHangup = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
+         // If we're already in the middle of a client-initiated disconnection,
+         // ignore the event
+         if (this.connectionState === ConnectionState.Disconnecting) return;
+@@ -617,14 +630,15 @@ export class JitsiCall extends Call {
+ 
+         // In case this hangup is caused by Jitsi Meet crashing at startup,
+         // wait for the connection event in order to avoid racing
+-        if (this.connectionState === ConnectionState.Connecting) {
++        if (this.connectionState === ConnectionState.Disconnected) {
+             await waitForEvent(this, CallEvent.ConnectionState);
+         }
+ 
+-        await this.messaging!.transport.reply(ev.detail, {}); // ack
++        this.messaging!.transport.reply(ev.detail, {}); // ack
+         this.setDisconnected();
++        this.close();
+         // In video rooms we immediately want to restart the call after hangup
+-        // The lobby will be shown again and it connects to all signals from EC and Jitsi.
++        // The lobby will be shown again and it connects to all signals from Jitsi.
+         if (isVideoRoom(this.room)) {
+             this.start();
+         }
+@@ -653,6 +667,14 @@ export class ElementCall extends Call {
+         this.emit(CallEvent.Layout, value);
+     }
+ 
++    public get presented(): boolean {
++        return super.presented;
++    }
++    public set presented(value: boolean) {
++        super.presented = value;
++        this.checkDestroy();
++    }
++
+     private static generateWidgetUrl(client: MatrixClient, roomId: string): URL {
+         const accountAnalyticsData = client.getAccountData(PosthogAnalytics.ANALYTICS_EVENT_TYPE);
+         // The analyticsID is passed directly to element call (EC) since this codepath is only for EC and no other widget.
+@@ -740,7 +762,7 @@ export class ElementCall extends Call {
+         // To use Element Call without touching room state, we create a virtual
+         // widget (one that doesn't have a corresponding state event)
+         const url = ElementCall.generateWidgetUrl(client, roomId);
+-        return WidgetStore.instance.addVirtualWidget(
++        const createdWidget = WidgetStore.instance.addVirtualWidget(
+             {
+                 id: secureRandomString(24), // So that it's globally unique
+                 creatorUserId: client.getUserId()!,
+@@ -761,6 +783,8 @@ export class ElementCall extends Call {
+             },
+             roomId,
+         );
++        WidgetStore.instance.emit(UPDATE_EVENT, null);
++        return createdWidget;
+     }
+ 
+     private static getWidgetData(
+@@ -794,7 +818,7 @@ export class ElementCall extends Call {
+         super(widget, client);
+ 
+         this.session.on(MatrixRTCSessionEvent.MembershipsChanged, this.onMembershipChanged);
+-        this.client.matrixRTC.on(MatrixRTCSessionManagerEvents.SessionEnded, this.onRTCSessionEnded);
++        this.client.matrixRTC.on(MatrixRTCSessionManagerEvents.SessionEnded, this.checkDestroy);
+         SettingsStore.watchSetting(
+             "feature_disable_call_per_sender_encryption",
+             null,
+@@ -827,9 +851,8 @@ export class ElementCall extends Call {
+         return null;
+     }
+ 
+-    public static async create(room: Room, skipLobby = false): Promise<void> {
++    public static create(room: Room, skipLobby = false): void {
+         ElementCall.createOrGetCallWidget(room.roomId, room.client, skipLobby, false, isVideoRoom(room));
+-        WidgetStore.instance.emit(UPDATE_EVENT, null);
+     }
+ 
+     protected async sendCallNotify(): Promise<void> {
+@@ -875,17 +898,9 @@ export class ElementCall extends Call {
+         this.messaging!.on(`action:${ElementWidgetActions.TileLayout}`, this.onTileLayout);
+         this.messaging!.on(`action:${ElementWidgetActions.SpotlightLayout}`, this.onSpotlightLayout);
+         this.messaging!.on(`action:${ElementWidgetActions.HangupCall}`, this.onHangup);
+-        this.messaging!.on(`action:${ElementWidgetActions.DeviceMute}`, async (ev) => {
+-            ev.preventDefault();
+-            await this.messaging!.transport.reply(ev.detail, {}); // ack
+-        });
++        this.messaging!.once(`action:${ElementWidgetActions.Close}`, this.onClose);
++        this.messaging!.on(`action:${ElementWidgetActions.DeviceMute}`, this.onDeviceMute);
+ 
+-        if (!this.widget.data?.skipLobby) {
+-            // If we do not skip the lobby we need to wait until the widget has
+-            // connected to matrixRTC. This is either observed through the session state
+-            // or the MatrixRTCSessionManager session started event.
+-            this.connectionState = ConnectionState.Lobby;
+-        }
+         // TODO: if the widget informs us when the join button is clicked (widget action), so we can
+         // - set state to connecting
+         // - send call notify
+@@ -927,15 +942,16 @@ export class ElementCall extends Call {
+     public setDisconnected(): void {
+         this.messaging!.off(`action:${ElementWidgetActions.TileLayout}`, this.onTileLayout);
+         this.messaging!.off(`action:${ElementWidgetActions.SpotlightLayout}`, this.onSpotlightLayout);
++        this.messaging!.off(`action:${ElementWidgetActions.HangupCall}`, this.onHangup);
++        this.messaging!.off(`action:${ElementWidgetActions.DeviceMute}`, this.onDeviceMute);
+         super.setDisconnected();
+     }
+ 
+     public destroy(): void {
+         ActiveWidgetStore.instance.destroyPersistentWidget(this.widget.id, this.widget.roomId);
+         WidgetStore.instance.removeVirtualWidget(this.widget.id, this.widget.roomId);
+-        this.messaging?.off(`action:${ElementWidgetActions.HangupCall}`, this.onHangup);
+         this.session.off(MatrixRTCSessionEvent.MembershipsChanged, this.onMembershipChanged);
+-        this.client.matrixRTC.off(MatrixRTCSessionManagerEvents.SessionEnded, this.onRTCSessionEnded);
++        this.client.matrixRTC.off(MatrixRTCSessionManagerEvents.SessionEnded, this.checkDestroy);
+ 
+         SettingsStore.unwatchSetting(this.settingsStoreCallEncryptionWatcher);
+         clearTimeout(this.terminationTimer);
+@@ -944,11 +960,10 @@ export class ElementCall extends Call {
+         super.destroy();
+     }
+ 
+-    private onRTCSessionEnded = (roomId: string, session: MatrixRTCSession): void => {
+-        // Don't destroy the call on hangup for video call rooms.
+-        if (roomId === this.roomId && !this.room.isCallRoom()) {
+-            this.destroy();
+-        }
++    private checkDestroy = (): void => {
++        // A call ceases to exist as soon as all participants leave and also the
++        // user isn't looking at it (for example, waiting in an empty lobby)
++        if (this.session.memberships.length === 0 && !this.presented && !this.room.isCallRoom()) this.destroy();
+     };
+ 
+     /**
+@@ -960,7 +975,7 @@ export class ElementCall extends Call {
+         await this.messaging!.transport.send(action, {});
+     }
+ 
+-    private onMembershipChanged = (): void => this.updateParticipants();
++    private readonly onMembershipChanged = (): void => this.updateParticipants();
+ 
+     private updateParticipants(): void {
+         const participants = new Map<RoomMember, Set<string>>();
+@@ -980,9 +995,14 @@ export class ElementCall extends Call {
+         this.participants = participants;
+     }
+ 
+-    private onHangup = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
++    private readonly onDeviceMute = (ev: CustomEvent<IWidgetApiRequest>): void => {
++        ev.preventDefault();
++        this.messaging!.transport.reply(ev.detail, {}); // ack
++    };
++
++    private readonly onHangup = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
+         ev.preventDefault();
+-        await this.messaging!.transport.reply(ev.detail, {}); // ack
++        this.messaging!.transport.reply(ev.detail, {}); // ack
+         this.setDisconnected();
+         // In video rooms we immediately want to reconnect after hangup
+         // This starts the lobby again and connects to all signals from EC.
+@@ -991,16 +1011,23 @@ export class ElementCall extends Call {
+         }
+     };
+ 
+-    private onTileLayout = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
++    private readonly onClose = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
++        ev.preventDefault();
++        this.messaging!.transport.reply(ev.detail, {}); // ack
++        // User is done with the call; tell the UI to close it
++        this.close();
++    };
++
++    private readonly onTileLayout = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
+         ev.preventDefault();
+         this.layout = Layout.Tile;
+-        await this.messaging!.transport.reply(ev.detail, {}); // ack
++        this.messaging!.transport.reply(ev.detail, {}); // ack
+     };
+ 
+-    private onSpotlightLayout = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
++    private readonly onSpotlightLayout = async (ev: CustomEvent<IWidgetApiRequest>): Promise<void> => {
+         ev.preventDefault();
+         this.layout = Layout.Spotlight;
+-        await this.messaging!.transport.reply(ev.detail, {}); // ack
++        this.messaging!.transport.reply(ev.detail, {}); // ack
+     };
+ 
+     public clean(): Promise<void> {
+diff --git a/src/stores/RoomViewStore.tsx b/src/stores/RoomViewStore.tsx
+index c691f0af7971f89abbde7b2e2190a06ada988c4e..91edcbb41223ae7963a919072a932e966ff1ddf6 100644
+--- a/src/stores/RoomViewStore.tsx
++++ b/src/stores/RoomViewStore.tsx
+@@ -50,6 +50,8 @@ import { type CancelAskToJoinPayload } from "../dispatcher/payloads/CancelAskToJ
+ import { type SubmitAskToJoinPayload } from "../dispatcher/payloads/SubmitAskToJoinPayload";
+ import { ModuleRunner } from "../modules/ModuleRunner";
+ import { setMarkedUnreadState } from "../utils/notifications";
++import { ConnectionState, ElementCall } from "../models/Call";
++import { isVideoRoom } from "../utils/video-rooms";
+ 
+ const NUM_JOIN_RETRY = 5;
+ 
+@@ -353,6 +355,23 @@ export class RoomViewStore extends EventEmitter {
+                 });
+             }
+ 
++            if (room && (payload.view_call || isVideoRoom(room))) {
++                let call = CallStore.instance.getCall(payload.room_id);
++                // Start a call if not already there
++                if (call === null) {
++                    ElementCall.create(room, false);
++                    call = CallStore.instance.getCall(payload.room_id)!;
++                }
++                call.presented = true;
++                // Immediately start the call. This will connect to all required widget events
++                // and allow the widget to show the lobby.
++                if (call.connectionState === ConnectionState.Disconnected) call.start();
++            }
++            // If we switch to a different room from the call, we are no longer presenting it
++            const prevRoomCall = this.state.roomId ? CallStore.instance.getCall(this.state.roomId) : null;
++            if (prevRoomCall !== null && (!payload.view_call || payload.room_id !== this.state.roomId))
++                prevRoomCall.presented = false;
++
+             if (SettingsStore.getValue("feature_sliding_sync") && this.state.roomId !== payload.room_id) {
+                 if (this.state.subscribingRoomId && this.state.subscribingRoomId !== payload.room_id) {
+                     // unsubscribe from this room, but don't await it as we don't care when this gets done.
+diff --git a/src/stores/widgets/ElementWidgetActions.ts b/src/stores/widgets/ElementWidgetActions.ts
+index be887c88cd3dd4fe7c13a84569f6611180066a8a..c7bcfcd8cd535acdf754b410b9b7cacf09441c3b 100644
+--- a/src/stores/widgets/ElementWidgetActions.ts
++++ b/src/stores/widgets/ElementWidgetActions.ts
+@@ -12,6 +12,7 @@ export enum ElementWidgetActions {
+     // All of these actions are currently specific to Jitsi and Element Call
+     JoinCall = "io.element.join",
+     HangupCall = "im.vector.hangup",
++    Close = "io.element.close",
+     CallParticipants = "io.element.participants",
+     StartLiveStream = "im.vector.start_live_stream",
+ 
+diff --git a/src/stores/widgets/WidgetMessagingStore.ts b/src/stores/widgets/WidgetMessagingStore.ts
+index e8210317ce3ec74d344c8efeb97fc4c5a72cb4fa..2dcf8c4fdc69e9407484ad402a526a9d529341ec 100644
+--- a/src/stores/widgets/WidgetMessagingStore.ts
++++ b/src/stores/widgets/WidgetMessagingStore.ts
+@@ -72,8 +72,11 @@ export class WidgetMessagingStore extends AsyncStoreWithClient<EmptyObject> {
+      * @param {string} widgetUid The widget UID.
+      */
+     public stopMessagingByUid(widgetUid: string): void {
+-        this.widgetMap.remove(widgetUid)?.stop();
+-        this.emit(WidgetMessagingStoreEvent.StopMessaging, widgetUid);
++        const messaging = this.widgetMap.remove(widgetUid);
++        if (messaging !== undefined) {
++            messaging.stop();
++            this.emit(WidgetMessagingStoreEvent.StopMessaging, widgetUid);
++        }
+     }
+ 
+     /**
+diff --git a/yarn.lock b/yarn.lock
+index cdd3120635774e68ffc0b4b97d5910359c77e6ea..390c172af9bc8f695c46b5833f8a1f83c7eee069 100644
+--- a/yarn.lock
++++ b/yarn.lock
+@@ -2194,12 +2194,12 @@
+   resolved "https://registry.yarnpkg.com/@pkgjs/parseargs/-/parseargs-0.11.0.tgz#a77ea742fab25775145434eb1d2328cf5013ac33"
+   integrity sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==
+ 
+-"@playwright/test@1.51.1", "@playwright/test@^1.50.1":
+-  version "1.51.1"
+-  resolved "https://registry.yarnpkg.com/@playwright/test/-/test-1.51.1.tgz#75357d513221a7be0baad75f01e966baf9c41a2e"
+-  integrity sha512-nM+kEaTSAoVlXmMPH10017vn3FSiFqr/bh4fKg9vmAdMfd9SDqRZNvPSiAHADc/itWak+qPvMPZQOPwCBW7k7Q==
++"@playwright/test@1.51.0", "@playwright/test@^1.50.1":
++  version "1.51.0"
++  resolved "https://registry.yarnpkg.com/@playwright/test/-/test-1.51.0.tgz#8d5c8400b465a0bfdbcf993e390ceecb903ea6d2"
++  integrity sha512-dJ0dMbZeHhI+wb77+ljx/FeC8VBP6j/rj9OAojO08JI80wTZy6vRk9KvHKiDCUh4iMpEiseMgqRBIeW+eKX6RA==
+   dependencies:
+-    playwright "1.51.1"
++    playwright "1.51.0"
+ 
+ "@polka/url@^1.0.0-next.24":
+   version "1.0.0-next.28"
+@@ -2527,10 +2527,10 @@
+     "@sentry-internal/browser-utils" "9.6.0"
+     "@sentry/core" "9.6.0"
+ 
+-"@sentry/babel-plugin-component-annotate@3.2.2":
+-  version "3.2.2"
+-  resolved "https://registry.yarnpkg.com/@sentry/babel-plugin-component-annotate/-/babel-plugin-component-annotate-3.2.2.tgz#0c5f26e417b8f524924fa4531b82ad5603216e90"
+-  integrity sha512-D+SKQ266ra/wo87s9+UI/rKQi3qhGPCR8eSCDe0VJudhjHsqyNU+JJ5lnIGCgmZaWFTXgdBP/gdr1Iz1zqGs4Q==
++"@sentry/babel-plugin-component-annotate@3.2.1":
++  version "3.2.1"
++  resolved "https://registry.yarnpkg.com/@sentry/babel-plugin-component-annotate/-/babel-plugin-component-annotate-3.2.1.tgz#90e40750a63ef5ce3d67498ed0cfccc587ab4cd8"
++  integrity sha512-tUp2e+CERpRFzTftjPxt7lg4BF0R3K+wGfeJyIqrc0tbJ2y6duT8OD0ArWoOi1g8xQ73NDn1/mEeS8pC+sbjTQ==
+ 
+ "@sentry/browser@^9.0.0":
+   version "9.6.0"
+@@ -2543,13 +2543,13 @@
+     "@sentry-internal/replay-canvas" "9.6.0"
+     "@sentry/core" "9.6.0"
+ 
+-"@sentry/bundler-plugin-core@3.2.2":
+-  version "3.2.2"
+-  resolved "https://registry.yarnpkg.com/@sentry/bundler-plugin-core/-/bundler-plugin-core-3.2.2.tgz#c9193b0c97acf0097fdb820d86eaaad9c9b6b2c4"
+-  integrity sha512-YGrtmqQ2jMixccX2slVG/Lw7pCGJL3DGB3clmY9mO8QBEBIN3/gEANiHJVWwRidpUOS/0b7yVVGAdwZ87oPwTg==
++"@sentry/bundler-plugin-core@3.2.1":
++  version "3.2.1"
++  resolved "https://registry.yarnpkg.com/@sentry/bundler-plugin-core/-/bundler-plugin-core-3.2.1.tgz#9c1c8b9acaca3ae5eeae2a04529f70212dd2937e"
++  integrity sha512-1wId05LXf6LyTeNwqyhSDSWYbYtFT/NQRqq3sW7hcL4nZuAgzT82PSvxeeCgR/D2qXOj7RCYXXZtyWzzo3wtXA==
+   dependencies:
+     "@babel/core" "^7.18.5"
+-    "@sentry/babel-plugin-component-annotate" "3.2.2"
++    "@sentry/babel-plugin-component-annotate" "3.2.1"
+     "@sentry/cli" "2.42.2"
+     dotenv "^16.3.1"
+     find-up "^5.0.0"
+@@ -2617,11 +2617,11 @@
+   integrity sha512-t51h6HKlPYW3TfeM09mZ6uDd95A7lgYpD5lUV54ilBA3TefS+M9I32MKwAW7yHzzWs0WQxOdm56eoDBOmRDpHQ==
+ 
+ "@sentry/webpack-plugin@^3.0.0":
+-  version "3.2.2"
+-  resolved "https://registry.yarnpkg.com/@sentry/webpack-plugin/-/webpack-plugin-3.2.2.tgz#716ab462279c25cea17490d02cb1d22b00f3f661"
+-  integrity sha512-6OkVKNOjKk8P9j7oh6svZ+kEP1i9YIHBC2aGWL2XsgeZTIrMBxJAXtOf+qSrfMAxEtibSroGVOMQc/y3WJTQtg==
++  version "3.2.1"
++  resolved "https://registry.yarnpkg.com/@sentry/webpack-plugin/-/webpack-plugin-3.2.1.tgz#83756c64c59a2be39e05beda30b08753f7b80780"
++  integrity sha512-wP/JDljhB9pCFc62rSwWbIglF2Os8FLV68pQuyJnmImM9cjGjlK6UO+qKa2pOLYsmAcnn+t3Bhu77bbzPIStCg==
+   dependencies:
+-    "@sentry/bundler-plugin-core" "3.2.2"
++    "@sentry/bundler-plugin-core" "3.2.1"
+     unplugin "1.0.1"
+     uuid "^9.0.0"
+ 
+@@ -3830,12 +3830,12 @@ acorn@^8.0.4, acorn@^8.1.0, acorn@^8.11.0, acorn@^8.9.0:
+   resolved "https://registry.yarnpkg.com/acorn/-/acorn-8.13.0.tgz#2a30d670818ad16ddd6a35d3842dacec9e5d7ca3"
+   integrity sha512-8zSiw54Oxrdym50NlZ9sUusyO1Z1ZchgRLWRaK6c86XJFClyCgFKetdowBg5bKxyp/u+CDBJG4Mpp0m3HLZl9w==
+ 
+-acorn@^8.14.0:
++acorn@^8.14.0, acorn@^8.8.1, acorn@^8.8.2:
+   version "8.14.0"
+   resolved "https://registry.yarnpkg.com/acorn/-/acorn-8.14.0.tgz#063e2c70cac5fb4f6467f0b11152e04c682795b0"
+   integrity sha512-cl669nCJTZBsL97OF4kUQm5g5hC2uihk0NxY3WENAC0TYdILVkAyHymAntgxGkl7K+t0cXIrH5siy5S4XkFycA==
+ 
+-acorn@^8.4.1, acorn@^8.8.1, acorn@^8.8.2:
++acorn@^8.4.1:
+   version "8.14.1"
+   resolved "https://registry.yarnpkg.com/acorn/-/acorn-8.14.1.tgz#721d5dc10f7d5b5609a891773d47731796935dfb"
+   integrity sha512-OvQ/2pUDKmgfCg++xsTX1wGxfTaszcHVcTctW4UJB4hibJx2HXxxO5UmVgyjMa+ZDsiaf5wWLXYpRWMmBI0QHg==
+@@ -4653,10 +4653,10 @@ caniuse-api@^3.0.0:
+     lodash.memoize "^4.1.2"
+     lodash.uniq "^4.5.0"
+ 
+-caniuse-lite@1.0.30001704, caniuse-lite@^1.0.0, caniuse-lite@^1.0.30001646, caniuse-lite@^1.0.30001688:
+-  version "1.0.30001704"
+-  resolved "https://registry.yarnpkg.com/caniuse-lite/-/caniuse-lite-1.0.30001704.tgz#6644fe909d924ac3a7125e8a0ab6af95b1f32990"
+-  integrity sha512-+L2IgBbV6gXB4ETf0keSvLr7JUrRVbIaB/lrQ1+z8mRcQiisG5k+lG6O4n6Y5q6f5EuNfaYXKgymucphlEXQew==
++caniuse-lite@1.0.30001701, caniuse-lite@^1.0.0, caniuse-lite@^1.0.30001646, caniuse-lite@^1.0.30001688:
++  version "1.0.30001701"
++  resolved "https://registry.yarnpkg.com/caniuse-lite/-/caniuse-lite-1.0.30001701.tgz#ad9c90301f7153cf6b3314d16cc30757285bf9e7"
++  integrity sha512-faRs/AW3jA9nTwmJBSO1PQ6L/EOgsB5HMQQq4iCu5zhPgVVgO/pZRHlmatwijZKetFw8/Pr4q6dEN8sJuq8qTw==
+ 
+ chalk@5.2.0:
+   version "5.2.0"
+@@ -5018,9 +5018,9 @@ core-js-compat@^3.40.0:
+     browserslist "^4.24.4"
+ 
+ core-js@^3.0.0, core-js@^3.38.1:
+-  version "3.41.0"
+-  resolved "https://registry.yarnpkg.com/core-js/-/core-js-3.41.0.tgz#57714dafb8c751a6095d028a7428f1fb5834a776"
+-  integrity sha512-SJ4/EHwS36QMJd6h/Rg+GyR4A5xE0FSI3eZ+iBVpfqf1x0eTSg1smWLHrA+2jQThZSh97fmSgFSU8B61nxosxA==
++  version "3.40.0"
++  resolved "https://registry.yarnpkg.com/core-js/-/core-js-3.40.0.tgz#2773f6b06877d8eda102fc42f828176437062476"
++  integrity sha512-7vsMc/Lty6AGnn7uFpYT56QesI5D2Y/UkgKounk87OP9Z2H9Z8kj6jzcSGAxFmUtDOS0ntK6lbQz+Nsa0Jj6mQ==
+ 
+ core-util-is@~1.0.0:
+   version "1.0.3"
+@@ -5173,14 +5173,14 @@ css-loader@^7.0.0:
+     semver "^7.5.4"
+ 
+ css-minimizer-webpack-plugin@^7.0.0:
+-  version "7.0.2"
+-  resolved "https://registry.yarnpkg.com/css-minimizer-webpack-plugin/-/css-minimizer-webpack-plugin-7.0.2.tgz#aa1b01c6033f5b2f86ddb60c1f5bddd012b50cac"
+-  integrity sha512-nBRWZtI77PBZQgcXMNqiIXVshiQOVLGSf2qX/WZfG8IQfMbeHUMXaBWQmiiSTmPJUflQxHjZjzAmuyO7tpL2Jg==
++  version "7.0.0"
++  resolved "https://registry.yarnpkg.com/css-minimizer-webpack-plugin/-/css-minimizer-webpack-plugin-7.0.0.tgz#b77a3d2f7c0fd02d3ac250dcc2f79065363f3cd3"
++  integrity sha512-niy66jxsQHqO+EYbhPuIhqRQ1mNcNVUHrMnkzzir9kFOERJUaQDDRhh7dKDz33kBpkWMF9M8Vx0QlDbc5AHOsw==
+   dependencies:
+     "@jridgewell/trace-mapping" "^0.3.25"
+-    cssnano "^7.0.4"
++    cssnano "^7.0.1"
+     jest-worker "^29.7.0"
+-    postcss "^8.4.40"
++    postcss "^8.4.38"
+     schema-utils "^4.2.0"
+     serialize-javascript "^6.0.2"
+ 
+@@ -5301,7 +5301,7 @@ cssnano-utils@^5.0.0:
+   resolved "https://registry.yarnpkg.com/cssnano-utils/-/cssnano-utils-5.0.0.tgz#b53a0343dd5d21012911882db6ae7d2eae0e3687"
+   integrity sha512-Uij0Xdxc24L6SirFr25MlwC2rCFX6scyUmuKpzI+JQ7cyqDEwD42fJ0xfB3yLfOnRDU5LKGgjQ9FA6LYh76GWQ==
+ 
+-cssnano@^7.0.4:
++cssnano@^7.0.1:
+   version "7.0.6"
+   resolved "https://registry.yarnpkg.com/cssnano/-/cssnano-7.0.6.tgz#63d54fd42bc017f6aaed69e47d9aaef85b7850ec"
+   integrity sha512-54woqx8SCbp8HwvNZYn68ZFAepuouZW4lTwiMVnBErM3VkO7/Sd4oTOt3Zz3bPx3kxQ36aISppyXj2Md4lg8bw==
+@@ -5693,9 +5693,9 @@ domutils@^2.5.2, domutils@^2.8.0:
+     domhandler "^4.2.0"
+ 
+ domutils@^3.0.1:
+-  version "3.2.2"
+-  resolved "https://registry.yarnpkg.com/domutils/-/domutils-3.2.2.tgz#edbfe2b668b0c1d97c24baf0f1062b132221bc78"
+-  integrity sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==
++  version "3.1.0"
++  resolved "https://registry.yarnpkg.com/domutils/-/domutils-3.1.0.tgz#c47f551278d3dc4b0b1ab8cbb42d751a6f0d824e"
++  integrity sha512-H78uMmQtI2AhgDJjWeQmHwJJ2bLPD3GMmO7Zja/ZZh84wkm+4ut+IUnUdRa8uCGX88DiVx1j6FRe1XfxEgjEZA==
+   dependencies:
+     dom-serializer "^2.0.0"
+     domelementtype "^2.3.0"
+@@ -6035,9 +6035,9 @@ eslint-config-google@^0.14.0:
+   integrity sha512-WsbX4WbjuMvTdeVL6+J3rK1RGhCTqjsFjX7UMSMgZiyxxaNLkoJENbrGExzERFeoTpGw3F3FypTiWAP9ZXzkEw==
+ 
+ eslint-config-prettier@^10.0.0:
+-  version "10.1.1"
+-  resolved "https://registry.yarnpkg.com/eslint-config-prettier/-/eslint-config-prettier-10.1.1.tgz#cf0ff6e5c4e7e15f129f1f1ce2a5ecba92dec132"
+-  integrity sha512-4EQQr6wXwS+ZJSzaR5ZCrYgLxqvUjdXctaEtBqHcbkW944B1NQyO4qpdHQbXBONfwxXdkAY81HH4+LUfrg+zPw==
++  version "10.0.2"
++  resolved "https://registry.yarnpkg.com/eslint-config-prettier/-/eslint-config-prettier-10.0.2.tgz#47444de8aa104ce82c2f91ad2a5e96b62c01e20d"
++  integrity sha512-1105/17ZIMjmCOJOPNfVdbXafLCLj3hPmkmB7dLgt7XsQ/zkxSuDerE/xgO3RxoHysR1N1whmquY0lSn2O0VLg==
+ 
+ eslint-import-resolver-node@^0.3.9:
+   version "0.3.9"
+@@ -8426,9 +8426,9 @@ kleur@^3.0.3:
+   integrity sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==
+ 
+ knip@^5.36.2:
+-  version "5.46.0"
+-  resolved "https://registry.yarnpkg.com/knip/-/knip-5.46.0.tgz#8444881f9382901b4022775ba99e2df4de1df991"
+-  integrity sha512-WedHSK5xNBWYgm64Rt5B9b0CVXL2kRBcyCeet3NHgdv9en3QE4AWSDPEiX48NoPUBW3h//9S0VwLF5MG/MPi3g==
++  version "5.45.0"
++  resolved "https://registry.yarnpkg.com/knip/-/knip-5.45.0.tgz#18eda62ffca7ec9cbee7732470b8415ae29e2d8f"
++  integrity sha512-OUyO9FUEVCM6/j0gl+PP/LDeJEs4hIdE8n4vK4xrtjN1g3Qu4Ws1oexbWTCJ+8xt8Tgse4Yvhx96OqF/UVl3Ug==
+   dependencies:
+     "@nodelib/fs.walk" "3.0.1"
+     "@snyk/github-codeowners" "1.1.0"
+@@ -8499,7 +8499,12 @@ lie@~3.3.0:
+   dependencies:
+     immediate "~3.0.5"
+ 
+-lilconfig@^3.1.2, lilconfig@^3.1.3:
++lilconfig@^3.1.2:
++  version "3.1.2"
++  resolved "https://registry.yarnpkg.com/lilconfig/-/lilconfig-3.1.2.tgz#e4a7c3cb549e3a606c8dcc32e5ae1005e62c05cb"
++  integrity sha512-eop+wDAvpItUys0FWkHIKeC9ybYrTGbU41U5K7+bttZZeohvnY7M9dZ5kB21GNWiFT2q1OoPTvncPCgSOVO5ow==
++
++lilconfig@^3.1.3:
+   version "3.1.3"
+   resolved "https://registry.yarnpkg.com/lilconfig/-/lilconfig-3.1.3.tgz#a1bcfd6257f9585bf5ae14ceeebb7b559025e4c4"
+   integrity sha512-/vlFKAoH5Cgt3Ie+JLhRbwOsCQePABiU3tJ1egGvyQ+33R/vcwM2Zl2QR/LzjsBeItPt3oSVXapn+m4nQDvpzw==
+@@ -8537,9 +8542,9 @@ linkifyjs@4.2.0:
+   integrity sha512-pCj3PrQyATaoTYKHrgWRF3SJwsm61udVh+vuls/Rl6SptiDhgE7ziUIudAedRY9QEfynmM7/RmLEfPUyw1HPCw==
+ 
+ lint-staged@^15.0.2:
+-  version "15.5.0"
+-  resolved "https://registry.yarnpkg.com/lint-staged/-/lint-staged-15.5.0.tgz#fa6464cfb06e0faf5bb167f83186e952ff6e569e"
+-  integrity sha512-WyCzSbfYGhK7cU+UuDDkzUiytbfbi0ZdPy2orwtM75P3WTtQBzmG40cCxIa8Ii2+XjfxzLH6Be46tUfWS85Xfg==
++  version "15.4.3"
++  resolved "https://registry.yarnpkg.com/lint-staged/-/lint-staged-15.4.3.tgz#e73587cc857f580c99f907abefe9ac8d8d5e74c1"
++  integrity sha512-FoH1vOeouNh1pw+90S+cnuoFwRfUD9ijY2GKy5h7HS3OR7JVir2N2xrsa0+Twc1B7cW72L+88geG5cW4wIhn7g==
+   dependencies:
+     chalk "^5.4.1"
+     commander "^13.1.0"
+@@ -9277,10 +9282,10 @@ obuf@^1.0.0, obuf@^1.1.2:
+   resolved "https://registry.yarnpkg.com/obuf/-/obuf-1.1.2.tgz#09bea3343d41859ebd446292d11c9d4db619084e"
+   integrity sha512-PX1wu0AmAdPqOL1mWhqmlOd8kOIZQwGZw6rh7uby9fTc5lhaOWFLX3I6R1hrF9k3zUY40e6igsLGkDXK92LJNg==
+ 
+-oidc-client-ts@3.2.0, oidc-client-ts@^3.0.1:
+-  version "3.2.0"
+-  resolved "https://registry.yarnpkg.com/oidc-client-ts/-/oidc-client-ts-3.2.0.tgz#37e6e563bfeabc4aa1497a9a963f8e3d73168316"
+-  integrity sha512-wUvVcG3SXzZDKHxi/VGQGaTUk9qguMKfYh26Y1zOVrQsu1zp85JWx/SjZzKSXK5j3NA1RcasgMoaHe6gt1WNtw==
++oidc-client-ts@3.1.0, oidc-client-ts@^3.0.1:
++  version "3.1.0"
++  resolved "https://registry.yarnpkg.com/oidc-client-ts/-/oidc-client-ts-3.1.0.tgz#28d3254951a1c64cc9780042c61492a71b2240dd"
++  integrity sha512-IDopEXjiwjkmJLYZo6BTlvwOtnlSniWZkKZoXforC/oLZHC9wkIxd25Kwtmo5yKFMMVcsp3JY6bhcNJqdYk8+g==
+   dependencies:
+     jwt-decode "^4.0.0"
+ 
+@@ -9593,17 +9598,17 @@ pkg-dir@^4.2.0:
+   dependencies:
+     find-up "^4.0.0"
+ 
+-playwright-core@1.51.1, playwright-core@^1.51.0:
+-  version "1.51.1"
+-  resolved "https://registry.yarnpkg.com/playwright-core/-/playwright-core-1.51.1.tgz#d57f0393e02416f32a47cf82b27533656a8acce1"
+-  integrity sha512-/crRMj8+j/Nq5s8QcvegseuyeZPxpQCZb6HNk3Sos3BlZyAknRjoyJPFWkpNn8v0+P3WiwqFF8P+zQo4eqiNuw==
++playwright-core@1.51.0, playwright-core@^1.51.0:
++  version "1.51.0"
++  resolved "https://registry.yarnpkg.com/playwright-core/-/playwright-core-1.51.0.tgz#bb23ea6bb6298242d088ae5e966ffcf8dc9827e8"
++  integrity sha512-x47yPE3Zwhlil7wlNU/iktF7t2r/URR3VLbH6EknJd/04Qc/PSJ0EY3CMXipmglLG+zyRxW6HNo2EGbKLHPWMg==
+ 
+-playwright@1.51.1:
+-  version "1.51.1"
+-  resolved "https://registry.yarnpkg.com/playwright/-/playwright-1.51.1.tgz#ae1467ee318083968ad28d6990db59f47a55390f"
+-  integrity sha512-kkx+MB2KQRkyxjYPc3a0wLZZoDczmppyGJIvQ43l+aZihkaVvmu/21kiyaHeHjiFxjxNNFnUncKmcGIyOojsaw==
++playwright@1.51.0:
++  version "1.51.0"
++  resolved "https://registry.yarnpkg.com/playwright/-/playwright-1.51.0.tgz#9ba154497ba62bc6dc199c58ee19295eb35a4707"
++  integrity sha512-442pTfGM0xxfCYxuBa/Pu6B2OqxqqaYq39JS8QDMGThUvIOCd6s0ANDog3uwA0cHavVlnTQzGCN7Id2YekDSXA==
+   dependencies:
+-    playwright-core "1.51.1"
++    playwright-core "1.51.0"
+   optionalDependencies:
+     fsevents "2.3.2"
+ 
+@@ -9642,11 +9647,11 @@ postcss-attribute-case-insensitive@^7.0.1:
+     postcss-selector-parser "^7.0.0"
+ 
+ postcss-calc@^10.0.2:
+-  version "10.1.1"
+-  resolved "https://registry.yarnpkg.com/postcss-calc/-/postcss-calc-10.1.1.tgz#52b385f2e628239686eb6e3a16207a43f36064ca"
+-  integrity sha512-NYEsLHh8DgG/PRH2+G9BTuUdtf9ViS+vdoQ0YA5OQdGsfN4ztiwtDWNtBl9EKeqNMFnIu8IKZ0cLxEQ5r5KVMw==
++  version "10.0.2"
++  resolved "https://registry.yarnpkg.com/postcss-calc/-/postcss-calc-10.0.2.tgz#15f01635a27b9d38913a98c4ef2877f5b715b439"
++  integrity sha512-DT/Wwm6fCKgpYVI7ZEWuPJ4az8hiEHtCUeYjZXqU7Ou4QqYh1Df2yCQ7Ca6N7xqKPFkxN3fhf+u9KSoOCJNAjg==
+   dependencies:
+-    postcss-selector-parser "^7.0.0"
++    postcss-selector-parser "^6.1.2"
+     postcss-value-parser "^4.2.0"
+ 
+ postcss-clamp@^4.1.0:
+@@ -10239,7 +10244,7 @@ postcss@8.4.46:
+     picocolors "^1.1.0"
+     source-map-js "^1.2.1"
+ 
+-postcss@^8.3.11, postcss@^8.4.33:
++postcss@^8.3.11, postcss@^8.4.33, postcss@^8.4.38:
+   version "8.4.47"
+   resolved "https://registry.yarnpkg.com/postcss/-/postcss-8.4.47.tgz#5bf6c9a010f3e724c503bf03ef7947dcb0fea365"
+   integrity sha512-56rxCq7G/XfB4EkXq9Egn5GCqugWvDFjafDOThIdMBsI15iqPqR5r15TfSr1YPYeEI19YeaXMCbY6u88Y76GLQ==
+@@ -10248,7 +10253,7 @@ postcss@^8.3.11, postcss@^8.4.33:
+     picocolors "^1.1.0"
+     source-map-js "^1.2.1"
+ 
+-postcss@^8.4.40, postcss@^8.5.3:
++postcss@^8.5.3:
+   version "8.5.3"
+   resolved "https://registry.yarnpkg.com/postcss/-/postcss-8.5.3.tgz#1463b6f1c7fb16fe258736cba29a2de35237eafb"
+   integrity sha512-dle9A3yYxlBSrt8Fu+IpjGT8SY8hN0mlaA6GY8t0P5PjIOZemULz/E2Bnm/2dcUOena75OTNkHI76uZBNUUq3A==
+@@ -10281,10 +10286,10 @@ prelude-ls@^1.2.1:
+   resolved "https://registry.yarnpkg.com/prelude-ls/-/prelude-ls-1.2.1.tgz#debc6489d7a6e6b0e7611888cec880337d316396"
+   integrity sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==
+ 
+-prettier@3.5.3:
+-  version "3.5.3"
+-  resolved "https://registry.yarnpkg.com/prettier/-/prettier-3.5.3.tgz#4fc2ce0d657e7a02e602549f053b239cb7dfe1b5"
+-  integrity sha512-QQtaxnoDJeAkDvDKWCLiwIXkTgRhwYDEQCghU9Z6q03iyek/rxRh/2lC3HB7P8sWT2xC/y5JDctPLBIGzHKbhw==
++prettier@3.5.2:
++  version "3.5.2"
++  resolved "https://registry.yarnpkg.com/prettier/-/prettier-3.5.2.tgz#d066c6053200da0234bf8fa1ef45168abed8b914"
++  integrity sha512-lc6npv5PH7hVqozBR7lkBNOGXV9vMwROAPlumdBkX0wTbbzPu/U1hk5yL8p2pt4Xoc+2mkT8t/sow2YrV/M5qg==
+ 
+ prettier@^2.6.2:
+   version "2.8.8"
+@@ -11946,9 +11951,9 @@ temporal-spec@^0.2.4:
+   integrity sha512-lDMFv4nKQrSjlkHKAlHVqKrBG4DyFfa9F74cmBZ3Iy3ed8yvWnlWSIdi4IKfSqwmazAohBNwiN64qGx4y5Q3IQ==
+ 
+ terser-webpack-plugin@^5.3.11, terser-webpack-plugin@^5.3.9:
+-  version "5.3.14"
+-  resolved "https://registry.yarnpkg.com/terser-webpack-plugin/-/terser-webpack-plugin-5.3.14.tgz#9031d48e57ab27567f02ace85c7d690db66c3e06"
+-  integrity sha512-vkZjpUjb6OMS7dhV+tILUW6BhpDR7P2L/aQSAv+Uwk+m8KATX9EccViHTJR2qDtACKPIYndLGCyl3FMo+r2LMw==
++  version "5.3.12"
++  resolved "https://registry.yarnpkg.com/terser-webpack-plugin/-/terser-webpack-plugin-5.3.12.tgz#d9518c80493081bace668aa8613b22e4a838810c"
++  integrity sha512-jDLYqo7oF8tJIttjXO6jBY5Hk8p3A8W4ttih7cCEq64fQFWmgJ4VqAQjKr7WwIDlmXKEc6QeoRb5ecjZ+2afcg==
+   dependencies:
+     "@jridgewell/trace-mapping" "^0.3.25"
+     jest-worker "^27.4.5"

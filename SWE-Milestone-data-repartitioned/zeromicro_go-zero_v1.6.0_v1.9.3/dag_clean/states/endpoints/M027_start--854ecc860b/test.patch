@@ -1,0 +1,1089 @@
+diff --git a/core/logx/writer_test.go b/core/logx/writer_test.go
+index 0f810975f6bd150dfe5bb5b397a6c1dff7d7a95f..6ac98bc1d17b19084699fdab9690b5c64fda9e27 100644
+--- a/core/logx/writer_test.go
++++ b/core/logx/writer_test.go
+@@ -189,6 +189,41 @@ func TestWritePlainAny(t *testing.T) {
+ 	assert.Contains(t, buf.String(), "runtime/debug.Stack")
+ }
+ 
++func TestWritePlainDuplicate(t *testing.T) {
++	old := atomic.SwapUint32(&encoding, plainEncodingType)
++	t.Cleanup(func() {
++		atomic.StoreUint32(&encoding, old)
++	})
++
++	var buf bytes.Buffer
++	output(&buf, levelInfo, "foo", LogField{
++		Key:   "first",
++		Value: "a",
++	}, LogField{
++		Key:   "first",
++		Value: "b",
++	})
++	assert.Contains(t, buf.String(), "foo")
++	assert.NotContains(t, buf.String(), "first=a")
++	assert.Contains(t, buf.String(), "first=b")
++
++	buf.Reset()
++	output(&buf, levelInfo, "foo", LogField{
++		Key:   "first",
++		Value: "a",
++	}, LogField{
++		Key:   "first",
++		Value: "b",
++	}, LogField{
++		Key:   "second",
++		Value: "c",
++	})
++	assert.Contains(t, buf.String(), "foo")
++	assert.NotContains(t, buf.String(), "first=a")
++	assert.Contains(t, buf.String(), "first=b")
++	assert.Contains(t, buf.String(), "second=c")
++}
++
+ func TestLogWithLimitContentLength(t *testing.T) {
+ 	maxLen := atomic.LoadUint32(&maxContentLength)
+ 	atomic.StoreUint32(&maxContentLength, 10)
+diff --git a/core/stat/remotewriter_test.go b/core/stat/remotewriter_test.go
+index e36fd80090e92ddea339f47807703e9fd6b079cc..74a14990e98b4da57ee4fe712464923ac42a0034 100644
+--- a/core/stat/remotewriter_test.go
++++ b/core/stat/remotewriter_test.go
+@@ -1,6 +1,7 @@
+ package stat
+ 
+ import (
++	"errors"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -28,3 +29,14 @@ func TestRemoteWriterFail(t *testing.T) {
+ 	})
+ 	assert.NotNil(t, err)
+ }
++
++func TestRemoteWriterError(t *testing.T) {
++	defer gock.Off()
++
++	gock.New("http://foo.com").ReplyError(errors.New("foo"))
++	writer := NewRemoteWriter("http://foo.com")
++	err := writer.Write(&StatReport{
++		Name: "bar",
++	})
++	assert.NotNil(t, err)
++}
+diff --git a/core/stores/redis/breakerhook_test.go b/core/stores/redis/breakerhook_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..ebd415049999397fa112cd158715ae71102b77b4
+--- /dev/null
++++ b/core/stores/redis/breakerhook_test.go
+@@ -0,0 +1,135 @@
++package redis
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++
++	"github.com/alicebob/miniredis/v2"
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/breaker"
++)
++
++func TestBreakerHook_ProcessHook(t *testing.T) {
++	t.Run("breakerHookOpen", func(t *testing.T) {
++		s := miniredis.RunT(t)
++
++		rds := MustNewRedis(RedisConf{
++			Host: s.Addr(),
++			Type: NodeType,
++		})
++
++		someError := errors.New("ERR some error")
++		s.SetError(someError.Error())
++
++		var err error
++		for i := 0; i < 1000; i++ {
++			_, err = rds.Get("key")
++			if err != nil && err.Error() != someError.Error() {
++				break
++			}
++		}
++		assert.Equal(t, breaker.ErrServiceUnavailable, err)
++	})
++
++	t.Run("breakerHookClose", func(t *testing.T) {
++		s := miniredis.RunT(t)
++
++		rds := MustNewRedis(RedisConf{
++			Host: s.Addr(),
++			Type: NodeType,
++		})
++
++		var err error
++		for i := 0; i < 1000; i++ {
++			_, err = rds.Get("key")
++			if err != nil {
++				break
++			}
++		}
++		assert.NotEqual(t, breaker.ErrServiceUnavailable, err)
++	})
++
++	t.Run("breakerHook_ignoreCmd", func(t *testing.T) {
++		s := miniredis.RunT(t)
++
++		rds := MustNewRedis(RedisConf{
++			Host: s.Addr(),
++			Type: NodeType,
++		})
++
++		someError := errors.New("ERR some error")
++		s.SetError(someError.Error())
++
++		var err error
++
++		node, err := getRedis(rds)
++		assert.NoError(t, err)
++
++		for i := 0; i < 1000; i++ {
++			_, err = rds.Blpop(node, "key")
++			if err != nil && err.Error() != someError.Error() {
++				break
++			}
++		}
++		assert.Equal(t, someError.Error(), err.Error())
++	})
++}
++
++func TestBreakerHook_ProcessPipelineHook(t *testing.T) {
++	t.Run("breakerPipelineHookOpen", func(t *testing.T) {
++		s := miniredis.RunT(t)
++
++		rds := MustNewRedis(RedisConf{
++			Host: s.Addr(),
++			Type: NodeType,
++		})
++
++		someError := errors.New("ERR some error")
++		s.SetError(someError.Error())
++
++		var err error
++		for i := 0; i < 1000; i++ {
++			err = rds.Pipelined(
++				func(pipe Pipeliner) error {
++					pipe.Incr(context.Background(), "pipelined_counter")
++					pipe.Expire(context.Background(), "pipelined_counter", time.Hour)
++					pipe.ZAdd(context.Background(), "zadd", Z{Score: 12, Member: "zadd"})
++					return nil
++				},
++			)
++
++			if err != nil && err.Error() != someError.Error() {
++				break
++			}
++		}
++		assert.Equal(t, breaker.ErrServiceUnavailable, err)
++	})
++
++	t.Run("breakerPipelineHookClose", func(t *testing.T) {
++		s := miniredis.RunT(t)
++
++		rds := MustNewRedis(RedisConf{
++			Host: s.Addr(),
++			Type: NodeType,
++		})
++
++		var err error
++		for i := 0; i < 1000; i++ {
++			err = rds.Pipelined(
++				func(pipe Pipeliner) error {
++					pipe.Incr(context.Background(), "pipelined_counter")
++					pipe.Expire(context.Background(), "pipelined_counter", time.Hour)
++					pipe.ZAdd(context.Background(), "zadd", Z{Score: 12, Member: "zadd"})
++					return nil
++				},
++			)
++
++			if err != nil {
++				break
++			}
++		}
++		assert.NotEqual(t, breaker.ErrServiceUnavailable, err)
++	})
++}
+diff --git a/core/stores/redis/durationhook_test.go b/core/stores/redis/durationhook_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..37c6eb54209318b87b00dfbe450a7892019d29e1
+--- /dev/null
++++ b/core/stores/redis/durationhook_test.go
+@@ -0,0 +1,156 @@
++package redis
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"strings"
++	"testing"
++	"time"
++
++	red "github.com/redis/go-redis/v9"
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/breaker"
++	"github.com/zeromicro/go-zero/core/logx/logtest"
++	"github.com/zeromicro/go-zero/core/trace/tracetest"
++	tracesdk "go.opentelemetry.io/otel/trace"
++)
++
++func TestHookProcessCase1(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := defaultDurationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return nil
++	})(context.Background(), red.NewCmd(context.Background()))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	assert.False(t, strings.Contains(w.String(), "slow"))
++}
++
++func TestHookProcessCase2(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := defaultDurationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		time.Sleep(slowThreshold.Load() + time.Millisecond)
++		return nil
++	})(context.Background(), red.NewCmd(context.Background()))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	assert.True(t, strings.Contains(w.String(), "slow"))
++	assert.True(t, strings.Contains(w.String(), "trace"))
++	assert.True(t, strings.Contains(w.String(), "span"))
++}
++
++func TestHookProcessPipelineCase1(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		return nil
++	})(context.Background(), nil)
++	assert.NoError(t, err)
++
++	err = defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return nil
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.NoError(t, err)
++
++	assert.False(t, strings.Contains(w.String(), "slow"))
++}
++
++func TestHookProcessPipelineCase2(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		time.Sleep(slowThreshold.Load() + time.Millisecond)
++		return nil
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.NoError(t, err)
++
++	assert.True(t, strings.Contains(w.String(), "slow"))
++	assert.True(t, strings.Contains(w.String(), "trace"))
++	assert.True(t, strings.Contains(w.String(), "span"))
++}
++
++func TestHookProcessPipelineCase3(t *testing.T) {
++	te := tracetest.NewInMemoryExporter(t)
++
++	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return assert.AnError
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.ErrorIs(t, err, assert.AnError)
++	traceLogs := te.GetSpans().Snapshots()[0]
++	assert.Equal(t, "redis", traceLogs.Name())
++	assert.Equal(t, assert.AnError.Error(), traceLogs.Events()[0].Attributes[1].Value.AsString(), "trace should record error")
++}
++
++func TestLogDuration(t *testing.T) {
++	w := logtest.NewCollector(t)
++
++	logDuration(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background(), "get", "foo"),
++	}, 1*time.Second)
++	assert.True(t, strings.Contains(w.String(), "get foo"))
++
++	logDuration(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background(), "get", "foo"),
++		red.NewCmd(context.Background(), "set", "bar", 0),
++	}, 1*time.Second)
++	assert.True(t, strings.Contains(w.String(), `get foo\nset bar 0`))
++}
++
++func TestFormatError(t *testing.T) {
++	// Test case: err is OpError
++	err := &net.OpError{
++		Err: mockOpError{},
++	}
++	assert.Equal(t, "timeout", formatError(err))
++
++	// Test case: err is nil
++	assert.Equal(t, "", formatError(nil))
++
++	// Test case: err is red.Nil
++	assert.Equal(t, "", formatError(red.Nil))
++
++	// Test case: err is io.EOF
++	assert.Equal(t, "eof", formatError(io.EOF))
++
++	// Test case: err is context.DeadlineExceeded
++	assert.Equal(t, "context deadline", formatError(context.DeadlineExceeded))
++
++	// Test case: err is breaker.ErrServiceUnavailable
++	assert.Equal(t, "breaker open", formatError(breaker.ErrServiceUnavailable))
++
++	// Test case: err is unknown
++	assert.Equal(t, "unexpected error", formatError(errors.New("some error")))
++}
++
++type mockOpError struct {
++}
++
++func (mockOpError) Error() string {
++	return "mock error"
++}
++
++func (mockOpError) Timeout() bool {
++	return true
++}
+diff --git a/core/stores/redis/hook_test.go b/core/stores/redis/hook_test.go
+deleted file mode 100644
+index 44b2e8fa709378b11c3d94f291550ef268b2465f..0000000000000000000000000000000000000000
+--- a/core/stores/redis/hook_test.go
++++ /dev/null
+@@ -1,156 +0,0 @@
+-package redis
+-
+-import (
+-	"context"
+-	"errors"
+-	"io"
+-	"net"
+-	"strings"
+-	"testing"
+-	"time"
+-
+-	red "github.com/redis/go-redis/v9"
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/breaker"
+-	"github.com/zeromicro/go-zero/core/logx/logtest"
+-	"github.com/zeromicro/go-zero/core/trace/tracetest"
+-	tracesdk "go.opentelemetry.io/otel/trace"
+-)
+-
+-func TestHookProcessCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	assert.False(t, strings.Contains(w.String(), "slow"))
+-}
+-
+-func TestHookProcessCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
+-}
+-
+-func TestHookProcessPipelineCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		return nil
+-	})(context.Background(), nil)
+-	assert.NoError(t, err)
+-
+-	err = durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.NoError(t, err)
+-
+-	assert.False(t, strings.Contains(w.String(), "slow"))
+-}
+-
+-func TestHookProcessPipelineCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.NoError(t, err)
+-
+-	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
+-}
+-
+-func TestHookProcessPipelineCase3(t *testing.T) {
+-	te := tracetest.NewInMemoryExporter(t)
+-
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return assert.AnError
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.ErrorIs(t, err, assert.AnError)
+-	traceLogs := te.GetSpans().Snapshots()[0]
+-	assert.Equal(t, "redis", traceLogs.Name())
+-	assert.Equal(t, assert.AnError.Error(), traceLogs.Events()[0].Attributes[1].Value.AsString(), "trace should record error")
+-}
+-
+-func TestLogDuration(t *testing.T) {
+-	w := logtest.NewCollector(t)
+-
+-	logDuration(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background(), "get", "foo"),
+-	}, 1*time.Second)
+-	assert.True(t, strings.Contains(w.String(), "get foo"))
+-
+-	logDuration(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background(), "get", "foo"),
+-		red.NewCmd(context.Background(), "set", "bar", 0),
+-	}, 1*time.Second)
+-	assert.True(t, strings.Contains(w.String(), `get foo\nset bar 0`))
+-}
+-
+-func TestFormatError(t *testing.T) {
+-	// Test case: err is OpError
+-	err := &net.OpError{
+-		Err: mockOpError{},
+-	}
+-	assert.Equal(t, "timeout", formatError(err))
+-
+-	// Test case: err is nil
+-	assert.Equal(t, "", formatError(nil))
+-
+-	// Test case: err is red.Nil
+-	assert.Equal(t, "", formatError(red.Nil))
+-
+-	// Test case: err is io.EOF
+-	assert.Equal(t, "eof", formatError(io.EOF))
+-
+-	// Test case: err is context.DeadlineExceeded
+-	assert.Equal(t, "context deadline", formatError(context.DeadlineExceeded))
+-
+-	// Test case: err is breaker.ErrServiceUnavailable
+-	assert.Equal(t, "breaker open", formatError(breaker.ErrServiceUnavailable))
+-
+-	// Test case: err is unknown
+-	assert.Equal(t, "unexpected error", formatError(errors.New("some error")))
+-}
+-
+-type mockOpError struct {
+-}
+-
+-func (mockOpError) Error() string {
+-	return "mock error"
+-}
+-
+-func (mockOpError) Timeout() bool {
+-	return true
+-}
+diff --git a/core/stores/redis/metrics_test.go b/core/stores/redis/metrics_test.go
+index 45549bde0cda8e2d9d96fcaff5fc6c19efd74981..58be61d5e3a1e3e6f37b7680e19a44e83bafc8b1 100644
+--- a/core/stores/redis/metrics_test.go
++++ b/core/stores/redis/metrics_test.go
+@@ -19,7 +19,7 @@ func TestRedisMetric(t *testing.T) {
+ 	cfg := devserver.Config{}
+ 	_ = conf.FillDefault(&cfg)
+ 	server := devserver.NewServer(cfg)
+-	server.StartAsync()
++	server.StartAsync(cfg)
+ 	time.Sleep(time.Second)
+ 
+ 	metricReqDur.Observe(8, "test-cmd")
+diff --git a/core/stores/redis/redis_test.go b/core/stores/redis/redis_test.go
+index cdb082abbe206da40ced4ac8372b91f796c6f2f0..4ddd2bfd77df7c159c3b716715ee2430a8845a80 100644
+--- a/core/stores/redis/redis_test.go
++++ b/core/stores/redis/redis_test.go
+@@ -36,7 +36,7 @@ func (m myHook) ProcessHook(next red.ProcessHook) red.ProcessHook {
+ 		if cmd.Name() == "ping" && !m.includePing {
+ 			return next(ctx, cmd)
+ 		}
+-		return errors.New("hook error")
++		return errors.New("durationHook error")
+ 	}
+ }
+ 
+@@ -155,7 +155,7 @@ func TestRedis_NonBlock(t *testing.T) {
+ 
+ 	t.Run("nonBlock true", func(t *testing.T) {
+ 		s := miniredis.RunT(t)
+-		// use hook to simulate redis ping error
++		// use durationHook to simulate redis ping error
+ 		_, err := NewRedis(RedisConf{
+ 			Host:     s.Addr(),
+ 			NonBlock: true,
+diff --git a/core/stores/redis/redisclustermanager_test.go b/core/stores/redis/redisclustermanager_test.go
+index ac31517e4901c81a58a16e8863792851b1eb3cee..ad4185583e9d6e91a3a32f39bd40bfb4badba6ac 100644
+--- a/core/stores/redis/redisclustermanager_test.go
++++ b/core/stores/redis/redisclustermanager_test.go
+@@ -51,7 +51,7 @@ func TestGetCluster(t *testing.T) {
+ 		Addr:  r.Addr(),
+ 		Type:  ClusterType,
+ 		tls:   true,
+-		hooks: []red.Hook{durationHook},
++		hooks: []red.Hook{defaultDurationHook},
+ 	})
+ 	if assert.NoError(t, err) {
+ 		assert.NotNil(t, c)
+diff --git a/core/stores/sqlx/metrics_test.go b/core/stores/sqlx/metrics_test.go
+index 01bf3f839173c8b4f96d787bf4e1b9faa016369b..0f4c4fd97f3bda0c525a1dd3199f5fa5492b8ca6 100644
+--- a/core/stores/sqlx/metrics_test.go
++++ b/core/stores/sqlx/metrics_test.go
+@@ -20,7 +20,7 @@ func TestSqlxMetric(t *testing.T) {
+ 	_ = conf.FillDefault(&cfg)
+ 	cfg.Port = 6480
+ 	server := devserver.NewServer(cfg)
+-	server.StartAsync()
++	server.StartAsync(cfg)
+ 	time.Sleep(time.Second)
+ 
+ 	metricReqDur.Observe(8, "test-cmd")
+diff --git a/core/stores/sqlx/stmt_test.go b/core/stores/sqlx/stmt_test.go
+index 84de7577b40069559204a117e00949bde3d181db..a2b0b1bbf254d6f6dce4aecab17c111f0482895c 100644
+--- a/core/stores/sqlx/stmt_test.go
++++ b/core/stores/sqlx/stmt_test.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
++	"strconv"
+ 	"testing"
+ 	"time"
+ 
+@@ -290,6 +291,24 @@ func TestStmtBreaker(t *testing.T) {
+ 	})
+ }
+ 
++func TestQueryRowsScanTimeout(t *testing.T) {
++	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
++		rows := sqlmock.NewRows([]string{"foo"})
++		for i := 0; i < 10000; i++ {
++			rows = rows.AddRow("bar" + strconv.Itoa(i))
++		}
++		mock.ExpectQuery("any").WillReturnRows(rows)
++		var val []struct {
++			Foo string
++		}
++		conn := NewSqlConnFromDB(db)
++		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
++		defer cancel()
++		err := conn.QueryRowsCtx(ctx, &val, "any")
++		assert.ErrorIs(t, err, context.DeadlineExceeded)
++	})
++}
++
+ type mockedSessionConn struct {
+ 	lastInsertId int64
+ 	rowsAffected int64
+diff --git a/internal/health/health_test.go b/internal/health/health_test.go
+index 4bdf7e2c7a00e8a5220976c950aa7f6053e0c89f..1184d91ca10b61401f17e4e29335672415749059 100644
+--- a/internal/health/health_test.go
++++ b/internal/health/health_test.go
+@@ -121,7 +121,7 @@ func TestAddGlobalProbes(t *testing.T) {
+ 
+ func TestCreateHttpHandler(t *testing.T) {
+ 	cleanupForTest(t)
+-	srv := httptest.NewServer(CreateHttpHandler())
++	srv := httptest.NewServer(CreateHttpHandler("OK"))
+ 	defer srv.Close()
+ 
+ 	resp, err := http.Get(srv.URL)
+diff --git a/rest/httpx/requests_test.go b/rest/httpx/requests_test.go
+index a1d3f6a8e020711bcab4877f23caa7c24174583a..1a1c8a10ef3cdf87f12a1811de83014423ce185c 100644
+--- a/rest/httpx/requests_test.go
++++ b/rest/httpx/requests_test.go
+@@ -15,18 +15,37 @@ import (
+ )
+ 
+ func TestParseForm(t *testing.T) {
+-	var v struct {
+-		Name    string  `form:"name"`
+-		Age     int     `form:"age"`
+-		Percent float64 `form:"percent,optional"`
+-	}
++	t.Run("slice", func(t *testing.T) {
++		var v struct {
++			Name    string  `form:"name"`
++			Age     int     `form:"age"`
++			Percent float64 `form:"percent,optional"`
++		}
+ 
+-	r, err := http.NewRequest(http.MethodGet, "/a?name=hello&age=18&percent=3.4", http.NoBody)
+-	assert.Nil(t, err)
+-	assert.Nil(t, Parse(r, &v))
+-	assert.Equal(t, "hello", v.Name)
+-	assert.Equal(t, 18, v.Age)
+-	assert.Equal(t, 3.4, v.Percent)
++		r, err := http.NewRequest(
++			http.MethodGet,
++			"/a?name=hello&age=18&percent=3.4",
++			http.NoBody)
++		assert.Nil(t, err)
++		assert.Nil(t, Parse(r, &v))
++		assert.Equal(t, "hello", v.Name)
++		assert.Equal(t, 18, v.Age)
++		assert.Equal(t, 3.4, v.Percent)
++	})
++
++	t.Run("no value", func(t *testing.T) {
++		var v struct {
++			NoValue string `form:"noValue,optional"`
++		}
++
++		r, err := http.NewRequest(
++			http.MethodGet,
++			"/a?name=hello&age=18&percent=3.4&statuses=try&statuses=done&singleValue=one",
++			http.NoBody)
++		assert.Nil(t, err)
++		assert.Nil(t, Parse(r, &v))
++		assert.Equal(t, 0, len(v.NoValue))
++	})
+ }
+ 
+ func TestParseForm_Error(t *testing.T) {
+diff --git a/rest/httpx/responses_test.go b/rest/httpx/responses_test.go
+index 44d4d720875117d30159e6d604b0a23c70db4d9a..00e099daf83ac25a59a431a84713d6dc36b002fe 100644
+--- a/rest/httpx/responses_test.go
++++ b/rest/httpx/responses_test.go
+@@ -1,10 +1,13 @@
+ package httpx
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"net/http"
++	"net/http/httptest"
+ 	"strings"
+ 	"testing"
+ 
+@@ -239,6 +242,60 @@ func TestWriteJsonMarshalFailed(t *testing.T) {
+ 	assert.Equal(t, http.StatusInternalServerError, w.code)
+ }
+ 
++func TestStream(t *testing.T) {
++	t.Run("regular case", func(t *testing.T) {
++		channel := make(chan string)
++		go func() {
++			defer close(channel)
++			for index := 0; index < 5; index++ {
++				channel <- fmt.Sprintf("%d", index)
++			}
++		}()
++
++		w := httptest.NewRecorder()
++		Stream(context.Background(), w, func(w io.Writer) bool {
++			output, ok := <-channel
++			if !ok {
++				return false
++			}
++
++			outputBytes := bytes.NewBufferString(output)
++			_, err := w.Write(append(outputBytes.Bytes(), []byte("\n")...))
++			return err == nil
++		})
++
++		assert.Equal(t, http.StatusOK, w.Code)
++		assert.Equal(t, "0\n1\n2\n3\n4\n", w.Body.String())
++	})
++
++	t.Run("context done", func(t *testing.T) {
++		channel := make(chan string)
++		go func() {
++			defer close(channel)
++			for index := 0; index < 5; index++ {
++				channel <- fmt.Sprintf("num: %d", index)
++			}
++		}()
++
++		w := httptest.NewRecorder()
++		ctx, cancel := context.WithCancel(context.Background())
++		cancel()
++		Stream(ctx, w, func(w io.Writer) bool {
++			output, ok := <-channel
++			if !ok {
++				return false
++			}
++
++			outputBytes := bytes.NewBufferString(output)
++			_, err := w.Write(append(outputBytes.Bytes(), []byte("\n")...))
++			return err == nil
++		})
++
++		assert.Equal(t, http.StatusOK, w.Code)
++		assert.Equal(t, "", w.Body.String())
++	})
++}
++
+ type tracedResponseWriter struct {
+ 	headers     map[string][]string
+ 	builder     strings.Builder
+diff --git a/tools/goctl/api/gogen/gen_test.go b/tools/goctl/api/gogen/gen_test.go
+index d2cb6842671777c441e43f43ad3d29dec458d172..349312e50c1de626de9262809067b02d433dddb4 100644
+--- a/tools/goctl/api/gogen/gen_test.go
++++ b/tools/goctl/api/gogen/gen_test.go
+@@ -2,7 +2,12 @@ package gogen
+ 
+ import (
+ 	_ "embed"
++	"go/ast"
+ 	goformat "go/format"
++	"go/importer"
++	goparser "go/parser"
++	"go/token"
++	"go/types"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -48,6 +53,10 @@ var (
+ 	noStructTagApi string
+ 	//go:embed testdata/nest_type_api.api
+ 	nestTypeApi string
++	//go:embed testdata/import_twice.api
++	importTwiceApi string
++	//go:embed testdata/another_import_api.api
++	anotherImportApi string
+ )
+ 
+ func TestParser(t *testing.T) {
+@@ -232,6 +241,46 @@ func TestHasImportApi(t *testing.T) {
+ 	validate(t, filename)
+ }
+ 
++func TestImportTwiceOnExperimental(t *testing.T) {
++	defaultExperimental := env.Get(env.GoctlExperimental)
++	env.Set(t, env.GoctlExperimental, "on")
++	defer env.Set(t, env.GoctlExperimental, defaultExperimental)
++
++	filename := "greet.api"
++	err := os.WriteFile(filename, []byte(importTwiceApi), os.ModePerm)
++	assert.Nil(t, err)
++	defer os.Remove(filename)
++
++	importApiName := "importApi.api"
++	err = os.WriteFile(importApiName, []byte(importApi), os.ModePerm)
++	assert.Nil(t, err)
++	defer os.Remove(importApiName)
++
++	hasImportApiName := "hasImportApi.api"
++	err = os.WriteFile(hasImportApiName, []byte(hasImportApi), os.ModePerm)
++	assert.Nil(t, err)
++	defer os.Remove(hasImportApiName)
++
++	anotherImportApiName := "anotherImportApi.api"
++	err = os.WriteFile(anotherImportApiName, []byte(anotherImportApi), os.ModePerm)
++	assert.Nil(t, err)
++	defer os.Remove(anotherImportApiName)
++
++	api, err := parser.Parse(filename)
++	assert.Nil(t, err)
++
++	var hasInline bool
++	for _, ty := range api.Types {
++		if ty.Name() == "ImportData" {
++			hasInline = true
++			break
++		}
++	}
++	assert.True(t, hasInline)
++
++	validate(t, filename)
++}
++
+ func TestNoStructApi(t *testing.T) {
+ 	filename := "greet.api"
+ 	err := os.WriteFile(filename, []byte(noStructTagApi), os.ModePerm)
+@@ -287,6 +336,9 @@ func validateWithCamel(t *testing.T, api, camel string) {
+ 			code, err := os.ReadFile(path)
+ 			assert.Nil(t, err)
+ 			assert.Nil(t, validateCode(string(code)))
++			if strings.HasSuffix(path, "types.go") {
++				assert.Nil(t, checkRedeclaredType(string(code)))
++			}
+ 		}
+ 		return nil
+ 	})
+@@ -301,3 +353,20 @@ func validateCode(code string) error {
+ 	_, err := goformat.Source([]byte(code))
+ 	return err
+ }
++
++func checkRedeclaredType(code string) error {
++	fset := token.NewFileSet()
++	f, err := goparser.ParseFile(fset, "", code, goparser.ParseComments)
++	if err != nil {
++		return err
++	}
++
++	conf := types.Config{
++		Error:    func(err error) {},
++		Importer: importer.Default(),
++	}
++
++	info := types.Info{Types: make(map[ast.Expr]types.TypeAndValue)}
++	_, err = conf.Check(f.Name.Name, fset, []*ast.File{f}, &info)
++	return err
++}
+diff --git a/tools/goctl/api/gogen/testdata/another_import_api.api b/tools/goctl/api/gogen/testdata/another_import_api.api
+new file mode 100644
+index 0000000000000000000000000000000000000000..1973b80b69833db88d2968ef1edfc60ed09b3d2b
+--- /dev/null
++++ b/tools/goctl/api/gogen/testdata/another_import_api.api
+@@ -0,0 +1,17 @@
++import "importApi.api"
++
++type AnotherRequest {
++    Name string `path:"name,options=you|me"`
++}
++
++type AnotherResponse {
++    Message string `json:"message"` // message
++}
++
++@server(
++    group: greet
++)
++service A-api {
++    @handler AnotherImportHandler
++    get /greet/from/another/:name(AnotherRequest) returns (AnotherResponse)
++}
+diff --git a/tools/goctl/api/gogen/testdata/has_comment_api_test.api b/tools/goctl/api/gogen/testdata/has_comment_api_test.api
+index 3bd89f8eab0660b5dc25a7995f80d9b5a837fc53..490ecb3e2ddd2c6061087820d00a25ce5098253b 100644
+--- a/tools/goctl/api/gogen/testdata/has_comment_api_test.api
++++ b/tools/goctl/api/gogen/testdata/has_comment_api_test.api
+@@ -16,5 +16,11 @@ service A-api {
+     @server(
+         handler: GreetHandler
+     )
+-    get /greet/from/:name(Request) returns (Response)
+-}
+\ No newline at end of file
++    get /greet/from/:name (Request) returns (Response)
++
++    @doc(
++        summary: "comment comment comment"
++    )
++    @handler NoResponseHandler
++    get /greet/get (Request)
++}
+diff --git a/tools/goctl/api/gogen/testdata/has_import_api.api b/tools/goctl/api/gogen/testdata/has_import_api.api
+index 6710280e6bc49d6fff0fabed83e6dce6bcd7820e..e61fc5123f78f86496396017819246724cc2cbe3 100644
+--- a/tools/goctl/api/gogen/testdata/has_import_api.api
++++ b/tools/goctl/api/gogen/testdata/has_import_api.api
+@@ -1,16 +1,17 @@
+ import "importApi.api"
+ 
+-type Request struct {
++type Request {
+     Name string `path:"name,options=you|me"`
+ }
+ 
+-type Response struct {
++type Response {
+     Message string `json:"message"` // message
+ }
+ 
++@server(
++    group: greet
++)
+ service A-api {
+-    @server(
+-        handler: GreetHandler
+-    )
++    @handler GreetHandler
+     get /greet/from/:name(Request) returns (Response)
+-}
+\ No newline at end of file
++}
+diff --git a/tools/goctl/api/gogen/testdata/import_api.api b/tools/goctl/api/gogen/testdata/import_api.api
+index b663997d1f1adc8103273fa9de63d59a6eacc506..594c5c5752d37f119a7ce2ff7e12e1e91180ee46 100644
+--- a/tools/goctl/api/gogen/testdata/import_api.api
++++ b/tools/goctl/api/gogen/testdata/import_api.api
+@@ -1,3 +1,3 @@
+-type ImportData struct {
++type ImportData {
+     Name string `path:"name,options=you|me"`
+-}
+\ No newline at end of file
++}
+diff --git a/tools/goctl/api/gogen/testdata/import_twice.api b/tools/goctl/api/gogen/testdata/import_twice.api
+new file mode 100644
+index 0000000000000000000000000000000000000000..00e6c0b5b79ab73ed46e10bda5d71f9d943740b2
+--- /dev/null
++++ b/tools/goctl/api/gogen/testdata/import_twice.api
+@@ -0,0 +1,2 @@
++import "hasImportApi.api"
++import "anotherImportApi.api"
+diff --git a/tools/goctl/model/sql/converter/types_test.go b/tools/goctl/model/sql/converter/types_test.go
+index c5f8353d91727a1321f58dadcaf3c3de6d3ea68b..8a5e17e5c6583de6bccdcafa3413446f45e056fa 100644
+--- a/tools/goctl/model/sql/converter/types_test.go
++++ b/tools/goctl/model/sql/converter/types_test.go
+@@ -8,23 +8,102 @@ import (
+ )
+ 
+ func TestConvertDataType(t *testing.T) {
+-	v, err := ConvertDataType(parser.TinyInt, false, false, true)
++	v, _, err := ConvertDataType(parser.TinyInt, false, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "int64", v)
+ 
+-	v, err = ConvertDataType(parser.TinyInt, false, true, true)
++	v, _, err = ConvertDataType(parser.TinyInt, false, true, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "uint64", v)
+ 
+-	v, err = ConvertDataType(parser.TinyInt, true, false, true)
++	v, _, err = ConvertDataType(parser.TinyInt, true, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "sql.NullInt64", v)
+ 
+-	v, err = ConvertDataType(parser.Timestamp, false, false, true)
++	v, _, err = ConvertDataType(parser.Timestamp, false, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "time.Time", v)
+ 
+-	v, err = ConvertDataType(parser.Timestamp, true, false, true)
++	v, _, err = ConvertDataType(parser.Timestamp, true, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "sql.NullTime", v)
++
++	v, _, err = ConvertDataType(parser.Decimal, false, false, true)
++	assert.Nil(t, err)
++	assert.Equal(t, "float64", v)
++}
++
++func TestConvertStringDataType(t *testing.T) {
++	type (
++		input struct {
++			dataType      string
++			isDefaultNull bool
++			unsigned      bool
++			strict        bool
++		}
++		result struct {
++			goType    string
++			thirdPkg  string
++			isPQArray bool
++		}
++	)
++	var testData = []struct {
++		input input
++		want  result
++	}{
++		{
++			input: input{
++				dataType:      "bigint",
++				isDefaultNull: false,
++				unsigned:      false,
++				strict:        false,
++			},
++			want: result{
++				goType: "int64",
++			},
++		},
++		{
++			input: input{
++				dataType:      "bigint",
++				isDefaultNull: true,
++				unsigned:      false,
++				strict:        false,
++			},
++			want: result{
++				goType: "sql.NullInt64",
++			},
++		},
++		{
++			input: input{
++				dataType:      "bigint",
++				isDefaultNull: false,
++				unsigned:      true,
++				strict:        false,
++			},
++			want: result{
++				goType: "uint64",
++			},
++		},
++		{
++			input: input{
++				dataType:      "_int2",
++				isDefaultNull: false,
++				unsigned:      false,
++				strict:        false,
++			},
++			want: result{
++				goType:    "pq.Int64Array",
++				isPQArray: true,
++			},
++		},
++	}
++	for _, data := range testData {
++		tp, thirdPkg, isPQArray, err := ConvertStringDataType(data.input.dataType, data.input.isDefaultNull, data.input.unsigned, data.input.strict)
++		assert.NoError(t, err)
++		assert.Equal(t, data.want, result{
++			goType:    tp,
++			thirdPkg:  thirdPkg,
++			isPQArray: isPQArray,
++		})
++	}
+ }

@@ -1,0 +1,151 @@
+diff --git a/tests/binary.rs b/tests/binary.rs
+index 93f6844cae5193e7105b510f7d0239d36deeeb0b..7f26dd7db8a94f2c648853b38188fa91552c0e76 100644
+--- a/tests/binary.rs
++++ b/tests/binary.rs
+@@ -304,3 +304,40 @@ hay:1867:\"And yet you say he is not a medical student?\"
+ ";
+     eqnice!(expected, cmd.stdout());
+ });
++
++// See: https://github.com/BurntSushi/ripgrep/issues/3131
++rgtest!(
++    matching_files_inconsistent_with_count,
++    |dir: Dir, _cmd: TestCommand| {
++        let mut file1 = String::new();
++        file1.push_str("cat here\n");
++        for _ in 0..150_000 {
++            file1.push_str("padding line\n");
++        }
++        file1.push_str("\x00");
++
++        dir.create("file1.txt", &file1);
++        dir.create("file2.txt", "cat here");
++
++        let got = dir.command().args(&["--sort=path", "-l", "cat"]).stdout();
++        eqnice!("file1.txt\nfile2.txt\n", got);
++
++        // This is the inconsistent result that can't really be avoided without
++        // either making `-l/--files-with-matches` much slower or changing
++        // what "binary filtering" means.
++        let got = dir.command().args(&["--sort=path", "-c", "cat"]).stdout();
++        eqnice!("file2.txt:1\n", got);
++
++        let got = dir
++            .command()
++            .args(&["--sort=path", "-c", "cat", "--binary"])
++            .stdout();
++        eqnice!("file1.txt:1\nfile2.txt:1\n", got);
++
++        let got = dir
++            .command()
++            .args(&["--sort=path", "-c", "cat", "--text"])
++            .stdout();
++        eqnice!("file1.txt:1\nfile2.txt:1\n", got);
++    }
++);
+diff --git a/tests/json.rs b/tests/json.rs
+index 8af56b50c9a6932231b9b6422fb43ce7e842d43c..d1233d7631144d95e3a8324617b8ae9b02f0f87c 100644
+--- a/tests/json.rs
++++ b/tests/json.rs
+@@ -21,35 +21,35 @@ impl Message {
+     fn unwrap_begin(&self) -> Begin {
+         match *self {
+             Message::Begin(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Begin but got {:?}", x),
++            ref x => panic!("expected Message::Begin but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_end(&self) -> End {
+         match *self {
+             Message::End(ref x) => x.clone(),
+-            ref x => panic!("expected Message::End but got {:?}", x),
++            ref x => panic!("expected Message::End but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_match(&self) -> Match {
+         match *self {
+             Message::Match(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Match but got {:?}", x),
++            ref x => panic!("expected Message::Match but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_context(&self) -> Context {
+         match *self {
+             Message::Context(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Context but got {:?}", x),
++            ref x => panic!("expected Message::Context but got {x:?}"),
+         }
+     }
+ 
+     fn unwrap_summary(&self) -> Summary {
+         match *self {
+             Message::Summary(ref x) => x.clone(),
+-            ref x => panic!("expected Message::Summary but got {:?}", x),
++            ref x => panic!("expected Message::Summary but got {x:?}"),
+         }
+     }
+ }
+diff --git a/tests/regression.rs b/tests/regression.rs
+index 4c08784455fc5b827885db2922fc8d40f3e4cbd6..bd8459055c3cfa71240cd1aeabfa5aeeeb204cdb 100644
+--- a/tests/regression.rs
++++ b/tests/regression.rs
+@@ -955,6 +955,43 @@ rgtest!(r1319, |dir: Dir, mut cmd: TestCommand| {
+     );
+ });
+ 
++// See: https://github.com/BurntSushi/ripgrep/issues/1332
++rgtest!(r1334_invert_empty_patterns, |dir: Dir, _cmd: TestCommand| {
++    dir.create("zero-patterns", "");
++    dir.create("one-pattern", "\n");
++    dir.create("haystack", "one\ntwo\nthree\n");
++
++    // zero patterns matches nothing
++    {
++        let mut cmd = dir.command();
++        cmd.arg("-f").arg("zero-patterns").arg("haystack").assert_err();
++    }
++    // one pattern that matches empty string matches everything
++    {
++        let mut cmd = dir.command();
++        eqnice!(
++            "one\ntwo\nthree\n",
++            cmd.arg("-f").arg("one-pattern").arg("haystack").stdout()
++        );
++    }
++
++    // inverting zero patterns matches everything
++    // (This is the regression. ripgrep used to match nothing because of an
++    // incorrect optimization.)
++    {
++        let mut cmd = dir.command();
++        eqnice!(
++            "one\ntwo\nthree\n",
++            cmd.arg("-vf").arg("zero-patterns").arg("haystack").stdout()
++        );
++    }
++    // inverting one pattern that matches empty string matches nothing
++    {
++        let mut cmd = dir.command();
++        cmd.arg("-vf").arg("one-pattern").arg("haystack").assert_err();
++    }
++});
++
+ // See: https://github.com/BurntSushi/ripgrep/issues/1334
+ rgtest!(r1334_crazy_literals, |dir: Dir, mut cmd: TestCommand| {
+     dir.create("patterns", &"1.208.0.0/12\n".repeat(40));
+diff --git a/tests/util.rs b/tests/util.rs
+index 4101766012aeece35a8a6e649cf323f4c88ac6dd..b578fec712d8c7d4d0d28b9f77e3c189c132c02d 100644
+--- a/tests/util.rs
++++ b/tests/util.rs
+@@ -75,7 +75,7 @@ impl Dir {
+             .expect("executable's directory")
+             .to_path_buf();
+         let dir =
+-            env::temp_dir().join(TEST_DIR).join(name).join(&format!("{}", id));
++            env::temp_dir().join(TEST_DIR).join(name).join(&format!("{id}"));
+         if dir.exists() {
+             nice_err(&dir, fs::remove_dir_all(&dir));
+         }

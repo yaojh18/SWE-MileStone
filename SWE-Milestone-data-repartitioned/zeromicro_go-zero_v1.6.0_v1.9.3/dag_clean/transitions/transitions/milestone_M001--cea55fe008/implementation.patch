@@ -1,0 +1,386 @@
+diff --git a/core/iox/textlinescanner.go b/core/iox/textlinescanner.go
+index ec28e27a9b1139d780444073de4f328367d0cb8b..0a9f6687e105dbc9fbf91c8e1491500be88f5f0b 100644
+--- a/core/iox/textlinescanner.go
++++ b/core/iox/textlinescanner.go
+@@ -2,6 +2,7 @@ package iox
+ 
+ import (
+ 	"bufio"
++	"errors"
+ 	"io"
+ 	"strings"
+ )
+@@ -30,7 +31,7 @@ func (scanner *TextLineScanner) Scan() bool {
+ 
+ 	line, err := scanner.reader.ReadString('\n')
+ 	scanner.line = strings.TrimRight(line, "\n")
+-	if err == io.EOF {
++	if errors.Is(err, io.EOF) {
+ 		scanner.hasNext = false
+ 		return true
+ 	} else if err != nil {
+diff --git a/core/stores/redis/hook.go b/core/stores/redis/hook.go
+index 46dfad1efa552a250003fc24671f26f89b8092fc..5f09f94a02e0e920cd3b4bb3299e8633ce93dc62 100644
+--- a/core/stores/redis/hook.go
++++ b/core/stores/redis/hook.go
+@@ -2,14 +2,14 @@ package redis
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"io"
+ 	"net"
+ 	"strings"
+ 	"time"
+ 
+-	red "github.com/go-redis/redis/v8"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/breaker"
+-	"github.com/zeromicro/go-zero/core/errorx"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/mapping"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -23,112 +23,111 @@ import (
+ const spanName = "redis"
+ 
+ var (
+-	startTimeKey          = contextKey("startTime")
+ 	durationHook          = hook{}
+ 	redisCmdsAttributeKey = attribute.Key("redis.cmds")
+ )
+ 
+-type (
+-	contextKey string
+-	hook       struct{}
+-)
++type hook struct{}
+ 
+-func (h hook) BeforeProcess(ctx context.Context, cmd red.Cmder) (context.Context, error) {
+-	return h.startSpan(context.WithValue(ctx, startTimeKey, timex.Now()), cmd), nil
++func (h hook) DialHook(next red.DialHook) red.DialHook {
++	return next
+ }
+ 
+-func (h hook) AfterProcess(ctx context.Context, cmd red.Cmder) error {
+-	err := cmd.Err()
+-	h.endSpan(ctx, err)
++func (h hook) ProcessHook(next red.ProcessHook) red.ProcessHook {
++	return func(ctx context.Context, cmd red.Cmder) error {
++		start := timex.Now()
++		ctx, endSpan := h.startSpan(ctx, cmd)
+ 
+-	val := ctx.Value(startTimeKey)
+-	if val == nil {
+-		return nil
+-	}
++		err := next(ctx, cmd)
+ 
+-	start, ok := val.(time.Duration)
+-	if !ok {
+-		return nil
+-	}
++		endSpan(err)
++		duration := timex.Since(start)
+ 
+-	duration := timex.Since(start)
+-	if duration > slowThreshold.Load() {
+-		logDuration(ctx, []red.Cmder{cmd}, duration)
+-		metricSlowCount.Inc(cmd.Name())
+-	}
++		if duration > slowThreshold.Load() {
++			logDuration(ctx, []red.Cmder{cmd}, duration)
++			metricSlowCount.Inc(cmd.Name())
++		}
+ 
+-	metricReqDur.ObserveFloat(float64(duration)/float64(time.Millisecond), cmd.Name())
+-	if msg := formatError(err); len(msg) > 0 {
+-		metricReqErr.Inc(cmd.Name(), msg)
+-	}
++		metricReqDur.Observe(duration.Milliseconds(), cmd.Name())
++		if msg := formatError(err); len(msg) > 0 {
++			metricReqErr.Inc(cmd.Name(), msg)
++		}
+ 
+-	return nil
++		return err
++	}
+ }
+ 
+-func (h hook) BeforeProcessPipeline(ctx context.Context, cmds []red.Cmder) (context.Context, error) {
+-	if len(cmds) == 0 {
+-		return ctx, nil
+-	}
++func (h hook) ProcessPipelineHook(next red.ProcessPipelineHook) red.ProcessPipelineHook {
++	return func(ctx context.Context, cmds []red.Cmder) error {
++		if len(cmds) == 0 {
++			return next(ctx, cmds)
++		}
+ 
+-	return h.startSpan(context.WithValue(ctx, startTimeKey, timex.Now()), cmds...), nil
+-}
++		start := timex.Now()
++		ctx, endSpan := h.startSpan(ctx, cmds...)
+ 
+-func (h hook) AfterProcessPipeline(ctx context.Context, cmds []red.Cmder) error {
+-	if len(cmds) == 0 {
+-		return nil
+-	}
++		err := next(ctx, cmds)
+ 
+-	batchError := errorx.BatchError{}
+-	for _, cmd := range cmds {
+-		err := cmd.Err()
+-		if err == nil {
+-			continue
++		endSpan(err)
++		duration := timex.Since(start)
++		if duration > slowThreshold.Load()*time.Duration(len(cmds)) {
++			logDuration(ctx, cmds, duration)
+ 		}
+ 
+-		batchError.Add(err)
+-	}
+-	h.endSpan(ctx, batchError.Err())
++		metricReqDur.Observe(duration.Milliseconds(), "Pipeline")
++		if msg := formatError(err); len(msg) > 0 {
++			metricReqErr.Inc("Pipeline", msg)
++		}
+ 
+-	val := ctx.Value(startTimeKey)
+-	if val == nil {
+-		return nil
++		return err
+ 	}
++}
+ 
+-	start, ok := val.(time.Duration)
+-	if !ok {
+-		return nil
+-	}
++func (h hook) startSpan(ctx context.Context, cmds ...red.Cmder) (context.Context, func(err error)) {
++	tracer := trace.TracerFromContext(ctx)
+ 
+-	duration := timex.Since(start)
+-	if duration > slowThreshold.Load()*time.Duration(len(cmds)) {
+-		logDuration(ctx, cmds, duration)
+-	}
++	ctx, span := tracer.Start(ctx,
++		spanName,
++		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
++	)
+ 
+-	metricReqDur.Observe(duration.Milliseconds(), "Pipeline")
+-	if msg := formatError(batchError.Err()); len(msg) > 0 {
+-		metricReqErr.Inc("Pipeline", msg)
++	cmdStrs := make([]string, 0, len(cmds))
++	for _, cmd := range cmds {
++		cmdStrs = append(cmdStrs, cmd.Name())
+ 	}
++	span.SetAttributes(redisCmdsAttributeKey.StringSlice(cmdStrs))
++
++	return ctx, func(err error) {
++		defer span.End()
++
++		if err == nil || errors.Is(err, red.Nil) {
++			span.SetStatus(codes.Ok, "")
++			return
++		}
+ 
+-	return nil
++		span.SetStatus(codes.Error, err.Error())
++		span.RecordError(err)
++	}
+ }
+ 
+ func formatError(err error) string {
+-	if err == nil || err == red.Nil {
++	if err == nil || errors.Is(err, red.Nil) {
+ 		return ""
+ 	}
+ 
+-	opErr, ok := err.(*net.OpError)
++	var opErr *net.OpError
++	ok := errors.As(err, &opErr)
+ 	if ok && opErr.Timeout() {
+ 		return "timeout"
+ 	}
+ 
+-	switch err {
+-	case io.EOF:
++	switch {
++	case errors.Is(err, io.EOF):
+ 		return "eof"
+-	case context.DeadlineExceeded:
++	case errors.Is(err, context.DeadlineExceeded):
+ 		return "context deadline"
+-	case breaker.ErrServiceUnavailable:
+-		return "breaker"
++	case errors.Is(err, breaker.ErrServiceUnavailable):
++		return "breaker open"
+ 	default:
+ 		return "unexpected error"
+ 	}
+@@ -151,33 +150,3 @@ func logDuration(ctx context.Context, cmds []red.Cmder, duration time.Duration)
+ 	}
+ 	logx.WithContext(ctx).WithDuration(duration).Slowf("[REDIS] slowcall on executing: %s", buf.String())
+ }
+-
+-func (h hook) startSpan(ctx context.Context, cmds ...red.Cmder) context.Context {
+-	tracer := trace.TracerFromContext(ctx)
+-
+-	ctx, span := tracer.Start(ctx,
+-		spanName,
+-		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+-	)
+-
+-	cmdStrs := make([]string, 0, len(cmds))
+-	for _, cmd := range cmds {
+-		cmdStrs = append(cmdStrs, cmd.Name())
+-	}
+-	span.SetAttributes(redisCmdsAttributeKey.StringSlice(cmdStrs))
+-
+-	return ctx
+-}
+-
+-func (h hook) endSpan(ctx context.Context, err error) {
+-	span := oteltrace.SpanFromContext(ctx)
+-	defer span.End()
+-
+-	if err == nil || err == red.Nil {
+-		span.SetStatus(codes.Ok, "")
+-		return
+-	}
+-
+-	span.SetStatus(codes.Error, err.Error())
+-	span.RecordError(err)
+-}
+diff --git a/core/stores/redis/metrics.go b/core/stores/redis/metrics.go
+index fe3ce9ccbe25d5a38f204728ad35a9f653530bea..260a0fae8ef4b9f7cce5ff6020af222b47e5b38f 100644
+--- a/core/stores/redis/metrics.go
++++ b/core/stores/redis/metrics.go
+@@ -3,8 +3,8 @@ package redis
+ import (
+ 	"sync"
+ 
+-	red "github.com/go-redis/redis/v8"
+ 	"github.com/prometheus/client_golang/prometheus"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/metric"
+ )
+ 
+diff --git a/core/stores/redis/redis.go b/core/stores/redis/redis.go
+index c5549e3dab66439184782f5681eefb22db3f73f7..a9f19aa42d834dd9efdeb3fc3b3eb9c41b4181ed 100644
+--- a/core/stores/redis/redis.go
++++ b/core/stores/redis/redis.go
+@@ -7,7 +7,7 @@ import (
+ 	"strconv"
+ 	"time"
+ 
+-	red "github.com/go-redis/redis/v8"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/errorx"
+ 	"github.com/zeromicro/go-zero/core/logx"
+@@ -64,6 +64,7 @@ type (
+ 	// RedisNode interface represents a redis node.
+ 	RedisNode interface {
+ 		red.Cmdable
++		red.BitMapCmdable
+ 	}
+ 
+ 	// GeoLocation is used with GeoAdd to add geospatial location.
+@@ -2025,7 +2026,7 @@ func (s *Redis) ZaddFloatCtx(ctx context.Context, key string, score float64, val
+ 			return err
+ 		}
+ 
+-		v, err := conn.ZAdd(ctx, key, &red.Z{
++		v, err := conn.ZAdd(ctx, key, red.Z{
+ 			Score:  score,
+ 			Member: value,
+ 		}).Result()
+@@ -2053,9 +2054,9 @@ func (s *Redis) ZaddsCtx(ctx context.Context, key string, ps ...Pair) (val int64
+ 			return err
+ 		}
+ 
+-		var zs []*red.Z
++		var zs []red.Z
+ 		for _, p := range ps {
+-			z := &red.Z{Score: float64(p.Score), Member: p.Key}
++			z := red.Z{Score: float64(p.Score), Member: p.Key}
+ 			zs = append(zs, z)
+ 		}
+ 
+diff --git a/core/stores/redis/redisblockingnode.go b/core/stores/redis/redisblockingnode.go
+index 106df6260cba63f56c832fd3acefd912a97c599e..6e60fa212f35bb0d8f6c64e44fb2fa0aaece75c3 100644
+--- a/core/stores/redis/redisblockingnode.go
++++ b/core/stores/redis/redisblockingnode.go
+@@ -3,7 +3,7 @@ package redis
+ import (
+ 	"fmt"
+ 
+-	red "github.com/go-redis/redis/v8"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ )
+ 
+diff --git a/core/stores/redis/redisclientmanager.go b/core/stores/redis/redisclientmanager.go
+index 8b1b8ed5fc72a794a52fe674f2e79dd48e542190..e2e1ad5fa66c29e625a69d0a24b98c4f83510193 100644
+--- a/core/stores/redis/redisclientmanager.go
++++ b/core/stores/redis/redisclientmanager.go
+@@ -5,7 +5,7 @@ import (
+ 	"io"
+ 	"runtime"
+ 
+-	red "github.com/go-redis/redis/v8"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+diff --git a/core/stores/redis/redisclustermanager.go b/core/stores/redis/redisclustermanager.go
+index 105498e83995ebb0f7e965dc3fc62d8dd2b24c43..e361a577444cc5f0f2ced69461dc0103e89a6f44 100644
+--- a/core/stores/redis/redisclustermanager.go
++++ b/core/stores/redis/redisclustermanager.go
+@@ -6,7 +6,7 @@ import (
+ 	"runtime"
+ 	"strings"
+ 
+-	red "github.com/go-redis/redis/v8"
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+diff --git a/core/stores/redis/redislock.go b/core/stores/redis/redislock.go
+index c740ef3689bd7c596a177ba6aed431c7dacc545d..2979ee500c8e12d513efe6162bba6ed0c56c7546 100644
+--- a/core/stores/redis/redislock.go
++++ b/core/stores/redis/redislock.go
+@@ -7,8 +7,7 @@ import (
+ 	"sync/atomic"
+ 	"time"
+ 
+-	red "github.com/go-redis/redis/v8"
+-
++	red "github.com/redis/go-redis/v9"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+ )
+diff --git a/zrpc/internal/clientinterceptors/tracinginterceptor.go b/zrpc/internal/clientinterceptors/tracinginterceptor.go
+index 006c4691ab33f008241b670eb3ce29a2b170314c..4a7e211ec928bb2f0f75e92ae5a1f2c10761e491 100644
+--- a/zrpc/internal/clientinterceptors/tracinginterceptor.go
++++ b/zrpc/internal/clientinterceptors/tracinginterceptor.go
+@@ -2,6 +2,7 @@ package clientinterceptors
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"io"
+ 
+ 	ztrace "github.com/zeromicro/go-zero/core/trace"
+@@ -122,7 +123,7 @@ func (w *clientStream) RecvMsg(m any) error {
+ 	err := w.ClientStream.RecvMsg(m)
+ 	if err == nil && !w.desc.ServerStreams {
+ 		w.sendStreamEvent(receiveEndEvent, nil)
+-	} else if err == io.EOF {
++	} else if errors.Is(err, io.EOF) {
+ 		w.sendStreamEvent(receiveEndEvent, nil)
+ 	} else if err != nil {
+ 		w.sendStreamEvent(errorEvent, err)

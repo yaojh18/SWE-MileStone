@@ -1,0 +1,283 @@
+diff --git a/core/bloom/bloom.go b/core/bloom/bloom.go
+index 3a72cf84d78b3037655165b28ef596a87a4425be..68f228121c6c139ddd02159883ea085d1ec2e0e2 100644
+--- a/core/bloom/bloom.go
++++ b/core/bloom/bloom.go
+@@ -2,6 +2,7 @@ package bloom
+ 
+ import (
+ 	"context"
++	_ "embed"
+ 	"errors"
+ 	"strconv"
+ 
+@@ -17,19 +18,13 @@ var (
+ 	// ErrTooLargeOffset indicates the offset is too large in bitset.
+ 	ErrTooLargeOffset = errors.New("too large offset")
+ 
+-	setScript = redis.NewScript(`
+-for _, offset in ipairs(ARGV) do
+-	redis.call("setbit", KEYS[1], offset, 1)
+-end
+-`)
+-	testScript = redis.NewScript(`
+-for _, offset in ipairs(ARGV) do
+-	if tonumber(redis.call("getbit", KEYS[1], offset)) == 0 then
+-		return false
+-	end
+-end
+-return true
+-`)
++	//go:embed setscript.lua
++	setLuaScript string
++	setScript    = redis.NewScript(setLuaScript)
++
++	//go:embed testscript.lua
++	testLuaScript string
++	testScript    = redis.NewScript(testLuaScript)
+ )
+ 
+ type (
+diff --git a/core/bloom/setscript.lua b/core/bloom/setscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..3bd391fdd6c3c2144815f63c1ca6a9b1e65ee7d8
+--- /dev/null
++++ b/core/bloom/setscript.lua
+@@ -0,0 +1,3 @@
++for _, offset in ipairs(ARGV) do
++    redis.call("setbit", KEYS[1], offset, 1)
++end
+\ No newline at end of file
+diff --git a/core/bloom/testscript.lua b/core/bloom/testscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..a518ef4959b75fe5e489c4e5f399f993c23cd1be
+--- /dev/null
++++ b/core/bloom/testscript.lua
+@@ -0,0 +1,6 @@
++for _, offset in ipairs(ARGV) do
++    if tonumber(redis.call("getbit", KEYS[1], offset)) == 0 then
++        return false
++    end
++end
++return true
+\ No newline at end of file
+diff --git a/core/limit/periodlimit.go b/core/limit/periodlimit.go
+index 332fe3c95c971f0544c997a6efd7fea37d9cf12c..b7a3508b455617eb1c819f9e564b9d9d1517a4a7 100644
+--- a/core/limit/periodlimit.go
++++ b/core/limit/periodlimit.go
+@@ -2,6 +2,7 @@ package limit
+ 
+ import (
+ 	"context"
++	_ "embed"
+ 	"errors"
+ 	"strconv"
+ 	"time"
+@@ -28,20 +29,9 @@ var (
+ 	// ErrUnknownCode is an error that represents unknown status code.
+ 	ErrUnknownCode = errors.New("unknown status code")
+ 
+-	// to be compatible with aliyun redis, we cannot use `local key = KEYS[1]` to reuse the key
+-	periodScript = redis.NewScript(`local limit = tonumber(ARGV[1])
+-local window = tonumber(ARGV[2])
+-local current = redis.call("INCRBY", KEYS[1], 1)
+-if current == 1 then
+-    redis.call("expire", KEYS[1], window)
+-end
+-if current < limit then
+-    return 1
+-elseif current == limit then
+-    return 2
+-else
+-    return 0
+-end`)
++	//go:embed periodscript.lua
++	periodLuaScript string
++	periodScript    = redis.NewScript(periodLuaScript)
+ )
+ 
+ type (
+diff --git a/core/limit/periodscript.lua b/core/limit/periodscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..7caaabe02abbb15ec8d922efa2be81391ca846f4
+--- /dev/null
++++ b/core/limit/periodscript.lua
+@@ -0,0 +1,14 @@
++-- to be compatible with aliyun redis, we cannot use `local key = KEYS[1]` to reuse the key
++local limit = tonumber(ARGV[1])
++local window = tonumber(ARGV[2])
++local current = redis.call("INCRBY", KEYS[1], 1)
++if current == 1 then
++    redis.call("expire", KEYS[1], window)
++end
++if current < limit then
++    return 1
++elseif current == limit then
++    return 2
++else
++    return 0
++end
+\ No newline at end of file
+diff --git a/core/limit/tokenlimit.go b/core/limit/tokenlimit.go
+index e33b4b951c6de1e7e01ae4be86c95fe4a628baaf..25c7ba0ba42121c98e906676e469ef5f3cca72ed 100644
+--- a/core/limit/tokenlimit.go
++++ b/core/limit/tokenlimit.go
+@@ -2,6 +2,7 @@ package limit
+ 
+ import (
+ 	"context"
++	_ "embed"
+ 	"errors"
+ 	"fmt"
+ 	"strconv"
+@@ -20,37 +21,11 @@ const (
+ 	pingInterval    = time.Millisecond * 100
+ )
+ 
+-// to be compatible with aliyun redis, we cannot use `local key = KEYS[1]` to reuse the key
+-// KEYS[1] as tokens_key
+-// KEYS[2] as timestamp_key
+-var script = redis.NewScript(`local rate = tonumber(ARGV[1])
+-local capacity = tonumber(ARGV[2])
+-local now = tonumber(ARGV[3])
+-local requested = tonumber(ARGV[4])
+-local fill_time = capacity/rate
+-local ttl = math.floor(fill_time*2)
+-local last_tokens = tonumber(redis.call("get", KEYS[1]))
+-if last_tokens == nil then
+-    last_tokens = capacity
+-end
+-
+-local last_refreshed = tonumber(redis.call("get", KEYS[2]))
+-if last_refreshed == nil then
+-    last_refreshed = 0
+-end
+-
+-local delta = math.max(0, now-last_refreshed)
+-local filled_tokens = math.min(capacity, last_tokens+(delta*rate))
+-local allowed = filled_tokens >= requested
+-local new_tokens = filled_tokens
+-if allowed then
+-    new_tokens = filled_tokens - requested
+-end
+-
+-redis.call("setex", KEYS[1], ttl, new_tokens)
+-redis.call("setex", KEYS[2], ttl, now)
+-
+-return allowed`)
++var (
++	//go:embed tokenscript.lua
++	tokenLuaScript string
++	tokenScript    = redis.NewScript(tokenLuaScript)
++)
+ 
+ // A TokenLimiter controls how frequently events are allowed to happen with in one second.
+ type TokenLimiter struct {
+@@ -112,7 +87,7 @@ func (lim *TokenLimiter) reserveN(ctx context.Context, now time.Time, n int) boo
+ 	}
+ 
+ 	resp, err := lim.store.ScriptRunCtx(ctx,
+-		script,
++		tokenScript,
+ 		[]string{
+ 			lim.tokenKey,
+ 			lim.timestampKey,
+diff --git a/core/limit/tokenscript.lua b/core/limit/tokenscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac39565f572789fdde78c0752dc5e3ebae44450c
+--- /dev/null
++++ b/core/limit/tokenscript.lua
+@@ -0,0 +1,31 @@
++-- to be compatible with aliyun redis, we cannot use `local key = KEYS[1]` to reuse the key
++-- KEYS[1] as tokens_key
++-- KEYS[2] as timestamp_key
++local rate = tonumber(ARGV[1])
++local capacity = tonumber(ARGV[2])
++local now = tonumber(ARGV[3])
++local requested = tonumber(ARGV[4])
++local fill_time = capacity/rate
++local ttl = math.floor(fill_time*2)
++local last_tokens = tonumber(redis.call("get", KEYS[1]))
++if last_tokens == nil then
++    last_tokens = capacity
++end
++
++local last_refreshed = tonumber(redis.call("get", KEYS[2]))
++if last_refreshed == nil then
++    last_refreshed = 0
++end
++
++local delta = math.max(0, now-last_refreshed)
++local filled_tokens = math.min(capacity, last_tokens+(delta*rate))
++local allowed = filled_tokens >= requested
++local new_tokens = filled_tokens
++if allowed then
++    new_tokens = filled_tokens - requested
++end
++
++redis.call("setex", KEYS[1], ttl, new_tokens)
++redis.call("setex", KEYS[2], ttl, now)
++
++return allowed
+\ No newline at end of file
+diff --git a/core/stores/redis/delscript.lua b/core/stores/redis/delscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..7bcae4e7e8f3dd9cd879f7e277c4c13796cc3743
+--- /dev/null
++++ b/core/stores/redis/delscript.lua
+@@ -0,0 +1,5 @@
++if redis.call("GET", KEYS[1]) == ARGV[1] then
++    return redis.call("DEL", KEYS[1])
++else
++    return 0
++end
+\ No newline at end of file
+diff --git a/core/stores/redis/lockscript.lua b/core/stores/redis/lockscript.lua
+new file mode 100644
+index 0000000000000000000000000000000000000000..11a1fe350afbd2b87d228cd883ae7ca6dd44dac4
+--- /dev/null
++++ b/core/stores/redis/lockscript.lua
+@@ -0,0 +1,6 @@
++if redis.call("GET", KEYS[1]) == ARGV[1] then
++    redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
++    return "OK"
++else
++    return redis.call("SET", KEYS[1], ARGV[1], "NX", "PX", ARGV[2])
++end
+\ No newline at end of file
+diff --git a/core/stores/redis/redislock.go b/core/stores/redis/redislock.go
+index cd0eb5c93ea4a6df740df562a7f325e30fc04879..2ec28abddb657e1107a8abcb30e52e7b0dba81d3 100644
+--- a/core/stores/redis/redislock.go
++++ b/core/stores/redis/redislock.go
+@@ -2,6 +2,7 @@ package redis
+ 
+ import (
+ 	"context"
++	_ "embed"
+ 	"errors"
+ 	"math/rand"
+ 	"strconv"
+@@ -20,17 +21,13 @@ const (
+ )
+ 
+ var (
+-	lockScript = NewScript(`if redis.call("GET", KEYS[1]) == ARGV[1] then
+-    redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
+-    return "OK"
+-else
+-    return redis.call("SET", KEYS[1], ARGV[1], "NX", "PX", ARGV[2])
+-end`)
+-	delScript = NewScript(`if redis.call("GET", KEYS[1]) == ARGV[1] then
+-    return redis.call("DEL", KEYS[1])
+-else
+-    return 0
+-end`)
++	//go:embed lockscript.lua
++	lockLuaScript string
++	lockScript    = NewScript(lockLuaScript)
++
++	//go:embed delscript.lua
++	delLuaScript string
++	delScript    = NewScript(delLuaScript)
+ )
+ 
+ // A RedisLock is a redis lock.

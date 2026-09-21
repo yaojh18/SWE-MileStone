@@ -1,0 +1,831 @@
+diff --git a/core/breaker/breaker.go b/core/breaker/breaker.go
+index 9fc4a48321df4a94196ea1888a47affd0a4aa30e..cbcede4614f5e2d85abe20cd769f341df2496a2e 100644
+--- a/core/breaker/breaker.go
++++ b/core/breaker/breaker.go
+@@ -1,6 +1,7 @@
+ package breaker
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"fmt"
+ 	"strings"
+@@ -31,16 +32,21 @@ type (
+ 		Name() string
+ 
+ 		// Allow checks if the request is allowed.
+-		// If allowed, a promise will be returned, the caller needs to call promise.Accept()
+-		// on success, or call promise.Reject() on failure.
+-		// If not allow, ErrServiceUnavailable will be returned.
++		// If allowed, a promise will be returned,
++		// otherwise ErrServiceUnavailable will be returned as the error.
++		// The caller needs to call promise.Accept() on success,
++		// or call promise.Reject() on failure.
+ 		Allow() (Promise, error)
++		// AllowCtx checks if the request is allowed when ctx isn't done.
++		AllowCtx(ctx context.Context) (Promise, error)
+ 
+ 		// Do runs the given request if the Breaker accepts it.
+ 		// Do returns an error instantly if the Breaker rejects the request.
+ 		// If a panic occurs in the request, the Breaker handles it as an error
+ 		// and causes the same panic again.
+ 		Do(req func() error) error
++		// DoCtx runs the given request if the Breaker accepts it when ctx isn't done.
++		DoCtx(ctx context.Context, req func() error) error
+ 
+ 		// DoWithAcceptable runs the given request if the Breaker accepts it.
+ 		// DoWithAcceptable returns an error instantly if the Breaker rejects the request.
+@@ -48,21 +54,31 @@ type (
+ 		// and causes the same panic again.
+ 		// acceptable checks if it's a successful call, even if the error is not nil.
+ 		DoWithAcceptable(req func() error, acceptable Acceptable) error
++		// DoWithAcceptableCtx runs the given request if the Breaker accepts it when ctx isn't done.
++		DoWithAcceptableCtx(ctx context.Context, req func() error, acceptable Acceptable) error
+ 
+ 		// DoWithFallback runs the given request if the Breaker accepts it.
+ 		// DoWithFallback runs the fallback if the Breaker rejects the request.
+ 		// If a panic occurs in the request, the Breaker handles it as an error
+ 		// and causes the same panic again.
+-		DoWithFallback(req func() error, fallback func(err error) error) error
++		DoWithFallback(req func() error, fallback Fallback) error
++		// DoWithFallbackCtx runs the given request if the Breaker accepts it when ctx isn't done.
++		DoWithFallbackCtx(ctx context.Context, req func() error, fallback Fallback) error
+ 
+ 		// DoWithFallbackAcceptable runs the given request if the Breaker accepts it.
+ 		// DoWithFallbackAcceptable runs the fallback if the Breaker rejects the request.
+ 		// If a panic occurs in the request, the Breaker handles it as an error
+ 		// and causes the same panic again.
+ 		// acceptable checks if it's a successful call, even if the error is not nil.
+-		DoWithFallbackAcceptable(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		DoWithFallbackAcceptable(req func() error, fallback Fallback, acceptable Acceptable) error
++		// DoWithFallbackAcceptableCtx runs the given request if the Breaker accepts it when ctx isn't done.
++		DoWithFallbackAcceptableCtx(ctx context.Context, req func() error, fallback Fallback,
++			acceptable Acceptable) error
+ 	}
+ 
++	// Fallback is the func to be called if the request is rejected.
++	Fallback func(err error) error
++
+ 	// Option defines the method to customize a Breaker.
+ 	Option func(breaker *circuitBreaker)
+ 
+@@ -86,12 +102,12 @@ type (
+ 
+ 	internalThrottle interface {
+ 		allow() (internalPromise, error)
+-		doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		doReq(req func() error, fallback Fallback, acceptable Acceptable) error
+ 	}
+ 
+ 	throttle interface {
+ 		allow() (Promise, error)
+-		doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		doReq(req func() error, fallback Fallback, acceptable Acceptable) error
+ 	}
+ )
+ 
+@@ -114,23 +130,71 @@ func (cb *circuitBreaker) Allow() (Promise, error) {
+ 	return cb.throttle.allow()
+ }
+ 
++func (cb *circuitBreaker) AllowCtx(ctx context.Context) (Promise, error) {
++	select {
++	case <-ctx.Done():
++		return nil, ctx.Err()
++	default:
++		return cb.Allow()
++	}
++}
++
+ func (cb *circuitBreaker) Do(req func() error) error {
+ 	return cb.throttle.doReq(req, nil, defaultAcceptable)
+ }
+ 
++func (cb *circuitBreaker) DoCtx(ctx context.Context, req func() error) error {
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	default:
++		return cb.Do(req)
++	}
++}
++
+ func (cb *circuitBreaker) DoWithAcceptable(req func() error, acceptable Acceptable) error {
+ 	return cb.throttle.doReq(req, nil, acceptable)
+ }
+ 
+-func (cb *circuitBreaker) DoWithFallback(req func() error, fallback func(err error) error) error {
++func (cb *circuitBreaker) DoWithAcceptableCtx(ctx context.Context, req func() error,
++	acceptable Acceptable) error {
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	default:
++		return cb.DoWithAcceptable(req, acceptable)
++	}
++}
++
++func (cb *circuitBreaker) DoWithFallback(req func() error, fallback Fallback) error {
+ 	return cb.throttle.doReq(req, fallback, defaultAcceptable)
+ }
+ 
+-func (cb *circuitBreaker) DoWithFallbackAcceptable(req func() error, fallback func(err error) error,
++func (cb *circuitBreaker) DoWithFallbackCtx(ctx context.Context, req func() error,
++	fallback Fallback) error {
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	default:
++		return cb.DoWithFallback(req, fallback)
++	}
++}
++
++func (cb *circuitBreaker) DoWithFallbackAcceptable(req func() error, fallback Fallback,
+ 	acceptable Acceptable) error {
+ 	return cb.throttle.doReq(req, fallback, acceptable)
+ }
+ 
++func (cb *circuitBreaker) DoWithFallbackAcceptableCtx(ctx context.Context, req func() error,
++	fallback Fallback, acceptable Acceptable) error {
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	default:
++		return cb.DoWithFallbackAcceptable(req, fallback, acceptable)
++	}
++}
++
+ func (cb *circuitBreaker) Name() string {
+ 	return cb.name
+ }
+@@ -168,7 +232,7 @@ func (lt loggedThrottle) allow() (Promise, error) {
+ 	}, lt.logError(err)
+ }
+ 
+-func (lt loggedThrottle) doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error {
++func (lt loggedThrottle) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
+ 	return lt.logError(lt.internalThrottle.doReq(req, fallback, func(err error) bool {
+ 		accept := acceptable(err)
+ 		if !accept && err != nil {
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index d32f8c5fed2697ea621f1adc3015270ae1a8c14c..af00e8d0c2126f22e440ec1c25a2fff7ae8180cd 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -1,6 +1,9 @@
+ package breaker
+ 
+-import "sync"
++import (
++	"context"
++	"sync"
++)
+ 
+ var (
+ 	lock     sync.RWMutex
+@@ -14,6 +17,13 @@ func Do(name string, req func() error) error {
+ 	})
+ }
+ 
++// DoCtx calls Breaker.DoCtx on the Breaker with given name.
++func DoCtx(ctx context.Context, name string, req func() error) error {
++	return do(name, func(b Breaker) error {
++		return b.DoCtx(ctx, req)
++	})
++}
++
+ // DoWithAcceptable calls Breaker.DoWithAcceptable on the Breaker with given name.
+ func DoWithAcceptable(name string, req func() error, acceptable Acceptable) error {
+ 	return do(name, func(b Breaker) error {
+@@ -21,21 +31,44 @@ func DoWithAcceptable(name string, req func() error, acceptable Acceptable) erro
+ 	})
+ }
+ 
++// DoWithAcceptableCtx calls Breaker.DoWithAcceptableCtx on the Breaker with given name.
++func DoWithAcceptableCtx(ctx context.Context, name string, req func() error,
++	acceptable Acceptable) error {
++	return do(name, func(b Breaker) error {
++		return b.DoWithAcceptableCtx(ctx, req, acceptable)
++	})
++}
++
+ // DoWithFallback calls Breaker.DoWithFallback on the Breaker with given name.
+-func DoWithFallback(name string, req func() error, fallback func(err error) error) error {
++func DoWithFallback(name string, req func() error, fallback Fallback) error {
+ 	return do(name, func(b Breaker) error {
+ 		return b.DoWithFallback(req, fallback)
+ 	})
+ }
+ 
++// DoWithFallbackCtx calls Breaker.DoWithFallbackCtx on the Breaker with given name.
++func DoWithFallbackCtx(ctx context.Context, name string, req func() error, fallback Fallback) error {
++	return do(name, func(b Breaker) error {
++		return b.DoWithFallbackCtx(ctx, req, fallback)
++	})
++}
++
+ // DoWithFallbackAcceptable calls Breaker.DoWithFallbackAcceptable on the Breaker with given name.
+-func DoWithFallbackAcceptable(name string, req func() error, fallback func(err error) error,
++func DoWithFallbackAcceptable(name string, req func() error, fallback Fallback,
+ 	acceptable Acceptable) error {
+ 	return do(name, func(b Breaker) error {
+ 		return b.DoWithFallbackAcceptable(req, fallback, acceptable)
+ 	})
+ }
+ 
++// DoWithFallbackAcceptableCtx calls Breaker.DoWithFallbackAcceptableCtx on the Breaker with given name.
++func DoWithFallbackAcceptableCtx(ctx context.Context, name string, req func() error,
++	fallback Fallback, acceptable Acceptable) error {
++	return do(name, func(b Breaker) error {
++		return b.DoWithFallbackAcceptableCtx(ctx, req, fallback, acceptable)
++	})
++}
++
+ // GetBreaker returns the Breaker with the given name.
+ func GetBreaker(name string) Breaker {
+ 	lock.RLock()
+diff --git a/core/breaker/bucket.go b/core/breaker/bucket.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2dec1ab9f065afcce1141a2ec66be77806f784a0
+--- /dev/null
++++ b/core/breaker/bucket.go
+@@ -0,0 +1,48 @@
++package breaker
++
++const (
++	success = iota
++	fail
++	drop
++)
++
++// bucket defines the bucket that holds sum and num of additions.
++type bucket struct {
++	Sum     int64
++	Success int64
++	Failure int64
++	Drop    int64
++}
++
++func (b *bucket) Add(v int64) {
++	switch v {
++	case fail:
++		b.fail()
++	case drop:
++		b.drop()
++	default:
++		b.succeed()
++	}
++}
++
++func (b *bucket) Reset() {
++	b.Sum = 0
++	b.Success = 0
++	b.Failure = 0
++	b.Drop = 0
++}
++
++func (b *bucket) drop() {
++	b.Sum++
++	b.Drop++
++}
++
++func (b *bucket) fail() {
++	b.Sum++
++	b.Failure++
++}
++
++func (b *bucket) succeed() {
++	b.Sum++
++	b.Success++
++}
+diff --git a/core/breaker/googlebreaker.go b/core/breaker/googlebreaker.go
+index a8432e30faccdfa4eee8c2bd1ab3be04a566dc26..0721663eb3fa7643c0d4c83953bc1fc5c92198c4 100644
+--- a/core/breaker/googlebreaker.go
++++ b/core/breaker/googlebreaker.go
+@@ -1,57 +1,87 @@
+ package breaker
+ 
+ import (
+-	"math"
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/collection"
+ 	"github.com/zeromicro/go-zero/core/mathx"
++	"github.com/zeromicro/go-zero/core/syncx"
++	"github.com/zeromicro/go-zero/core/timex"
+ )
+ 
+ const (
+ 	// 250ms for bucket duration
+-	window     = time.Second * 10
+-	buckets    = 40
+-	k          = 1.5
+-	protection = 5
++	window            = time.Second * 10
++	buckets           = 40
++	forcePassDuration = time.Second
++	k                 = 1.5
++	minK              = 1.1
++	protection        = 5
+ )
+ 
+ // googleBreaker is a netflixBreaker pattern from google.
+ // see Client-Side Throttling section in https://landing.google.com/sre/sre-book/chapters/handling-overload/
+-type googleBreaker struct {
+-	k     float64
+-	stat  *collection.RollingWindow
+-	proba *mathx.Proba
+-}
++type (
++	googleBreaker struct {
++		k        float64
++		stat     *collection.RollingWindow[int64, *bucket]
++		proba    *mathx.Proba
++		lastPass *syncx.AtomicDuration
++	}
++
++	windowResult struct {
++		accepts        int64
++		total          int64
++		failingBuckets int64
++		workingBuckets int64
++	}
++)
+ 
+ func newGoogleBreaker() *googleBreaker {
+ 	bucketDuration := time.Duration(int64(window) / int64(buckets))
+-	st := collection.NewRollingWindow(buckets, bucketDuration)
++	st := collection.NewRollingWindow[int64, *bucket](func() *bucket {
++		return new(bucket)
++	}, buckets, bucketDuration)
+ 	return &googleBreaker{
+-		stat:  st,
+-		k:     k,
+-		proba: mathx.NewProba(),
++		stat:     st,
++		k:        k,
++		proba:    mathx.NewProba(),
++		lastPass: syncx.NewAtomicDuration(),
+ 	}
+ }
+ 
+ func (b *googleBreaker) accept() error {
+-	accepts, total := b.history()
+-	weightedAccepts := b.k * float64(accepts)
++	var w float64
++	history := b.history()
++	w = b.k - (b.k-minK)*float64(history.failingBuckets)/buckets
++	weightedAccepts := mathx.AtLeast(w, minK) * float64(history.accepts)
+ 	// https://landing.google.com/sre/sre-book/chapters/handling-overload/#eq2101
+-	dropRatio := math.Max(0, (float64(total-protection)-weightedAccepts)/float64(total+1))
++	// for better performance, no need to care about the negative ratio
++	dropRatio := (float64(history.total-protection) - weightedAccepts) / float64(history.total+1)
+ 	if dropRatio <= 0 {
+ 		return nil
+ 	}
+ 
++	lastPass := b.lastPass.Load()
++	if lastPass > 0 && timex.Since(lastPass) > forcePassDuration {
++		b.lastPass.Set(timex.Now())
++		return nil
++	}
++
++	dropRatio *= float64(buckets-history.workingBuckets) / buckets
++
+ 	if b.proba.TrueOnProba(dropRatio) {
+ 		return ErrServiceUnavailable
+ 	}
+ 
++	b.lastPass.Set(timex.Now())
++
+ 	return nil
+ }
+ 
+ func (b *googleBreaker) allow() (internalPromise, error) {
+ 	if err := b.accept(); err != nil {
++		b.markDrop()
+ 		return nil, err
+ 	}
+ 
+@@ -60,8 +90,9 @@ func (b *googleBreaker) allow() (internalPromise, error) {
+ 	}, nil
+ }
+ 
+-func (b *googleBreaker) doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error {
++func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
+ 	if err := b.accept(); err != nil {
++		b.markDrop()
+ 		if fallback != nil {
+ 			return fallback(err)
+ 		}
+@@ -69,38 +100,55 @@ func (b *googleBreaker) doReq(req func() error, fallback func(err error) error,
+ 		return err
+ 	}
+ 
++	var succ bool
+ 	defer func() {
+-		if e := recover(); e != nil {
++		// if req() panic, success is false, mark as failure
++		if succ {
++			b.markSuccess()
++		} else {
+ 			b.markFailure()
+-			panic(e)
+ 		}
+ 	}()
+ 
+ 	err := req()
+ 	if acceptable(err) {
+-		b.markSuccess()
+-	} else {
+-		b.markFailure()
++		succ = true
+ 	}
+ 
+ 	return err
+ }
+ 
+-func (b *googleBreaker) markSuccess() {
+-	b.stat.Add(1)
++func (b *googleBreaker) markDrop() {
++	b.stat.Add(drop)
+ }
+ 
+ func (b *googleBreaker) markFailure() {
+-	b.stat.Add(0)
++	b.stat.Add(fail)
++}
++
++func (b *googleBreaker) markSuccess() {
++	b.stat.Add(success)
+ }
+ 
+-func (b *googleBreaker) history() (accepts, total int64) {
+-	b.stat.Reduce(func(b *collection.Bucket) {
+-		accepts += int64(b.Sum)
+-		total += b.Count
++func (b *googleBreaker) history() windowResult {
++	var result windowResult
++
++	b.stat.Reduce(func(b *bucket) {
++		result.accepts += b.Success
++		result.total += b.Sum
++		if b.Failure > 0 {
++			result.workingBuckets = 0
++		} else if b.Success > 0 {
++			result.workingBuckets++
++		}
++		if b.Success > 0 {
++			result.failingBuckets = 0
++		} else if b.Failure > 0 {
++			result.failingBuckets++
++		}
+ 	})
+ 
+-	return
++	return result
+ }
+ 
+ type googlePromise struct {
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index f72dc358229c22417767218e68dfee401ef73bd7..99ef29f146778b24413de6c8d27f45f48da893d2 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -1,5 +1,7 @@
+ package breaker
+ 
++import "context"
++
+ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+@@ -17,20 +19,40 @@ func (b nopBreaker) Allow() (Promise, error) {
+ 	return nopPromise{}, nil
+ }
+ 
++func (b nopBreaker) AllowCtx(_ context.Context) (Promise, error) {
++	return nopPromise{}, nil
++}
++
+ func (b nopBreaker) Do(req func() error) error {
+ 	return req()
+ }
+ 
++func (b nopBreaker) DoCtx(_ context.Context, req func() error) error {
++	return req()
++}
++
+ func (b nopBreaker) DoWithAcceptable(req func() error, _ Acceptable) error {
+ 	return req()
+ }
+ 
+-func (b nopBreaker) DoWithFallback(req func() error, _ func(err error) error) error {
++func (b nopBreaker) DoWithAcceptableCtx(_ context.Context, req func() error, _ Acceptable) error {
++	return req()
++}
++
++func (b nopBreaker) DoWithFallback(req func() error, _ Fallback) error {
++	return req()
++}
++
++func (b nopBreaker) DoWithFallbackCtx(_ context.Context, req func() error, _ Fallback) error {
++	return req()
++}
++
++func (b nopBreaker) DoWithFallbackAcceptable(req func() error, _ Fallback, _ Acceptable) error {
+ 	return req()
+ }
+ 
+-func (b nopBreaker) DoWithFallbackAcceptable(req func() error, _ func(err error) error,
+-	_ Acceptable) error {
++func (b nopBreaker) DoWithFallbackAcceptableCtx(_ context.Context, req func() error,
++	_ Fallback, _ Acceptable) error {
+ 	return req()
+ }
+ 
+diff --git a/core/collection/rollingwindow.go b/core/collection/rollingwindow.go
+index 81894be334db3ebf129c58fd9790904b5e347c69..1e17784f8d7dbf3b989a22bdd74be39ee38bf50f 100644
+--- a/core/collection/rollingwindow.go
++++ b/core/collection/rollingwindow.go
+@@ -4,18 +4,28 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+ )
+ 
+ type (
++	// BucketInterface is the interface that defines the buckets.
++	BucketInterface[T Numerical] interface {
++		Add(v T)
++		Reset()
++	}
++
++	// Numerical is the interface that restricts the numerical type.
++	Numerical = mathx.Numerical
++
+ 	// RollingWindowOption let callers customize the RollingWindow.
+-	RollingWindowOption func(rollingWindow *RollingWindow)
++	RollingWindowOption[T Numerical, B BucketInterface[T]] func(rollingWindow *RollingWindow[T, B])
+ 
+-	// RollingWindow defines a rolling window to calculate the events in buckets with time interval.
+-	RollingWindow struct {
++	// RollingWindow defines a rolling window to calculate the events in buckets with the time interval.
++	RollingWindow[T Numerical, B BucketInterface[T]] struct {
+ 		lock          sync.RWMutex
+ 		size          int
+-		win           *window
++		win           *window[T, B]
+ 		interval      time.Duration
+ 		offset        int
+ 		ignoreCurrent bool
+@@ -25,14 +35,15 @@ type (
+ 
+ // NewRollingWindow returns a RollingWindow that with size buckets and time interval,
+ // use opts to customize the RollingWindow.
+-func NewRollingWindow(size int, interval time.Duration, opts ...RollingWindowOption) *RollingWindow {
++func NewRollingWindow[T Numerical, B BucketInterface[T]](newBucket func() B, size int,
++	interval time.Duration, opts ...RollingWindowOption[T, B]) *RollingWindow[T, B] {
+ 	if size < 1 {
+ 		panic("size must be greater than 0")
+ 	}
+ 
+-	w := &RollingWindow{
++	w := &RollingWindow[T, B]{
+ 		size:     size,
+-		win:      newWindow(size),
++		win:      newWindow[T, B](newBucket, size),
+ 		interval: interval,
+ 		lastTime: timex.Now(),
+ 	}
+@@ -43,7 +54,7 @@ func NewRollingWindow(size int, interval time.Duration, opts ...RollingWindowOpt
+ }
+ 
+ // Add adds value to current bucket.
+-func (rw *RollingWindow) Add(v float64) {
++func (rw *RollingWindow[T, B]) Add(v T) {
+ 	rw.lock.Lock()
+ 	defer rw.lock.Unlock()
+ 	rw.updateOffset()
+@@ -51,13 +62,13 @@ func (rw *RollingWindow) Add(v float64) {
+ }
+ 
+ // Reduce runs fn on all buckets, ignore current bucket if ignoreCurrent was set.
+-func (rw *RollingWindow) Reduce(fn func(b *Bucket)) {
++func (rw *RollingWindow[T, B]) Reduce(fn func(b B)) {
+ 	rw.lock.RLock()
+ 	defer rw.lock.RUnlock()
+ 
+ 	var diff int
+ 	span := rw.span()
+-	// ignore current bucket, because of partial data
++	// ignore the current bucket, because of partial data
+ 	if span == 0 && rw.ignoreCurrent {
+ 		diff = rw.size - 1
+ 	} else {
+@@ -69,7 +80,7 @@ func (rw *RollingWindow) Reduce(fn func(b *Bucket)) {
+ 	}
+ }
+ 
+-func (rw *RollingWindow) span() int {
++func (rw *RollingWindow[T, B]) span() int {
+ 	offset := int(timex.Since(rw.lastTime) / rw.interval)
+ 	if 0 <= offset && offset < rw.size {
+ 		return offset
+@@ -78,7 +89,7 @@ func (rw *RollingWindow) span() int {
+ 	return rw.size
+ }
+ 
+-func (rw *RollingWindow) updateOffset() {
++func (rw *RollingWindow[T, B]) updateOffset() {
+ 	span := rw.span()
+ 	if span <= 0 {
+ 		return
+@@ -97,54 +108,54 @@ func (rw *RollingWindow) updateOffset() {
+ }
+ 
+ // Bucket defines the bucket that holds sum and num of additions.
+-type Bucket struct {
+-	Sum   float64
++type Bucket[T Numerical] struct {
++	Sum   T
+ 	Count int64
+ }
+ 
+-func (b *Bucket) add(v float64) {
++func (b *Bucket[T]) Add(v T) {
+ 	b.Sum += v
+ 	b.Count++
+ }
+ 
+-func (b *Bucket) reset() {
++func (b *Bucket[T]) Reset() {
+ 	b.Sum = 0
+ 	b.Count = 0
+ }
+ 
+-type window struct {
+-	buckets []*Bucket
++type window[T Numerical, B BucketInterface[T]] struct {
++	buckets []B
+ 	size    int
+ }
+ 
+-func newWindow(size int) *window {
+-	buckets := make([]*Bucket, size)
++func newWindow[T Numerical, B BucketInterface[T]](newBucket func() B, size int) *window[T, B] {
++	buckets := make([]B, size)
+ 	for i := 0; i < size; i++ {
+-		buckets[i] = new(Bucket)
++		buckets[i] = newBucket()
+ 	}
+-	return &window{
++	return &window[T, B]{
+ 		buckets: buckets,
+ 		size:    size,
+ 	}
+ }
+ 
+-func (w *window) add(offset int, v float64) {
+-	w.buckets[offset%w.size].add(v)
++func (w *window[T, B]) add(offset int, v T) {
++	w.buckets[offset%w.size].Add(v)
+ }
+ 
+-func (w *window) reduce(start, count int, fn func(b *Bucket)) {
++func (w *window[T, B]) reduce(start, count int, fn func(b B)) {
+ 	for i := 0; i < count; i++ {
+ 		fn(w.buckets[(start+i)%w.size])
+ 	}
+ }
+ 
+-func (w *window) resetBucket(offset int) {
+-	w.buckets[offset%w.size].reset()
++func (w *window[T, B]) resetBucket(offset int) {
++	w.buckets[offset%w.size].Reset()
+ }
+ 
+ // IgnoreCurrentBucket lets the Reduce call ignore current bucket.
+-func IgnoreCurrentBucket() RollingWindowOption {
+-	return func(w *RollingWindow) {
++func IgnoreCurrentBucket[T Numerical, B BucketInterface[T]]() RollingWindowOption[T, B] {
++	return func(w *RollingWindow[T, B]) {
+ 		w.ignoreCurrent = true
+ 	}
+ }
+diff --git a/core/load/adaptiveshedder.go b/core/load/adaptiveshedder.go
+index 2afc43a2225ea2640ba6e75c0a8730e2c19a8ccf..a1f9c21d441e8f5085cd0f17f926f12de2c72a5d 100644
+--- a/core/load/adaptiveshedder.go
++++ b/core/load/adaptiveshedder.go
+@@ -76,8 +76,8 @@ type (
+ 		avgFlyingLock   syncx.SpinLock
+ 		overloadTime    *syncx.AtomicDuration
+ 		droppedRecently *syncx.AtomicBool
+-		passCounter     *collection.RollingWindow
+-		rtCounter       *collection.RollingWindow
++		passCounter     *collection.RollingWindow[int64, *collection.Bucket[int64]]
++		rtCounter       *collection.RollingWindow[int64, *collection.Bucket[int64]]
+ 	}
+ )
+ 
+@@ -107,15 +107,16 @@ func NewAdaptiveShedder(opts ...ShedderOption) Shedder {
+ 		opt(&options)
+ 	}
+ 	bucketDuration := options.window / time.Duration(options.buckets)
++	newBucket := func() *collection.Bucket[int64] {
++		return new(collection.Bucket[int64])
++	}
+ 	return &adaptiveShedder{
+ 		cpuThreshold:    options.cpuThreshold,
+ 		windowScale:     float64(time.Second) / float64(bucketDuration) / millisecondsPerSecond,
+ 		overloadTime:    syncx.NewAtomicDuration(),
+ 		droppedRecently: syncx.NewAtomicBool(),
+-		passCounter: collection.NewRollingWindow(options.buckets, bucketDuration,
+-			collection.IgnoreCurrentBucket()),
+-		rtCounter: collection.NewRollingWindow(options.buckets, bucketDuration,
+-			collection.IgnoreCurrentBucket()),
++		passCounter:     collection.NewRollingWindow[int64, *collection.Bucket[int64]](newBucket, options.buckets, bucketDuration, collection.IgnoreCurrentBucket[int64, *collection.Bucket[int64]]()),
++		rtCounter:       collection.NewRollingWindow[int64, *collection.Bucket[int64]](newBucket, options.buckets, bucketDuration, collection.IgnoreCurrentBucket[int64, *collection.Bucket[int64]]()),
+ 	}
+ }
+ 
+@@ -167,15 +168,15 @@ func (as *adaptiveShedder) maxFlight() float64 {
+ }
+ 
+ func (as *adaptiveShedder) maxPass() int64 {
+-	var result float64 = 1
++	var result int64 = 1
+ 
+-	as.passCounter.Reduce(func(b *collection.Bucket) {
++	as.passCounter.Reduce(func(b *collection.Bucket[int64]) {
+ 		if b.Sum > result {
+ 			result = b.Sum
+ 		}
+ 	})
+ 
+-	return int64(result)
++	return result
+ }
+ 
+ func (as *adaptiveShedder) minRt() float64 {
+@@ -183,12 +184,12 @@ func (as *adaptiveShedder) minRt() float64 {
+ 	// its a reasonable large value to avoid dropping requests.
+ 	result := defaultMinRt
+ 
+-	as.rtCounter.Reduce(func(b *collection.Bucket) {
++	as.rtCounter.Reduce(func(b *collection.Bucket[int64]) {
+ 		if b.Count <= 0 {
+ 			return
+ 		}
+ 
+-		avg := math.Round(b.Sum / float64(b.Count))
++		avg := math.Round(float64(b.Sum) / float64(b.Count))
+ 		if avg < result {
+ 			result = avg
+ 		}
+@@ -283,6 +284,6 @@ func (p *promise) Fail() {
+ func (p *promise) Pass() {
+ 	rt := float64(timex.Since(p.start)) / float64(time.Millisecond)
+ 	p.shedder.addFlying(-1)
+-	p.shedder.rtCounter.Add(math.Ceil(rt))
++	p.shedder.rtCounter.Add(int64(math.Ceil(rt)))
+ 	p.shedder.passCounter.Add(1)
+ }
+diff --git a/core/mathx/range.go b/core/mathx/range.go
+index d74ac4dd6e32a1872c7932207c63832458f27d39..17e63fd5f13a903424306aef05ad6da810684cb6 100644
+--- a/core/mathx/range.go
++++ b/core/mathx/range.go
+@@ -1,13 +1,13 @@
+ package mathx
+ 
+-type numerical interface {
++type Numerical interface {
+ 	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+ 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+ 		~float32 | ~float64
+ }
+ 
+ // AtLeast returns the greater of x or lower.
+-func AtLeast[T numerical](x, lower T) T {
++func AtLeast[T Numerical](x, lower T) T {
+ 	if x < lower {
+ 		return lower
+ 	}
+@@ -15,7 +15,7 @@ func AtLeast[T numerical](x, lower T) T {
+ }
+ 
+ // AtMost returns the smaller of x or upper.
+-func AtMost[T numerical](x, upper T) T {
++func AtMost[T Numerical](x, upper T) T {
+ 	if x > upper {
+ 		return upper
+ 	}
+@@ -23,7 +23,7 @@ func AtMost[T numerical](x, upper T) T {
+ }
+ 
+ // Between returns the value of x clamped to the range [lower, upper].
+-func Between[T numerical](x, lower, upper T) T {
++func Between[T Numerical](x, lower, upper T) T {
+ 	if x < lower {
+ 		return lower
+ 	}

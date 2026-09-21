@@ -1,0 +1,145 @@
+diff --git a/rest/internal/fileserver/filehandler.go b/rest/internal/fileserver/filehandler.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2140a41226b94e0364542b04f862b37b2dfcffd7
+--- /dev/null
++++ b/rest/internal/fileserver/filehandler.go
+@@ -0,0 +1,93 @@
++package fileserver
++
++import (
++	"net/http"
++	"path"
++	"strings"
++	"sync"
++)
++
++// Middleware returns a middleware that serves files from the given file system.
++func Middleware(upath string, fs http.FileSystem) func(http.HandlerFunc) http.HandlerFunc {
++	fileServer := http.FileServer(fs)
++	pathWithoutTrailSlash := ensureNoTrailingSlash(upath)
++	canServe := createServeChecker(upath, fs)
++
++	return func(next http.HandlerFunc) http.HandlerFunc {
++		return func(w http.ResponseWriter, r *http.Request) {
++			if canServe(r) {
++				r.URL.Path = r.URL.Path[len(pathWithoutTrailSlash):]
++				fileServer.ServeHTTP(w, r)
++			} else {
++				next(w, r)
++			}
++		}
++	}
++}
++
++func createFileChecker(fs http.FileSystem) func(string) bool {
++	var lock sync.RWMutex
++	fileChecker := make(map[string]bool)
++
++	return func(upath string) bool {
++		// Emulate http.Dir.Open’s path normalization for embed.FS.Open.
++		// http.FileServer redirects any request ending in "/index.html"
++		// to the same path without the final "index.html".
++		// So the path here may be empty or end with a "/".
++		// http.Dir.Open uses this logic to clean the path,
++		// correctly handling those two cases.
++		// embed.FS doesn’t perform this normalization, so we apply the same logic here.
++		upath = path.Clean("/" + upath)[1:]
++		if len(upath) == 0 {
++			// if the path is empty, we use "." to open the current directory
++			upath = "."
++		}
++
++		lock.RLock()
++		exist, ok := fileChecker[upath]
++		lock.RUnlock()
++		if ok {
++			return exist
++		}
++
++		lock.Lock()
++		defer lock.Unlock()
++
++		file, err := fs.Open(upath)
++		exist = err == nil
++		fileChecker[upath] = exist
++		if err != nil {
++			return false
++		}
++
++		_ = file.Close()
++		return true
++	}
++}
++
++func createServeChecker(upath string, fs http.FileSystem) func(r *http.Request) bool {
++	pathWithTrailSlash := ensureTrailingSlash(upath)
++	fileChecker := createFileChecker(fs)
++
++	return func(r *http.Request) bool {
++		return r.Method == http.MethodGet &&
++			strings.HasPrefix(r.URL.Path, pathWithTrailSlash) &&
++			fileChecker(r.URL.Path[len(pathWithTrailSlash):])
++	}
++}
++
++func ensureTrailingSlash(upath string) string {
++	if strings.HasSuffix(upath, "/") {
++		return upath
++	}
++
++	return upath + "/"
++}
++
++func ensureNoTrailingSlash(upath string) string {
++	if strings.HasSuffix(upath, "/") {
++		return upath[:len(upath)-1]
++	}
++
++	return upath
++}
+diff --git a/rest/server.go b/rest/server.go
+index bbf6ff39d039ffc6851bc622eab6a3d0a22a1aa5..0723bfd943deb749f96f48ea8d2a812d055ac9bc 100644
+--- a/rest/server.go
++++ b/rest/server.go
+@@ -13,6 +13,7 @@ import (
+ 	"github.com/zeromicro/go-zero/rest/httpx"
+ 	"github.com/zeromicro/go-zero/rest/internal"
+ 	"github.com/zeromicro/go-zero/rest/internal/cors"
++	"github.com/zeromicro/go-zero/rest/internal/fileserver"
+ 	"github.com/zeromicro/go-zero/rest/router"
+ )
+ 
+@@ -170,6 +171,13 @@ func WithCustomCors(middlewareFn func(header http.Header), notAllowedFn func(htt
+ 	}
+ }
+ 
++// WithFileServer returns a RunOption to serve files from given dir with given path.
++func WithFileServer(path string, fs http.FileSystem) RunOption {
++	return func(server *Server) {
++		server.router = newFileServingRouter(server.router, path, fs)
++	}
++}
++
+ // WithJwt returns a func to enable jwt authentication in given route.
+ func WithJwt(secret string) RouteOption {
+ 	return func(r *featuredRoutes) {
+@@ -337,3 +345,19 @@ func newCorsRouter(router httpx.Router, headerFn func(http.Header), origins ...s
+ func (c *corsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	c.middleware(c.Router.ServeHTTP)(w, r)
+ }
++
++type fileServingRouter struct {
++	httpx.Router
++	middleware Middleware
++}
++
++func newFileServingRouter(router httpx.Router, path string, fs http.FileSystem) httpx.Router {
++	return &fileServingRouter{
++		Router:     router,
++		middleware: fileserver.Middleware(path, fs),
++	}
++}
++
++func (f *fileServingRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	f.middleware(f.Router.ServeHTTP)(w, r)
++}

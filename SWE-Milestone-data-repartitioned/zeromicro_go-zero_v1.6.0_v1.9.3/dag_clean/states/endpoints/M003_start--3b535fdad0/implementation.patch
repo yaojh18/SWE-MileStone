@@ -1,0 +1,4146 @@
+diff --git a/.github/FUNDING.yml b/.github/FUNDING.yml
+index dc5261d0ff323e6746c7e88a92eb9b88bb9cd130..5523ad2ce97fc911e7c881ce7629037cb075df13 100644
+--- a/.github/FUNDING.yml
++++ b/.github/FUNDING.yml
+@@ -1,13 +1,3 @@
+ # These are supported funding model platforms
+ 
+-github: # Replace with up to 4 GitHub Sponsors-enabled usernames e.g., [user1, user2]
+-patreon: # Replace with a single Patreon username
+-open_collective: # Replace with a single Open Collective username
+-ko_fi: # Replace with a single Ko-fi username
+-tidelift: # Replace with a single Tidelift platform-name/package-name e.g., npm/babel
+-community_bridge: # Replace with a single Community Bridge project-name e.g., cloud-foundry
+-liberapay: # Replace with a single Liberapay username
+-issuehunt: # Replace with a single IssueHunt username
+-otechie: # Replace with a single Otechie username
+-custom: # https://gitee.com/kevwan/static/raw/master/images/sponsor.jpg
+-ethereum: # 0x5052b7f6B937B02563996D23feb69b38D06Ca150 | kevwan
++github: kevwan
+diff --git a/core/bloom/bloom.go b/core/bloom/bloom.go
+index 897f4bc8b3bddc39886f98f58b483d44a32a42e2..3a72cf84d78b3037655165b28ef596a87a4425be 100644
+--- a/core/bloom/bloom.go
++++ b/core/bloom/bloom.go
+@@ -130,7 +130,7 @@ func (r *redisBitSet) check(ctx context.Context, offsets []uint) (bool, error) {
+ 	}
+ 
+ 	resp, err := r.store.ScriptRunCtx(ctx, testScript, []string{r.key}, args)
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return false, nil
+ 	} else if err != nil {
+ 		return false, err
+@@ -162,7 +162,7 @@ func (r *redisBitSet) set(ctx context.Context, offsets []uint) error {
+ 	}
+ 
+ 	_, err = r.store.ScriptRunCtx(ctx, setScript, []string{r.key}, args)
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return nil
+ 	}
+ 
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index be55d55a2b2cc619c4bd7f997f4d30f49f96c4b1..d32f8c5fed2697ea621f1adc3015270ae1a8c14c 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -59,7 +59,7 @@ func GetBreaker(name string) Breaker {
+ // NoBreakerFor disables the circuit breaker for the given name.
+ func NoBreakerFor(name string) {
+ 	lock.Lock()
+-	breakers[name] = newNopBreaker()
++	breakers[name] = NopBreaker()
+ 	lock.Unlock()
+ }
+ 
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index a1b2e7ccb95b985dadb765c0e038f521b99c6023..f72dc358229c22417767218e68dfee401ef73bd7 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -4,7 +4,8 @@ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+ 
+-func newNopBreaker() Breaker {
++// NopBreaker returns a breaker that never trigger breaker circuit.
++func NopBreaker() Breaker {
+ 	return nopBreaker{}
+ }
+ 
+diff --git a/core/codec/dh.go b/core/codec/dh.go
+index 49d839b43e62a16602e793adea8f01f94ca55568..63dd2d9c9434429808ddd63422161ff26867c198 100644
+--- a/core/codec/dh.go
++++ b/core/codec/dh.go
+@@ -23,7 +23,7 @@ var (
+ 	zero = big.NewInt(0)
+ )
+ 
+-// DhKey defines the Diffie Hellman key.
++// DhKey defines the Diffie-Hellman key.
+ type DhKey struct {
+ 	PriKey *big.Int
+ 	PubKey *big.Int
+@@ -46,7 +46,7 @@ func ComputeKey(pubKey, priKey *big.Int) (*big.Int, error) {
+ 	return new(big.Int).Exp(pubKey, priKey, p), nil
+ }
+ 
+-// GenerateKey returns a Diffie Hellman key.
++// GenerateKey returns a Diffie-Hellman key.
+ func GenerateKey() (*DhKey, error) {
+ 	var err error
+ 	var x *big.Int
+diff --git a/core/collection/cache.go b/core/collection/cache.go
+index ace21ece60d33dcd4ca4e0fcab026a1599e311ae..75bb8d48a99b42202d46dc2e67a697733c2d25fd 100644
+--- a/core/collection/cache.go
++++ b/core/collection/cache.go
+@@ -81,6 +81,10 @@ func (c *Cache) Del(key string) {
+ 	delete(c.data, key)
+ 	c.lruCache.remove(key)
+ 	c.lock.Unlock()
++
++	// RemoveTimer is called outside the lock to avoid performance impact from this
++	// potentially time-consuming operation. Data integrity is maintained by lruCache,
++	// which will eventually evict any remaining entries when capacity is exceeded.
+ 	c.timingWheel.RemoveTimer(key)
+ }
+ 
+@@ -128,8 +132,8 @@ func (c *Cache) Take(key string, fetch func() (any, error)) (any, error) {
+ 
+ 	var fresh bool
+ 	val, err := c.barrier.Do(key, func() (any, error) {
+-		// because O(1) on map search in memory, and fetch is an IO query
+-		// so we do double check, cache might be taken by another call
++		// because O(1) on map search in memory, and fetch is an IO query,
++		// so we do double-check, cache might be taken by another call
+ 		if val, ok := c.doGet(key); ok {
+ 			return val, nil
+ 		}
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 64796ef78b16ddd2224a9ea3aedb776368b9605e..d189b932bdeb8b88a9ae79dfcb95dafdd9e8b82a 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -133,7 +133,7 @@ func addOrMergeFields(info *fieldInfo, key string, child *fieldInfo, fullName st
+ 			return newConflictKeyError(fullName)
+ 		}
+ 
+-		if err := mergeFields(prev, key, child.children, fullName); err != nil {
++		if err := mergeFields(prev, child.children, fullName); err != nil {
+ 			return err
+ 		}
+ 	} else {
+@@ -192,7 +192,7 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
+ 	case reflect.Array, reflect.Slice:
+ 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
+ 	case reflect.Chan, reflect.Func:
+-		return nil, fmt.Errorf("unsupported type: %s", tp.Kind())
++		return nil, fmt.Errorf("unsupported type: %s,fullName: %s", tp.Kind(), fullName)
+ 	default:
+ 		return &fieldInfo{
+ 			children: make(map[string]*fieldInfo),
+@@ -281,7 +281,7 @@ func getTagName(field reflect.StructField) string {
+ 	return field.Name
+ }
+ 
+-func mergeFields(prev *fieldInfo, key string, children map[string]*fieldInfo, fullName string) error {
++func mergeFields(prev *fieldInfo, children map[string]*fieldInfo, fullName string) error {
+ 	if len(prev.children) == 0 || len(children) == 0 {
+ 		return newConflictKeyError(fullName)
+ 	}
+diff --git a/core/conf/readme.md b/core/conf/readme.md
+index 7bd5854062a6dc60e19c87a117b39308dc7301c5..c34a3b6718bd411e577f893b945f086c68d78cdf 100644
+--- a/core/conf/readme.md
++++ b/core/conf/readme.md
+@@ -12,7 +12,7 @@ type RestfulConf struct {
+ 	MaxConns     int           `json:",default=10000"`
+ 	MaxBytes     int64         `json:",default=1048576"`
+ 	Timeout      time.Duration `json:",default=3s"`
+-	CpuThreshold int64         `json:",default=900,range=[0:1000]"`
++	CpuThreshold int64         `json:",default=900,range=[0:1000)"`
+ }
+ ```
+ 
+diff --git a/core/filex/progressscanner.go b/core/filex/progressscanner.go
+index 11f3c1a543c4803730c3e6f026468c86c08a055e..e4f187f6f67a9416332d63d8b31e4c42feaf682e 100644
+--- a/core/filex/progressscanner.go
++++ b/core/filex/progressscanner.go
+@@ -5,7 +5,7 @@ import "gopkg.in/cheggaaa/pb.v1"
+ type (
+ 	// A Scanner is used to read lines.
+ 	Scanner interface {
+-		// Scan checks if has remaining to read.
++		// Scan checks if it has remaining to read.
+ 		Scan() bool
+ 		// Text returns next line.
+ 		Text() string
+diff --git a/core/fx/stream.go b/core/fx/stream.go
+index cebb11e3673173e1250c794978f1d87474fbf8fa..e0c3cd28126450bb735ec0ba47ca755461e5bf2d 100644
+--- a/core/fx/stream.go
++++ b/core/fx/stream.go
+@@ -352,7 +352,7 @@ func (s Stream) Parallel(fn ParallelFunc, opts ...Option) {
+ 	}, opts...).Done()
+ }
+ 
+-// Reduce is an utility method to let the caller deal with the underlying channel.
++// Reduce is a utility method to let the caller deal with the underlying channel.
+ func (s Stream) Reduce(fn ReduceFunc) (any, error) {
+ 	return fn(s.source)
+ }
+diff --git a/core/iox/pipe.go b/core/iox/pipe.go
+index be36479ce266fabe516b486239953269479fc7ce..044de38042875910a234d3fccf94158fd23ed1b9 100644
+--- a/core/iox/pipe.go
++++ b/core/iox/pipe.go
+@@ -2,7 +2,7 @@ package iox
+ 
+ import "os"
+ 
+-// RedirectInOut redirects stdin to r, stdout to w, and callers need to call restore afterwards.
++// RedirectInOut redirects stdin to r, stdout to w, and callers need to call restore afterward.
+ func RedirectInOut() (restore func(), err error) {
+ 	var r, w *os.File
+ 	r, w, err = os.Pipe()
+diff --git a/core/iox/textfile.go b/core/iox/textfile.go
+index 89083cea684acabd28fd271a96bd34eb9820cb42..963097167637b6079ef481e11d9216081880e857 100644
+--- a/core/iox/textfile.go
++++ b/core/iox/textfile.go
+@@ -9,7 +9,7 @@ import (
+ 
+ const bufSize = 32 * 1024
+ 
+-// CountLines returns the number of lines in file.
++// CountLines returns the number of lines in the file.
+ func CountLines(file string) (int, error) {
+ 	f, err := os.Open(file)
+ 	if err != nil {
+diff --git a/core/iox/textlinescanner.go b/core/iox/textlinescanner.go
+index ec28e27a9b1139d780444073de4f328367d0cb8b..afa8165273c4c09ce53644b8a0f1c4e25959f29f 100644
+--- a/core/iox/textlinescanner.go
++++ b/core/iox/textlinescanner.go
+@@ -6,7 +6,7 @@ import (
+ 	"strings"
+ )
+ 
+-// A TextLineScanner is a scanner that can scan lines from given reader.
++// A TextLineScanner is a scanner that can scan lines from the given reader.
+ type TextLineScanner struct {
+ 	reader  *bufio.Reader
+ 	hasNext bool
+@@ -14,7 +14,7 @@ type TextLineScanner struct {
+ 	err     error
+ }
+ 
+-// NewTextLineScanner returns a TextLineScanner with given reader.
++// NewTextLineScanner returns a TextLineScanner with the given reader.
+ func NewTextLineScanner(reader io.Reader) *TextLineScanner {
+ 	return &TextLineScanner{
+ 		reader:  bufio.NewReader(reader),
+diff --git a/core/limit/tokenlimit.go b/core/limit/tokenlimit.go
+index fe576dd9d0fa08eaaf6f39c1e32a01717638d301..e33b4b951c6de1e7e01ae4be86c95fe4a628baaf 100644
+--- a/core/limit/tokenlimit.go
++++ b/core/limit/tokenlimit.go
+@@ -125,7 +125,7 @@ func (lim *TokenLimiter) reserveN(ctx context.Context, now time.Time, n int) boo
+ 		})
+ 	// redis allowed == false
+ 	// Lua boolean false -> r Nil bulk reply
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return false
+ 	}
+ 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+diff --git a/core/load/adaptiveshedder.go b/core/load/adaptiveshedder.go
+index f925ec4d2adfcae862a3ff5172d4a727eeaa0b85..2afc43a2225ea2640ba6e75c0a8730e2c19a8ccf 100644
+--- a/core/load/adaptiveshedder.go
++++ b/core/load/adaptiveshedder.go
+@@ -9,6 +9,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/core/collection"
+ 	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -21,8 +22,11 @@ const (
+ 	defaultCpuThreshold = 900
+ 	defaultMinRt        = float64(time.Second / time.Millisecond)
+ 	// moving average hyperparameter beta for calculating requests on the fly
+-	flyingBeta      = 0.9
+-	coolOffDuration = time.Second
++	flyingBeta               = 0.9
++	coolOffDuration          = time.Second
++	cpuMax                   = 1000 // millicpu
++	millisecondsPerSecond    = 1000
++	overloadFactorLowerBound = 0.1
+ )
+ 
+ var (
+@@ -66,7 +70,7 @@ type (
+ 
+ 	adaptiveShedder struct {
+ 		cpuThreshold    int64
+-		windows         int64
++		windowScale     float64
+ 		flying          int64
+ 		avgFlying       float64
+ 		avgFlyingLock   syncx.SpinLock
+@@ -105,7 +109,7 @@ func NewAdaptiveShedder(opts ...ShedderOption) Shedder {
+ 	bucketDuration := options.window / time.Duration(options.buckets)
+ 	return &adaptiveShedder{
+ 		cpuThreshold:    options.cpuThreshold,
+-		windows:         int64(time.Second / bucketDuration),
++		windowScale:     float64(time.Second) / float64(bucketDuration) / millisecondsPerSecond,
+ 		overloadTime:    syncx.NewAtomicDuration(),
+ 		droppedRecently: syncx.NewAtomicBool(),
+ 		passCounter: collection.NewRollingWindow(options.buckets, bucketDuration,
+@@ -134,10 +138,10 @@ func (as *adaptiveShedder) Allow() (Promise, error) {
+ func (as *adaptiveShedder) addFlying(delta int64) {
+ 	flying := atomic.AddInt64(&as.flying, delta)
+ 	// update avgFlying when the request is finished.
+-	// this strategy makes avgFlying have a little bit lag against flying, and smoother.
++	// this strategy makes avgFlying have a little bit of lag against flying, and smoother.
+ 	// when the flying requests increase rapidly, avgFlying increase slower, accept more requests.
+-	// when the flying requests drop rapidly, avgFlying drop slower, accept less requests.
+-	// it makes the service to serve as more requests as possible.
++	// when the flying requests drop rapidly, avgFlying drop slower, accept fewer requests.
++	// it makes the service to serve as many requests as possible.
+ 	if delta < 0 {
+ 		as.avgFlyingLock.Lock()
+ 		as.avgFlying = as.avgFlying*flyingBeta + float64(flying)*(1-flyingBeta)
+@@ -149,16 +153,17 @@ func (as *adaptiveShedder) highThru() bool {
+ 	as.avgFlyingLock.Lock()
+ 	avgFlying := as.avgFlying
+ 	as.avgFlyingLock.Unlock()
+-	maxFlight := as.maxFlight()
+-	return int64(avgFlying) > maxFlight && atomic.LoadInt64(&as.flying) > maxFlight
++	maxFlight := as.maxFlight() * as.overloadFactor()
++	return avgFlying > maxFlight && float64(atomic.LoadInt64(&as.flying)) > maxFlight
+ }
+ 
+-func (as *adaptiveShedder) maxFlight() int64 {
++func (as *adaptiveShedder) maxFlight() float64 {
+ 	// windows = buckets per second
+ 	// maxQPS = maxPASS * windows
+ 	// minRT = min average response time in milliseconds
+-	// maxQPS * minRT / milliseconds_per_second
+-	return int64(math.Max(1, float64(as.maxPass()*as.windows)*(as.minRt()/1e3)))
++	// allowedFlying = maxQPS * minRT / milliseconds_per_second
++	maxFlight := float64(as.maxPass()) * as.minRt() * as.windowScale
++	return mathx.AtLeast(maxFlight, 1)
+ }
+ 
+ func (as *adaptiveShedder) maxPass() int64 {
+@@ -174,6 +179,8 @@ func (as *adaptiveShedder) maxPass() int64 {
+ }
+ 
+ func (as *adaptiveShedder) minRt() float64 {
++	// if no requests in previous windows, return defaultMinRt,
++	// its a reasonable large value to avoid dropping requests.
+ 	result := defaultMinRt
+ 
+ 	as.rtCounter.Reduce(func(b *collection.Bucket) {
+@@ -190,6 +197,13 @@ func (as *adaptiveShedder) minRt() float64 {
+ 	return result
+ }
+ 
++func (as *adaptiveShedder) overloadFactor() float64 {
++	// as.cpuThreshold must be less than cpuMax
++	factor := (cpuMax - float64(stat.CpuUsage())) / (cpuMax - float64(as.cpuThreshold))
++	// at least accept 10% of acceptable requests, even cpu is highly overloaded.
++	return mathx.Between(factor, overloadFactorLowerBound, 1)
++}
++
+ func (as *adaptiveShedder) shouldDrop() bool {
+ 	if as.systemOverloaded() || as.stillHot() {
+ 		if as.highThru() {
+@@ -236,14 +250,14 @@ func (as *adaptiveShedder) systemOverloaded() bool {
+ 	return true
+ }
+ 
+-// WithBuckets customizes the Shedder with given number of buckets.
++// WithBuckets customizes the Shedder with the given number of buckets.
+ func WithBuckets(buckets int) ShedderOption {
+ 	return func(opts *shedderOptions) {
+ 		opts.buckets = buckets
+ 	}
+ }
+ 
+-// WithCpuThreshold customizes the Shedder with given cpu threshold.
++// WithCpuThreshold customizes the Shedder with the given cpu threshold.
+ func WithCpuThreshold(threshold int64) ShedderOption {
+ 	return func(opts *shedderOptions) {
+ 		opts.cpuThreshold = threshold
+diff --git a/core/load/sheddergroup.go b/core/load/sheddergroup.go
+index c3d624026c3e1fcdcf1bdd704f37ae60204c3fd5..8cc742f5ed3f4f0025a1335c16723471bdd217d8 100644
+--- a/core/load/sheddergroup.go
++++ b/core/load/sheddergroup.go
+@@ -6,7 +6,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+-// A ShedderGroup is a manager to manage key based shedders.
++// A ShedderGroup is a manager to manage key-based shedders.
+ type ShedderGroup struct {
+ 	options []ShedderOption
+ 	manager *syncx.ResourceManager
+diff --git a/core/logc/logs.go b/core/logc/logs.go
+index 7123354554fe6972b6e8b8be12f3ad43c6685121..b8343fa26ce8887d34e2c5dcb5ab6e668ffa6fb8 100644
+--- a/core/logc/logs.go
++++ b/core/logc/logs.go
+@@ -42,7 +42,7 @@ func Debugv(ctx context.Context, v interface{}) {
+ 	getLogger(ctx).Debugv(v)
+ }
+ 
+-// Debugw writes msg along with fields into access log.
++// Debugw writes msg along with fields into the access log.
+ func Debugw(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Debugw(msg, fields...)
+ }
+@@ -63,7 +63,7 @@ func Errorv(ctx context.Context, v any) {
+ 	getLogger(ctx).Errorv(v)
+ }
+ 
+-// Errorw writes msg along with fields into error log.
++// Errorw writes msg along with fields into the error log.
+ func Errorw(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Errorw(msg, fields...)
+ }
+@@ -88,7 +88,7 @@ func Infov(ctx context.Context, v any) {
+ 	getLogger(ctx).Infov(v)
+ }
+ 
+-// Infow writes msg along with fields into access log.
++// Infow writes msg along with fields into the access log.
+ func Infow(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Infow(msg, fields...)
+ }
+@@ -108,10 +108,11 @@ func SetLevel(level uint32) {
+ 	logx.SetLevel(level)
+ }
+ 
+-// SetUp sets up the logx. If already set up, just return nil.
+-// we allow SetUp to be called multiple times, because for example
++// SetUp sets up the logx.
++// If already set up, return nil.
++// We allow SetUp to be called multiple times, because, for example,
+ // we need to allow different service frameworks to initialize logx respectively.
+-// the same logic for SetUp
++// The same logic for SetUp
+ func SetUp(c LogConf) error {
+ 	return logx.SetUp(c)
+ }
+diff --git a/core/logx/lesslogger.go b/core/logx/lesslogger.go
+index 35ca20516cae7cc790cc6c65aa11c414b3309bb6..04113929b97014bb8a809bf826c08cab845540e8 100644
+--- a/core/logx/lesslogger.go
++++ b/core/logx/lesslogger.go
+@@ -1,6 +1,6 @@
+ package logx
+ 
+-// A LessLogger is a logger that control to log once during the given duration.
++// A LessLogger is a logger that controls to log once during the given duration.
+ type LessLogger struct {
+ 	*limitedExecutor
+ }
+diff --git a/core/logx/logs.go b/core/logx/logs.go
+index 817cb557b132795468511c4292dff0296b50cb3d..bc5e356e4213e53020bdd3008cabe877f37d652e 100644
+--- a/core/logx/logs.go
++++ b/core/logx/logs.go
+@@ -87,7 +87,7 @@ func Debugv(v any) {
+ 	}
+ }
+ 
+-// Debugw writes msg along with fields into access log.
++// Debugw writes msg along with fields into the access log.
+ func Debugw(msg string, fields ...LogField) {
+ 	if shallLog(DebugLevel) {
+ 		writeDebug(msg, fields...)
+@@ -143,7 +143,7 @@ func Errorv(v any) {
+ 	}
+ }
+ 
+-// Errorw writes msg along with fields into error log.
++// Errorw writes msg along with fields into the error log.
+ func Errorw(msg string, fields ...LogField) {
+ 	if shallLog(ErrorLevel) {
+ 		writeError(msg, fields...)
+@@ -209,7 +209,7 @@ func Infov(v any) {
+ 	}
+ }
+ 
+-// Infow writes msg along with fields into access log.
++// Infow writes msg along with fields into the access log.
+ func Infow(msg string, fields ...LogField) {
+ 	if shallLog(InfoLevel) {
+ 		writeInfo(msg, fields...)
+@@ -255,11 +255,12 @@ func SetWriter(w Writer) {
+ 	}
+ }
+ 
+-// SetUp sets up the logx. If already set up, just return nil.
+-// we allow SetUp to be called multiple times, because for example
++// SetUp sets up the logx.
++// If already set up, return nil.
++// We allow SetUp to be called multiple times, because, for example,
+ // we need to allow different service frameworks to initialize logx respectively.
+ func SetUp(c LogConf) (err error) {
+-	// Just ignore the subsequent SetUp calls.
++	// Ignore the later SetUp calls.
+ 	// Because multiple services in one process might call SetUp respectively.
+ 	// Need to wait for the first caller to complete the execution.
+ 	setupOnce.Do(func() {
+@@ -481,7 +482,7 @@ func writeDebug(val any, fields ...LogField) {
+ 	getWriter().Debug(val, addCaller(fields...)...)
+ }
+ 
+-// writeError writes v into error log.
++// writeError writes v into the error log.
+ // Not checking shallLog here is for performance consideration.
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+@@ -521,7 +522,7 @@ func writeStack(msg string) {
+ 	getWriter().Stack(fmt.Sprintf("%s\n%s", msg, string(debug.Stack())))
+ }
+ 
+-// writeStat writes v into stat log.
++// writeStat writes v into the stat log.
+ // Not checking shallLog here is for performance consideration.
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+diff --git a/core/logx/rotatelogger.go b/core/logx/rotatelogger.go
+index 4b7f31e764fc15640c830a1004f36db3d4fa6fc9..61f9a9d03f795cf6005108cae5eb3ca1c8d1cf1c 100644
+--- a/core/logx/rotatelogger.go
++++ b/core/logx/rotatelogger.go
+@@ -319,7 +319,7 @@ func (l *RotateLogger) maybeCompressFile(file string) {
+ 	}()
+ 
+ 	if _, err := os.Stat(file); err != nil {
+-		// file not exists or other error, ignore compression
++		// file doesn't exist or another error, ignore compression
+ 		return
+ 	}
+ 
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index c54ae7476c90c3d1fc3b32e5a8142717cfb84935..b3b3a01d1a375aa1c836403932a6559b437196a0 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -12,7 +12,7 @@ const (
+ )
+ 
+ // Marshal marshals the given val and returns the map that contains the fields.
+-// optional=another is not implemented, and it's hard to implement and not common used.
++// optional=another is not implemented, and it's hard to implement and not commonly used.
+ func Marshal(val any) (map[string]map[string]any, error) {
+ 	ret := make(map[string]map[string]any)
+ 	tp := reflect.TypeOf(val)
+@@ -118,7 +118,7 @@ func validateOptional(field reflect.StructField, value reflect.Value) error {
+ 		if value.IsNil() {
+ 			return fmt.Errorf("field %q is nil", field.Name)
+ 		}
+-	case reflect.Array, reflect.Slice, reflect.Map:
++	case reflect.Slice, reflect.Map:
+ 		if value.IsNil() || value.Len() == 0 {
+ 			return fmt.Errorf("field %q is empty", field.Name)
+ 		}
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 15215693b62a24f7fb0c659dd50c2a4f806f3128..326de7a54d60c67af0c75aa81f09895774b8b068 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -2,10 +2,10 @@ package mapping
+ 
+ import (
+ 	"encoding"
++	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"math"
+ 	"reflect"
+ 	"strconv"
+ 	"strings"
+@@ -40,7 +40,7 @@ var (
+ )
+ 
+ type (
+-	// Unmarshaler is used to unmarshal with given tag key.
++	// Unmarshaler is used to unmarshal with the given tag key.
+ 	Unmarshaler struct {
+ 		key  string
+ 		opts unmarshalOptions
+@@ -70,7 +70,7 @@ func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
+ 	return &unmarshaler
+ }
+ 
+-// UnmarshalKey unmarshals m into v with tag key.
++// UnmarshalKey unmarshals m into v with the tag key.
+ func UnmarshalKey(m map[string]any, v any) error {
+ 	return keyUnmarshaler.Unmarshal(m, v)
+ }
+@@ -114,7 +114,8 @@ func (u *Unmarshaler) unmarshalValuer(m Valuer, v any, fullName string) error {
+ 	return u.unmarshalWithFullName(simpleValuer{current: m}, v, fullName)
+ }
+ 
+-func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillMap(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -155,7 +156,8 @@ func (u *Unmarshaler) fillMapFromString(value reflect.Value, mapValue any) error
+ 	return nil
+ }
+ 
+-func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
++func (u *Unmarshaler) fillSlice(fieldType reflect.Type, value reflect.Value,
++	mapValue any, fullName string) error {
+ 	if !value.CanSet() {
+ 		return errValueNotSettable
+ 	}
+@@ -224,11 +226,11 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 	switch v := mapValue.(type) {
+ 	case fmt.Stringer:
+ 		if err := jsonx.UnmarshalFromString(v.String(), &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	case string:
+ 		if err := jsonx.UnmarshalFromString(v, &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	default:
+ 		return errUnsupportedType
+@@ -250,6 +252,10 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 
+ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int,
+ 	baseKind reflect.Kind, value any, fullName string) error {
++	if value == nil {
++		return errNilSliceElement
++	}
++
+ 	ithVal := slice.Index(index)
+ 	switch v := value.(type) {
+ 	case fmt.Stringer:
+@@ -304,7 +310,34 @@ func (u *Unmarshaler) fillSliceWithDefault(derefedType reflect.Type, value refle
+ 	return u.fillSlice(derefedType, value, slice, fullName)
+ }
+ 
+-func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any, fullName string) (reflect.Value, error) {
++func (u *Unmarshaler) fillUnmarshalerStruct(fieldType reflect.Type,
++	value reflect.Value, targetValue string) error {
++	if !value.CanSet() {
++		return errValueNotSettable
++	}
++
++	baseType := Deref(fieldType)
++	target := reflect.New(baseType)
++	switch u.key {
++	case jsonTagKey:
++		unmarshaler, ok := target.Interface().(json.Unmarshaler)
++		if !ok {
++			return errUnsupportedType
++		}
++
++		if err := unmarshaler.UnmarshalJSON([]byte(targetValue)); err != nil {
++			return err
++		}
++	default:
++		return errUnsupportedType
++	}
++
++	value.Set(target)
++	return nil
++}
++
++func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
++	fullName string) (reflect.Value, error) {
+ 	mapType := reflect.MapOf(keyType, elemType)
+ 	valueType := reflect.TypeOf(mapValue)
+ 	if mapType == valueType {
+@@ -396,6 +429,15 @@ func (u *Unmarshaler) generateMap(keyType, elemType reflect.Type, mapValue any,
+ 	return targetValue, nil
+ }
+ 
++func (u *Unmarshaler) implementsUnmarshaler(t reflect.Type) bool {
++	switch u.key {
++	case jsonTagKey:
++		return t.Implements(reflect.TypeOf((*json.Unmarshaler)(nil)).Elem())
++	default:
++		return false
++	}
++}
++
+ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Valuer, fullName string) (
+ 	string, *fieldOptionsWithContext, error) {
+ 	key, options, err := parseKeyAndOptions(u.key, field)
+@@ -425,6 +467,10 @@ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Value
+ 		}
+ 	}
+ 
++	if u.opts.fillDefault {
++		return key, &options.fieldOptionsWithContext, nil
++	}
++
+ 	optsWithContext, err := options.toOptionsWithContext(key, m, fullName)
+ 	if err != nil {
+ 		return "", nil, err
+@@ -566,9 +612,28 @@ func (u *Unmarshaler) processFieldNotFromString(fieldType reflect.Type, value re
+ 	case valueKind == reflect.String && typeKind == reflect.Map:
+ 		return u.fillMapFromString(value, mapValue)
+ 	case valueKind == reflect.String && typeKind == reflect.Slice:
++		// try to find out if it's a byte slice, golang use []byte Marshal to base64 but there only SliceOf uint8/bytes can convert to []byte
++		// more details https://pkg.go.dev/encoding/json#Marshal
++		//> Array and slice values encode as JSON arrays, except that []byte encodes as a base64-encoded string, and a nil slice encodes as the null JSON value.
++		//and also u can find this https://stackoverflow.com/questions/34089750/marshal-byte-to-json-giving-a-strange-string
++		if fieldType.Elem().Kind() == reflect.Uint8 {
++			strVal := mapValue.(string)
++			decodedBytes, err := base64.StdEncoding.DecodeString(strVal)
++			// if err !=nil do next
++			if err == nil {
++				value.Set(reflect.ValueOf(decodedBytes))
++				return nil
++			}
++		}
+ 		return u.fillSliceFromString(fieldType, value, mapValue, fullName)
+ 	case valueKind == reflect.String && derefedFieldType == durationType:
+-		return fillDurationValue(fieldType, value, mapValue.(string))
++		v, ok := mapValue.(string)
++		if !ok {
++			return fmt.Errorf("unexpected type %T, expected a string value for field %s", mapValue, fullName)
++		}
++		return fillDurationValue(fieldType, value, v)
++	case valueKind == reflect.String && typeKind == reflect.Struct && u.implementsUnmarshaler(fieldType):
++		return u.fillUnmarshalerStruct(fieldType, value, mapValue.(string))
+ 	default:
+ 		return u.processFieldPrimitive(fieldType, value, mapValue, opts, fullName)
+ 	}
+@@ -622,7 +687,12 @@ func (u *Unmarshaler) processFieldPrimitiveWithJSONNumber(fieldType reflect.Type
+ 			return err
+ 		}
+ 
+-		if fValue > math.MaxFloat32 {
++		// if the value is a pointer, we need to check overflow with the pointer's value.
++		derefedValue := value
++		for derefedValue.Type().Kind() == reflect.Ptr {
++			derefedValue = derefedValue.Elem()
++		}
++		if derefedValue.CanFloat() && derefedValue.OverflowFloat(fValue) {
+ 			return fmt.Errorf("parsing %q as float32: value out of range", v.String())
+ 		}
+ 
+@@ -684,7 +754,15 @@ func (u *Unmarshaler) processFieldTextUnmarshaler(fieldType reflect.Type, value
+ 			return true, tval.UnmarshalText(mv)
+ 		}
+ 	}
+-
++	//[]byte
++	if fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.Uint8 {
++		b, err := base64.StdEncoding.DecodeString(mapValue.(string))
++		if err != nil {
++			return false, err
++		}
++		value.SetBytes(b)
++		return true, nil
++	}
+ 	return false, nil
+ }
+ 
+@@ -694,24 +772,26 @@ func (u *Unmarshaler) processFieldWithEnvValue(fieldType reflect.Type, value ref
+ 		return err
+ 	}
+ 
+-	fieldKind := fieldType.Kind()
+-	switch fieldKind {
+-	case reflect.Bool:
++	derefType := Deref(fieldType)
++	derefKind := derefType.Kind()
++	switch {
++	case derefKind == reflect.String:
++		SetValue(fieldType, value, toReflectValue(derefType, envVal))
++		return nil
++	case derefKind == reflect.Bool:
+ 		val, err := strconv.ParseBool(envVal)
+ 		if err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		value.SetBool(val)
++		SetValue(fieldType, value, toReflectValue(derefType, val))
+ 		return nil
+-	case durationType.Kind():
++	case derefType == durationType:
++		// time.Duration is a special case, its derefKind is reflect.Int64.
+ 		if err := fillDurationValue(fieldType, value, envVal); err != nil {
+ 			return fmt.Errorf("unmarshal field %q with environment variable, %w", fullName, err)
+ 		}
+ 
+-		return nil
+-	case reflect.String:
+-		value.SetString(envVal)
+ 		return nil
+ 	default:
+ 		return u.processFieldPrimitiveWithJSONNumber(fieldType, value, json.Number(envVal), opts, fullName)
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index 67ea0ae3393ef4e14c812949937de928504a72a0..f47aad0edc79e24e13f8f3fda3ba52f9db15e574 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -36,6 +36,7 @@ const (
+ var (
+ 	errUnsupportedType  = errors.New("unsupported type on setting field value")
+ 	errNumberRange      = errors.New("wrong number range setting")
++	errNilSliceElement  = errors.New("null element for slice")
+ 	optionsCache        = make(map[string]optionsCacheValue)
+ 	cacheLock           sync.RWMutex
+ 	structRequiredCache = make(map[reflect.Type]requiredCacheValue)
+@@ -415,7 +416,7 @@ func parseOption(fieldOpts *fieldOptions, fieldName, option string) error {
+ }
+ 
+ // parseOptions parses the given options in tag.
+-// for example: `json:"name,options=foo|bar"` or `json:"name,options=[foo,bar]"`
++// for example, `json:"name,options=foo|bar"` or `json:"name,options=[foo,bar]"`
+ func parseOptions(val string) []string {
+ 	if len(val) == 0 {
+ 		return nil
+@@ -572,6 +573,10 @@ func toFloat64(v any) (float64, bool) {
+ 	}
+ }
+ 
++func toReflectValue(tp reflect.Type, v any) reflect.Value {
++	return reflect.ValueOf(v).Convert(Deref(tp))
++}
++
+ func usingDifferentKeys(key string, field reflect.StructField) bool {
+ 	if len(field.Tag) > 0 {
+ 		if _, ok := field.Tag.Lookup(key); !ok {
+diff --git a/core/mapping/valuer.go b/core/mapping/valuer.go
+index 206b1b137a8af00ff0bfddb38f917ca0b5e8951d..24f6f7f3744975673b50b826c224ecc4e921bb0c 100644
+--- a/core/mapping/valuer.go
++++ b/core/mapping/valuer.go
+@@ -26,9 +26,9 @@ type (
+ 		parent valuerWithParent
+ 	}
+ 
+-	// mapValuer is a type for map to meet the Valuer interface.
++	// mapValuer is a type for the map to meet the Valuer interface.
+ 	mapValuer map[string]any
+-	// simpleValuer is a type to get value from current node.
++	// simpleValuer is a type to get value from the current node.
+ 	simpleValuer node
+ 	// recursiveValuer is a type to get the value recursively from current and parent nodes.
+ 	recursiveValuer node
+diff --git a/core/mathx/range.go b/core/mathx/range.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..d74ac4dd6e32a1872c7932207c63832458f27d39
+--- /dev/null
++++ b/core/mathx/range.go
+@@ -0,0 +1,34 @@
++package mathx
++
++type numerical interface {
++	~int | ~int8 | ~int16 | ~int32 | ~int64 |
++		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
++		~float32 | ~float64
++}
++
++// AtLeast returns the greater of x or lower.
++func AtLeast[T numerical](x, lower T) T {
++	if x < lower {
++		return lower
++	}
++	return x
++}
++
++// AtMost returns the smaller of x or upper.
++func AtMost[T numerical](x, upper T) T {
++	if x > upper {
++		return upper
++	}
++	return x
++}
++
++// Between returns the value of x clamped to the range [lower, upper].
++func Between[T numerical](x, lower, upper T) T {
++	if x < lower {
++		return lower
++	}
++	if x > upper {
++		return upper
++	}
++	return x
++}
+diff --git a/core/queue/queue.go b/core/queue/queue.go
+index 81aaaae4f882bb76208ef3e1d7c560393fb430f2..5a9fd5c9ba34620d4905a62171fc3a11631bd756 100644
+--- a/core/queue/queue.go
++++ b/core/queue/queue.go
+@@ -76,7 +76,7 @@ func (q *Queue) AddListener(listener Listener) {
+ 	q.listeners = append(q.listeners, listener)
+ }
+ 
+-// Broadcast broadcasts message to all event channels.
++// Broadcast broadcasts the message to all event channels.
+ func (q *Queue) Broadcast(message any) {
+ 	go func() {
+ 		q.eventLock.Lock()
+@@ -202,7 +202,7 @@ func (q *Queue) produce() {
+ }
+ 
+ func (q *Queue) produceOne(producer Producer) (string, bool) {
+-	// avoid panic quit the producer, just log it and continue
++	// avoid panic quit the producer, log it and continue
+ 	defer rescue.Recover()
+ 
+ 	return producer.Produce()
+diff --git a/core/stat/internal/cgroup_linux.go b/core/stat/internal/cgroup_linux.go
+index 6ac1985375321988332343ccd12a82754846740f..a95037035591c3248b2f002715e685b46b3c2689 100644
+--- a/core/stat/internal/cgroup_linux.go
++++ b/core/stat/internal/cgroup_linux.go
+@@ -2,6 +2,7 @@ package internal
+ 
+ import (
+ 	"bufio"
++	"errors"
+ 	"fmt"
+ 	"math"
+ 	"os"
+@@ -18,6 +19,7 @@ import (
+ 
+ const (
+ 	cgroupDir   = "/sys/fs/cgroup"
++	cpuMaxFile  = cgroupDir + "/cpu.max"
+ 	cpuStatFile = cgroupDir + "/cpu.stat"
+ 	cpusetFile  = cgroupDir + "/cpuset.cpus.effective"
+ )
+@@ -30,10 +32,9 @@ var (
+ )
+ 
+ type cgroup interface {
+-	cpuQuotaUs() (int64, error)
+-	cpuPeriodUs() (uint64, error)
+-	cpus() ([]uint64, error)
+-	usageAllCpus() (uint64, error)
++	cpuQuota() (float64, error)
++	cpuUsage() (uint64, error)
++	effectiveCpus() (int, error)
+ }
+ 
+ func currentCgroup() (cgroup, error) {
+@@ -48,13 +49,22 @@ type cgroupV1 struct {
+ 	cgroups map[string]string
+ }
+ 
+-func (c *cgroupV1) cpuQuotaUs() (int64, error) {
+-	data, err := iox.ReadText(path.Join(c.cgroups["cpu"], "cpu.cfs_quota_us"))
++func (c *cgroupV1) cpuQuota() (float64, error) {
++	quotaUs, err := c.cpuQuotaUs()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return strconv.ParseInt(data, 10, 64)
++	if quotaUs == -1 {
++		return -1, nil
++	}
++
++	periodUs, err := c.cpuPeriodUs()
++	if err != nil {
++		return 0, err
++	}
++
++	return float64(quotaUs) / float64(periodUs), nil
+ }
+ 
+ func (c *cgroupV1) cpuPeriodUs() (uint64, error) {
+@@ -66,16 +76,16 @@ func (c *cgroupV1) cpuPeriodUs() (uint64, error) {
+ 	return parseUint(data)
+ }
+ 
+-func (c *cgroupV1) cpus() ([]uint64, error) {
+-	data, err := iox.ReadText(path.Join(c.cgroups["cpuset"], "cpuset.cpus"))
++func (c *cgroupV1) cpuQuotaUs() (int64, error) {
++	data, err := iox.ReadText(path.Join(c.cgroups["cpu"], "cpu.cfs_quota_us"))
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return parseUints(data)
++	return strconv.ParseInt(data, 10, 64)
+ }
+ 
+-func (c *cgroupV1) usageAllCpus() (uint64, error) {
++func (c *cgroupV1) cpuUsage() (uint64, error) {
+ 	data, err := iox.ReadText(path.Join(c.cgroups["cpuacct"], "cpuacct.usage"))
+ 	if err != nil {
+ 		return 0, err
+@@ -84,38 +94,53 @@ func (c *cgroupV1) usageAllCpus() (uint64, error) {
+ 	return parseUint(data)
+ }
+ 
++func (c *cgroupV1) effectiveCpus() (int, error) {
++	data, err := iox.ReadText(path.Join(c.cgroups["cpuset"], "cpuset.cpus"))
++	if err != nil {
++		return 0, err
++	}
++
++	cpus, err := parseUints(data)
++	if err != nil {
++		return 0, err
++	}
++
++	return len(cpus), nil
++}
++
+ type cgroupV2 struct {
+ 	cgroups map[string]string
+ }
+ 
+-func (c *cgroupV2) cpuQuotaUs() (int64, error) {
+-	data, err := iox.ReadText(path.Join(cgroupDir, "cpu.cfs_quota_us"))
++func (c *cgroupV2) cpuQuota() (float64, error) {
++	data, err := iox.ReadText(cpuMaxFile)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return strconv.ParseInt(data, 10, 64)
+-}
++	fields := strings.Fields(data)
++	if len(fields) != 2 {
++		return 0, fmt.Errorf("cgroup: bad /sys/fs/cgroup/cpu.max file: %s", data)
++	}
++
++	if fields[0] == "max" {
++		return -1, nil
++	}
+ 
+-func (c *cgroupV2) cpuPeriodUs() (uint64, error) {
+-	data, err := iox.ReadText(path.Join(cgroupDir, "cpu.cfs_period_us"))
++	quotaUs, err := strconv.ParseInt(fields[0], 10, 64)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return parseUint(data)
+-}
+-
+-func (c *cgroupV2) cpus() ([]uint64, error) {
+-	data, err := iox.ReadText(cpusetFile)
++	periodUs, err := strconv.ParseUint(fields[1], 10, 64)
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return parseUints(data)
++	return float64(quotaUs) / float64(periodUs), nil
+ }
+ 
+-func (c *cgroupV2) usageAllCpus() (uint64, error) {
++func (c *cgroupV2) cpuUsage() (uint64, error) {
+ 	usec, err := parseUint(c.cgroups["usage_usec"])
+ 	if err != nil {
+ 		return 0, err
+@@ -124,6 +149,20 @@ func (c *cgroupV2) usageAllCpus() (uint64, error) {
+ 	return usec * uint64(time.Microsecond), nil
+ }
+ 
++func (c *cgroupV2) effectiveCpus() (int, error) {
++	data, err := iox.ReadText(cpusetFile)
++	if err != nil {
++		return 0, err
++	}
++
++	cpus, err := parseUints(data)
++	if err != nil {
++		return 0, err
++	}
++
++	return len(cpus), nil
++}
++
+ func currentCgroupV1() (cgroup, error) {
+ 	cgroupFile := fmt.Sprintf("/proc/%d/cgroup", os.Getpid())
+ 	lines, err := iox.ReadTextLines(cgroupFile, iox.WithoutBlank())
+@@ -200,7 +239,7 @@ func isCgroup2UnifiedMode() bool {
+ func parseUint(s string) (uint64, error) {
+ 	v, err := strconv.ParseInt(s, 10, 64)
+ 	if err != nil {
+-		if err.(*strconv.NumError).Err == strconv.ErrRange {
++		if errors.Is(err, strconv.ErrRange) {
+ 			return 0, nil
+ 		}
+ 
+@@ -225,21 +264,21 @@ func parseUints(val string) ([]uint64, error) {
+ 	for _, r := range cols {
+ 		if strings.Contains(r, "-") {
+ 			fields := strings.SplitN(r, "-", 2)
+-			min, err := parseUint(fields[0])
++			minimum, err := parseUint(fields[0])
+ 			if err != nil {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			max, err := parseUint(fields[1])
++			maximum, err := parseUint(fields[1])
+ 			if err != nil {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			if max < min {
++			if maximum < minimum {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			for i := min; i <= max; i++ {
++			for i := minimum; i <= maximum; i++ {
+ 				if _, ok := ints[i]; !ok {
+ 					ints[i] = lang.Placeholder
+ 					sets = append(sets, i)
+diff --git a/core/stat/internal/cpu_linux.go b/core/stat/internal/cpu_linux.go
+index 6d1173177c66326201387e801635f61d68a0501c..c10196c1f857acca3d41cc02751a1eb68aa8653a 100644
+--- a/core/stat/internal/cpu_linux.go
++++ b/core/stat/internal/cpu_linux.go
+@@ -14,60 +14,28 @@ import (
+ const (
+ 	cpuTicks  = 100
+ 	cpuFields = 8
++	cpuMax    = 1000
++	statFile  = "/proc/stat"
+ )
+ 
+ var (
+ 	preSystem uint64
+ 	preTotal  uint64
+-	quota     float64
++	limit     float64
+ 	cores     uint64
++	noCgroup  bool
+ 	initOnce  sync.Once
+ )
+ 
+-// if /proc not present, ignore the cpu calculation, like wsl linux
+-func initialize() {
+-	cpus, err := cpuSets()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-
+-	cores = uint64(len(cpus))
+-	quota = float64(len(cpus))
+-	cq, err := cpuQuota()
+-	if err == nil {
+-		if cq != -1 {
+-			period, err := cpuPeriod()
+-			if err != nil {
+-				logx.Error(err)
+-				return
+-			}
+-
+-			limit := float64(cq) / float64(period)
+-			if limit < quota {
+-				quota = limit
+-			}
+-		}
+-	}
+-
+-	preSystem, err = systemCpuUsage()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-
+-	preTotal, err = totalCpuUsage()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-}
+-
+ // RefreshCpu refreshes cpu usage and returns.
+ func RefreshCpu() uint64 {
+-	initOnce.Do(initialize)
++	initializeOnce()
+ 
+-	total, err := totalCpuUsage()
++	if noCgroup {
++		return 0
++	}
++
++	total, err := cpuUsage()
+ 	if err != nil {
+ 		return 0
+ 	}
+@@ -81,7 +49,10 @@ func RefreshCpu() uint64 {
+ 	cpuDelta := total - preTotal
+ 	systemDelta := system - preSystem
+ 	if cpuDelta > 0 && systemDelta > 0 {
+-		usage = uint64(float64(cpuDelta*cores*1e3) / (float64(systemDelta) * quota))
++		usage = uint64(float64(cpuDelta*cores*cpuMax) / (float64(systemDelta) * limit))
++		if usage > cpuMax {
++			usage = cpuMax
++		}
+ 	}
+ 	preSystem = system
+ 	preTotal = total
+@@ -89,35 +60,76 @@ func RefreshCpu() uint64 {
+ 	return usage
+ }
+ 
+-func cpuQuota() (int64, error) {
++func cpuQuota() (float64, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return cg.cpuQuotaUs()
++	return cg.cpuQuota()
+ }
+ 
+-func cpuPeriod() (uint64, error) {
++func cpuUsage() (uint64, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return cg.cpuPeriodUs()
++	return cg.cpuUsage()
+ }
+ 
+-func cpuSets() ([]uint64, error) {
++func effectiveCpus() (int, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return cg.cpus()
++	return cg.effectiveCpus()
++}
++
++// if /proc not present, ignore the cpu calculation, like wsl linux
++func initialize() error {
++	cpus, err := effectiveCpus()
++	if err != nil {
++		return err
++	}
++
++	cores = uint64(cpus)
++	limit = float64(cpus)
++	quota, err := cpuQuota()
++	if err == nil && quota > 0 {
++		if quota < limit {
++			limit = quota
++		}
++	}
++
++	preSystem, err = systemCpuUsage()
++	if err != nil {
++		return err
++	}
++
++	preTotal, err = cpuUsage()
++	return err
++}
++
++func initializeOnce() {
++	initOnce.Do(func() {
++		defer func() {
++			if p := recover(); p != nil {
++				noCgroup = true
++				logx.Error(p)
++			}
++		}()
++
++		if err := initialize(); err != nil {
++			noCgroup = true
++			logx.Error(err)
++		}
++	})
+ }
+ 
+ func systemCpuUsage() (uint64, error) {
+-	lines, err := iox.ReadTextLines("/proc/stat", iox.WithoutBlank())
++	lines, err := iox.ReadTextLines(statFile, iox.WithoutBlank())
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -145,12 +157,3 @@ func systemCpuUsage() (uint64, error) {
+ 
+ 	return 0, errors.New("bad stats format")
+ }
+-
+-func totalCpuUsage() (usage uint64, err error) {
+-	var cg cgroup
+-	if cg, err = currentCgroup(); err != nil {
+-		return
+-	}
+-
+-	return cg.usageAllCpus()
+-}
+diff --git a/core/stat/task.go b/core/stat/task.go
+index 637e0b7678c6c90c753ae629baacf5fd4363fb78..203248f236d1b5c7693122cbf4c6457a17d9168b 100644
+--- a/core/stat/task.go
++++ b/core/stat/task.go
+@@ -2,7 +2,7 @@ package stat
+ 
+ import "time"
+ 
+-// A Task is a task that is reported to Metrics.
++// A Task is a task reported to Metrics.
+ type Task struct {
+ 	Drop        bool
+ 	Duration    time.Duration
+diff --git a/core/stores/cache/cacheopt.go b/core/stores/cache/cacheopt.go
+index cc8d459db7ab0062008bd0a5ee71fb1b264308ad..836c12af0d292e054f0281c02c9485ba9ca5ee01 100644
+--- a/core/stores/cache/cacheopt.go
++++ b/core/stores/cache/cacheopt.go
+@@ -8,7 +8,7 @@ const (
+ )
+ 
+ type (
+-	// An Options is used to store the cache options.
++	// Options is used to store the cache options.
+ 	Options struct {
+ 		Expiry         time.Duration
+ 		NotFoundExpiry time.Duration
+diff --git a/core/stores/redis/conf.go b/core/stores/redis/conf.go
+index c54210870ef7f8c51b345318d47d0fce23631bd6..5328757fddc4e9409dd7e7ad9a109593f5b81534 100644
+--- a/core/stores/redis/conf.go
++++ b/core/stores/redis/conf.go
+@@ -47,7 +47,7 @@ func (rc RedisConf) NewRedis() *Redis {
+ 		opts = append(opts, WithTLS())
+ 	}
+ 
+-	return New(rc.Host, opts...)
++	return newRedis(rc.Host, opts...)
+ }
+ 
+ // Validate validates the RedisConf.
+diff --git a/core/stores/redis/redislock.go b/core/stores/redis/redislock.go
+index c740ef3689bd7c596a177ba6aed431c7dacc545d..3eff48282f5ed64314270233f804b560b6dc6338 100644
+--- a/core/stores/redis/redislock.go
++++ b/core/stores/redis/redislock.go
+@@ -2,6 +2,7 @@ package redis
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"math/rand"
+ 	"strconv"
+ 	"sync/atomic"
+@@ -65,7 +66,7 @@ func (rl *RedisLock) AcquireCtx(ctx context.Context) (bool, error) {
+ 	resp, err := rl.store.ScriptRunCtx(ctx, lockScript, []string{rl.key}, []string{
+ 		rl.id, strconv.Itoa(int(seconds)*millisPerSecond + tolerance),
+ 	})
+-	if err == red.Nil {
++	if errors.Is(err, red.Nil) {
+ 		return false, nil
+ 	} else if err != nil {
+ 		logx.Errorf("Error on acquiring lock for %s, %s", rl.key, err.Error())
+diff --git a/core/stores/sqlc/cachedsql.go b/core/stores/sqlc/cachedsql.go
+index 8b81e9254928087d2a1f496908af4491ca9e6ac3..addf3b404b1b0b91565a4ea13425a0477730e4ad 100644
+--- a/core/stores/sqlc/cachedsql.go
++++ b/core/stores/sqlc/cachedsql.go
+@@ -190,6 +190,17 @@ func (cc CachedConn) QueryRowNoCacheCtx(ctx context.Context, v any, q string,
+ 	return cc.db.QueryRowCtx(ctx, v, q, args...)
+ }
+ 
++// QueryRowPartialNoCache unmarshals into v with given statement.
++func (cc CachedConn) QueryRowPartialNoCache(v any, q string, args ...any) error {
++	return cc.QueryRowPartialNoCacheCtx(context.Background(), v, q, args...)
++}
++
++// QueryRowPartialNoCacheCtx unmarshals into v with given statement.
++func (cc CachedConn) QueryRowPartialNoCacheCtx(ctx context.Context, v any, q string,
++	args ...any) error {
++	return cc.db.QueryRowPartialCtx(ctx, v, q, args...)
++}
++
+ // QueryRowsNoCache unmarshals into v with given statement.
+ // It doesn't use cache, because it might cause consistency problem.
+ func (cc CachedConn) QueryRowsNoCache(v any, q string, args ...any) error {
+@@ -203,6 +214,19 @@ func (cc CachedConn) QueryRowsNoCacheCtx(ctx context.Context, v any, q string,
+ 	return cc.db.QueryRowsCtx(ctx, v, q, args...)
+ }
+ 
++// QueryRowsPartialNoCache unmarshals into v with given statement.
++// It doesn't use cache, because it might cause consistency problem.
++func (cc CachedConn) QueryRowsPartialNoCache(v any, q string, args ...any) error {
++	return cc.QueryRowsPartialNoCacheCtx(context.Background(), v, q, args...)
++}
++
++// QueryRowsPartialNoCacheCtx unmarshals into v with given statement.
++// It doesn't use cache, because it might cause consistency problem.
++func (cc CachedConn) QueryRowsPartialNoCacheCtx(ctx context.Context, v any, q string,
++	args ...any) error {
++	return cc.db.QueryRowsPartialCtx(ctx, v, q, args...)
++}
++
+ // SetCache sets v into cache with given key.
+ func (cc CachedConn) SetCache(key string, val any) error {
+ 	return cc.SetCacheCtx(context.Background(), key, val)
+diff --git a/core/stores/sqlx/metrics.go b/core/stores/sqlx/metrics.go
+index 1092c9a201d5087f90d71bd5a0d5b321ca914b7e..0e03f92b056385c01542509ec228a7b750ab2cc3 100644
+--- a/core/stores/sqlx/metrics.go
++++ b/core/stores/sqlx/metrics.go
+@@ -8,7 +8,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/metric"
+ )
+ 
+-const namespace = "mysql_client"
++const namespace = "sql_client"
+ 
+ var (
+ 	metricReqDur = metric.NewHistogramVec(&metric.HistogramVecOpts{
+@@ -41,6 +41,7 @@ var (
+ 
+ type (
+ 	statGetter struct {
++		host      string
+ 		dbName    string
+ 		hash      string
+ 		poolStats func() sql.DBStats
+diff --git a/core/stores/sqlx/mysql.go b/core/stores/sqlx/mysql.go
+index 3c026921e311465a3df6e33377e8d6dfb50b62ce..e7797095a1b4df09b72568a409b9c8eb910400c4 100644
+--- a/core/stores/sqlx/mysql.go
++++ b/core/stores/sqlx/mysql.go
+@@ -13,7 +13,7 @@ const (
+ 
+ // NewMysql returns a mysql connection.
+ func NewMysql(datasource string, opts ...SqlOption) SqlConn {
+-	opts = append(opts, withMysqlAcceptable())
++	opts = append([]SqlOption{withMysqlAcceptable()}, opts...)
+ 	return NewSqlConn(mysqlDriverName, datasource, opts...)
+ }
+ 
+diff --git a/core/stores/sqlx/orm.go b/core/stores/sqlx/orm.go
+index 9924eefc02f0df9a992c3711875da586c152184e..b395f3c525ecb324989671b851dcba71a9454f0e 100644
+--- a/core/stores/sqlx/orm.go
++++ b/core/stores/sqlx/orm.go
+@@ -1,6 +1,7 @@
+ package sqlx
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"reflect"
+ 	"strings"
+@@ -8,7 +9,10 @@ import (
+ 	"github.com/zeromicro/go-zero/core/mapping"
+ )
+ 
+-const tagName = "db"
++const (
++	tagIgnore = "-"
++	tagName   = "db"
++)
+ 
+ var (
+ 	// ErrNotMatchDestination is an error that indicates not matching destination to scan.
+@@ -66,25 +70,20 @@ func getTaggedFieldValueMap(v reflect.Value) (map[string]any, error) {
+ }
+ 
+ func getValueInterface(value reflect.Value) (any, error) {
+-	switch value.Kind() {
+-	case reflect.Ptr:
+-		if !value.CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	if !value.CanAddr() || !value.Addr().CanInterface() {
++		return nil, ErrNotReadableValue
++	}
+ 
+-		if value.IsNil() {
+-			baseValueType := mapping.Deref(value.Type())
+-			value.Set(reflect.New(baseValueType))
+-		}
++	if value.Kind() == reflect.Pointer && value.IsNil() {
++		baseValueType := mapping.Deref(value.Type())
++		value.Set(reflect.New(baseValueType))
++	}
+ 
+-		return value.Interface(), nil
+-	default:
+-		if !value.CanAddr() || !value.Addr().CanInterface() {
+-			return nil, ErrNotReadableValue
+-		}
++	return value.Addr().Interface(), nil
++}
+ 
+-		return value.Addr().Interface(), nil
+-	}
++func isScanFailed(err error) bool {
++	return err != nil && !errors.Is(err, context.DeadlineExceeded)
+ }
+ 
+ func mapStructFieldsIntoSlice(v reflect.Value, columns []string, strict bool) ([]any, error) {
+@@ -248,7 +247,7 @@ func unmarshalRows(v any, scanner rowsScanner, strict bool) error {
+ 			return ErrUnsupportedValueType
+ 		}
+ 
+-		return nil
++		return scanner.Err()
+ 	default:
+ 		return ErrUnsupportedValueType
+ 	}
+@@ -264,13 +263,17 @@ func unwrapFields(v reflect.Value) []reflect.Value {
+ 			continue
+ 		}
+ 
++		childType := indirect.Type().Field(i)
++		if parseTagName(childType) == tagIgnore {
++			continue
++		}
++
+ 		if child.Kind() == reflect.Ptr && child.IsNil() {
+ 			baseValueType := mapping.Deref(child.Type())
+ 			child.Set(reflect.New(baseValueType))
+ 		}
+ 
+ 		child = reflect.Indirect(child)
+-		childType := indirect.Type().Field(i)
+ 		if child.Kind() == reflect.Struct && childType.Anonymous {
+ 			fields = append(fields, unwrapFields(child)...)
+ 		} else {
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 9603af5b3b0857e58348d6408dded4c2399d14c3..4dde5d43f034b896c420caf119b067754cbaac48 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -42,21 +42,6 @@ type (
+ 	// SqlOption defines the method to customize a sql connection.
+ 	SqlOption func(*commonSqlConn)
+ 
+-	// StmtSession interface represents a session that can be used to execute statements.
+-	StmtSession interface {
+-		Close() error
+-		Exec(args ...any) (sql.Result, error)
+-		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
+-		QueryRow(v any, args ...any) error
+-		QueryRowCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowPartial(v any, args ...any) error
+-		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
+-		QueryRows(v any, args ...any) error
+-		QueryRowsCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowsPartial(v any, args ...any) error
+-		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
+-	}
+-
+ 	// thread-safe
+ 	// Because CORBA doesn't support PREPARE, so we need to combine the
+ 	// query arguments into one string and do underlying query without arguments
+@@ -65,7 +50,7 @@ type (
+ 		onError  func(context.Context, error)
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+-		accept   func(error) bool
++		accept   breaker.Acceptable
+ 	}
+ 
+ 	connProvider func() (*sql.DB, error)
+@@ -76,18 +61,6 @@ type (
+ 		Query(query string, args ...any) (*sql.Rows, error)
+ 		QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+ 	}
+-
+-	statement struct {
+-		query string
+-		stmt  *sql.Stmt
+-	}
+-
+-	stmtConn interface {
+-		Exec(args ...any) (sql.Result, error)
+-		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
+-		Query(args ...any) (*sql.Rows, error)
+-		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
+-	}
+ )
+ 
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+@@ -189,8 +162,10 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 		}
+ 
+ 		stmt = statement{
+-			query: query,
+-			stmt:  st,
++			query:  query,
++			stmt:   st,
++			brk:    db.brk,
++			accept: db.acceptable,
+ 		}
+ 		return nil
+ 	}, db.acceptable)
+@@ -311,7 +286,7 @@ func (db *commonSqlConn) acceptable(err error) bool {
+ 
+ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows) error,
+ 	q string, args ...any) (err error) {
+-	var qerr error
++	var scanFailed bool
+ 	err = db.brk.DoWithAcceptable(func() error {
+ 		conn, err := db.connProv()
+ 		if err != nil {
+@@ -320,11 +295,14 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 		}
+ 
+ 		return query(ctx, conn, func(rows *sql.Rows) error {
+-			qerr = scanner(rows)
+-			return qerr
++			e := scanner(rows)
++			if isScanFailed(e) {
++				scanFailed = true
++			}
++			return e
+ 		}, q, args...)
+ 	}, func(err error) bool {
+-		return errors.Is(err, qerr) || db.acceptable(err)
++		return scanFailed || db.acceptable(err)
+ 	})
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+ 		metricReqErr.Inc("queryRows", "breaker")
+@@ -333,87 +311,17 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func (s statement) Close() error {
+-	return s.stmt.Close()
+-}
+-
+-func (s statement) Exec(args ...any) (sql.Result, error) {
+-	return s.ExecCtx(context.Background(), args...)
+-}
+-
+-func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
+-	ctx, span := startSpan(ctx, "Exec")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return execStmt(ctx, s.stmt, s.query, args...)
+-}
+-
+-func (s statement) QueryRow(v any, args ...any) error {
+-	return s.QueryRowCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRow")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowPartial(v any, args ...any) error {
+-	return s.QueryRowPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRows(v any, args ...any) error {
+-	return s.QueryRowsCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRows")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowsPartial(v any, args ...any) error {
+-	return s.QueryRowsPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowsPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+ 	return func(conn *commonSqlConn) {
+-		conn.accept = acceptable
++		if conn.accept == nil {
++			conn.accept = acceptable
++		} else {
++			pre := conn.accept
++			conn.accept = func(err error) bool {
++				return pre(err) || acceptable(err)
++			}
++		}
+ 	}
+ }
+diff --git a/core/stores/sqlx/sqlmanager.go b/core/stores/sqlx/sqlmanager.go
+index db652edc3d3915fabd4b338172af6edfe4d8a6d9..1bcdcf19c47324b88cd4a51c5c0ac1fda2148484 100644
+--- a/core/stores/sqlx/sqlmanager.go
++++ b/core/stores/sqlx/sqlmanager.go
+@@ -1,10 +1,14 @@
+ package sqlx
+ 
+ import (
++	"crypto/sha256"
+ 	"database/sql"
++	"encoding/hex"
+ 	"io"
+ 	"time"
+ 
++	"github.com/go-sql-driver/mysql"
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+@@ -23,6 +27,23 @@ func getCachedSqlConn(driverName, server string) (*sql.DB, error) {
+ 			return nil, err
+ 		}
+ 
++		if driverName != mysqlDriverName {
++			if cfg, e := mysql.ParseDSN(server); e != nil {
++				// if cannot parse, don't collect the metrics
++				logx.Error(e)
++			} else {
++				checksum := sha256.Sum256([]byte(server))
++				connCollector.registerClient(&statGetter{
++					host:   cfg.Addr,
++					dbName: cfg.DBName,
++					hash:   hex.EncodeToString(checksum[:]),
++					poolStats: func() sql.DBStats {
++						return conn.Stats()
++					},
++				})
++			}
++		}
++
+ 		return conn, nil
+ 	})
+ 	if err != nil {
+diff --git a/core/stores/sqlx/stmt.go b/core/stores/sqlx/stmt.go
+index ab688abbd586575e29adab5e81e25fac50e3eaa9..e10a110ccb525da87a9b7e1112d3ca622542fbda 100644
+--- a/core/stores/sqlx/stmt.go
++++ b/core/stores/sqlx/stmt.go
+@@ -3,8 +3,10 @@ package sqlx
+ import (
+ 	"context"
+ 	"database/sql"
++	"errors"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -18,6 +20,145 @@ var (
+ 	logSlowSql    = syncx.ForAtomicBool(true)
+ )
+ 
++type (
++	// StmtSession interface represents a session that can be used to execute statements.
++	StmtSession interface {
++		Close() error
++		Exec(args ...any) (sql.Result, error)
++		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
++		QueryRow(v any, args ...any) error
++		QueryRowCtx(ctx context.Context, v any, args ...any) error
++		QueryRowPartial(v any, args ...any) error
++		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
++		QueryRows(v any, args ...any) error
++		QueryRowsCtx(ctx context.Context, v any, args ...any) error
++		QueryRowsPartial(v any, args ...any) error
++		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
++	}
++
++	statement struct {
++		query  string
++		stmt   *sql.Stmt
++		brk    breaker.Breaker
++		accept breaker.Acceptable
++	}
++
++	stmtConn interface {
++		Exec(args ...any) (sql.Result, error)
++		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
++		Query(args ...any) (*sql.Rows, error)
++		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
++	}
++)
++
++func (s statement) Close() error {
++	return s.stmt.Close()
++}
++
++func (s statement) Exec(args ...any) (sql.Result, error) {
++	return s.ExecCtx(context.Background(), args...)
++}
++
++func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
++	ctx, span := startSpan(ctx, "Exec")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	err = s.brk.DoWithAcceptable(func() error {
++		result, err = execStmt(ctx, s.stmt, s.query, args...)
++		return err
++	}, func(err error) bool {
++		return s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_exec", "breaker")
++	}
++
++	return
++}
++
++func (s statement) QueryRow(v any, args ...any) error {
++	return s.QueryRowCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRow")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowPartial(v any, args ...any) error {
++	return s.QueryRowPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) QueryRows(v any, args ...any) error {
++	return s.QueryRowsCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRows")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowsPartial(v any, args ...any) error {
++	return s.QueryRowsPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowsPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) queryRows(ctx context.Context, scanFn func(any, rowsScanner) error,
++	v any, args ...any) error {
++	var scanFailed bool
++	err := s.brk.DoWithAcceptable(func() error {
++		return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
++			err := scanFn(v, rows)
++			if isScanFailed(err) {
++				scanFailed = true
++			}
++			return err
++		}, s.query, args...)
++	}, func(err error) bool {
++		return scanFailed || s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_queryRows", "breaker")
++	}
++
++	return err
++}
++
+ // DisableLog disables logging of sql statements, includes info and slow logs.
+ func DisableLog() {
+ 	logSql.Set(false)
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index d983077ce4994064a1d4d4862a83360b2449479d..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"fmt"
++
++	"github.com/zeromicro/go-zero/core/breaker"
+ )
+ 
+ type (
+@@ -75,6 +77,7 @@ func (t txSession) PrepareCtx(ctx context.Context, q string) (stmtSession StmtSe
+ 	return statement{
+ 		query: q,
+ 		stmt:  stmt,
++		brk:   breaker.NopBreaker(),
+ 	}, nil
+ }
+ 
+diff --git a/core/trace/vars.go b/core/trace/vars.go
+index d8cee2902c95c64540c2944334616d0eb757601c..33d2e6c9886f1419602cc2df508bcb2e19b93eed 100644
+--- a/core/trace/vars.go
++++ b/core/trace/vars.go
+@@ -4,5 +4,5 @@ import "net/http"
+ 
+ // TraceIdKey is the trace id header.
+ // https://www.w3.org/TR/trace-context/#trace-id
+-// May change it to trace-id afterwards.
++// May change it to trace-id afterward.
+ var TraceIdKey = http.CanonicalHeaderKey("x-trace-id")
+diff --git a/go.mod b/go.mod
+index 1865f9707a2839abffcad6ec90a372c3bf36b862..d98596ac704e53ed7b9ba9eb373a9c80c43f7e95 100644
+--- a/go.mod
++++ b/go.mod
+@@ -4,24 +4,24 @@ go 1.19
+ 
+ require (
+ 	github.com/DATA-DOG/go-sqlmock v1.5.2
+-	github.com/alicebob/miniredis/v2 v2.31.1
+-	github.com/fatih/color v1.16.0
+-	github.com/fullstorydev/grpcurl v1.8.9
+-	github.com/go-sql-driver/mysql v1.7.1
++	github.com/alicebob/miniredis/v2 v2.32.1
++	github.com/fatih/color v1.17.0
++	github.com/fullstorydev/grpcurl v1.9.1
++	github.com/go-sql-driver/mysql v1.8.1
+ 	github.com/golang-jwt/jwt/v4 v4.5.0
+ 	github.com/golang/mock v1.6.0
+ 	github.com/golang/protobuf v1.5.4
+ 	github.com/google/uuid v1.6.0
+-	github.com/jackc/pgx/v5 v5.5.4
+-	github.com/jhump/protoreflect v1.15.6
++	github.com/jackc/pgx/v5 v5.5.5
++	github.com/jhump/protoreflect v1.16.0
+ 	github.com/olekukonko/tablewriter v0.0.5
+-	github.com/pelletier/go-toml/v2 v2.1.1
++	github.com/pelletier/go-toml/v2 v2.2.2
+ 	github.com/prometheus/client_golang v1.18.0
+ 	github.com/redis/go-redis/v9 v9.4.0
+ 	github.com/spaolacci/murmur3 v1.1.0
+ 	github.com/stretchr/testify v1.9.0
+-	go.etcd.io/etcd/api/v3 v3.5.12
+-	go.etcd.io/etcd/client/v3 v3.5.12
++	go.etcd.io/etcd/api/v3 v3.5.13
++	go.etcd.io/etcd/client/v3 v3.5.13
+ 	go.mongodb.org/mongo-driver v1.13.1
+ 	go.opentelemetry.io/otel v1.19.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0
+@@ -33,32 +33,36 @@ require (
+ 	go.opentelemetry.io/otel/trace v1.19.0
+ 	go.uber.org/automaxprocs v1.5.3
+ 	go.uber.org/goleak v1.2.1
+-	golang.org/x/net v0.22.0
+-	golang.org/x/sys v0.18.0
++	golang.org/x/net v0.25.0
++	golang.org/x/sys v0.20.0
+ 	golang.org/x/time v0.5.0
+-	google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80
+-	google.golang.org/grpc v1.62.1
+-	google.golang.org/protobuf v1.33.0
++	google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de
++	google.golang.org/grpc v1.63.2
++	google.golang.org/protobuf v1.34.1
+ 	gopkg.in/cheggaaa/pb.v1 v1.0.28
+ 	gopkg.in/h2non/gock.v1 v1.1.2
+ 	gopkg.in/yaml.v2 v2.4.0
+-	k8s.io/api v0.29.2
+-	k8s.io/apimachinery v0.29.2
+-	k8s.io/client-go v0.29.2
++	k8s.io/api v0.29.3
++	k8s.io/apimachinery v0.29.4
++	k8s.io/client-go v0.29.3
+ 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
+ )
+ 
+ require (
++	filippo.io/edwards25519 v1.1.0 // indirect
+ 	github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302 // indirect
+ 	github.com/beorn7/perks v1.0.1 // indirect
+-	github.com/bufbuild/protocompile v0.8.0 // indirect
++	github.com/bufbuild/protocompile v0.10.0 // indirect
+ 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
+ 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
++	github.com/cncf/xds/go v0.0.0-20231128003011-0fa0005c9caa // indirect
+ 	github.com/coreos/go-semver v0.3.1 // indirect
+ 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
+ 	github.com/davecgh/go-spew v1.1.1 // indirect
+ 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+ 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
++	github.com/envoyproxy/go-control-plane v0.12.0 // indirect
++	github.com/envoyproxy/protoc-gen-validate v1.0.4 // indirect
+ 	github.com/go-logr/logr v1.3.0 // indirect
+ 	github.com/go-logr/stdr v1.2.2 // indirect
+ 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
+@@ -96,22 +100,22 @@ require (
+ 	github.com/xdg-go/scram v1.1.2 // indirect
+ 	github.com/xdg-go/stringprep v1.0.4 // indirect
+ 	github.com/youmark/pkcs8 v0.0.0-20201027041543-1326539a0a0a // indirect
+-	github.com/yuin/gopher-lua v1.1.0 // indirect
+-	go.etcd.io/etcd/client/pkg/v3 v3.5.12 // indirect
++	github.com/yuin/gopher-lua v1.1.1 // indirect
++	go.etcd.io/etcd/client/pkg/v3 v3.5.13 // indirect
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.19.0 // indirect
+ 	go.opentelemetry.io/otel/metric v1.19.0 // indirect
+ 	go.opentelemetry.io/proto/otlp v1.0.0 // indirect
+ 	go.uber.org/atomic v1.10.0 // indirect
+ 	go.uber.org/multierr v1.9.0 // indirect
+ 	go.uber.org/zap v1.24.0 // indirect
+-	golang.org/x/crypto v0.21.0 // indirect
+-	golang.org/x/oauth2 v0.16.0 // indirect
++	golang.org/x/crypto v0.23.0 // indirect
++	golang.org/x/oauth2 v0.17.0 // indirect
+ 	golang.org/x/sync v0.6.0 // indirect
+-	golang.org/x/term v0.18.0 // indirect
+-	golang.org/x/text v0.14.0 // indirect
++	golang.org/x/term v0.20.0 // indirect
++	golang.org/x/text v0.15.0 // indirect
+ 	google.golang.org/appengine v1.6.8 // indirect
+-	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect
+-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
++	google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de // indirect
+ 	gopkg.in/inf.v0 v0.9.1 // indirect
+ 	gopkg.in/yaml.v3 v3.0.1 // indirect
+ 	k8s.io/klog/v2 v2.110.1 // indirect
+diff --git a/go.sum b/go.sum
+index 93b490a2cbfebe9377023010cdb78c751ad9482b..c9e0bf21b2ebdfe8d7a1de87d719f4016c27a62f 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,18 +1,19 @@
++filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
++filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
+ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7OputlJIzU=
+ github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
+-github.com/DmitriyVTitov/size v1.5.0/go.mod h1:le6rNI4CoLQV1b9gzp1+3d7hMAD/uu2QcJ+aYbNgiU0=
+ github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
+ github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302 h1:uvdUDbHQHO85qeSydJtItA4T55Pw6BtAejd0APRJOCE=
+ github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
+-github.com/alicebob/miniredis/v2 v2.31.1 h1:7XAt0uUg3DtwEKW5ZAGa+K7FZV2DdKQo5K/6TTnfX8Y=
+-github.com/alicebob/miniredis/v2 v2.31.1/go.mod h1:UB/T2Uztp7MlFSDakaX1sTXUv5CASoprx0wulRT6HBg=
++github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=
++github.com/alicebob/miniredis/v2 v2.32.1/go.mod h1:AqkLNAfUm0K07J28hnAyyQKf/x0YkCY/g5DCtuL01Mw=
+ github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
+ github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
+ github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
+ github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
+ github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
+-github.com/bufbuild/protocompile v0.8.0 h1:9Kp1q6OkS9L4nM3FYbr8vlJnEwtbpDPQlQOVXfR+78s=
+-github.com/bufbuild/protocompile v0.8.0/go.mod h1:+Etjg4guZoAqzVk2czwEQP12yaxLJ8DxuqCJ9qHdH94=
++github.com/bufbuild/protocompile v0.10.0 h1:+jW/wnLMLxaCEG8AX9lD0bQ5v9h1RUiMKOBOT5ll9dM=
++github.com/bufbuild/protocompile v0.10.0/go.mod h1:G9qQIQo0xZ6Uyj6CMNz0saGmx2so+KONo8/KrELABiY=
+ github.com/cenkalti/backoff/v4 v4.2.1 h1:y4OZtCnogmCPw98Zjyt5a6+QwPLGkiQsYW5oUqylYbM=
+ github.com/cenkalti/backoff/v4 v4.2.1/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
+ github.com/cespare/xxhash/v2 v2.2.0 h1:DC2CZ1Ep5Y4k3ZQ899DldepgrayRUGE6BBZ/cd9Cj44=
+@@ -20,6 +21,8 @@ github.com/cespare/xxhash/v2 v2.2.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XL
+ github.com/chzyer/logex v1.1.10/go.mod h1:+Ywpsq7O8HXn0nuIou7OrIPyXbp3wmkHB+jjWRnGsAI=
+ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5PlCu98SY8svDHJxuZscDgtXS6KTTbou5AhLI=
+ github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
++github.com/cncf/xds/go v0.0.0-20231128003011-0fa0005c9caa h1:jQCWAUqqlij9Pgj2i/PB79y4KOPYVyFYdROxgaCwdTQ=
++github.com/cncf/xds/go v0.0.0-20231128003011-0fa0005c9caa/go.mod h1:x/1Gn8zydmfq8dk6e9PdstVsDgu9RuyIIJqAaF//0IM=
+ github.com/coreos/go-semver v0.3.1 h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr4=
+ github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03VsM8rvUec=
+ github.com/coreos/go-systemd/v22 v22.5.0 h1:RrqgGjYQKalulkV8NGVIfkXQf6YYmOyiJKk8iXXhfZs=
+@@ -32,10 +35,14 @@ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/r
+ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
+ github.com/emicklei/go-restful/v3 v3.11.0 h1:rAQeMHw1c7zTmncogyy8VvRZwtkmkZ4FxERmMY4rD+g=
+ github.com/emicklei/go-restful/v3 v3.11.0/go.mod h1:6n3XBCmQQb25CM2LCACGz8ukIrRry+4bhvbpWn3mrbc=
+-github.com/fatih/color v1.16.0 h1:zmkK9Ngbjj+K0yRhTVONQh1p/HknKYSlNT+vZCzyokM=
+-github.com/fatih/color v1.16.0/go.mod h1:fL2Sau1YI5c0pdGEVCbKQbLXB6edEj1ZgiY4NijnWvE=
+-github.com/fullstorydev/grpcurl v1.8.9 h1:JMvZXK8lHDGyLmTQ0ZdGDnVVGuwjbpaumf8p42z0d+c=
+-github.com/fullstorydev/grpcurl v1.8.9/go.mod h1:PNNKevV5VNAV2loscyLISrEnWQI61eqR0F8l3bVadAA=
++github.com/envoyproxy/go-control-plane v0.12.0 h1:4X+VP1GHd1Mhj6IB5mMeGbLCleqxjletLK6K0rbxyZI=
++github.com/envoyproxy/go-control-plane v0.12.0/go.mod h1:ZBTaoJ23lqITozF0M6G4/IragXCQKCnYbmlmtHvwRG0=
++github.com/envoyproxy/protoc-gen-validate v1.0.4 h1:gVPz/FMfvh57HdSJQyvBtF00j8JU4zdyUgIUNhlgg0A=
++github.com/envoyproxy/protoc-gen-validate v1.0.4/go.mod h1:qys6tmnRsYrQqIhm2bvKZH4Blx/1gTIZ2UKVY1M+Yew=
++github.com/fatih/color v1.17.0 h1:GlRw1BRJxkpqUCBKzKOw098ed57fEsKeNjpTe3cSjK4=
++github.com/fatih/color v1.17.0/go.mod h1:YZ7TlrGPkiz6ku9fK3TLD/pl3CpsiFyu8N92HLgmosI=
++github.com/fullstorydev/grpcurl v1.9.1 h1:YxX1aCcCc4SDBQfj9uoWcTLe8t4NWrZe1y+mk83BQgo=
++github.com/fullstorydev/grpcurl v1.9.1/go.mod h1:i8gKLIC6s93WdU3LSmkE5vtsCxyRmihUj5FK1cNW5EM=
+ github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
+ github.com/go-logr/logr v1.3.0 h1:2y3SDp0ZXuc6/cjLSZ+Q3ir+QB9T/iG5yYRXqsagWSY=
+ github.com/go-logr/logr v1.3.0/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
+@@ -48,8 +55,8 @@ github.com/go-openapi/jsonreference v0.20.2/go.mod h1:Bl1zwGIM8/wsvqjsOQLJ/SH+En
+ github.com/go-openapi/swag v0.22.3/go.mod h1:UzaqsxGiab7freDnrUUra0MwWfN/q7tE4j+VcZ0yl14=
+ github.com/go-openapi/swag v0.22.4 h1:QLMzNJnMGPRNDCbySlcj1x01tzU8/9LTTL9hZZZogBU=
+ github.com/go-openapi/swag v0.22.4/go.mod h1:UzaqsxGiab7freDnrUUra0MwWfN/q7tE4j+VcZ0yl14=
+-github.com/go-sql-driver/mysql v1.7.1 h1:lUIinVbN1DY0xBg0eMOzmmtGoHwWBbvnWubQUrtU8EI=
+-github.com/go-sql-driver/mysql v1.7.1/go.mod h1:OXbVy3sEdcQ2Doequ6Z5BW6fXNQTmx+9S1MCJN5yJMI=
++github.com/go-sql-driver/mysql v1.8.1 h1:LedoTUt/eveggdHS9qUFC1EFSa8bU2+1pZjSRpvNJ1Y=
++github.com/go-sql-driver/mysql v1.8.1/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
+ github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 h1:tfuBGBXKqDEevZMzYi5KSi8KkcZtzBcTgAUUtapy0OI=
+ github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
+ github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
+@@ -57,7 +64,6 @@ github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69
+ github.com/golang-jwt/jwt/v4 v4.5.0 h1:7cYmW1XlMY7h7ii7UhUyChSgS5wUJEnm9uZVTGqOWzg=
+ github.com/golang-jwt/jwt/v4 v4.5.0/go.mod h1:m21LjoU+eqJr34lmDMbreY2eSTRJ1cv77w39/MY0Ch0=
+ github.com/golang/glog v1.2.0 h1:uCdmnmatrKCgMBlM4rMuJZWOkPDqdbZPnrMXDY4gI68=
+-github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
+ github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+ github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+ github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=
+@@ -88,12 +94,12 @@ github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsI
+ github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
+ github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a h1:bbPeKD0xmW/Y25WS6cokEszi5g+S0QxI/d45PkRi7Nk=
+ github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=
+-github.com/jackc/pgx/v5 v5.5.4 h1:Xp2aQS8uXButQdnCMWNmvx6UysWQQC+u1EoizjguY+8=
+-github.com/jackc/pgx/v5 v5.5.4/go.mod h1:ez9gk+OAat140fv9ErkZDYFWmXLfV+++K0uAOiwgm1A=
++github.com/jackc/pgx/v5 v5.5.5 h1:amBjrZVmksIdNjxGW/IiIMzxMKZFelXbUoPNb+8sjQw=
++github.com/jackc/pgx/v5 v5.5.5/go.mod h1:ez9gk+OAat140fv9ErkZDYFWmXLfV+++K0uAOiwgm1A=
+ github.com/jackc/puddle/v2 v2.2.1 h1:RhxXJtFG022u4ibrCSMSiu5aOq1i77R3OHKNJj77OAk=
+ github.com/jackc/puddle/v2 v2.2.1/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
+-github.com/jhump/protoreflect v1.15.6 h1:WMYJbw2Wo+KOWwZFvgY0jMoVHM6i4XIvRs2RcBj5VmI=
+-github.com/jhump/protoreflect v1.15.6/go.mod h1:jCHoyYQIJnaabEYnbGwyo9hUqfyUMTbJw/tAut5t97E=
++github.com/jhump/protoreflect v1.16.0 h1:54fZg+49widqXYQ0b+usAFHbMkBGR4PpXrsHc8+TBDg=
++github.com/jhump/protoreflect v1.16.0/go.mod h1:oYPd7nPvcBw/5wlDfm/AVmU9zH9BgqGCI469pGxfj/8=
+ github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
+ github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
+ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
+@@ -139,8 +145,8 @@ github.com/onsi/ginkgo/v2 v2.13.0 h1:0jY9lJquiL8fcf3M4LAXN5aMlS/b2BV86HFFPCPMgE4
+ github.com/onsi/gomega v1.29.0 h1:KIA/t2t5UBzoirT4H9tsML45GEbo3ouUnBHsCfD2tVg=
+ github.com/openzipkin/zipkin-go v0.4.2 h1:zjqfqHjUpPmB3c1GlCvvgsM1G4LkvqQbBDueDOCg/jA=
+ github.com/openzipkin/zipkin-go v0.4.2/go.mod h1:ZeVkFjuuBiSy13y8vpSDCjMi9GoI3hPpCJSBx/EYFhY=
+-github.com/pelletier/go-toml/v2 v2.1.1 h1:LWAJwfNvjQZCFIDKWYQaM62NcYeYViCmWIwmOStowAI=
+-github.com/pelletier/go-toml/v2 v2.1.1/go.mod h1:tJU2Z3ZkXwnxa4DPO899bsyIoywizdUvyaeZurnPPDc=
++github.com/pelletier/go-toml/v2 v2.2.2 h1:aYUidT7k73Pcl9nb2gScu7NSrKCSHIDE89b3+6Wq+LM=
++github.com/pelletier/go-toml/v2 v2.2.2/go.mod h1:1t835xjRzz80PqgE6HHgN2JOsmgYu/h4qDAS4n929Rs=
+ github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+@@ -165,6 +171,7 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
+ github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+ github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+ github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
++github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
+ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+ github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+@@ -186,14 +193,14 @@ github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9de
+ github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+ github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
+ github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
+-github.com/yuin/gopher-lua v1.1.0 h1:BojcDhfyDWgU2f2TOzYK/g5p2gxMrku8oupLDqlnSqE=
+-github.com/yuin/gopher-lua v1.1.0/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
+-go.etcd.io/etcd/api/v3 v3.5.12 h1:W4sw5ZoU2Juc9gBWuLk5U6fHfNVyY1WC5g9uiXZio/c=
+-go.etcd.io/etcd/api/v3 v3.5.12/go.mod h1:Ot+o0SWSyT6uHhA56al1oCED0JImsRiU9Dc26+C2a+4=
+-go.etcd.io/etcd/client/pkg/v3 v3.5.12 h1:EYDL6pWwyOsylrQyLp2w+HkQ46ATiOvoEdMarindU2A=
+-go.etcd.io/etcd/client/pkg/v3 v3.5.12/go.mod h1:seTzl2d9APP8R5Y2hFL3NVlD6qC/dOT+3kvrqPyTas4=
+-go.etcd.io/etcd/client/v3 v3.5.12 h1:v5lCPXn1pf1Uu3M4laUE2hp/geOTc5uPcYYsNe1lDxg=
+-go.etcd.io/etcd/client/v3 v3.5.12/go.mod h1:tSbBCakoWmmddL+BKVAJHa9km+O/E+bumDe9mSbPiqw=
++github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
++github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
++go.etcd.io/etcd/api/v3 v3.5.13 h1:8WXU2/NBge6AUF1K1gOexB6e07NgsN1hXK0rSTtgSp4=
++go.etcd.io/etcd/api/v3 v3.5.13/go.mod h1:gBqlqkcMMZMVTMm4NDZloEVJzxQOQIls8splbqBDa0c=
++go.etcd.io/etcd/client/pkg/v3 v3.5.13 h1:RVZSAnWWWiI5IrYAXjQorajncORbS0zI48LQlE2kQWg=
++go.etcd.io/etcd/client/pkg/v3 v3.5.13/go.mod h1:XxHT4u1qU12E2+po+UVPrEeL94Um6zL58ppuJWXSAB8=
++go.etcd.io/etcd/client/v3 v3.5.13 h1:o0fHTNJLeO0MyVbc7I3fsCf6nrOqn5d+diSarKnB2js=
++go.etcd.io/etcd/client/v3 v3.5.13/go.mod h1:cqiAeY8b5DEEcpxvgWKsbLIWNM/8Wy2xJSDMtioMcoI=
+ go.mongodb.org/mongo-driver v1.13.1 h1:YIc7HTYsKndGK4RFzJ3covLz1byri52x0IoMB0Pt/vk=
+ go.mongodb.org/mongo-driver v1.13.1/go.mod h1:wcDf1JBCXy2mOW0bWHwO/IOYqdca1MPCwDtFu/Z9+eo=
+ go.opentelemetry.io/otel v1.19.0 h1:MuS/TNf4/j4IXsZuJegVzI1cwut7Qc00344rgH7p8bs=
+@@ -234,8 +241,8 @@ golang.org/x/crypto v0.0.0-20200302210943-78000ba7a073/go.mod h1:LzIPMQfyMNhhGPh
+ golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+ golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
+ golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d/go.mod h1:IxCIyHEi3zRg3s0A5j5BB6A9Jmi73HwBIUl50j+osU4=
+-golang.org/x/crypto v0.21.0 h1:X31++rzVUdKhX5sWmSOFZxx8UW/ldWx55cbf08iNAMA=
+-golang.org/x/crypto v0.21.0/go.mod h1:0BP7YvVV9gBbVKyeTG0Gyn+gZm94bibOW5BjDEYAOMs=
++golang.org/x/crypto v0.23.0 h1:dIJU/v2J8Mdglj/8rJ6UUOM3Zc9zLZxVZwwxMooUSAI=
++golang.org/x/crypto v0.23.0/go.mod h1:CKFgDieR+mRhux2Lsu27y0fO304Db0wZe70UKqHu0v8=
+ golang.org/x/mod v0.2.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.3.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.4.2/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+@@ -248,10 +255,10 @@ golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v
+ golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4/go.mod h1:p54w0d4576C0XHj96bSt6lcn1PtDYWL6XObtHCRCNQM=
+ golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+ golang.org/x/net v0.0.0-20220722155237-a158d28d115b/go.mod h1:XRhObCWvk6IyKnWLug+ECip1KBveYUHfp+8e9klMJ9c=
+-golang.org/x/net v0.22.0 h1:9sGLhx7iRIHEiX0oAJ3MRZMUCElJgy7Br1nO+AMN3Tc=
+-golang.org/x/net v0.22.0/go.mod h1:JKghWKKOSdJwpW2GEx0Ja7fmaKnMsbu+MWVZTokSYmg=
+-golang.org/x/oauth2 v0.16.0 h1:aDkGMBSYxElaoP81NpoUoz2oo2R2wHdZpGToUxfyQrQ=
+-golang.org/x/oauth2 v0.16.0/go.mod h1:hqZ+0LWXsiVoZpeld6jVt06P3adbS2Uu911W1SsJv2o=
++golang.org/x/net v0.25.0 h1:d/OCCoBEUq33pjydKrGQhw7IlUPI2Oylr+8qLx49kac=
++golang.org/x/net v0.25.0/go.mod h1:JkAGAh7GEvH74S6FOH42FLoXpXbE/aqXSrIQjXgsiwM=
++golang.org/x/oauth2 v0.17.0 h1:6m3ZPmLEFdVxKKWnKq4VqZ60gutO35zm+zrAHVmHyDQ=
++golang.org/x/oauth2 v0.17.0/go.mod h1:OzPDGQiuQMguemayvdylqddI7qcD9lnSDb+1FiwQ5HA=
+ golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+@@ -272,20 +279,20 @@ golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBc
+ golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+-golang.org/x/sys v0.18.0 h1:DBdB3niSjOA/O0blCZBqDefyWNYveAYMNF1Wum0DYQ4=
+-golang.org/x/sys v0.18.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
++golang.org/x/sys v0.20.0 h1:Od9JTbYCk261bKm4M/mw7AklTlFYIa0bIp9BgSm1S8Y=
++golang.org/x/sys v0.20.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+ golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+ golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
+-golang.org/x/term v0.18.0 h1:FcHjZXDMxI8mM3nwhX9HlKop4C0YQvCVCdwYl2wOtE8=
+-golang.org/x/term v0.18.0/go.mod h1:ILwASektA3OnRv7amZ1xhE/KTR+u50pbXfZ03+6Nx58=
++golang.org/x/term v0.20.0 h1:VnkxpohqXaOBYJtBmEppKUG6mXpi+4O6purfc2+sMhw=
++golang.org/x/term v0.20.0/go.mod h1:8UkIAJTvZgivsXaD6/pH6U9ecQzZ45awqEOzuCvwpFY=
+ golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+ golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
+ golang.org/x/text v0.3.8/go.mod h1:E6s5w1FMmriuDzIBO73fBruAKo1PCIq6d2Q6DHfQ8WQ=
+ golang.org/x/text v0.7.0/go.mod h1:mrYo+phRRbMaCq/xk9113O4dZlRixOauAjOtrjsXDZ8=
+-golang.org/x/text v0.14.0 h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ=
+-golang.org/x/text v0.14.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
++golang.org/x/text v0.15.0 h1:h1V/4gjBv8v9cjcR6+AR5+/cIYK5N/WAgiv4xlsEtAk=
++golang.org/x/text v0.15.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
+ golang.org/x/time v0.5.0 h1:o7cqy6amK/52YcAKIPlM3a+Fpj35zvRj2TP+e1xFSfk=
+ golang.org/x/time v0.5.0/go.mod h1:3BpzKBy/shNhVucY/MWOyx10tF3SFh9QdLuxbVysPQM=
+ golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
+@@ -301,18 +308,18 @@ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8T
+ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ google.golang.org/appengine v1.6.8 h1:IhEN5q69dyKagZPYMSdIjS2HqprW324FRQZJcGqPAsM=
+ google.golang.org/appengine v1.6.8/go.mod h1:1jJ3jBArFh5pcgW8gCtRJnepW8FzD1V44FJffLiz/Ds=
+-google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 h1:KAeGQVN3M9nD0/bQXnr/ClcEMJ968gUXJQ9pwfSynuQ=
+-google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80/go.mod h1:cc8bqMqtv9gMOr0zHg2Vzff5ULhhL2IXP4sbcn32Dro=
+-google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80 h1:Lj5rbfG876hIAYFjqiJnPHfhXbv+nzTWfm04Fg/XSVU=
+-google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80/go.mod h1:4jWUdICTdgc3Ibxmr8nAJiiLHwQBY0UI0XZcEMaFKaA=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 h1:AjyfHzEPEFp/NpvfN5g+KDla3EMojjhRVZc1i7cj+oM=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80/go.mod h1:PAREbraiVEVGVdTZsVWjSbbTtSyGbAgIIvni8a8CD5s=
+-google.golang.org/grpc v1.62.1 h1:B4n+nfKzOICUXMgyrNd19h/I9oH0L1pizfk1d4zSgTk=
+-google.golang.org/grpc v1.62.1/go.mod h1:IWTG0VlJLCh1SkC58F7np9ka9mx/WNkjl4PGJaiq+QE=
++google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de h1:F6qOa9AZTYJXOUEr4jDysRDLrm4PHePlge4v4TGAlxY=
++google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:VUhTRKeHn9wwcdrk73nvdC9gF178Tzhmt/qyaFcPLSo=
++google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de h1:jFNzHPIeuzhdRwVhbZdiym9q0ory/xY3sA+v2wPg8I0=
++google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:5iCWqnniDlqZHrd3neWVTOwvh/v6s3232omMecelax8=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de h1:cZGRis4/ot9uVm639a+rHCUaG0JJHEsdyzSQTMX+suY=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:H4O17MA/PE9BsGx3w+a+W2VOLLD1Qf7oJneAoU6WktY=
++google.golang.org/grpc v1.63.2 h1:MUeiw1B2maTVZthpU5xvASfTh3LDbxHd6IJ6QQVU+xM=
++google.golang.org/grpc v1.63.2/go.mod h1:WAX/8DgncnokcFUldAxq7GeB5DXHDbMF+lLvDomNkRA=
+ google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
+ google.golang.org/protobuf v1.26.0/go.mod h1:9q0QmTI4eRPtz6boOQmLYwt+qCgq0jsYwAQnmE0givc=
+-google.golang.org/protobuf v1.33.0 h1:uNO2rsAINq/JlFpSdYEKIZ0uKD/R9cpdv0T+yoGwGmI=
+-google.golang.org/protobuf v1.33.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
++google.golang.org/protobuf v1.34.1 h1:9ddQBjfCyZPOHPUiPxpYESBLc+T8P3E+Vo4IbKZgFWg=
++google.golang.org/protobuf v1.34.1/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
+ gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
+@@ -328,12 +335,12 @@ gopkg.in/yaml.v2 v2.4.0/go.mod h1:RDklbk79AGWmwhnvt/jBztapEOGDOx6ZbXqjP6csGnQ=
+ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+-k8s.io/api v0.29.2 h1:hBC7B9+MU+ptchxEqTNW2DkUosJpp1P+Wn6YncZ474A=
+-k8s.io/api v0.29.2/go.mod h1:sdIaaKuU7P44aoyyLlikSLayT6Vb7bvJNCX105xZXY0=
+-k8s.io/apimachinery v0.29.2 h1:EWGpfJ856oj11C52NRCHuU7rFDwxev48z+6DSlGNsV8=
+-k8s.io/apimachinery v0.29.2/go.mod h1:6HVkd1FwxIagpYrHSwJlQqZI3G9LfYWRPAkUvLnXTKU=
+-k8s.io/client-go v0.29.2 h1:FEg85el1TeZp+/vYJM7hkDlSTFZ+c5nnK44DJ4FyoRg=
+-k8s.io/client-go v0.29.2/go.mod h1:knlvFZE58VpqbQpJNbCbctTVXcd35mMyAAwBdpt4jrA=
++k8s.io/api v0.29.3 h1:2ORfZ7+bGC3YJqGpV0KSDDEVf8hdGQ6A03/50vj8pmw=
++k8s.io/api v0.29.3/go.mod h1:y2yg2NTyHUUkIoTC+phinTnEa3KFM6RZ3szxt014a80=
++k8s.io/apimachinery v0.29.4 h1:RaFdJiDmuKs/8cm1M6Dh1Kvyh59YQFDcFuFTSmXes6Q=
++k8s.io/apimachinery v0.29.4/go.mod h1:i3FJVwhvSp/6n8Fl4K97PJEP8C+MM+aoDq4+ZJBf70Y=
++k8s.io/client-go v0.29.3 h1:R/zaZbEAxqComZ9FHeQwOh3Y1ZUs7FaHKZdQtIc2WZg=
++k8s.io/client-go v0.29.3/go.mod h1:tkDisCvgPfiRpxGnOORfkljmS+UrW+WtXAy2fTvXJB0=
+ k8s.io/klog/v2 v2.110.1 h1:U/Af64HJf7FcwMcXyKm2RPM22WZzyR7OSpYj5tg3cL0=
+ k8s.io/klog/v2 v2.110.1/go.mod h1:YGtd1984u+GgbuZ7e08/yBuAfKLSO0+uR1Fhi6ExXjo=
+ k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 h1:aVUu9fTY98ivBPKR9Y5w/AuzbMm96cd3YHRTU83I780=
+diff --git a/internal/devserver/config.go b/internal/devserver/config.go
+index 1c0950d0c99203f427c34a625a6a29ed8c55ae16..aa11b2fd6d0258a8e6be143d3e5ff585349e0e9a 100644
+--- a/internal/devserver/config.go
++++ b/internal/devserver/config.go
+@@ -2,11 +2,12 @@ package devserver
+ 
+ // Config is config for inner http server.
+ type Config struct {
+-	Enabled       bool   `json:",default=true"`
+-	Host          string `json:",optional"`
+-	Port          int    `json:",default=6060"`
+-	MetricsPath   string `json:",default=/metrics"`
+-	HealthPath    string `json:",default=/healthz"`
+-	EnableMetrics bool   `json:",default=true"`
+-	EnablePprof   bool   `json:",default=true"`
++	Enabled        bool   `json:",default=true"`
++	Host           string `json:",optional"`
++	Port           int    `json:",default=6060"`
++	MetricsPath    string `json:",default=/metrics"`
++	HealthPath     string `json:",default=/healthz"`
++	EnableMetrics  bool   `json:",default=true"`
++	EnablePprof    bool   `json:",default=true"`
++	HealthRespInfo string `json:",default=OK"`
+ }
+diff --git a/internal/devserver/server.go b/internal/devserver/server.go
+index 4b34f56c7e1ef81b54260439e633109448a34644..57293adc88e9a59aa2dbb55720bee41682168419 100644
+--- a/internal/devserver/server.go
++++ b/internal/devserver/server.go
+@@ -32,13 +32,13 @@ func NewServer(config Config) *Server {
+ 	}
+ }
+ 
+-func (s *Server) addRoutes() {
++func (s *Server) addRoutes(c Config) {
+ 	// route path, routes list
+ 	s.handleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+ 		_ = json.NewEncoder(w).Encode(s.routes)
+ 	})
+ 	// health
+-	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler())
++	s.handleFunc(s.config.HealthPath, health.CreateHttpHandler(c.HealthRespInfo))
+ 
+ 	// metrics
+ 	if s.config.EnableMetrics {
+@@ -62,8 +62,8 @@ func (s *Server) handleFunc(pattern string, handler http.HandlerFunc) {
+ }
+ 
+ // StartAsync start inner http server background.
+-func (s *Server) StartAsync() {
+-	s.addRoutes()
++func (s *Server) StartAsync(c Config) {
++	s.addRoutes(c)
+ 	threading.GoSafe(func() {
+ 		addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+ 		logx.Infof("Starting dev http server at %s", addr)
+@@ -78,7 +78,7 @@ func StartAgent(c Config) {
+ 	once.Do(func() {
+ 		if c.Enabled {
+ 			s := NewServer(c)
+-			s.StartAsync()
++			s.StartAsync(c)
+ 		}
+ 	})
+ }
+diff --git a/internal/health/health.go b/internal/health/health.go
+index 7c238d9cdc1b4ae71882e4fe3deb932789605ac9..4711ee5067d6812b970d38e4deafb010346b52e6 100644
+--- a/internal/health/health.go
++++ b/internal/health/health.go
+@@ -44,10 +44,10 @@ func AddProbe(probe Probe) {
+ }
+ 
+ // CreateHttpHandler create health http handler base on given probe.
+-func CreateHttpHandler() http.HandlerFunc {
++func CreateHttpHandler(healthRespInfo string) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, _ *http.Request) {
+ 		if defaultHealthManager.IsReady() {
+-			_, _ = w.Write([]byte("OK"))
++			_, _ = w.Write([]byte(healthRespInfo))
+ 		} else {
+ 			http.Error(w, "Service Unavailable\n"+defaultHealthManager.verboseInfo(),
+ 				http.StatusServiceUnavailable)
+@@ -111,6 +111,10 @@ func (p *comboHealthManager) IsReady() bool {
+ 	p.mu.Lock()
+ 	defer p.mu.Unlock()
+ 
++	if len(p.probes) == 0 {
++		return false
++	}
++
+ 	for _, probe := range p.probes {
+ 		if !probe.IsReady() {
+ 			return false
+diff --git a/readme-cn.md b/readme-cn.md
+index 067e79df5f223db2332aa9e10c72996d8f9eff58..5aba0b22a5061e6529e12d362e97571e5405bc57 100644
+--- a/readme-cn.md
++++ b/readme-cn.md
+@@ -302,6 +302,7 @@ go-zero 已被许多公司用于生产部署，接入场景如在线教育、电
+ >98. 上海同犀智能科技有限公司
+ >99. 新华三技术有限公司
+ >100. 上海邑脉科技有限公司
++>101. 上海巨瓴科技有限公司
+ 
+ 如果贵公司也已使用 go-zero，欢迎在 [登记地址](https://github.com/zeromicro/go-zero/issues/602) 登记，仅仅为了推广，不做其它用途。
+ 
+diff --git a/rest/config.go b/rest/config.go
+index ece29bfd837cae46560f60432f3903cbd0bf7c6a..eb5fdb0ba2340ce12951dbb5092f268cde99ee8e 100644
+--- a/rest/config.go
++++ b/rest/config.go
+@@ -53,7 +53,7 @@ type (
+ 		MaxBytes int64  `json:",default=1048576"`
+ 		// milliseconds
+ 		Timeout      int64         `json:",default=3000"`
+-		CpuThreshold int64         `json:",default=900,range=[0:1000]"`
++		CpuThreshold int64         `json:",default=900,range=[0:1000)"`
+ 		Signature    SignatureConf `json:",optional"`
+ 		// There are default values for all the items in Middlewares.
+ 		Middlewares MiddlewaresConf
+diff --git a/rest/handler/prometheushandler.go b/rest/handler/prometheushandler.go
+index 86676d4c0c94a8b1e4a2f4c7f4e7197599c8c840..6abf4dee3a8b55c8a05463538389133ce5506d08 100644
+--- a/rest/handler/prometheushandler.go
++++ b/rest/handler/prometheushandler.go
+@@ -18,7 +18,7 @@ var (
+ 		Name:      "duration_ms",
+ 		Help:      "http server requests duration(ms).",
+ 		Labels:    []string{"path", "method"},
+-		Buckets:   []float64{5, 10, 25, 50, 100, 250, 500, 1000},
++		Buckets:   []float64{5, 10, 25, 50, 100, 250, 500, 750, 1000},
+ 	})
+ 
+ 	metricServerReqCodeTotal = metric.NewCounterVec(&metric.CounterVecOpts{
+diff --git a/tools/goctl/Dockerfile b/tools/goctl/Dockerfile
+index ec4e2bda5833cb39132eebda002d60e6a63081f9..37e990ae3072e973aaae9db58b981301e7caca22 100644
+--- a/tools/goctl/Dockerfile
++++ b/tools/goctl/Dockerfile
+@@ -35,6 +35,5 @@ LABEL org.opencontainers.image.description="A cloud-native Go microservices fram
+ LABEL org.opencontainers.image.licenses="MIT"
+ LABEL org.opencontainers.image.source="https://github.com/zeromicro/go-zero"
+ LABEL org.opencontainers.image.title="goctl (cli)"
+-LABEL org.opencontainers.image.version="v1.6.3"
+ 
+ ENTRYPOINT ["/usr/local/bin/goctl"]
+diff --git a/tools/goctl/Makefile b/tools/goctl/Makefile
+index 14a725e5528e7ee80de0b49f9c678dba4a8fdc1a..f7b92d3d4b7668a9d3743d0e218a745110f99f6f 100644
+--- a/tools/goctl/Makefile
++++ b/tools/goctl/Makefile
+@@ -1,18 +1,18 @@
+ build:
+ 	go build -ldflags="-s -w" goctl.go
+-	$(if $(shell command -v upx), upx goctl)
++	$(if $(shell command -v upx || which upx), upx goctl)
+ 
+ mac:
+ 	GOOS=darwin go build -ldflags="-s -w" -o goctl-darwin goctl.go
+-	$(if $(shell command -v upx), upx goctl-darwin)
++	$(if $(shell command -v upx || which upx), upx goctl-darwin)
+ 
+ win:
+ 	GOOS=windows go build -ldflags="-s -w" -o goctl.exe goctl.go
+-	$(if $(shell command -v upx), upx goctl.exe)
++	$(if $(shell command -v upx || which upx), upx goctl.exe)
+ 
+ linux:
+ 	GOOS=linux go build -ldflags="-s -w" -o goctl-linux goctl.go
+-	$(if $(shell command -v upx), upx goctl-linux)
++	$(if $(shell command -v upx || which upx), upx goctl-linux)
+ 
+ image:
+ 	docker build --rm --platform linux/amd64 -t kevinwan/goctl:$(version) .
+diff --git a/tools/goctl/api/gogen/genhandlers.go b/tools/goctl/api/gogen/genhandlers.go
+index fa1093ec18fcac3247784742392fe042bf71499b..4611be4d7ea2d8d3da6c7e21f7009777ff1ed484 100644
+--- a/tools/goctl/api/gogen/genhandlers.go
++++ b/tools/goctl/api/gogen/genhandlers.go
+@@ -18,19 +18,6 @@ const defaultLogicPackage = "logic"
+ //go:embed handler.tpl
+ var handlerTemplate string
+ 
+-type handlerInfo struct {
+-	PkgName            string
+-	ImportPackages     string
+-	ImportHttpxPackage string
+-	HandlerName        string
+-	RequestType        string
+-	LogicName          string
+-	LogicType          string
+-	Call               string
+-	HasResp            bool
+-	HasRequest         bool
+-}
+-
+ func genHandler(dir, rootPkg string, cfg *config.Config, group spec.Group, route spec.Route) error {
+ 	handler := getHandlerName(route)
+ 	handlerPath := getHandlerFolderPath(group, route)
+@@ -40,23 +27,6 @@ func genHandler(dir, rootPkg string, cfg *config.Config, group spec.Group, route
+ 		handler = strings.Title(handler)
+ 		logicName = pkgName
+ 	}
+-
+-	return doGenToFile(dir, handler, cfg, group, route, handlerInfo{
+-		PkgName:        pkgName,
+-		ImportPackages: genHandlerImports(group, route, rootPkg),
+-		HandlerName:    handler,
+-		RequestType:    util.Title(route.RequestTypeName()),
+-		LogicName:      logicName,
+-		LogicType:      strings.Title(getLogicName(route)),
+-		Call:           strings.Title(strings.TrimSuffix(handler, "Handler")),
+-		HasResp:        len(route.ResponseTypeName()) > 0,
+-		HasRequest:     len(route.RequestTypeName()) > 0,
+-	})
+-}
+-
+-func doGenToFile(dir, handler string, cfg *config.Config, group spec.Group,
+-	route spec.Route, handleObj handlerInfo,
+-) error {
+ 	filename, err := format.FileNamingFormat(cfg.NamingFormat, handler)
+ 	if err != nil {
+ 		return err
+@@ -70,7 +40,19 @@ func doGenToFile(dir, handler string, cfg *config.Config, group spec.Group,
+ 		category:        category,
+ 		templateFile:    handlerTemplateFile,
+ 		builtinTemplate: handlerTemplate,
+-		data:            handleObj,
++		data: map[string]any{
++			"PkgName":        pkgName,
++			"ImportPackages": genHandlerImports(group, route, rootPkg),
++			"HandlerName":    handler,
++			"RequestType":    util.Title(route.RequestTypeName()),
++			"LogicName":      logicName,
++			"LogicType":      strings.Title(getLogicName(route)),
++			"Call":           strings.Title(strings.TrimSuffix(handler, "Handler")),
++			"HasResp":        len(route.ResponseTypeName()) > 0,
++			"HasRequest":     len(route.RequestTypeName()) > 0,
++			"HasDoc":         len(route.JoinedDoc()) > 0,
++			"Doc":            getDoc(route.JoinedDoc()),
++		},
+ 	})
+ }
+ 
+diff --git a/tools/goctl/api/gogen/genlogic.go b/tools/goctl/api/gogen/genlogic.go
+index 287804956fa5a9b2df5ac7a57b4e8f03c0501245..e162eeb642226f22e1e09a3c950c2277cff3ddc5 100644
+--- a/tools/goctl/api/gogen/genlogic.go
++++ b/tools/goctl/api/gogen/genlogic.go
+@@ -62,7 +62,7 @@ func genLogicByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group,
+ 		category:        category,
+ 		templateFile:    logicTemplateFile,
+ 		builtinTemplate: logicTemplate,
+-		data: map[string]string{
++		data: map[string]any{
+ 			"pkgName":      subDir[strings.LastIndex(subDir, "/")+1:],
+ 			"imports":      imports,
+ 			"logic":        strings.Title(logic),
+@@ -70,6 +70,8 @@ func genLogicByRoute(dir, rootPkg string, cfg *config.Config, group spec.Group,
+ 			"responseType": responseString,
+ 			"returnString": returnString,
+ 			"request":      requestString,
++			"hasDoc":       len(route.JoinedDoc()) > 0,
++			"doc":          getDoc(route.JoinedDoc()),
+ 		},
+ 	})
+ }
+diff --git a/tools/goctl/api/gogen/genroutes.go b/tools/goctl/api/gogen/genroutes.go
+index 8243d5e4e619084d12ef0bcca8af94e53cbf5fde..528cad4a0a05f3bf335283071d381a77481bb8df 100644
+--- a/tools/goctl/api/gogen/genroutes.go
++++ b/tools/goctl/api/gogen/genroutes.go
+@@ -71,6 +71,7 @@ type (
+ 		method  string
+ 		path    string
+ 		handler string
++		doc     string
+ 	}
+ )
+ 
+@@ -92,13 +93,24 @@ func genRoutes(dir, rootPkg string, cfg *config.Config, api *spec.ApiSpec) error
+ 		var gbuilder strings.Builder
+ 		gbuilder.WriteString("[]rest.Route{")
+ 		for _, r := range g.routes {
+-			fmt.Fprintf(&gbuilder, `
+-		{
+-			Method:  %s,
+-			Path:    "%s",
+-			Handler: %s,
+-		},`,
+-				r.method, r.path, r.handler)
++			var routeString string
++			if len(r.doc) > 0 {
++				routeString = fmt.Sprintf(`
++					{
++						%s
++						Method:  %s,
++						Path:    "%s",
++						Handler: %s,
++					},`, getDoc(r.doc), r.method, r.path, r.handler)
++			} else {
++				routeString = fmt.Sprintf(`
++					{
++						Method:  %s,
++						Path:    "%s",
++						Handler: %s,
++					},`, r.method, r.path, r.handler)
++			}
++			fmt.Fprint(&gbuilder, routeString)
+ 		}
+ 
+ 		var jwt string
+@@ -239,6 +251,7 @@ func getRoutes(api *spec.ApiSpec) ([]group, error) {
+ 				method:  mapping[r.Method],
+ 				path:    r.Path,
+ 				handler: handler,
++				doc:     r.JoinedDoc(),
+ 			})
+ 		}
+ 
+diff --git a/tools/goctl/api/gogen/handler.tpl b/tools/goctl/api/gogen/handler.tpl
+index a6480a2314f4e75d1f8228651e1fbe6748fba370..fce5acc2d157658bd14a628a10338d8a44d2bb4d 100644
+--- a/tools/goctl/api/gogen/handler.tpl
++++ b/tools/goctl/api/gogen/handler.tpl
+@@ -7,6 +7,7 @@ import (
+ 	{{.ImportPackages}}
+ )
+ 
++{{if .HasDoc}}{{.Doc}}{{end}}
+ func {{.HandlerName}}(svcCtx *svc.ServiceContext) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		{{if .HasRequest}}var req types.{{.RequestType}}
+diff --git a/tools/goctl/api/gogen/logic.tpl b/tools/goctl/api/gogen/logic.tpl
+index 7c0432371027957e1867809116fe7018d5fcd42f..94611c577b29d670d33df883ca18bdaa2240b2c6 100644
+--- a/tools/goctl/api/gogen/logic.tpl
++++ b/tools/goctl/api/gogen/logic.tpl
+@@ -10,6 +10,7 @@ type {{.logic}} struct {
+ 	svcCtx *svc.ServiceContext
+ }
+ 
++{{if .hasDoc}}{{.doc}}{{end}}
+ func New{{.logic}}(ctx context.Context, svcCtx *svc.ServiceContext) *{{.logic}} {
+ 	return &{{.logic}}{
+ 		Logger: logx.WithContext(ctx),
+diff --git a/tools/goctl/api/gogen/util.go b/tools/goctl/api/gogen/util.go
+index 948b1ee9722f48e8a75fcdda42df4c398064a14a..5a9bc6c89cbdf634bb31d3c125a2b660fe3f3417 100644
+--- a/tools/goctl/api/gogen/util.go
++++ b/tools/goctl/api/gogen/util.go
+@@ -181,3 +181,11 @@ func golangExpr(ty spec.Type, pkg ...string) string {
+ 
+ 	return ""
+ }
++
++func getDoc(doc string) string {
++	if len(doc) == 0 {
++		return ""
++	}
++
++	return "// " + strings.Trim(doc, "\"")
++}
+diff --git a/tools/goctl/cmd/root.go b/tools/goctl/cmd/root.go
+index c19b9c7b7a62c01bbaa8e0be7523a36a7699fa3a..5cbfa4cc091bc63d17407a5d9d3e9c7505402461 100644
+--- a/tools/goctl/cmd/root.go
++++ b/tools/goctl/cmd/root.go
+@@ -13,6 +13,7 @@ import (
+ 	"github.com/withfig/autocomplete-tools/integrations/cobra"
+ 	"github.com/zeromicro/go-zero/tools/goctl/api"
+ 	"github.com/zeromicro/go-zero/tools/goctl/bug"
++	"github.com/zeromicro/go-zero/tools/goctl/config"
+ 	"github.com/zeromicro/go-zero/tools/goctl/docker"
+ 	"github.com/zeromicro/go-zero/tools/goctl/env"
+ 	"github.com/zeromicro/go-zero/tools/goctl/gateway"
+@@ -113,7 +114,7 @@ func init() {
+ 
+ 	rootCmd.SetUsageTemplate(usageTpl)
+ 	rootCmd.AddCommand(api.Cmd, bug.Cmd, docker.Cmd, kube.Cmd, env.Cmd, gateway.Cmd, model.Cmd)
+-	rootCmd.AddCommand(migrate.Cmd, quickstart.Cmd, rpc.Cmd, tpl.Cmd, upgrade.Cmd)
++	rootCmd.AddCommand(migrate.Cmd, quickstart.Cmd, rpc.Cmd, tpl.Cmd, upgrade.Cmd, config.Cmd)
+ 	rootCmd.Command.AddCommand(cobracompletefig.CreateCompletionSpecCommand())
+ 	rootCmd.MustInit()
+ }
+diff --git a/tools/goctl/config/cmd.go b/tools/goctl/config/cmd.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..474c6340bd94553c69cea1af6464e0a21b2d4b27
+--- /dev/null
++++ b/tools/goctl/config/cmd.go
+@@ -0,0 +1,59 @@
++package config
++
++import (
++	"fmt"
++	"os"
++
++	"github.com/spf13/cobra"
++	"github.com/zeromicro/go-zero/tools/goctl/internal/cobrax"
++	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
++)
++
++var (
++	// Cmd describes a bug command.
++	Cmd = cobrax.NewCommand("config")
++
++	initCmd  = cobrax.NewCommand("init", cobrax.WithRunE(runConfigInit))
++	cleanCmd = cobrax.NewCommand("clean", cobrax.WithRunE(runConfigClean))
++)
++
++func init() {
++	Cmd.AddCommand(initCmd, cleanCmd)
++}
++
++func runConfigInit(*cobra.Command, []string) error {
++	wd, err := os.Getwd()
++	if err != nil {
++		return err
++	}
++
++	cfgFile, err := getConfigPath(wd)
++	if err != nil {
++		return err
++	}
++	if pathx.FileExists(cfgFile) {
++		fmt.Printf("%s already exists, path: %s\n", configFile, cfgFile)
++		return nil
++	}
++
++	err = os.WriteFile(cfgFile, defaultConfig, 0644)
++	if err != nil {
++		return err
++	}
++	fmt.Printf("%s generated in %s\n", configFile, cfgFile)
++	return nil
++}
++
++func runConfigClean(*cobra.Command, []string) error {
++	wd, err := os.Getwd()
++	if err != nil {
++		return err
++	}
++
++	cfgFile, err := getConfigPath(wd)
++	if err != nil {
++		return err
++	}
++
++	return pathx.RemoveIfExist(cfgFile)
++}
+diff --git a/tools/goctl/config/config.go b/tools/goctl/config/config.go
+index 49e800754f0c4e1e8e3960889b97a940efbded43..f14caa16a953c9ff0740a8a5f622986834bde6a2 100644
+--- a/tools/goctl/config/config.go
++++ b/tools/goctl/config/config.go
+@@ -1,25 +1,71 @@
+ package config
+ 
+ import (
++	_ "embed"
+ 	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
+ 	"strings"
++
++	"github.com/zeromicro/go-zero/tools/goctl/util/ctx"
++	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
++	"gopkg.in/yaml.v2"
++)
++
++const (
++	// DefaultFormat defines a default naming style
++	DefaultFormat = "gozero"
++	configFile    = "goctl.yaml"
+ )
+ 
+-// DefaultFormat defines a default naming style
+-const DefaultFormat = "gozero"
++var (
++	//go:embed default.yaml
++	defaultConfig []byte
++
++	ExternalConfig *External
++)
+ 
+ // Config defines the file naming style
+-type Config struct {
+-	// NamingFormat is used to define the naming format of the generated file name.
+-	// just like time formatting, you can specify the formatting style through the
+-	// two format characters go, and zero. for example: snake format you can
+-	// define as go_zero, camel case format you can it is defined as goZero,
+-	// and even split characters can be specified, such as go#zero. in theory,
+-	// any combination can be used, but the prerequisite must meet the naming conventions
+-	// of each operating system file name.
+-	// Note: NamingFormat is based on snake or camel string
+-	NamingFormat string `yaml:"namingFormat"`
+-}
++type (
++	Config struct {
++		// NamingFormat is used to define the naming format of the generated file name.
++		// just like time formatting, you can specify the formatting style through the
++		// two format characters go, and zero. for example: snake format you can
++		// define as go_zero, camel case format you can it is defined as goZero,
++		// and even split characters can be specified, such as go#zero. in theory,
++		// any combination can be used, but the prerequisite must meet the naming conventions
++		// of each operating system file name.
++		// Note: NamingFormat is based on snake or camel string
++		NamingFormat string `yaml:"namingFormat"`
++	}
++
++	External struct {
++		// Model is the configuration for the model code generation.
++		Model Model `yaml:"model,omitempty"`
++	}
++
++	// Model defines the configuration for the model code generation.
++	Model struct {
++		// TypesMap: custom Data Type Mapping Table.
++		TypesMap map[string]ModelTypeMapOption `yaml:"types_map,omitempty" `
++	}
++
++	// ModelTypeMapOption custom Type Options.
++	ModelTypeMapOption struct {
++		// Type: valid when not using UnsignedType and NullType.
++		Type string `yaml:"type"`
++
++		// UnsignedType: valid when not using  NullType.
++		UnsignedType string `yaml:"unsigned_type,omitempty"`
++
++		// NullType: priority use.
++		NullType string `yaml:"null_type,omitempty"`
++
++		// Pkg defines the package of the custom type.
++		Pkg string `yaml:"pkg,omitempty"`
++	}
++)
+ 
+ // NewConfig creates an instance for Config
+ func NewConfig(format string) (*Config, error) {
+@@ -31,6 +77,58 @@ func NewConfig(format string) (*Config, error) {
+ 	return cfg, err
+ }
+ 
++func init() {
++	var cfg External
++	err := loadConfig(&cfg)
++	if err != nil {
++		fmt.Println(err.Error())
++	} else {
++		ExternalConfig = &cfg
++	}
++}
++
++func loadConfig(cfg *External) error {
++	wd, err := os.Getwd()
++	if err != nil {
++		return err
++	}
++
++	cfgFile, err := getConfigPath(wd)
++	if err != nil {
++		return err
++	}
++	var content []byte
++	if pathx.FileExists(cfgFile) {
++		content, err = os.ReadFile(cfgFile)
++		if err != nil {
++			return err
++		}
++	}
++	if len(content) == 0 {
++		content = append(content, defaultConfig...)
++	}
++	return yaml.Unmarshal(content, cfg)
++}
++
++// getConfigPath returns the configuration file path, but not create the file.
++func getConfigPath(workDir string) (string, error) {
++	abs, err := filepath.Abs(workDir)
++	if err != nil {
++		return "", err
++	}
++
++	err = pathx.MkdirIfNotExist(abs)
++	if err != nil {
++		return "", err
++	}
++
++	projectCtx, err := ctx.Prepare(abs)
++	if err != nil {
++		return "", err
++	}
++	return filepath.Join(projectCtx.Dir, configFile), nil
++}
++
+ func validate(cfg *Config) error {
+ 	if len(strings.TrimSpace(cfg.NamingFormat)) == 0 {
+ 		return errors.New("missing namingFormat")
+diff --git a/tools/goctl/config/default.yaml b/tools/goctl/config/default.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..6da7fa6b52d2bf951e00242345e18fbffb82f7b8
+--- /dev/null
++++ b/tools/goctl/config/default.yaml
+@@ -0,0 +1,157 @@
++model:
++  types_map:
++    bigint:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    dec:
++      null_type: sql.NullFloat64
++      type: float64
++    decimal:
++      null_type: sql.NullFloat64
++      type: float64
++    double:
++      null_type: sql.NullFloat64
++      type: float64
++    float:
++      null_type: sql.NullFloat64
++      type: float64
++    float4:
++      null_type: sql.NullFloat64
++      type: float64
++    float8:
++      null_type: sql.NullFloat64
++      type: float64
++    int:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    int1:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    int2:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    int3:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    int4:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    int8:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    integer:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    mediumint:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    middleint:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    smallint:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    tinyint:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    date:
++      null_type: sql.NullTime
++      type: time.Time
++    datetime:
++      null_type: sql.NullTime
++      type: time.Time
++    timestamp:
++      null_type: sql.NullTime
++      type: time.Time
++    time:
++      null_type: sql.NullString
++      type: string
++    year:
++      null_type: sql.NullInt64
++      type: int64
++      unsigned_type: uint64
++    bit:
++      null_type: sql.NullByte
++      type: byte
++      unsigned_type: byte
++    bool:
++      null_type: sql.NullBool
++      type: bool
++    boolean:
++      null_type: sql.NullBool
++      type: bool
++    char:
++      null_type: sql.NullString
++      type: string
++    varchar:
++      null_type: sql.NullString
++      type: string
++    nvarchar:
++      null_type: sql.NullString
++      type: string
++    nchar:
++      null_type: sql.NullString
++      type: string
++    character:
++      null_type: sql.NullString
++      type: string
++    longvarchar:
++      null_type: sql.NullString
++      type: string
++    linestring:
++      null_type: sql.NullString
++      type: string
++    multilinestring:
++      null_type: sql.NullString
++      type: string
++    binary:
++      null_type: sql.NullString
++      type: string
++    varbinary:
++      null_type: sql.NullString
++      type: string
++    tinytext:
++      null_type: sql.NullString
++      type: string
++    text:
++      null_type: sql.NullString
++      type: string
++    mediumtext:
++      null_type: sql.NullString
++      type: string
++    longtext:
++      null_type: sql.NullString
++      type: string
++    enum:
++      null_type: sql.NullString
++      type: string
++    set:
++      null_type: sql.NullString
++      type: string
++    json:
++      null_type: sql.NullString
++      type: string
++    blob:
++      null_type: sql.NullString
++      type: string
++    longblob:
++      null_type: sql.NullString
++      type: string
++    mediumblob:
++      null_type: sql.NullString
++      type: string
++    tinyblob:
++      null_type: sql.NullString
++      type: string
+diff --git a/tools/goctl/go.mod b/tools/goctl/go.mod
+index ca72403d3e87de50d0e337c931660df701a19775..e6d784e6825a344a46939caf578383f8abffac7b 100644
+--- a/tools/goctl/go.mod
++++ b/tools/goctl/go.mod
+@@ -6,7 +6,7 @@ require (
+ 	github.com/DATA-DOG/go-sqlmock v1.5.2
+ 	github.com/emicklei/proto v1.13.2
+ 	github.com/fatih/structtag v1.2.0
+-	github.com/go-sql-driver/mysql v1.7.1
++	github.com/go-sql-driver/mysql v1.8.1
+ 	github.com/gookit/color v1.5.4
+ 	github.com/iancoleman/strcase v0.3.0
+ 	github.com/spf13/cobra v1.8.0
+@@ -15,15 +15,16 @@ require (
+ 	github.com/withfig/autocomplete-tools/integrations/cobra v1.2.1
+ 	github.com/zeromicro/antlr v0.0.1
+ 	github.com/zeromicro/ddl-parser v1.0.5
+-	github.com/zeromicro/go-zero v1.6.3
++	github.com/zeromicro/go-zero v1.6.4
+ 	golang.org/x/text v0.14.0
+-	google.golang.org/grpc v1.62.1
++	google.golang.org/grpc v1.63.2
+ 	google.golang.org/protobuf v1.33.0
+ )
+ 
+ require (
++	filippo.io/edwards25519 v1.1.0 // indirect
+ 	github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302 // indirect
+-	github.com/alicebob/miniredis/v2 v2.31.1 // indirect
++	github.com/alicebob/miniredis/v2 v2.32.1 // indirect
+ 	github.com/antlr/antlr4/runtime/Go/antlr v0.0.0-20210521184019-c5ad59b459ec // indirect
+ 	github.com/beorn7/perks v1.0.1 // indirect
+ 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
+@@ -41,7 +42,7 @@ require (
+ 	github.com/go-openapi/swag v0.22.4 // indirect
+ 	github.com/gogo/protobuf v1.3.2 // indirect
+ 	github.com/golang/mock v1.6.0 // indirect
+-	github.com/golang/protobuf v1.5.3 // indirect
++	github.com/golang/protobuf v1.5.4 // indirect
+ 	github.com/google/gnostic-models v0.6.8 // indirect
+ 	github.com/google/go-cmp v0.6.0 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+@@ -50,7 +51,7 @@ require (
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+ 	github.com/jackc/pgpassfile v1.0.0 // indirect
+ 	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
+-	github.com/jackc/pgx/v5 v5.5.3 // indirect
++	github.com/jackc/pgx/v5 v5.5.5 // indirect
+ 	github.com/jackc/puddle/v2 v2.2.1 // indirect
+ 	github.com/josharian/intern v1.0.0 // indirect
+ 	github.com/json-iterator/go v1.1.12 // indirect
+@@ -63,7 +64,7 @@ require (
+ 	github.com/modern-go/reflect2 v1.0.2 // indirect
+ 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+ 	github.com/openzipkin/zipkin-go v0.4.2 // indirect
+-	github.com/pelletier/go-toml/v2 v2.1.1 // indirect
++	github.com/pelletier/go-toml/v2 v2.2.0 // indirect
+ 	github.com/pmezard/go-difflib v1.0.0 // indirect
+ 	github.com/prometheus/client_golang v1.18.0 // indirect
+ 	github.com/prometheus/client_model v0.5.0 // indirect
+@@ -72,10 +73,10 @@ require (
+ 	github.com/redis/go-redis/v9 v9.4.0 // indirect
+ 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+ 	github.com/xo/terminfo v0.0.0-20210125001918-ca9a967f8778 // indirect
+-	github.com/yuin/gopher-lua v1.1.0 // indirect
+-	go.etcd.io/etcd/api/v3 v3.5.12 // indirect
+-	go.etcd.io/etcd/client/pkg/v3 v3.5.12 // indirect
+-	go.etcd.io/etcd/client/v3 v3.5.12 // indirect
++	github.com/yuin/gopher-lua v1.1.1 // indirect
++	go.etcd.io/etcd/api/v3 v3.5.13 // indirect
++	go.etcd.io/etcd/client/pkg/v3 v3.5.13 // indirect
++	go.etcd.io/etcd/client/v3 v3.5.13 // indirect
+ 	go.opentelemetry.io/otel v1.19.0 // indirect
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0 // indirect
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.19.0 // indirect
+@@ -91,23 +92,23 @@ require (
+ 	go.uber.org/automaxprocs v1.5.3 // indirect
+ 	go.uber.org/multierr v1.9.0 // indirect
+ 	go.uber.org/zap v1.24.0 // indirect
+-	golang.org/x/crypto v0.19.0 // indirect
+-	golang.org/x/net v0.21.0 // indirect
+-	golang.org/x/oauth2 v0.16.0 // indirect
++	golang.org/x/crypto v0.22.0 // indirect
++	golang.org/x/net v0.24.0 // indirect
++	golang.org/x/oauth2 v0.17.0 // indirect
+ 	golang.org/x/sync v0.6.0 // indirect
+-	golang.org/x/sys v0.17.0 // indirect
+-	golang.org/x/term v0.17.0 // indirect
++	golang.org/x/sys v0.19.0 // indirect
++	golang.org/x/term v0.19.0 // indirect
+ 	golang.org/x/time v0.5.0 // indirect
+ 	google.golang.org/appengine v1.6.8 // indirect
+-	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect
+-	google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80 // indirect
+-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
++	google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de // indirect
++	google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de // indirect
+ 	gopkg.in/inf.v0 v0.9.1 // indirect
+ 	gopkg.in/yaml.v2 v2.4.0 // indirect
+ 	gopkg.in/yaml.v3 v3.0.1 // indirect
+-	k8s.io/api v0.29.2 // indirect
+-	k8s.io/apimachinery v0.29.2 // indirect
+-	k8s.io/client-go v0.29.2 // indirect
++	k8s.io/api v0.29.3 // indirect
++	k8s.io/apimachinery v0.29.3 // indirect
++	k8s.io/client-go v0.29.3 // indirect
+ 	k8s.io/klog/v2 v2.110.1 // indirect
+ 	k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 // indirect
+ 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
+diff --git a/tools/goctl/go.sum b/tools/goctl/go.sum
+index 00e8858008cae865d5ae66a04927e5904ba2deb2..a8a223f59814b684aaf65ee83ab503544bb45781 100644
+--- a/tools/goctl/go.sum
++++ b/tools/goctl/go.sum
+@@ -1,11 +1,12 @@
++filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
++filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
+ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7OputlJIzU=
+ github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
+-github.com/DmitriyVTitov/size v1.5.0/go.mod h1:le6rNI4CoLQV1b9gzp1+3d7hMAD/uu2QcJ+aYbNgiU0=
+ github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
+ github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302 h1:uvdUDbHQHO85qeSydJtItA4T55Pw6BtAejd0APRJOCE=
+ github.com/alicebob/gopher-json v0.0.0-20230218143504-906a9b012302/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
+-github.com/alicebob/miniredis/v2 v2.31.1 h1:7XAt0uUg3DtwEKW5ZAGa+K7FZV2DdKQo5K/6TTnfX8Y=
+-github.com/alicebob/miniredis/v2 v2.31.1/go.mod h1:UB/T2Uztp7MlFSDakaX1sTXUv5CASoprx0wulRT6HBg=
++github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=
++github.com/alicebob/miniredis/v2 v2.32.1/go.mod h1:AqkLNAfUm0K07J28hnAyyQKf/x0YkCY/g5DCtuL01Mw=
+ github.com/antlr/antlr4/runtime/Go/antlr v0.0.0-20210521184019-c5ad59b459ec h1:EEyRvzmpEUZ+I8WmD5cw/vY8EqhambkOqy5iFr0908A=
+ github.com/antlr/antlr4/runtime/Go/antlr v0.0.0-20210521184019-c5ad59b459ec/go.mod h1:F7bn7fEU90QkQ3tnmaTx3LTKLEDqnwWODIYppRQ5hnY=
+ github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
+@@ -51,20 +52,19 @@ github.com/go-openapi/jsonreference v0.20.2/go.mod h1:Bl1zwGIM8/wsvqjsOQLJ/SH+En
+ github.com/go-openapi/swag v0.22.3/go.mod h1:UzaqsxGiab7freDnrUUra0MwWfN/q7tE4j+VcZ0yl14=
+ github.com/go-openapi/swag v0.22.4 h1:QLMzNJnMGPRNDCbySlcj1x01tzU8/9LTTL9hZZZogBU=
+ github.com/go-openapi/swag v0.22.4/go.mod h1:UzaqsxGiab7freDnrUUra0MwWfN/q7tE4j+VcZ0yl14=
+-github.com/go-sql-driver/mysql v1.7.1 h1:lUIinVbN1DY0xBg0eMOzmmtGoHwWBbvnWubQUrtU8EI=
+-github.com/go-sql-driver/mysql v1.7.1/go.mod h1:OXbVy3sEdcQ2Doequ6Z5BW6fXNQTmx+9S1MCJN5yJMI=
++github.com/go-sql-driver/mysql v1.8.1 h1:LedoTUt/eveggdHS9qUFC1EFSa8bU2+1pZjSRpvNJ1Y=
++github.com/go-sql-driver/mysql v1.8.1/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
+ github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 h1:tfuBGBXKqDEevZMzYi5KSi8KkcZtzBcTgAUUtapy0OI=
+ github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
+ github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
+ github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
+ github.com/golang/glog v1.2.0 h1:uCdmnmatrKCgMBlM4rMuJZWOkPDqdbZPnrMXDY4gI68=
+-github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
+ github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+ github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+ github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=
+ github.com/golang/protobuf v1.5.2/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
+-github.com/golang/protobuf v1.5.3 h1:KhyjKVUg7Usr/dYsdSqoFveMYd5ko72D+zANwlG1mmg=
+-github.com/golang/protobuf v1.5.3/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/gnostic-models v0.6.8 h1:yo/ABAfM5IMRsS1VnXjTBvUb61tFIHozhlYvRgGre9I=
+ github.com/google/gnostic-models v0.6.8/go.mod h1:5n7qKqH0f5wFt+aWF8CW6pZLLNOfYuF5OpfBSENuI8U=
+ github.com/google/go-cmp v0.5.5/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+@@ -90,8 +90,8 @@ github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsI
+ github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
+ github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a h1:bbPeKD0xmW/Y25WS6cokEszi5g+S0QxI/d45PkRi7Nk=
+ github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=
+-github.com/jackc/pgx/v5 v5.5.3 h1:Ces6/M3wbDXYpM8JyyPD57ivTtJACFZJd885pdIaV2s=
+-github.com/jackc/pgx/v5 v5.5.3/go.mod h1:ez9gk+OAat140fv9ErkZDYFWmXLfV+++K0uAOiwgm1A=
++github.com/jackc/pgx/v5 v5.5.5 h1:amBjrZVmksIdNjxGW/IiIMzxMKZFelXbUoPNb+8sjQw=
++github.com/jackc/pgx/v5 v5.5.5/go.mod h1:ez9gk+OAat140fv9ErkZDYFWmXLfV+++K0uAOiwgm1A=
+ github.com/jackc/puddle/v2 v2.2.1 h1:RhxXJtFG022u4ibrCSMSiu5aOq1i77R3OHKNJj77OAk=
+ github.com/jackc/puddle/v2 v2.2.1/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=
+ github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
+@@ -129,8 +129,8 @@ github.com/onsi/ginkgo/v2 v2.13.0 h1:0jY9lJquiL8fcf3M4LAXN5aMlS/b2BV86HFFPCPMgE4
+ github.com/onsi/gomega v1.29.0 h1:KIA/t2t5UBzoirT4H9tsML45GEbo3ouUnBHsCfD2tVg=
+ github.com/openzipkin/zipkin-go v0.4.2 h1:zjqfqHjUpPmB3c1GlCvvgsM1G4LkvqQbBDueDOCg/jA=
+ github.com/openzipkin/zipkin-go v0.4.2/go.mod h1:ZeVkFjuuBiSy13y8vpSDCjMi9GoI3hPpCJSBx/EYFhY=
+-github.com/pelletier/go-toml/v2 v2.1.1 h1:LWAJwfNvjQZCFIDKWYQaM62NcYeYViCmWIwmOStowAI=
+-github.com/pelletier/go-toml/v2 v2.1.1/go.mod h1:tJU2Z3ZkXwnxa4DPO899bsyIoywizdUvyaeZurnPPDc=
++github.com/pelletier/go-toml/v2 v2.2.0 h1:QLgLl2yMN7N+ruc31VynXs1vhMZa7CeHHejIeBAsoHo=
++github.com/pelletier/go-toml/v2 v2.2.0/go.mod h1:1t835xjRzz80PqgE6HHgN2JOsmgYu/h4qDAS4n929Rs=
+ github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+@@ -157,6 +157,7 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
+ github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+ github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+ github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
++github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
+ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+ github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+@@ -173,20 +174,20 @@ github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9de
+ github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
+ github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
+ github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
+-github.com/yuin/gopher-lua v1.1.0 h1:BojcDhfyDWgU2f2TOzYK/g5p2gxMrku8oupLDqlnSqE=
+-github.com/yuin/gopher-lua v1.1.0/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
++github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
++github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
+ github.com/zeromicro/antlr v0.0.1 h1:CQpIn/dc0pUjgGQ81y98s/NGOm2Hfru2NNio2I9mQgk=
+ github.com/zeromicro/antlr v0.0.1/go.mod h1:nfpjEwFR6Q4xGDJMcZnCL9tEfQRgszMwu3rDz2Z+p5M=
+ github.com/zeromicro/ddl-parser v1.0.5 h1:LaVqHdzMTjasua1yYpIYaksxKqRzFrEukj2Wi2EbWaQ=
+ github.com/zeromicro/ddl-parser v1.0.5/go.mod h1:ISU/8NuPyEpl9pa17Py9TBPetMjtsiHrb9f5XGiYbo8=
+-github.com/zeromicro/go-zero v1.6.3 h1:OL0NnHD5LdRNDolfcK9vUkJt7K8TcBE3RkzfM8poOVw=
+-github.com/zeromicro/go-zero v1.6.3/go.mod h1:XZL435ZxVi9MSXXtw2MRQhHgx6OoX3++MRMOE9xU70c=
+-go.etcd.io/etcd/api/v3 v3.5.12 h1:W4sw5ZoU2Juc9gBWuLk5U6fHfNVyY1WC5g9uiXZio/c=
+-go.etcd.io/etcd/api/v3 v3.5.12/go.mod h1:Ot+o0SWSyT6uHhA56al1oCED0JImsRiU9Dc26+C2a+4=
+-go.etcd.io/etcd/client/pkg/v3 v3.5.12 h1:EYDL6pWwyOsylrQyLp2w+HkQ46ATiOvoEdMarindU2A=
+-go.etcd.io/etcd/client/pkg/v3 v3.5.12/go.mod h1:seTzl2d9APP8R5Y2hFL3NVlD6qC/dOT+3kvrqPyTas4=
+-go.etcd.io/etcd/client/v3 v3.5.12 h1:v5lCPXn1pf1Uu3M4laUE2hp/geOTc5uPcYYsNe1lDxg=
+-go.etcd.io/etcd/client/v3 v3.5.12/go.mod h1:tSbBCakoWmmddL+BKVAJHa9km+O/E+bumDe9mSbPiqw=
++github.com/zeromicro/go-zero v1.6.4 h1:GvZXxxwl1Lby/gIHxHwN/ZNmXl1WFJa1DvoVgqgttUs=
++github.com/zeromicro/go-zero v1.6.4/go.mod h1:dQ39Zoz20/6x/SUhFXyEEg8lWjl+CO3dzg8Je2xG63Q=
++go.etcd.io/etcd/api/v3 v3.5.13 h1:8WXU2/NBge6AUF1K1gOexB6e07NgsN1hXK0rSTtgSp4=
++go.etcd.io/etcd/api/v3 v3.5.13/go.mod h1:gBqlqkcMMZMVTMm4NDZloEVJzxQOQIls8splbqBDa0c=
++go.etcd.io/etcd/client/pkg/v3 v3.5.13 h1:RVZSAnWWWiI5IrYAXjQorajncORbS0zI48LQlE2kQWg=
++go.etcd.io/etcd/client/pkg/v3 v3.5.13/go.mod h1:XxHT4u1qU12E2+po+UVPrEeL94Um6zL58ppuJWXSAB8=
++go.etcd.io/etcd/client/v3 v3.5.13 h1:o0fHTNJLeO0MyVbc7I3fsCf6nrOqn5d+diSarKnB2js=
++go.etcd.io/etcd/client/v3 v3.5.13/go.mod h1:cqiAeY8b5DEEcpxvgWKsbLIWNM/8Wy2xJSDMtioMcoI=
+ go.opentelemetry.io/otel v1.19.0 h1:MuS/TNf4/j4IXsZuJegVzI1cwut7Qc00344rgH7p8bs=
+ go.opentelemetry.io/otel v1.19.0/go.mod h1:i0QyjOq3UPoTzff0PJB2N66fb4S0+rSbSB15/oyH9fY=
+ go.opentelemetry.io/otel/exporters/jaeger v1.17.0 h1:D7UpUy2Xc2wsi1Ras6V40q806WM07rqoCWzXu7Sqy+4=
+@@ -222,8 +223,8 @@ golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACk
+ golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
+ golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+ golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
+-golang.org/x/crypto v0.19.0 h1:ENy+Az/9Y1vSrlrvBSyna3PITt4tiZLf7sgCjZBX7Wo=
+-golang.org/x/crypto v0.19.0/go.mod h1:Iy9bg/ha4yyC70EfRS8jz+B6ybOBKMaSxLj6P6oBDfU=
++golang.org/x/crypto v0.22.0 h1:g1v0xeRhjcugydODzvb3mEM9SQ0HGp9s/nh3COQ/C30=
++golang.org/x/crypto v0.22.0/go.mod h1:vr6Su+7cTlO45qkww3VDJlzDn0ctJvRgYbC2NvXHt+M=
+ golang.org/x/mod v0.2.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.3.0/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+ golang.org/x/mod v0.4.2/go.mod h1:s0Qsj1ACt9ePp/hMypM3fl4fZqREWJwdYDEqhRiZZUA=
+@@ -235,10 +236,10 @@ golang.org/x/net v0.0.0-20201021035429-f5854403a974/go.mod h1:sp8m0HH+o8qH0wwXwY
+ golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
+ golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4/go.mod h1:p54w0d4576C0XHj96bSt6lcn1PtDYWL6XObtHCRCNQM=
+ golang.org/x/net v0.0.0-20220722155237-a158d28d115b/go.mod h1:XRhObCWvk6IyKnWLug+ECip1KBveYUHfp+8e9klMJ9c=
+-golang.org/x/net v0.21.0 h1:AQyQV4dYCvJ7vGmJyKki9+PBdyvhkSd8EIx/qb0AYv4=
+-golang.org/x/net v0.21.0/go.mod h1:bIjVDfnllIU7BJ2DNgfnXvpSvtn8VRwhlsaeUTyUS44=
+-golang.org/x/oauth2 v0.16.0 h1:aDkGMBSYxElaoP81NpoUoz2oo2R2wHdZpGToUxfyQrQ=
+-golang.org/x/oauth2 v0.16.0/go.mod h1:hqZ+0LWXsiVoZpeld6jVt06P3adbS2Uu911W1SsJv2o=
++golang.org/x/net v0.24.0 h1:1PcaxkF854Fu3+lvBIx5SYn9wRlBzzcnHZSiaFFAb0w=
++golang.org/x/net v0.24.0/go.mod h1:2Q7sJY5mzlzWjKtYUEXSlBWCdyaioyXzRB2RtU8KVE8=
++golang.org/x/oauth2 v0.17.0 h1:6m3ZPmLEFdVxKKWnKq4VqZ60gutO35zm+zrAHVmHyDQ=
++golang.org/x/oauth2 v0.17.0/go.mod h1:OzPDGQiuQMguemayvdylqddI7qcD9lnSDb+1FiwQ5HA=
+ golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+@@ -258,12 +259,12 @@ golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBc
+ golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+-golang.org/x/sys v0.17.0 h1:25cE3gD+tdBA7lp7QfhuV+rJiE9YXTcS3VG1SqssI/Y=
+-golang.org/x/sys v0.17.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
++golang.org/x/sys v0.19.0 h1:q5f1RH2jigJ1MoAWp2KTp3gm5zAGFUTarQZ5U386+4o=
++golang.org/x/sys v0.19.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+ golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+ golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
+-golang.org/x/term v0.17.0 h1:mkTF7LCd6WGJNL3K1Ad7kwxNfYAW6a8a8QqtMblp/4U=
+-golang.org/x/term v0.17.0/go.mod h1:lLRBjIVuehSbZlaOtGMbcMncT+aqLLLmKrsjNrUguwk=
++golang.org/x/term v0.19.0 h1:+ThwsDv+tYfnJFhF4L8jITxu1tdTWRTZpdsWgEgjL6Q=
++golang.org/x/term v0.19.0/go.mod h1:2CuTdWZ7KHSQwUzKva0cbMg6q2DMI3Mmxp+gKJbskEk=
+ golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+ golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
+@@ -285,14 +286,14 @@ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8T
+ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ google.golang.org/appengine v1.6.8 h1:IhEN5q69dyKagZPYMSdIjS2HqprW324FRQZJcGqPAsM=
+ google.golang.org/appengine v1.6.8/go.mod h1:1jJ3jBArFh5pcgW8gCtRJnepW8FzD1V44FJffLiz/Ds=
+-google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 h1:KAeGQVN3M9nD0/bQXnr/ClcEMJ968gUXJQ9pwfSynuQ=
+-google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80/go.mod h1:cc8bqMqtv9gMOr0zHg2Vzff5ULhhL2IXP4sbcn32Dro=
+-google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80 h1:Lj5rbfG876hIAYFjqiJnPHfhXbv+nzTWfm04Fg/XSVU=
+-google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80/go.mod h1:4jWUdICTdgc3Ibxmr8nAJiiLHwQBY0UI0XZcEMaFKaA=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 h1:AjyfHzEPEFp/NpvfN5g+KDla3EMojjhRVZc1i7cj+oM=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80/go.mod h1:PAREbraiVEVGVdTZsVWjSbbTtSyGbAgIIvni8a8CD5s=
+-google.golang.org/grpc v1.62.1 h1:B4n+nfKzOICUXMgyrNd19h/I9oH0L1pizfk1d4zSgTk=
+-google.golang.org/grpc v1.62.1/go.mod h1:IWTG0VlJLCh1SkC58F7np9ka9mx/WNkjl4PGJaiq+QE=
++google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de h1:F6qOa9AZTYJXOUEr4jDysRDLrm4PHePlge4v4TGAlxY=
++google.golang.org/genproto v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:VUhTRKeHn9wwcdrk73nvdC9gF178Tzhmt/qyaFcPLSo=
++google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de h1:jFNzHPIeuzhdRwVhbZdiym9q0ory/xY3sA+v2wPg8I0=
++google.golang.org/genproto/googleapis/api v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:5iCWqnniDlqZHrd3neWVTOwvh/v6s3232omMecelax8=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de h1:cZGRis4/ot9uVm639a+rHCUaG0JJHEsdyzSQTMX+suY=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de/go.mod h1:H4O17MA/PE9BsGx3w+a+W2VOLLD1Qf7oJneAoU6WktY=
++google.golang.org/grpc v1.63.2 h1:MUeiw1B2maTVZthpU5xvASfTh3LDbxHd6IJ6QQVU+xM=
++google.golang.org/grpc v1.63.2/go.mod h1:WAX/8DgncnokcFUldAxq7GeB5DXHDbMF+lLvDomNkRA=
+ google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
+ google.golang.org/protobuf v1.26.0/go.mod h1:9q0QmTI4eRPtz6boOQmLYwt+qCgq0jsYwAQnmE0givc=
+ google.golang.org/protobuf v1.33.0 h1:uNO2rsAINq/JlFpSdYEKIZ0uKD/R9cpdv0T+yoGwGmI=
+@@ -309,12 +310,12 @@ gopkg.in/yaml.v2 v2.4.0/go.mod h1:RDklbk79AGWmwhnvt/jBztapEOGDOx6ZbXqjP6csGnQ=
+ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+-k8s.io/api v0.29.2 h1:hBC7B9+MU+ptchxEqTNW2DkUosJpp1P+Wn6YncZ474A=
+-k8s.io/api v0.29.2/go.mod h1:sdIaaKuU7P44aoyyLlikSLayT6Vb7bvJNCX105xZXY0=
+-k8s.io/apimachinery v0.29.2 h1:EWGpfJ856oj11C52NRCHuU7rFDwxev48z+6DSlGNsV8=
+-k8s.io/apimachinery v0.29.2/go.mod h1:6HVkd1FwxIagpYrHSwJlQqZI3G9LfYWRPAkUvLnXTKU=
+-k8s.io/client-go v0.29.2 h1:FEg85el1TeZp+/vYJM7hkDlSTFZ+c5nnK44DJ4FyoRg=
+-k8s.io/client-go v0.29.2/go.mod h1:knlvFZE58VpqbQpJNbCbctTVXcd35mMyAAwBdpt4jrA=
++k8s.io/api v0.29.3 h1:2ORfZ7+bGC3YJqGpV0KSDDEVf8hdGQ6A03/50vj8pmw=
++k8s.io/api v0.29.3/go.mod h1:y2yg2NTyHUUkIoTC+phinTnEa3KFM6RZ3szxt014a80=
++k8s.io/apimachinery v0.29.3 h1:2tbx+5L7RNvqJjn7RIuIKu9XTsIZ9Z5wX2G22XAa5EU=
++k8s.io/apimachinery v0.29.3/go.mod h1:hx/S4V2PNW4OMg3WizRrHutyB5la0iCUbZym+W0EQIU=
++k8s.io/client-go v0.29.3 h1:R/zaZbEAxqComZ9FHeQwOh3Y1ZUs7FaHKZdQtIc2WZg=
++k8s.io/client-go v0.29.3/go.mod h1:tkDisCvgPfiRpxGnOORfkljmS+UrW+WtXAy2fTvXJB0=
+ k8s.io/klog/v2 v2.110.1 h1:U/Af64HJf7FcwMcXyKm2RPM22WZzyR7OSpYj5tg3cL0=
+ k8s.io/klog/v2 v2.110.1/go.mod h1:YGtd1984u+GgbuZ7e08/yBuAfKLSO0+uR1Fhi6ExXjo=
+ k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 h1:aVUu9fTY98ivBPKR9Y5w/AuzbMm96cd3YHRTU83I780=
+diff --git a/tools/goctl/internal/flags/default_en.json b/tools/goctl/internal/flags/default_en.json
+index 95f2d99caf026c1f093628990fbf4f77cb3c2f3b..d26ec292c5d8cb7f353b57607b742ee182a0f7ed 100644
+--- a/tools/goctl/internal/flags/default_en.json
++++ b/tools/goctl/internal/flags/default_en.json
+@@ -178,7 +178,7 @@
+         "short": "Generate postgresql model",
+         "datasource": {
+           "short": "Generate model from datasource",
+-          "url": "The data source of database,like \"root:password@tcp(127.0.0.1:3306)/database",
++          "url": "The data source of database,like \"postgres://root:password@127.0.0.1:5432/database?sslmode=disable\"",
+           "table": "The table or table globbing patterns in the database",
+           "schema": "The schema or schema globbing patterns in the database",
+           "cache": "Generate code with cache [optional]",
+@@ -274,6 +274,14 @@
+     },
+     "upgrade": {
+       "short": "Upgrade goctl to latest version"
++    },
++    "config": {
++      "init": {
++        "short": "Initialize goctl config file"
++      },
++      "clean": {
++        "short": "Clean goctl config file"
++      }
+     }
+   },
+   "global": {
+diff --git a/tools/goctl/internal/version/version.go b/tools/goctl/internal/version/version.go
+index 90d7b63cbefa028954fc6f1ccfbef1bd90ceaf1f..2fa070e5af696002b30f759a40d388c242efac3d 100644
+--- a/tools/goctl/internal/version/version.go
++++ b/tools/goctl/internal/version/version.go
+@@ -6,7 +6,7 @@ import (
+ )
+ 
+ // BuildVersion is the version of goctl.
+-const BuildVersion = "1.6.3"
++const BuildVersion = "1.6.5"
+ 
+ var tag = map[string]int{"pre-alpha": 0, "alpha": 1, "pre-bata": 2, "beta": 3, "released": 4, "": 5}
+ 
+diff --git a/tools/goctl/model/sql/converter/types.go b/tools/goctl/model/sql/converter/types.go
+index 587f5fc9b6666254d34bd6af75da662de1c05403..2cd803dfcdc1022cc022139d6ca4a19aecf65041 100644
+--- a/tools/goctl/model/sql/converter/types.go
++++ b/tools/goctl/model/sql/converter/types.go
+@@ -5,6 +5,8 @@ import (
+ 	"strings"
+ 
+ 	"github.com/zeromicro/ddl-parser/parser"
++	"github.com/zeromicro/go-zero/tools/goctl/config"
++	"github.com/zeromicro/go-zero/tools/goctl/pkg/env"
+ )
+ 
+ var unsignedTypeMap = map[string]string{
+@@ -73,6 +75,63 @@ var commonMysqlDataTypeMapInt = map[int]string{
+ 	parser.Boolean: "bool",
+ }
+ 
++var commonMysqlDataTypeMap = map[int]string{
++	// number
++	parser.Bit:       "bit",
++	parser.TinyInt:   "tinyint",
++	parser.SmallInt:  "smallint",
++	parser.MediumInt: "mediumint",
++	parser.Int:       "int",
++	parser.MiddleInt: "middleint",
++	parser.Int1:      "int1",
++	parser.Int2:      "int2",
++	parser.Int3:      "int3",
++	parser.Int4:      "int4",
++	parser.Int8:      "int8",
++	parser.Integer:   "integer",
++	parser.BigInt:    "bigint",
++	parser.Float:     "float",
++	parser.Float4:    "float4",
++	parser.Float8:    "float8",
++	parser.Double:    "double",
++	parser.Decimal:   "decimal",
++	parser.Dec:       "dec",
++	parser.Fixed:     "fixed",
++	parser.Numeric:   "numeric",
++	parser.Real:      "real",
++	// date&time
++	parser.Date:      "date",
++	parser.DateTime:  "datetime",
++	parser.Timestamp: "timestamp",
++	parser.Time:      "time",
++	parser.Year:      "year",
++	// string
++	parser.Char:            "char",
++	parser.VarChar:         "varchar",
++	parser.NVarChar:        "nvarchar",
++	parser.NChar:           "nchar",
++	parser.Character:       "character",
++	parser.LongVarChar:     "longvarchar",
++	parser.LineString:      "linestring",
++	parser.MultiLineString: "multilinestring",
++	parser.Binary:          "binary",
++	parser.VarBinary:       "varbinary",
++	parser.TinyText:        "tinytext",
++	parser.Text:            "text",
++	parser.MediumText:      "mediumtext",
++	parser.LongText:        "longtext",
++	parser.Enum:            "enum",
++	parser.Set:             "set",
++	parser.Json:            "json",
++	parser.Blob:            "blob",
++	parser.LongBlob:        "longblob",
++	parser.MediumBlob:      "mediumblob",
++	parser.TinyBlob:        "tinyblob",
++	// bool
++	parser.Bool:    "bool",
++	parser.Boolean: "boolean",
++}
++
+ var commonMysqlDataTypeMapString = map[string]string{
+ 	// For consistency, all integer types are converted to int64
+ 	// bool
+@@ -144,28 +203,79 @@ var commonMysqlDataTypeMapString = map[string]string{
+ }
+ 
+ // ConvertDataType converts mysql column type into golang type
+-func ConvertDataType(dataBaseType int, isDefaultNull, unsigned, strict bool) (string, error) {
++func ConvertDataType(dataBaseType int, isDefaultNull, unsigned, strict bool) (string, string, error) {
++	if env.UseExperimental() {
++		tp, ok := commonMysqlDataTypeMap[dataBaseType]
++		if !ok {
++			return "", "", fmt.Errorf("unsupported database type: %v", dataBaseType)
++		}
++
++		goType, thirdPkg, _, err := ConvertStringDataType(tp, isDefaultNull, unsigned, strict)
++		return goType, thirdPkg, err
++	}
++
++	// the following are the old version compatibility code.
+ 	tp, ok := commonMysqlDataTypeMapInt[dataBaseType]
+ 	if !ok {
+-		return "", fmt.Errorf("unsupported database type: %v", dataBaseType)
++		return "", "", fmt.Errorf("unsupported database type: %v", dataBaseType)
+ 	}
+ 
+-	return mayConvertNullType(tp, isDefaultNull, unsigned, strict), nil
++	return mayConvertNullType(tp, isDefaultNull, unsigned, strict), "", nil
+ }
+ 
+ // ConvertStringDataType converts mysql column type into golang type
+ func ConvertStringDataType(dataBaseType string, isDefaultNull, unsigned, strict bool) (
+-	goType string, isPQArray bool, err error) {
++	goType string, thirdPkg string, isPQArray bool, err error) {
++	if env.UseExperimental() {
++		customTp, thirdImport := convertDatatypeWithConfig(dataBaseType, isDefaultNull, unsigned)
++		if len(customTp) != 0 {
++			return customTp, thirdImport, false, nil
++		}
++
++		tp, ok := commonMysqlDataTypeMapString[strings.ToLower(dataBaseType)]
++		if !ok {
++			return "", "", false, fmt.Errorf("unsupported database type: %s", dataBaseType)
++		}
++
++		if strings.HasPrefix(dataBaseType, "_") {
++			return tp, "", true, nil
++		}
++
++		return mayConvertNullType(tp, isDefaultNull, unsigned, strict), "", false, nil
++	}
++
++	// the following are the old version compatibility code.
+ 	tp, ok := commonMysqlDataTypeMapString[strings.ToLower(dataBaseType)]
+ 	if !ok {
+-		return "", false, fmt.Errorf("unsupported database type: %s", dataBaseType)
++		return "", "", false, fmt.Errorf("unsupported database type: %s", dataBaseType)
+ 	}
+ 
+ 	if strings.HasPrefix(dataBaseType, "_") {
+-		return tp, true, nil
++		return tp, "", true, nil
+ 	}
+ 
+-	return mayConvertNullType(tp, isDefaultNull, unsigned, strict), false, nil
++	return mayConvertNullType(tp, isDefaultNull, unsigned, strict), "", false, nil
++}
++
++func convertDatatypeWithConfig(dataBaseType string, isDefaultNull, unsigned bool) (string, string) {
++	if config.ExternalConfig == nil {
++		return "", ""
++	}
++	opt, ok := config.ExternalConfig.Model.TypesMap[strings.ToLower(dataBaseType)]
++	if !ok || (len(opt.Type) == 0 && len(opt.UnsignedType) == 0 && len(opt.NullType) == 0) {
++		return "", ""
++	}
++
++	if isDefaultNull {
++		if len(opt.NullType) != 0 {
++			return opt.NullType, opt.Pkg
++		}
++	} else if unsigned {
++		if len(opt.UnsignedType) != 0 {
++			return opt.UnsignedType, opt.Pkg
++		}
++	}
++	return opt.Type, opt.Pkg
+ }
+ 
+ func mayConvertNullType(goDataType string, isDefaultNull, unsigned, strict bool) string {
+diff --git a/tools/goctl/model/sql/example/sql/user.sql b/tools/goctl/model/sql/example/sql/user.sql
+index 01be06961059c254d99d317903183c99433f3ec8..ba59b5defd91eca657e587bda066cedb951ef6e9 100644
+--- a/tools/goctl/model/sql/example/sql/user.sql
++++ b/tools/goctl/model/sql/example/sql/user.sql
+@@ -9,7 +9,7 @@ CREATE TABLE `user`
+     `mobile`      varchar(255) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '手机号',
+     `gender`      char(5) COLLATE utf8mb4_general_ci      NOT NULL COMMENT '男｜女｜未公\r开',
+     `nickname`    varchar(255) COLLATE utf8mb4_general_ci          DEFAULT '' COMMENT '用户昵称',
+-    `type`    tinyint(1) COLLATE utf8mb4_general_ci          DEFAULT 0 COMMENT '用户类型',
++    `type`        tinyint(1) COLLATE utf8mb4_general_ci DEFAULT 0 COMMENT '用户类型',
+     `create_time` timestamp NULL,
+     `update_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+     PRIMARY KEY (`id`),
+@@ -22,12 +22,13 @@ CREATE TABLE `user`
+ 
+ CREATE TABLE `student`
+ (
+-    `type`    bigint                          NOT NULL,
+-    `class` varchar(255) COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+-    `name`  varchar(255) COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+-    `age`   tinyint                                   DEFAULT NULL,
++    `type`  bigint       NOT NULL,
++    `class` varchar(255) NOT NULL DEFAULT '',
++    `name`  varchar(255) NOT NULL DEFAULT '',
++    `age`   tinyint               DEFAULT NULL,
+     `score` float(10, 0
+ ) DEFAULT NULL,
++    `amount` decimal DEFAULT NULL,
+   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+   `update_time` timestamp NULL DEFAULT NULL,
+   `delete_time` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+diff --git a/tools/goctl/model/sql/gen/customized.go b/tools/goctl/model/sql/gen/customized.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..77872837ff1386cd7d75bf790301147b648f99ad
+--- /dev/null
++++ b/tools/goctl/model/sql/gen/customized.go
+@@ -0,0 +1,108 @@
++package gen
++
++import (
++	"fmt"
++	"sort"
++	"strings"
++
++	"github.com/zeromicro/go-zero/core/collection"
++	"github.com/zeromicro/go-zero/tools/goctl/model/sql/template"
++	"github.com/zeromicro/go-zero/tools/goctl/util"
++	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
++	"github.com/zeromicro/go-zero/tools/goctl/util/stringx"
++)
++
++// Field describes a table field
++type Field struct {
++	NameOriginal    string
++	UpperName       string
++	LowerName       string
++	DataType        string
++	Comment         string
++	SeqInIndex      int
++	OrdinalPosition int
++}
++
++func genCustomized(table Table, withCache, postgreSql bool) (string, error) {
++	expressions := make([]string, 0)
++	expressionValues := make([]string, 0)
++	fields := make([]Field, 0)
++	var count int
++	for _, field := range table.Fields {
++		camel := util.SafeString(field.Name.ToCamel())
++		if table.isIgnoreColumns(field.Name.Source()) {
++			continue
++		}
++
++		if field.Name.Source() == table.PrimaryKey.Name.Source() {
++			if table.PrimaryKey.AutoIncrement {
++				continue
++			}
++		}
++
++		count += 1
++		if postgreSql {
++			expressions = append(expressions, fmt.Sprintf("$%d", count))
++		} else {
++			expressions = append(expressions, "?")
++		}
++		expressionValues = append(expressionValues, "data."+camel)
++
++		f := Field{
++			NameOriginal:    field.NameOriginal,
++			UpperName:       camel,
++			LowerName:       stringx.From(camel).Untitle(),
++			DataType:        field.DataType,
++			Comment:         field.Comment,
++			SeqInIndex:      field.SeqInIndex,
++			OrdinalPosition: field.OrdinalPosition,
++		}
++		fields = append(fields, f)
++	}
++
++	keySet := collection.NewSet()
++	keyVariableSet := collection.NewSet()
++	keySet.AddStr(table.PrimaryCacheKey.KeyExpression)
++	keyVariableSet.AddStr(table.PrimaryCacheKey.KeyLeft)
++	for _, key := range table.UniqueCacheKey {
++		keySet.AddStr(key.DataKeyExpression)
++		keyVariableSet.AddStr(key.KeyLeft)
++	}
++	keys := keySet.KeysStr()
++	sort.Strings(keys)
++	keyVars := keyVariableSet.KeysStr()
++	sort.Strings(keyVars)
++
++	camel := table.Name.ToCamel()
++	text, err := pathx.LoadTemplate(category, customizedTemplateFile, template.Customized)
++	if err != nil {
++		return "", err
++	}
++
++	output, err := util.With("customized").
++		Parse(text).
++		Execute(map[string]any{
++			"withCache":                 withCache,
++			"containsIndexCache":        table.ContainsUniqueCacheKey,
++			"upperStartCamelObject":     camel,
++			"lowerStartCamelObject":     stringx.From(camel).Untitle(),
++			"lowerStartCamelPrimaryKey": util.EscapeGolangKeyword(stringx.From(table.PrimaryKey.Name.ToCamel()).Untitle()),
++			"upperStartCamelPrimaryKey": table.PrimaryKey.Name.ToCamel(),
++			"primaryKeyDataType":        table.PrimaryKey.DataType,
++			"originalPrimaryKey":        wrapWithRawString(table.PrimaryKey.Name.Source(), postgreSql),
++			"primaryCacheKey":           table.PrimaryCacheKey.DataKeyExpression,
++			"primaryKeyVariable":        table.PrimaryCacheKey.KeyLeft,
++			"keys":                      strings.Join(keys, "\n"),
++			"keyValues":                 strings.Join(keyVars, ", "),
++			"expression":                strings.Join(expressions, ", "),
++			"expressionValues":          strings.Join(expressionValues, ", "),
++			"postgreSql":                postgreSql,
++			"fields":                    fields,
++			"data":                      table,
++		})
++	if err != nil {
++		return "", err
++	}
++
++	return output.String(), nil
++}
+diff --git a/tools/goctl/model/sql/gen/gen.go b/tools/goctl/model/sql/gen/gen.go
+index 34a07517b5de7493eb5ba3226145ce46679d1b44..37b9e72505f8208a29bb7c9f19bf62b86157d3cb 100644
+--- a/tools/goctl/model/sql/gen/gen.go
++++ b/tools/goctl/model/sql/gen/gen.go
+@@ -36,16 +36,17 @@ type (
+ 	Option func(generator *defaultGenerator)
+ 
+ 	code struct {
+-		importsCode string
+-		varsCode    string
+-		typesCode   string
+-		newCode     string
+-		insertCode  string
+-		findCode    []string
+-		updateCode  string
+-		deleteCode  string
+-		cacheExtra  string
+-		tableName   string
++		importsCode    string
++		varsCode       string
++		typesCode      string
++		newCode        string
++		insertCode     string
++		findCode       []string
++		updateCode     string
++		deleteCode     string
++		cacheExtra     string
++		tableName      string
++		customizedCode string
+ 	}
+ 
+ 	codeTuple struct {
+@@ -323,17 +324,23 @@ func (g *defaultGenerator) genModel(in parser.Table, withCache bool) (string, er
+ 		return "", err
+ 	}
+ 
++	customizedCode, err := genCustomized(table, withCache, g.isPostgreSql)
++	if err != nil {
++		return "", err
++	}
++
+ 	code := &code{
+-		importsCode: importsCode,
+-		varsCode:    varsCode,
+-		typesCode:   typesCode,
+-		newCode:     newCode,
+-		insertCode:  insertCode,
+-		findCode:    findCode,
+-		updateCode:  updateCode,
+-		deleteCode:  deleteCode,
+-		cacheExtra:  ret.cacheExtra,
+-		tableName:   tableName,
++		importsCode:    importsCode,
++		varsCode:       varsCode,
++		typesCode:      typesCode,
++		newCode:        newCode,
++		insertCode:     insertCode,
++		findCode:       findCode,
++		updateCode:     updateCode,
++		deleteCode:     deleteCode,
++		cacheExtra:     ret.cacheExtra,
++		tableName:      tableName,
++		customizedCode: customizedCode,
+ 	}
+ 
+ 	output, err := g.executeModel(table, code)
+@@ -387,6 +394,7 @@ func (g *defaultGenerator) executeModel(table Table, code *code) (*bytes.Buffer,
+ 		"extraMethod": code.cacheExtra,
+ 		"tableName":   code.tableName,
+ 		"data":        table,
++		"customized":  code.customizedCode,
+ 	})
+ 	if err != nil {
+ 		return nil, err
+diff --git a/tools/goctl/model/sql/gen/imports.go b/tools/goctl/model/sql/gen/imports.go
+index dbe5e6eaab6e30a3c00b5148d865a13882cfb418..81980fca5ccc9d304501bde67de887afa8782527 100644
+--- a/tools/goctl/model/sql/gen/imports.go
++++ b/tools/goctl/model/sql/gen/imports.go
+@@ -1,12 +1,27 @@
+ package gen
+ 
+ import (
++	"fmt"
++	"strings"
++
+ 	"github.com/zeromicro/go-zero/tools/goctl/model/sql/template"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
+ )
+ 
+ func genImports(table Table, withCache, timeImport bool) (string, error) {
++	var thirdImports []string
++	var m = map[string]struct{}{}
++	for _, c := range table.Fields {
++		if len(c.ThirdPkg) > 0 {
++			if _, ok := m[c.ThirdPkg]; ok {
++				continue
++			}
++			m[c.ThirdPkg] = struct{}{}
++			thirdImports = append(thirdImports, fmt.Sprintf("%q", c.ThirdPkg))
++		}
++	}
++
+ 	if withCache {
+ 		text, err := pathx.LoadTemplate(category, importsTemplateFile, template.Imports)
+ 		if err != nil {
+@@ -17,6 +32,7 @@ func genImports(table Table, withCache, timeImport bool) (string, error) {
+ 			"time":       timeImport,
+ 			"containsPQ": table.ContainsPQ,
+ 			"data":       table,
++			"third":      strings.Join(thirdImports, "\n"),
+ 		})
+ 		if err != nil {
+ 			return "", err
+@@ -34,6 +50,7 @@ func genImports(table Table, withCache, timeImport bool) (string, error) {
+ 		"time":       timeImport,
+ 		"containsPQ": table.ContainsPQ,
+ 		"data":       table,
++		"third":      strings.Join(thirdImports, "\n"),
+ 	})
+ 	if err != nil {
+ 		return "", err
+diff --git a/tools/goctl/model/sql/gen/template.go b/tools/goctl/model/sql/gen/template.go
+index 19513ffc9c7329d9e04cc5c27961547cb74dbb07..0f5c3e8db6bb3e389682a2eaad692333d779fbc8 100644
+--- a/tools/goctl/model/sql/gen/template.go
++++ b/tools/goctl/model/sql/gen/template.go
+@@ -9,6 +9,7 @@ import (
+ 
+ const (
+ 	category                              = "model"
++	customizedTemplateFile                = "customized.tpl"
+ 	deleteTemplateFile                    = "delete.tpl"
+ 	deleteMethodTemplateFile              = "interface-delete.tpl"
+ 	fieldTemplateFile                     = "field.tpl"
+@@ -34,6 +35,7 @@ const (
+ )
+ 
+ var templates = map[string]string{
++	customizedTemplateFile:                template.Customized,
+ 	deleteTemplateFile:                    template.Delete,
+ 	deleteMethodTemplateFile:              template.DeleteMethod,
+ 	fieldTemplateFile:                     template.Field,
+diff --git a/tools/goctl/model/sql/parser/parser.go b/tools/goctl/model/sql/parser/parser.go
+index 628d30ad38b8908caadd4b45ad3a12d11386ec95..e93d9bedf3213f1319a9ea5180decb9dc5c055fc 100644
+--- a/tools/goctl/model/sql/parser/parser.go
++++ b/tools/goctl/model/sql/parser/parser.go
+@@ -38,6 +38,7 @@ type (
+ 	Field struct {
+ 		NameOriginal    string
+ 		Name            stringx.String
++		ThirdPkg        string
+ 		DataType        string
+ 		Comment         string
+ 		SeqInIndex      int
+@@ -219,7 +220,7 @@ func convertColumns(columns []*parser.Column, primaryColumn string, strict bool)
+ 			}
+ 		}
+ 
+-		dataType, err := converter.ConvertDataType(column.DataType.Type(), isDefaultNull, column.DataType.Unsigned(), strict)
++		dataType, thirdPkg, err := converter.ConvertDataType(column.DataType.Type(), isDefaultNull, column.DataType.Unsigned(), strict)
+ 		if err != nil {
+ 			return Primary{}, nil, err
+ 		}
+@@ -236,6 +237,7 @@ func convertColumns(columns []*parser.Column, primaryColumn string, strict bool)
+ 
+ 		var field Field
+ 		field.Name = stringx.From(column.Name)
++		field.ThirdPkg = thirdPkg
+ 		field.DataType = dataType
+ 		field.Comment = util.TrimNewLine(comment)
+ 
+@@ -267,7 +269,7 @@ func (t *Table) ContainsTime() bool {
+ func ConvertDataType(table *model.Table, strict bool) (*Table, error) {
+ 	isPrimaryDefaultNull := table.PrimaryKey.ColumnDefault == nil && table.PrimaryKey.IsNullAble == "YES"
+ 	isPrimaryUnsigned := strings.Contains(table.PrimaryKey.DbColumn.ColumnType, "unsigned")
+-	primaryDataType, containsPQ, err := converter.ConvertStringDataType(table.PrimaryKey.DataType, isPrimaryDefaultNull, isPrimaryUnsigned, strict)
++	primaryDataType, thirdPkg, containsPQ, err := converter.ConvertStringDataType(table.PrimaryKey.DataType, isPrimaryDefaultNull, isPrimaryUnsigned, strict)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -285,6 +287,7 @@ func ConvertDataType(table *model.Table, strict bool) (*Table, error) {
+ 	reply.PrimaryKey = Primary{
+ 		Field: Field{
+ 			Name:            stringx.From(table.PrimaryKey.Name),
++			ThirdPkg:        thirdPkg,
+ 			DataType:        primaryDataType,
+ 			Comment:         table.PrimaryKey.Comment,
+ 			SeqInIndex:      seqInIndex,
+@@ -351,7 +354,7 @@ func getTableFields(table *model.Table, strict bool) (map[string]*Field, error)
+ 	for _, each := range table.Columns {
+ 		isDefaultNull := each.ColumnDefault == nil && each.IsNullAble == "YES"
+ 		isPrimaryUnsigned := strings.Contains(each.ColumnType, "unsigned")
+-		dt, containsPQ, err := converter.ConvertStringDataType(each.DataType, isDefaultNull, isPrimaryUnsigned, strict)
++		dt, thirdPkg, containsPQ, err := converter.ConvertStringDataType(each.DataType, isDefaultNull, isPrimaryUnsigned, strict)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -363,6 +366,7 @@ func getTableFields(table *model.Table, strict bool) (map[string]*Field, error)
+ 		field := &Field{
+ 			NameOriginal:    each.Name,
+ 			Name:            stringx.From(each.Name),
++			ThirdPkg:        thirdPkg,
+ 			DataType:        dt,
+ 			Comment:         each.Comment,
+ 			SeqInIndex:      columnSeqInIndex,
+diff --git a/tools/goctl/model/sql/template/template.go b/tools/goctl/model/sql/template/template.go
+index 71b15445312cede0af03a7faa6fe76bc28d555ec..99cb3b19d0fea1c5c3cc164f5e781836b01a9da7 100644
+--- a/tools/goctl/model/sql/template/template.go
++++ b/tools/goctl/model/sql/template/template.go
+@@ -7,6 +7,11 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util"
+ )
+ 
++// Customized defines a template for customized in model
++//
++//go:embed tpl/customized.tpl
++var Customized string
++
+ // Vars defines a template for var block in model
+ //
+ //go:embed tpl/var.tpl
+@@ -51,6 +56,7 @@ package {{.pkg}}
+ {{.update}}
+ {{.extraMethod}}
+ {{.tableName}}
++{{.customized}}
+ `, util.DoNotEditHead)
+ 
+ // Insert defines a template for insert code in model
+diff --git a/tools/goctl/model/sql/template/tpl/customized.tpl b/tools/goctl/model/sql/template/tpl/customized.tpl
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/tools/goctl/model/sql/template/tpl/import-no-cache.tpl b/tools/goctl/model/sql/template/tpl/import-no-cache.tpl
+index ba9c6b4d68dcd03c8de77dba3d785a44f97370bb..0ffbc2423cf2cd552ed8a09a85c52be4c1b03fae 100644
+--- a/tools/goctl/model/sql/template/tpl/import-no-cache.tpl
++++ b/tools/goctl/model/sql/template/tpl/import-no-cache.tpl
+@@ -9,4 +9,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/stores/builder"
+ 	"github.com/zeromicro/go-zero/core/stores/sqlx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
++
++	{{.third}}
+ )
+diff --git a/tools/goctl/model/sql/template/tpl/import.tpl b/tools/goctl/model/sql/template/tpl/import.tpl
+index 7e0c40f507d09ebeec2a85c7b30cc17441880ad4..96650fd52a50f47f063cbd869e73eff767e8b7bd 100644
+--- a/tools/goctl/model/sql/template/tpl/import.tpl
++++ b/tools/goctl/model/sql/template/tpl/import.tpl
+@@ -11,4 +11,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/stores/sqlc"
+ 	"github.com/zeromicro/go-zero/core/stores/sqlx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
++
++	{{.third}}
+ )
+diff --git a/tools/goctl/pkg/golang/install.go b/tools/goctl/pkg/golang/install.go
+index 465b2e0ff76ffb1c35938a9e0e761031264ee610..984d3812dbb1795137ee8f32e0c1b88b1cfb29a7 100644
+--- a/tools/goctl/pkg/golang/install.go
++++ b/tools/goctl/pkg/golang/install.go
+@@ -8,7 +8,7 @@ import (
+ func Install(git string) error {
+ 	cmd := exec.Command("go", "install", git)
+ 	env := os.Environ()
+-	env = append(env, "GO111MODULE=on", "GOPROXY=https://goproxy.cn,direct")
++	env = append(env, "GO111MODULE=on")
+ 	cmd.Env = env
+ 	cmd.Stdout = os.Stdout
+ 	cmd.Stderr = os.Stderr
+diff --git a/tools/goctl/pkg/parser/api/parser/api.go b/tools/goctl/pkg/parser/api/parser/api.go
+index 69d33b40c5f916ae3f9fb0658e93b432152dea7d..aee27727ad6cb64627011282fcc0e37be4555f7b 100644
+--- a/tools/goctl/pkg/parser/api/parser/api.go
++++ b/tools/goctl/pkg/parser/api/parser/api.go
+@@ -32,11 +32,8 @@ type API struct {
+ func convert2API(a *ast.AST, importSet map[string]lang.PlaceholderType, is *importstack.ImportStack) (*API, error) {
+ 	var api = new(API)
+ 	api.importManager = is
+-	api.importSet = make(map[string]lang.PlaceholderType)
++	api.importSet = importSet
+ 	api.Filename = a.Filename
+-	for k, v := range importSet {
+-		api.importSet[k] = v
+-	}
+ 	one := a.Stmts[0]
+ 	syntax, ok := one.(*ast.SyntaxStmt)
+ 	if !ok {
+diff --git a/tools/goctl/pkg/parser/api/parser/parser.go b/tools/goctl/pkg/parser/api/parser/parser.go
+index 2fe60ca6680914cb2f6e244dc9acf8d5d4c30438..2328f414b3e7e0386f22663e86d6ce34a2c4e730 100644
+--- a/tools/goctl/pkg/parser/api/parser/parser.go
++++ b/tools/goctl/pkg/parser/api/parser/parser.go
+@@ -1247,6 +1247,34 @@ func (p *Parser) parseAtServerKVExpression() *ast.KVExpr {
+ 				}
+ 			}
+ 
++			valueTok.Type = token.PATH
++			node := ast.NewTokenNode(valueTok)
++			node.SetLeadingCommentGroup(leadingCommentGroup)
++			expr.Value = node
++			return expr
++		} else if p.peekTokenIs(token.SUB) {
++			for {
++				if p.peekTokenIs(token.SUB) {
++					if !p.nextToken() {
++						return nil
++					}
++
++					subTok := p.curTok
++					if !p.advanceIfPeekTokenIs(token.IDENT) {
++						return nil
++					}
++
++					idTok := p.curTok
++					valueTok = token.Token{
++						Text:     valueTok.Text + subTok.Text + idTok.Text,
++						Position: valueTok.Position,
++					}
++					leadingCommentGroup = p.curTokenNode().LeadingCommentGroup
++				} else {
++					break
++				}
++			}
++
+ 			valueTok.Type = token.PATH
+ 			node := ast.NewTokenNode(valueTok)
+ 			node.SetLeadingCommentGroup(leadingCommentGroup)
+diff --git a/tools/goctl/readme-cn.md b/tools/goctl/readme-cn.md
+index de030fa358b719de1471f63d962e3fe7cb592707..001289ca74377563fef48035928558e20b8cfaa0 100644
+--- a/tools/goctl/readme-cn.md
++++ b/tools/goctl/readme-cn.md
+@@ -2,4 +2,4 @@
+ 
+ [English](readme.md) | 简体中文
+ 
+-goctl 使用见文档 https://go-zero.dev/cn/docs/goctl/goctl/
+\ No newline at end of file
++goctl 使用见文档 https://go-zero.dev/docs/tutorials/cli/overview
+diff --git a/tools/goctl/readme.md b/tools/goctl/readme.md
+index 335e82ea76c20f8ee9db9cdc926df95852dcbab1..dd6b5b48abf5cffe4a4662bcf9faf3641f927f6f 100644
+--- a/tools/goctl/readme.md
++++ b/tools/goctl/readme.md
+@@ -2,4 +2,4 @@
+ 
+ English | [简体中文](readme-cn.md)
+ 
+-Read document at https://go-zero.dev/docs/goctl/goctl
+\ No newline at end of file
++Read document at https://go-zero.dev/docs/tutorials/cli/overview
+diff --git a/tools/goctl/rpc/generator/genmain.go b/tools/goctl/rpc/generator/genmain.go
+index 0238153875fd9a00cee0b34a216eb3ff8cfa6c1f..e0d0849acb0269494540d98142200a27b6d4b2c0 100644
+--- a/tools/goctl/rpc/generator/genmain.go
++++ b/tools/goctl/rpc/generator/genmain.go
+@@ -11,15 +11,17 @@ import (
+ 	"github.com/zeromicro/go-zero/tools/goctl/util"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/format"
+ 	"github.com/zeromicro/go-zero/tools/goctl/util/pathx"
++	"github.com/zeromicro/go-zero/tools/goctl/util/stringx"
+ )
+ 
+ //go:embed main.tpl
+ var mainTemplate string
+ 
+ type MainServiceTemplateData struct {
+-	Service   string
+-	ServerPkg string
+-	Pkg       string
++	GRPCService string
++	Service     string
++	ServerPkg   string
++	Pkg         string
+ }
+ 
+ // GenMain generates the main file of the rpc service, which is an rpc service program call entry
+@@ -57,9 +59,10 @@ func (g *Generator) GenMain(ctx DirContext, proto parser.Proto, cfg *conf.Config
+ 		}
+ 		imports = append(imports, remoteImport)
+ 		serviceNames = append(serviceNames, MainServiceTemplateData{
+-			Service:   parser.CamelCase(e.Name),
+-			ServerPkg: serverPkg,
+-			Pkg:       proto.PbPackage,
++			GRPCService: parser.CamelCase(e.Name),
++			Service:     stringx.From(e.Name).ToCamel(),
++			ServerPkg:   serverPkg,
++			Pkg:         proto.PbPackage,
+ 		})
+ 	}
+ 
+diff --git a/tools/goctl/rpc/generator/genserver.go b/tools/goctl/rpc/generator/genserver.go
+index 04c816bf7a7f6f8aa2a29c8e975f89fee48a3df7..1ead7ef6d9e2487d6fe78db3cb86b19c282a9581 100644
+--- a/tools/goctl/rpc/generator/genserver.go
++++ b/tools/goctl/rpc/generator/genserver.go
+@@ -92,7 +92,7 @@ func (g *Generator) genServerGroup(ctx DirContext, proto parser.Proto, cfg *conf
+ 		if err = util.With("server").GoFmt(true).Parse(text).SaveTo(map[string]any{
+ 			"head": head,
+ 			"unimplementedServer": fmt.Sprintf("%s.Unimplemented%sServer", proto.PbPackage,
+-				stringx.From(service.Name).ToCamel()),
++				parser.CamelCase(service.Name)),
+ 			"server":    stringx.From(service.Name).ToCamel(),
+ 			"imports":   strings.Join(imports.KeysStr(), pathx.NL),
+ 			"funcs":     strings.Join(funcList, pathx.NL),
+@@ -143,7 +143,7 @@ func (g *Generator) genServerInCompatibility(ctx DirContext, proto parser.Proto,
+ 	return util.With("server").GoFmt(true).Parse(text).SaveTo(map[string]any{
+ 		"head": head,
+ 		"unimplementedServer": fmt.Sprintf("%s.Unimplemented%sServer", proto.PbPackage,
+-			stringx.From(service.Name).ToCamel()),
++			parser.CamelCase(service.Name)),
+ 		"server":    stringx.From(service.Name).ToCamel(),
+ 		"imports":   strings.Join(imports.KeysStr(), pathx.NL),
+ 		"funcs":     strings.Join(funcList, pathx.NL),
+diff --git a/tools/goctl/rpc/generator/main.tpl b/tools/goctl/rpc/generator/main.tpl
+index 58cb676062f5cc244673d7dc93f647e9bb330277..566ad82b6d1f58a4b1c7180bfc2e121a685fe7ca 100644
+--- a/tools/goctl/rpc/generator/main.tpl
++++ b/tools/goctl/rpc/generator/main.tpl
+@@ -23,7 +23,7 @@ func main() {
+ 	ctx := svc.NewServiceContext(c)
+ 
+ 	s := zrpc.MustNewServer(c.RpcServerConf, func(grpcServer *grpc.Server) {
+-{{range .serviceNames}}       {{.Pkg}}.Register{{.Service}}Server(grpcServer, {{.ServerPkg}}.New{{.Service}}Server(ctx))
++{{range .serviceNames}}       {{.Pkg}}.Register{{.GRPCService}}Server(grpcServer, {{.ServerPkg}}.New{{.Service}}Server(ctx))
+ {{end}}
+ 		if c.Mode == service.DevMode || c.Mode == service.TestMode {
+ 			reflection.Register(grpcServer)
+diff --git a/tools/goctl/util/zipx/zipx.go b/tools/goctl/util/zipx/zipx.go
+index 2b1619ddeb9ac8eef16e5ee1571654fe8a005df9..0071150d1b3aa6900f2e900dc7b09b029d834eee 100644
+--- a/tools/goctl/util/zipx/zipx.go
++++ b/tools/goctl/util/zipx/zipx.go
+@@ -16,10 +16,15 @@ func Unpacking(name, destPath string, mapper func(f *zip.File) bool) error {
+ 	}
+ 	defer r.Close()
+ 
++	destAbsPath, err := filepath.Abs(destPath)
++	if err != nil {
++		return err
++	}
++
+ 	for _, file := range r.File {
+ 		ok := mapper(file)
+ 		if ok {
+-			err = fileCopy(file, destPath)
++			err = fileCopy(file, destAbsPath)
+ 			if err != nil {
+ 				return err
+ 			}
+@@ -34,7 +39,12 @@ func fileCopy(file *zip.File, destPath string) error {
+ 		return err
+ 	}
+ 	defer rc.Close()
+-	filename := filepath.Join(destPath, filepath.Base(file.Name))
++	abs, err := filepath.Abs(file.Name)
++	if err != nil {
++		return err
++	}
++
++	filename := filepath.Join(destPath, filepath.Base(abs))
+ 	dir := filepath.Dir(filename)
+ 	err = pathx.MkdirIfNotExist(dir)
+ 	if err != nil {
+diff --git a/zrpc/config.go b/zrpc/config.go
+index 84a32160dc67833495d6f08f2fe762002cf30c23..5e459a3c43d5c75813ef46c19048455bbd69c581 100644
+--- a/zrpc/config.go
++++ b/zrpc/config.go
+@@ -43,7 +43,7 @@ type (
+ 		StrictControl bool               `json:",optional"`
+ 		// setting 0 means no timeout
+ 		Timeout      int64 `json:",default=2000"`
+-		CpuThreshold int64 `json:",default=900,range=[0:1000]"`
++		CpuThreshold int64 `json:",default=900,range=[0:1000)"`
+ 		// grpc health check switch
+ 		Health      bool `json:",default=true"`
+ 		Middlewares ServerMiddlewaresConf

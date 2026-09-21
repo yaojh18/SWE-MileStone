@@ -1,0 +1,202 @@
+diff --git a/res/css/views/rooms/_EventTile.pcss b/res/css/views/rooms/_EventTile.pcss
+index 54f91bd5f40dc8e02a7a6dd90a1eea13554ac69f..b4172fc00370d2be3061c7586535926dd007ee27 100644
+--- a/res/css/views/rooms/_EventTile.pcss
++++ b/res/css/views/rooms/_EventTile.pcss
+@@ -816,11 +816,13 @@ $left-gutter: 64px;
+     .mx_EventTile_spoiler_content {
+         filter: blur(5px) saturate(0.1) sepia(1);
+         transition-duration: 0.5s;
++        pointer-events: none;
+     }
+ 
+     &.visible > .mx_EventTile_spoiler_content {
+         filter: none;
+         user-select: auto;
++        pointer-events: auto;
+     }
+ }
+ 
+diff --git a/src/BasePlatform.ts b/src/BasePlatform.ts
+index 2093881cc5f2e43ae0b8c7bccde23277580f3fbf..c7b7825fe68bee69eb12e098d9002a0cd0872d87 100644
+--- a/src/BasePlatform.ts
++++ b/src/BasePlatform.ts
+@@ -16,6 +16,7 @@ import {
+     type SSOAction,
+     encodeUnpaddedBase64,
+     type OidcRegistrationClientMetadata,
++    MatrixEventEvent,
+ } from "matrix-js-sdk/src/matrix";
+ import { logger } from "matrix-js-sdk/src/logger";
+ 
+@@ -228,6 +229,16 @@ export default abstract class BasePlatform {
+             window.focus();
+         };
+ 
++        const closeHandler = (): void => notification.close();
++
++        // Clear a notification from a redacted event.
++        if (ev) {
++            ev.once(MatrixEventEvent.BeforeRedaction, closeHandler);
++            notification.onclose = () => {
++                ev.off(MatrixEventEvent.BeforeRedaction, closeHandler);
++            };
++        }
++
+         return notification;
+     }
+ 
+diff --git a/src/components/views/elements/MiniAvatarUploader.tsx b/src/components/views/elements/MiniAvatarUploader.tsx
+index a6328816ed37249f62aeb8e8257329bf5dca2a4e..49a908d854a64fbf90dd443e86dcacdde4855e0e 100644
+--- a/src/components/views/elements/MiniAvatarUploader.tsx
++++ b/src/components/views/elements/MiniAvatarUploader.tsx
+@@ -9,10 +9,8 @@ Please see LICENSE files in the repository root for full details.
+ import classNames from "classnames";
+ import { EventType } from "matrix-js-sdk/src/matrix";
+ import React, { useContext, useRef, useState, type MouseEvent, type ReactNode } from "react";
+-import { Tooltip } from "@vector-im/compound-web";
+ 
+ import MatrixClientContext from "../../../contexts/MatrixClientContext";
+-import { useTimeout } from "../../../hooks/useTimeout";
+ import { chromeFileInputFix } from "../../../utils/BrowserWorkarounds";
+ import AccessibleButton from "./AccessibleButton";
+ import Spinner from "./Spinner";
+@@ -42,15 +40,6 @@ const MiniAvatarUploader: React.FC<IProps> = ({
+ }) => {
+     const cli = useContext(MatrixClientContext);
+     const [busy, setBusy] = useState(false);
+-    const [hover, setHover] = useState(false);
+-    const [show, setShow] = useState(false);
+-
+-    useTimeout(() => {
+-        setShow(true);
+-    }, 3000); // show after 3 seconds
+-    useTimeout(() => {
+-        setShow(false);
+-    }, 13000); // hide after being shown for 10 seconds
+ 
+     const uploadRef = useRef<HTMLInputElement>(null);
+ 
+@@ -61,7 +50,6 @@ const MiniAvatarUploader: React.FC<IProps> = ({
+         isUserAvatar || room?.currentState?.maySendStateEvent(EventType.RoomAvatar, cli.getSafeUserId());
+     if (!canSetAvatar) return <React.Fragment>{children}</React.Fragment>;
+ 
+-    const visible = !!label && (hover || show);
+     return (
+         <React.Fragment>
+             <input
+@@ -84,24 +72,23 @@ const MiniAvatarUploader: React.FC<IProps> = ({
+                 accept="image/*"
+             />
+ 
+-            <Tooltip label={label!} open={visible} onOpenChange={setHover}>
+-                <AccessibleButton
+-                    className={classNames("mx_MiniAvatarUploader", {
+-                        mx_MiniAvatarUploader_busy: busy,
+-                        mx_MiniAvatarUploader_hasAvatar: hasAvatar,
+-                    })}
+-                    disabled={busy}
+-                    onClick={() => {
+-                        uploadRef.current?.click();
+-                    }}
+-                >
+-                    {children}
++            <AccessibleButton
++                className={classNames("mx_MiniAvatarUploader", {
++                    mx_MiniAvatarUploader_busy: busy,
++                    mx_MiniAvatarUploader_hasAvatar: hasAvatar,
++                })}
++                disabled={busy}
++                onClick={() => {
++                    uploadRef.current?.click();
++                }}
++                aria-label={label}
++            >
++                {children}
+ 
+-                    <div className="mx_MiniAvatarUploader_indicator">
+-                        {busy ? <Spinner w={20} h={20} /> : <div className="mx_MiniAvatarUploader_cameraIcon" />}
+-                    </div>
+-                </AccessibleButton>
+-            </Tooltip>
++                <div className="mx_MiniAvatarUploader_indicator">
++                    {busy ? <Spinner w={20} h={20} /> : <div className="mx_MiniAvatarUploader_cameraIcon" />}
++                </div>
++            </AccessibleButton>
+         </React.Fragment>
+     );
+ };
+diff --git a/src/components/views/messages/MFileBody.tsx b/src/components/views/messages/MFileBody.tsx
+index 674e0f858329c5ca3b3485553409b3dcaedbbf8b..99f6aa4c13ef9958b02fb1b842ca0f4607fd3e46 100644
+--- a/src/components/views/messages/MFileBody.tsx
++++ b/src/components/views/messages/MFileBody.tsx
+@@ -125,7 +125,7 @@ export default class MFileBody extends React.Component<IProps, IState> {
+     }
+ 
+     private get fileName(): string {
+-        return this.content.body && this.content.body.length > 0 ? this.content.body : _t("common|attachment");
++        return this.props.mediaEventHelper?.fileName || _t("common|attachment");
+     }
+ 
+     private get linkText(): string {
+diff --git a/src/components/views/rooms/MemberList/MemberListView.tsx b/src/components/views/rooms/MemberList/MemberListView.tsx
+index e514144e31c0a0977f10e1b72ad0d20eb42c4a6d..dd04a8920934dc1c673a9522c791c3d481eb12f2 100644
+--- a/src/components/views/rooms/MemberList/MemberListView.tsx
++++ b/src/components/views/rooms/MemberList/MemberListView.tsx
+@@ -108,6 +108,7 @@ const MemberListView: React.FC<IProps> = (props: IProps) => {
+                                     // Subtract the height of MemberlistHeaderView so that the parent div does not overflow.
+                                     height={height - 113}
+                                     width={width}
++                                    overscanRowCount={15}
+                                 />
+                             )}
+                         </AutoSizer>
+diff --git a/src/utils/SessionLock.ts b/src/utils/SessionLock.ts
+index 861c87ead5551f36c2ea76d428f55d660f73a177..c93097aba179b7e09c07e039435b5f0a7f1580f6 100644
+--- a/src/utils/SessionLock.ts
++++ b/src/utils/SessionLock.ts
+@@ -57,7 +57,7 @@ export const SESSION_LOCK_CONSTANTS = {
+     /**
+      * The number of milliseconds after which we consider a lock claim stale
+      */
+-    LOCK_EXPIRY_TIME_MS: 30000,
++    LOCK_EXPIRY_TIME_MS: 15000,
+ };
+ 
+ /**
+@@ -140,7 +140,10 @@ export async function getSessionLock(onNewInstance: () => Promise<void>): Promis
+         }
+ 
+         const timeAgo = Date.now() - parseInt(lastPingTime);
+-        const remaining = SESSION_LOCK_CONSTANTS.LOCK_EXPIRY_TIME_MS - timeAgo;
++        // If the last ping time is in the future (i.e., timeAgo is negative), the chances are that the system clock has
++        // been wound back since the ping. Rather than waiting hours/days/millenia for us to get there, treat a future
++        // ping as "just now" by clipping to 0.
++        const remaining = SESSION_LOCK_CONSTANTS.LOCK_EXPIRY_TIME_MS - Math.max(timeAgo, 0);
+         if (remaining <= 0) {
+             // another session claimed the lock, but it is stale.
+             prefixedLogger.info(`Last ping (from ${lockHolder}) was ${timeAgo}ms ago: proceeding with startup`);
+@@ -242,13 +245,23 @@ export async function getSessionLock(onNewInstance: () => Promise<void>): Promis
+             };
+         });
+ 
++        // We construct our own promise here rather than using the `sleep` utility, to make it easier to test the
++        // SessionLock in a separate Window.
+         const sleepPromise = new Promise((resolve) => {
+             setTimeout(resolve, remaining, undefined);
+         });
+ 
+         window.addEventListener("storage", onStorageUpdate!);
+-        await Promise.race([sleepPromise, storageUpdatePromise]);
++        const winner = await Promise.race([sleepPromise, storageUpdatePromise]);
+         window.removeEventListener("storage", onStorageUpdate!);
++
++        // If we got through the whole of the sleep without any writes to the store, we know that the
++        // ping is now stale. There's no point in going round and calling `checkLock` again: we know that
++        // nothing has changed since last time.
++        if (!(winner instanceof StorageEvent)) {
++            prefixedLogger.info("Existing claim went stale: proceeding with startup");
++            break;
++        }
+     }
+ 
+     // If we get here, we know the lock is ours for the taking.

@@ -1,0 +1,2411 @@
+diff --git a/core/breaker/breaker_test.go b/core/breaker/breaker_test.go
+index 15fafd783238563a7b29f318006afb2ec427e20c..70a3480c19e960b4a985abe4e0cd240c16825c6a 100644
+--- a/core/breaker/breaker_test.go
++++ b/core/breaker/breaker_test.go
+@@ -1,13 +1,11 @@
+ package breaker
+ 
+ import (
+-	"context"
+ 	"errors"
+ 	"fmt"
+ 	"strconv"
+ 	"strings"
+ 	"testing"
+-	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/stat"
+@@ -18,274 +16,10 @@ func init() {
+ }
+ 
+ func TestCircuitBreaker_Allow(t *testing.T) {
+-	t.Run("allow", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		_, err := b.Allow()
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("allow with ctx", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		_, err := b.AllowCtx(context.Background())
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("allow with ctx timeout", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+-		defer cancel()
+-		time.Sleep(time.Millisecond)
+-		_, err := b.AllowCtx(ctx)
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-	})
+-
+-	t.Run("allow with ctx cancel", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		for i := 0; i < 100; i++ {
+-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+-			cancel()
+-			_, err := b.AllowCtx(ctx)
+-			assert.ErrorIs(t, err, context.Canceled)
+-		}
+-		_, err := b.AllowCtx(context.Background())
+-		assert.NoError(t, err)
+-	})
+-}
+-
+-func TestCircuitBreaker_Do(t *testing.T) {
+-	t.Run("do", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.Do(func() error {
+-			return nil
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("do with ctx", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoCtx(context.Background(), func() error {
+-			return nil
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("do with ctx timeout", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+-		defer cancel()
+-		time.Sleep(time.Millisecond)
+-		err := b.DoCtx(ctx, func() error {
+-			return nil
+-		})
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-	})
+-
+-	t.Run("do with ctx cancel", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		for i := 0; i < 100; i++ {
+-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+-			cancel()
+-			err := b.DoCtx(ctx, func() error {
+-				return nil
+-			})
+-			assert.ErrorIs(t, err, context.Canceled)
+-		}
+-		assert.NoError(t, b.DoCtx(context.Background(), func() error {
+-			return nil
+-		}))
+-	})
+-}
+-
+-func TestCircuitBreaker_DoWithAcceptable(t *testing.T) {
+-	t.Run("doWithAcceptable", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithAcceptable(func() error {
+-			return nil
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithAcceptable with ctx", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithAcceptableCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithAcceptable with ctx timeout", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+-		defer cancel()
+-		time.Sleep(time.Millisecond)
+-		err := b.DoWithAcceptableCtx(ctx, func() error {
+-			return nil
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-	})
+-
+-	t.Run("doWithAcceptable with ctx cancel", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		for i := 0; i < 100; i++ {
+-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+-			cancel()
+-			err := b.DoWithAcceptableCtx(ctx, func() error {
+-				return nil
+-			}, func(err error) bool {
+-				return true
+-			})
+-			assert.ErrorIs(t, err, context.Canceled)
+-		}
+-		assert.NoError(t, b.DoWithAcceptableCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) bool {
+-			return true
+-		}))
+-	})
+-}
+-
+-func TestCircuitBreaker_DoWithFallback(t *testing.T) {
+-	t.Run("doWithFallback", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithFallback(func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithFallback with ctx", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithFallbackCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithFallback with ctx timeout", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+-		defer cancel()
+-		time.Sleep(time.Millisecond)
+-		err := b.DoWithFallbackCtx(ctx, func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		})
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-	})
+-
+-	t.Run("doWithFallback with ctx cancel", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		for i := 0; i < 100; i++ {
+-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+-			cancel()
+-			err := b.DoWithFallbackCtx(ctx, func() error {
+-				return nil
+-			}, func(err error) error {
+-				return err
+-			})
+-			assert.ErrorIs(t, err, context.Canceled)
+-		}
+-		assert.NoError(t, b.DoWithFallbackCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		}))
+-	})
+-}
+-
+-func TestCircuitBreaker_DoWithFallbackAcceptable(t *testing.T) {
+-	t.Run("doWithFallbackAcceptable", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithFallbackAcceptable(func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithFallbackAcceptable with ctx", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		err := b.DoWithFallbackAcceptableCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("doWithFallbackAcceptable with ctx timeout", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+-		defer cancel()
+-		time.Sleep(time.Millisecond)
+-		err := b.DoWithFallbackAcceptableCtx(ctx, func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		}, func(err error) bool {
+-			return true
+-		})
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-	})
+-
+-	t.Run("doWithFallbackAcceptable with ctx cancel", func(t *testing.T) {
+-		b := NewBreaker()
+-		assert.True(t, len(b.Name()) > 0)
+-		for i := 0; i < 100; i++ {
+-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+-			cancel()
+-			err := b.DoWithFallbackAcceptableCtx(ctx, func() error {
+-				return nil
+-			}, func(err error) error {
+-				return err
+-			}, func(err error) bool {
+-				return true
+-			})
+-			assert.ErrorIs(t, err, context.Canceled)
+-		}
+-		assert.NoError(t, b.DoWithFallbackAcceptableCtx(context.Background(), func() error {
+-			return nil
+-		}, func(err error) error {
+-			return err
+-		}, func(err error) bool {
+-			return true
+-		}))
+-	})
++	b := NewBreaker()
++	assert.True(t, len(b.Name()) > 0)
++	_, err := b.Allow()
++	assert.Nil(t, err)
+ }
+ 
+ func TestLogReason(t *testing.T) {
+diff --git a/core/breaker/breakers_test.go b/core/breaker/breakers_test.go
+index af7cb8cc426d47331cc35dd53b8705953ed01650..ad1e62fb2f0ca293fdf11a49372a5f1a1e0faa93 100644
+--- a/core/breaker/breakers_test.go
++++ b/core/breaker/breakers_test.go
+@@ -1,7 +1,6 @@
+ package breaker
+ 
+ import (
+-	"context"
+ 	"errors"
+ 	"fmt"
+ 	"testing"
+@@ -23,9 +22,6 @@ func TestBreakersDo(t *testing.T) {
+ 	assert.Equal(t, errDummy, Do("any", func() error {
+ 		return errDummy
+ 	}))
+-	assert.Equal(t, errDummy, DoCtx(context.Background(), "any", func() error {
+-		return errDummy
+-	}))
+ }
+ 
+ func TestBreakersDoWithAcceptable(t *testing.T) {
+@@ -42,13 +38,6 @@ func TestBreakersDoWithAcceptable(t *testing.T) {
+ 			return nil
+ 		}) == nil
+ 	})
+-	verify(t, func() bool {
+-		return DoWithAcceptableCtx(context.Background(), "anyone", func() error {
+-			return nil
+-		}, func(err error) bool {
+-			return true
+-		}) == nil
+-	})
+ 
+ 	for i := 0; i < 10000; i++ {
+ 		err := DoWithAcceptable("another", func() error {
+@@ -87,12 +76,6 @@ func TestBreakersFallback(t *testing.T) {
+ 			return nil
+ 		})
+ 		assert.True(t, err == nil || errors.Is(err, errDummy))
+-		err = DoWithFallbackCtx(context.Background(), "fallback", func() error {
+-			return errDummy
+-		}, func(err error) error {
+-			return nil
+-		})
+-		assert.True(t, err == nil || errors.Is(err, errDummy))
+ 	}
+ 	verify(t, func() bool {
+ 		return errors.Is(Do("fallback", func() error {
+@@ -103,7 +86,7 @@ func TestBreakersFallback(t *testing.T) {
+ 
+ func TestBreakersAcceptableFallback(t *testing.T) {
+ 	errDummy := errors.New("any")
+-	for i := 0; i < 5000; i++ {
++	for i := 0; i < 10000; i++ {
+ 		err := DoWithFallbackAcceptable("acceptablefallback", func() error {
+ 			return errDummy
+ 		}, func(err error) error {
+@@ -112,14 +95,6 @@ func TestBreakersAcceptableFallback(t *testing.T) {
+ 			return err == nil
+ 		})
+ 		assert.True(t, err == nil || errors.Is(err, errDummy))
+-		err = DoWithFallbackAcceptableCtx(context.Background(), "acceptablefallback", func() error {
+-			return errDummy
+-		}, func(err error) error {
+-			return nil
+-		}, func(err error) bool {
+-			return err == nil
+-		})
+-		assert.True(t, err == nil || errors.Is(err, errDummy))
+ 	}
+ 	verify(t, func() bool {
+ 		return errors.Is(Do("acceptablefallback", func() error {
+diff --git a/core/breaker/bucket_test.go b/core/breaker/bucket_test.go
+deleted file mode 100644
+index ec43331b6670174f1fe3ab5a57da5144d1480419..0000000000000000000000000000000000000000
+--- a/core/breaker/bucket_test.go
++++ /dev/null
+@@ -1,43 +0,0 @@
+-package breaker
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestBucketAdd(t *testing.T) {
+-	b := &bucket{}
+-
+-	// Test succeed
+-	b.Add(0) // Using 0 for success
+-	assert.Equal(t, int64(1), b.Sum, "Sum should be incremented")
+-	assert.Equal(t, int64(1), b.Success, "Success should be incremented")
+-	assert.Equal(t, int64(0), b.Failure, "Failure should not be incremented")
+-	assert.Equal(t, int64(0), b.Drop, "Drop should not be incremented")
+-
+-	// Test failure
+-	b.Add(fail)
+-	assert.Equal(t, int64(2), b.Sum, "Sum should be incremented")
+-	assert.Equal(t, int64(1), b.Failure, "Failure should be incremented")
+-	assert.Equal(t, int64(0), b.Drop, "Drop should not be incremented")
+-
+-	// Test drop
+-	b.Add(drop)
+-	assert.Equal(t, int64(3), b.Sum, "Sum should be incremented")
+-	assert.Equal(t, int64(1), b.Drop, "Drop should be incremented")
+-}
+-
+-func TestBucketReset(t *testing.T) {
+-	b := &bucket{
+-		Sum:     3,
+-		Success: 1,
+-		Failure: 1,
+-		Drop:    1,
+-	}
+-	b.Reset()
+-	assert.Equal(t, int64(0), b.Sum, "Sum should be reset to 0")
+-	assert.Equal(t, int64(0), b.Success, "Success should be reset to 0")
+-	assert.Equal(t, int64(0), b.Failure, "Failure should be reset to 0")
+-	assert.Equal(t, int64(0), b.Drop, "Drop should be reset to 0")
+-}
+diff --git a/core/breaker/googlebreaker_test.go b/core/breaker/googlebreaker_test.go
+index 0d71b9127293846cf48e300d69ad6819e725561b..85d76660fac0c138686dd9d3840777fc11f50656 100644
+--- a/core/breaker/googlebreaker_test.go
++++ b/core/breaker/googlebreaker_test.go
+@@ -10,7 +10,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/collection"
+ 	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/stat"
+-	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+ const (
+@@ -23,14 +22,11 @@ func init() {
+ }
+ 
+ func getGoogleBreaker() *googleBreaker {
+-	st := collection.NewRollingWindow[int64, *bucket](func() *bucket {
+-		return new(bucket)
+-	}, testBuckets, testInterval)
++	st := collection.NewRollingWindow(testBuckets, testInterval)
+ 	return &googleBreaker{
+-		stat:     st,
+-		k:        5,
+-		proba:    mathx.NewProba(),
+-		lastPass: syncx.NewAtomicDuration(),
++		stat:  st,
++		k:     5,
++		proba: mathx.NewProba(),
+ 	}
+ }
+ 
+@@ -67,33 +63,6 @@ func TestGoogleBreakerOpen(t *testing.T) {
+ 	})
+ }
+ 
+-func TestGoogleBreakerRecover(t *testing.T) {
+-	st := collection.NewRollingWindow[int64, *bucket](func() *bucket {
+-		return new(bucket)
+-	}, testBuckets*2, testInterval)
+-	b := &googleBreaker{
+-		stat:     st,
+-		k:        k,
+-		proba:    mathx.NewProba(),
+-		lastPass: syncx.NewAtomicDuration(),
+-	}
+-	for i := 0; i < testBuckets; i++ {
+-		for j := 0; j < 100; j++ {
+-			b.stat.Add(1)
+-		}
+-		time.Sleep(testInterval)
+-	}
+-	for i := 0; i < testBuckets; i++ {
+-		for j := 0; j < 100; j++ {
+-			b.stat.Add(0)
+-		}
+-		time.Sleep(testInterval)
+-	}
+-	verify(t, func() bool {
+-		return b.accept() == nil
+-	})
+-}
+-
+ func TestGoogleBreakerFallback(t *testing.T) {
+ 	b := getGoogleBreaker()
+ 	markSuccess(b, 1)
+@@ -120,43 +89,6 @@ func TestGoogleBreakerReject(t *testing.T) {
+ 	}, nil, defaultAcceptable))
+ }
+ 
+-func TestGoogleBreakerMoreFallingBuckets(t *testing.T) {
+-	t.Parallel()
+-
+-	t.Run("more falling buckets", func(t *testing.T) {
+-		b := getGoogleBreaker()
+-
+-		func() {
+-			stopChan := time.After(testInterval * 6)
+-			for {
+-				time.Sleep(time.Millisecond)
+-				select {
+-				case <-stopChan:
+-					return
+-				default:
+-					assert.Error(t, b.doReq(func() error {
+-						return errors.New("foo")
+-					}, func(err error) error {
+-						return err
+-					}, func(err error) bool {
+-						return err == nil
+-					}))
+-				}
+-			}
+-		}()
+-
+-		var count int
+-		for i := 0; i < 100; i++ {
+-			if errors.Is(b.doReq(func() error {
+-				return ErrServiceUnavailable
+-			}, nil, defaultAcceptable), ErrServiceUnavailable) {
+-				count++
+-			}
+-		}
+-		assert.True(t, count > 90)
+-	})
+-}
+-
+ func TestGoogleBreakerAcceptable(t *testing.T) {
+ 	b := getGoogleBreaker()
+ 	errAcceptable := errors.New("any")
+@@ -232,38 +164,41 @@ func TestGoogleBreakerSelfProtection(t *testing.T) {
+ }
+ 
+ func TestGoogleBreakerHistory(t *testing.T) {
++	var b *googleBreaker
++	var accepts, total int64
++
+ 	sleep := testInterval
+ 	t.Run("accepts == total", func(t *testing.T) {
+-		b := getGoogleBreaker()
++		b = getGoogleBreaker()
+ 		markSuccessWithDuration(b, 10, sleep/2)
+-		result := b.history()
+-		assert.Equal(t, int64(10), result.accepts)
+-		assert.Equal(t, int64(10), result.total)
++		accepts, total = b.history()
++		assert.Equal(t, int64(10), accepts)
++		assert.Equal(t, int64(10), total)
+ 	})
+ 
+ 	t.Run("fail == total", func(t *testing.T) {
+-		b := getGoogleBreaker()
++		b = getGoogleBreaker()
+ 		markFailedWithDuration(b, 10, sleep/2)
+-		result := b.history()
+-		assert.Equal(t, int64(0), result.accepts)
+-		assert.Equal(t, int64(10), result.total)
++		accepts, total = b.history()
++		assert.Equal(t, int64(0), accepts)
++		assert.Equal(t, int64(10), total)
+ 	})
+ 
+ 	t.Run("accepts = 1/2 * total, fail = 1/2 * total", func(t *testing.T) {
+-		b := getGoogleBreaker()
++		b = getGoogleBreaker()
+ 		markFailedWithDuration(b, 5, sleep/2)
+ 		markSuccessWithDuration(b, 5, sleep/2)
+-		result := b.history()
+-		assert.Equal(t, int64(5), result.accepts)
+-		assert.Equal(t, int64(10), result.total)
++		accepts, total = b.history()
++		assert.Equal(t, int64(5), accepts)
++		assert.Equal(t, int64(10), total)
+ 	})
+ 
+ 	t.Run("auto reset rolling counter", func(t *testing.T) {
+-		b := getGoogleBreaker()
++		b = getGoogleBreaker()
+ 		time.Sleep(testInterval * testBuckets)
+-		result := b.history()
+-		assert.Equal(t, int64(0), result.accepts)
+-		assert.Equal(t, int64(0), result.total)
++		accepts, total = b.history()
++		assert.Equal(t, int64(0), accepts)
++		assert.Equal(t, int64(0), total)
+ 	})
+ }
+ 
+diff --git a/core/breaker/nopbreaker_test.go b/core/breaker/nopbreaker_test.go
+index 8ced1c229b73457b612203cdaa324e0891c8648e..ac26428d9ab161aac814fc2d37ca384836bee4d2 100644
+--- a/core/breaker/nopbreaker_test.go
++++ b/core/breaker/nopbreaker_test.go
+@@ -1,7 +1,6 @@
+ package breaker
+ 
+ import (
+-	"context"
+ 	"errors"
+ 	"testing"
+ 
+@@ -13,8 +12,6 @@ func TestNopBreaker(t *testing.T) {
+ 	assert.Equal(t, nopBreakerName, b.Name())
+ 	p, err := b.Allow()
+ 	assert.Nil(t, err)
+-	p, err = b.AllowCtx(context.Background())
+-	assert.Nil(t, err)
+ 	p.Accept()
+ 	for i := 0; i < 1000; i++ {
+ 		p, err := b.Allow()
+@@ -24,34 +21,18 @@ func TestNopBreaker(t *testing.T) {
+ 	assert.Nil(t, b.Do(func() error {
+ 		return nil
+ 	}))
+-	assert.Nil(t, b.DoCtx(context.Background(), func() error {
+-		return nil
+-	}))
+ 	assert.Nil(t, b.DoWithAcceptable(func() error {
+ 		return nil
+ 	}, defaultAcceptable))
+-	assert.Nil(t, b.DoWithAcceptableCtx(context.Background(), func() error {
+-		return nil
+-	}, defaultAcceptable))
+ 	errDummy := errors.New("any")
+ 	assert.Equal(t, errDummy, b.DoWithFallback(func() error {
+ 		return errDummy
+ 	}, func(err error) error {
+ 		return nil
+ 	}))
+-	assert.Equal(t, errDummy, b.DoWithFallbackCtx(context.Background(), func() error {
+-		return errDummy
+-	}, func(err error) error {
+-		return nil
+-	}))
+ 	assert.Equal(t, errDummy, b.DoWithFallbackAcceptable(func() error {
+ 		return errDummy
+ 	}, func(err error) error {
+ 		return nil
+ 	}, defaultAcceptable))
+-	assert.Equal(t, errDummy, b.DoWithFallbackAcceptableCtx(context.Background(), func() error {
+-		return errDummy
+-	}, func(err error) error {
+-		return nil
+-	}, defaultAcceptable))
+ }
+diff --git a/core/collection/rollingwindow_test.go b/core/collection/rollingwindow_test.go
+index 05bd956ad74faa41e5887fe54b0775d70c6512e9..201dce0e14baf8e2c952faa8d910d840dd2e5a07 100644
+--- a/core/collection/rollingwindow_test.go
++++ b/core/collection/rollingwindow_test.go
+@@ -12,24 +12,18 @@ import (
+ const duration = time.Millisecond * 50
+ 
+ func TestNewRollingWindow(t *testing.T) {
+-	assert.NotNil(t, NewRollingWindow[int64, *Bucket[int64]](func() *Bucket[int64] {
+-		return new(Bucket[int64])
+-	}, 10, time.Second))
++	assert.NotNil(t, NewRollingWindow(10, time.Second))
+ 	assert.Panics(t, func() {
+-		NewRollingWindow[int64, *Bucket[int64]](func() *Bucket[int64] {
+-			return new(Bucket[int64])
+-		}, 0, time.Second)
++		NewRollingWindow(0, time.Second)
+ 	})
+ }
+ 
+ func TestRollingWindowAdd(t *testing.T) {
+ 	const size = 3
+-	r := NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-		return new(Bucket[float64])
+-	}, size, duration)
++	r := NewRollingWindow(size, duration)
+ 	listBuckets := func() []float64 {
+ 		var buckets []float64
+-		r.Reduce(func(b *Bucket[float64]) {
++		r.Reduce(func(b *Bucket) {
+ 			buckets = append(buckets, b.Sum)
+ 		})
+ 		return buckets
+@@ -53,12 +47,10 @@ func TestRollingWindowAdd(t *testing.T) {
+ 
+ func TestRollingWindowReset(t *testing.T) {
+ 	const size = 3
+-	r := NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-		return new(Bucket[float64])
+-	}, size, duration, IgnoreCurrentBucket[float64, *Bucket[float64]]())
++	r := NewRollingWindow(size, duration, IgnoreCurrentBucket())
+ 	listBuckets := func() []float64 {
+ 		var buckets []float64
+-		r.Reduce(func(b *Bucket[float64]) {
++		r.Reduce(func(b *Bucket) {
+ 			buckets = append(buckets, b.Sum)
+ 		})
+ 		return buckets
+@@ -80,19 +72,15 @@ func TestRollingWindowReset(t *testing.T) {
+ func TestRollingWindowReduce(t *testing.T) {
+ 	const size = 4
+ 	tests := []struct {
+-		win    *RollingWindow[float64, *Bucket[float64]]
++		win    *RollingWindow
+ 		expect float64
+ 	}{
+ 		{
+-			win: NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-				return new(Bucket[float64])
+-			}, size, duration),
++			win:    NewRollingWindow(size, duration),
+ 			expect: 10,
+ 		},
+ 		{
+-			win: NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-				return new(Bucket[float64])
+-			}, size, duration, IgnoreCurrentBucket[float64, *Bucket[float64]]()),
++			win:    NewRollingWindow(size, duration, IgnoreCurrentBucket()),
+ 			expect: 4,
+ 		},
+ 	}
+@@ -109,7 +97,7 @@ func TestRollingWindowReduce(t *testing.T) {
+ 				}
+ 			}
+ 			var result float64
+-			r.Reduce(func(b *Bucket[float64]) {
++			r.Reduce(func(b *Bucket) {
+ 				result += b.Sum
+ 			})
+ 			assert.Equal(t, test.expect, result)
+@@ -120,12 +108,10 @@ func TestRollingWindowReduce(t *testing.T) {
+ func TestRollingWindowBucketTimeBoundary(t *testing.T) {
+ 	const size = 3
+ 	interval := time.Millisecond * 30
+-	r := NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-		return new(Bucket[float64])
+-	}, size, interval)
++	r := NewRollingWindow(size, interval)
+ 	listBuckets := func() []float64 {
+ 		var buckets []float64
+-		r.Reduce(func(b *Bucket[float64]) {
++		r.Reduce(func(b *Bucket) {
+ 			buckets = append(buckets, b.Sum)
+ 		})
+ 		return buckets
+@@ -152,9 +138,7 @@ func TestRollingWindowBucketTimeBoundary(t *testing.T) {
+ 
+ func TestRollingWindowDataRace(t *testing.T) {
+ 	const size = 3
+-	r := NewRollingWindow[float64, *Bucket[float64]](func() *Bucket[float64] {
+-		return new(Bucket[float64])
+-	}, size, duration)
++	r := NewRollingWindow(size, duration)
+ 	stop := make(chan bool)
+ 	go func() {
+ 		for {
+@@ -173,7 +157,7 @@ func TestRollingWindowDataRace(t *testing.T) {
+ 			case <-stop:
+ 				return
+ 			default:
+-				r.Reduce(func(b *Bucket[float64]) {})
++				r.Reduce(func(b *Bucket) {})
+ 			}
+ 		}
+ 	}()
+diff --git a/core/errorx/check_test.go b/core/errorx/check_test.go
+deleted file mode 100644
+index 0e7b267fb5b0e1db29a1c99438547e1657ec6e87..0000000000000000000000000000000000000000
+--- a/core/errorx/check_test.go
++++ /dev/null
+@@ -1,70 +0,0 @@
+-package errorx
+-
+-import (
+-	"errors"
+-	"testing"
+-)
+-
+-func TestIn(t *testing.T) {
+-	err1 := errors.New("error 1")
+-	err2 := errors.New("error 2")
+-	err3 := errors.New("error 3")
+-
+-	tests := []struct {
+-		name string
+-		err  error
+-		errs []error
+-		want bool
+-	}{
+-		{
+-			name: "Error matches one of the errors in the list",
+-			err:  err1,
+-			errs: []error{err1, err2},
+-			want: true,
+-		},
+-		{
+-			name: "Error does not match any errors in the list",
+-			err:  err3,
+-			errs: []error{err1, err2},
+-			want: false,
+-		},
+-		{
+-			name: "Empty error list",
+-			err:  err1,
+-			errs: []error{},
+-			want: false,
+-		},
+-		{
+-			name: "Nil error with non-nil list",
+-			err:  nil,
+-			errs: []error{err1, err2},
+-			want: false,
+-		},
+-		{
+-			name: "Non-nil error with nil in list",
+-			err:  err1,
+-			errs: []error{nil, err2},
+-			want: false,
+-		},
+-		{
+-			name: "Error matches nil error in the list",
+-			err:  nil,
+-			errs: []error{nil, err2},
+-			want: true,
+-		},
+-		{
+-			name: "Nil error with empty list",
+-			err:  nil,
+-			errs: []error{},
+-			want: false,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			if got := In(tt.err, tt.errs...); got != tt.want {
+-				t.Errorf("In() = %v, want %v", got, tt.want)
+-			}
+-		})
+-	}
+-}
+diff --git a/core/fx/parallel_test.go b/core/fx/parallel_test.go
+index 85032411d9750577738bd597f8d739368cc00c0a..eed5521ab27a581d8813f5eb6b8befe1c4ce514e 100644
+--- a/core/fx/parallel_test.go
++++ b/core/fx/parallel_test.go
+@@ -1,7 +1,6 @@
+ package fx
+ 
+ import (
+-	"errors"
+ 	"sync/atomic"
+ 	"testing"
+ 	"time"
+@@ -23,54 +22,3 @@ func TestParallel(t *testing.T) {
+ 	})
+ 	assert.Equal(t, int32(6), count)
+ }
+-
+-func TestParallelErr(t *testing.T) {
+-	var count int32
+-	err := ParallelErr(
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 1)
+-			return errors.New("failed to exec #1")
+-		},
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 2)
+-			return errors.New("failed to exec #2")
+-
+-		},
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 3)
+-			return nil
+-		},
+-	)
+-
+-	assert.Equal(t, int32(6), count)
+-	assert.Error(t, err)
+-	assert.ErrorContains(t, err, "failed to exec #1", "failed to exec #2")
+-}
+-
+-func TestParallelErrErrorNil(t *testing.T) {
+-	var count int32
+-	err := ParallelErr(
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 1)
+-			return nil
+-		},
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 2)
+-			return nil
+-
+-		},
+-		func() error {
+-			time.Sleep(time.Millisecond * 100)
+-			atomic.AddInt32(&count, 3)
+-			return nil
+-		},
+-	)
+-
+-	assert.Equal(t, int32(6), count)
+-	assert.NoError(t, err)
+-}
+diff --git a/core/load/adaptiveshedder_test.go b/core/load/adaptiveshedder_test.go
+index c30460c3c21d5dab69b13f1190006b9fc59aeae8..104be20e92dd828b183f33593b7a1e3d43d947a9 100644
+--- a/core/load/adaptiveshedder_test.go
++++ b/core/load/adaptiveshedder_test.go
+@@ -58,7 +58,7 @@ func TestAdaptiveShedder(t *testing.T) {
+ func TestAdaptiveShedderMaxPass(t *testing.T) {
+ 	passCounter := newRollingWindow()
+ 	for i := 1; i <= 10; i++ {
+-		passCounter.Add(int64(i * 100))
++		passCounter.Add(float64(i * 100))
+ 		time.Sleep(bucketDuration)
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -83,7 +83,7 @@ func TestAdaptiveShedderMinRt(t *testing.T) {
+ 			time.Sleep(bucketDuration)
+ 		}
+ 		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(int64(j))
++			rtCounter.Add(float64(j))
+ 		}
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -107,9 +107,9 @@ func TestAdaptiveShedderMaxFlight(t *testing.T) {
+ 		if i > 0 {
+ 			time.Sleep(bucketDuration)
+ 		}
+-		passCounter.Add(int64((i + 1) * 100))
++		passCounter.Add(float64((i + 1) * 100))
+ 		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(int64(j))
++			rtCounter.Add(float64(j))
+ 		}
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -129,9 +129,9 @@ func TestAdaptiveShedderShouldDrop(t *testing.T) {
+ 		if i > 0 {
+ 			time.Sleep(bucketDuration)
+ 		}
+-		passCounter.Add(int64((i + 1) * 100))
++		passCounter.Add(float64((i + 1) * 100))
+ 		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(int64(j))
++			rtCounter.Add(float64(j))
+ 		}
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -184,9 +184,9 @@ func TestAdaptiveShedderStillHot(t *testing.T) {
+ 		if i > 0 {
+ 			time.Sleep(bucketDuration)
+ 		}
+-		passCounter.Add(int64((i + 1) * 100))
++		passCounter.Add(float64((i + 1) * 100))
+ 		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(int64(j))
++			rtCounter.Add(float64(j))
+ 		}
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -248,9 +248,9 @@ func BenchmarkMaxFlight(b *testing.B) {
+ 		if i > 0 {
+ 			time.Sleep(bucketDuration)
+ 		}
+-		passCounter.Add(int64((i + 1) * 100))
++		passCounter.Add(float64((i + 1) * 100))
+ 		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(int64(j))
++			rtCounter.Add(float64(j))
+ 		}
+ 	}
+ 	shedder := &adaptiveShedder{
+@@ -265,8 +265,6 @@ func BenchmarkMaxFlight(b *testing.B) {
+ 	}
+ }
+ 
+-func newRollingWindow() *collection.RollingWindow[int64, *collection.Bucket[int64]] {
+-	return collection.NewRollingWindow[int64, *collection.Bucket[int64]](func() *collection.Bucket[int64] {
+-		return new(collection.Bucket[int64])
+-	}, buckets, bucketDuration, collection.IgnoreCurrentBucket[int64, *collection.Bucket[int64]]())
++func newRollingWindow() *collection.RollingWindow {
++	return collection.NewRollingWindow(buckets, bucketDuration, collection.IgnoreCurrentBucket())
+ }
+diff --git a/core/logx/logs_test.go b/core/logx/logs_test.go
+index 5d46b7b9eb4c1fdeb5d4d85cdff58a12275e9a84..3780bc2f120c418b1ccd11755f5a8bab308bd26a 100644
+--- a/core/logx/logs_test.go
++++ b/core/logx/logs_test.go
+@@ -348,27 +348,6 @@ func TestStructedLogInfow(t *testing.T) {
+ 	})
+ }
+ 
+-func TestStructedLogFieldNil(t *testing.T) {
+-	w := new(mockWriter)
+-	old := writer.Swap(w)
+-	defer writer.Store(old)
+-
+-	assert.NotPanics(t, func() {
+-		var s *string
+-		Infow("test", Field("bb", s))
+-		var d *nilStringer
+-		Infow("test", Field("bb", d))
+-		var e *nilError
+-		Errorw("test", Field("bb", e))
+-	})
+-	assert.NotPanics(t, func() {
+-		var p panicStringer
+-		Infow("test", Field("bb", p))
+-		var ps innerPanicStringer
+-		Infow("test", Field("bb", ps))
+-	})
+-}
+-
+ func TestStructedLogInfoConsoleAny(t *testing.T) {
+ 	w := new(mockWriter)
+ 	old := writer.Swap(w)
+@@ -880,36 +859,3 @@ func validateFields(t *testing.T, content string, fields map[string]any) {
+ 		}
+ 	}
+ }
+-
+-type nilError struct {
+-	Name string
+-}
+-
+-func (e *nilError) Error() string {
+-	return e.Name
+-}
+-
+-type nilStringer struct {
+-	Name string
+-}
+-
+-func (s *nilStringer) String() string {
+-	return s.Name
+-}
+-
+-type innerPanicStringer struct {
+-	Inner *struct {
+-		Name string
+-	}
+-}
+-
+-func (s innerPanicStringer) String() string {
+-	return s.Inner.Name
+-}
+-
+-type panicStringer struct {
+-}
+-
+-func (s panicStringer) String() string {
+-	panic("panic")
+-}
+diff --git a/core/logx/writer_test.go b/core/logx/writer_test.go
+index 6ac98bc1d17b19084699fdab9690b5c64fda9e27..0f810975f6bd150dfe5bb5b397a6c1dff7d7a95f 100644
+--- a/core/logx/writer_test.go
++++ b/core/logx/writer_test.go
+@@ -189,41 +189,6 @@ func TestWritePlainAny(t *testing.T) {
+ 	assert.Contains(t, buf.String(), "runtime/debug.Stack")
+ }
+ 
+-func TestWritePlainDuplicate(t *testing.T) {
+-	old := atomic.SwapUint32(&encoding, plainEncodingType)
+-	t.Cleanup(func() {
+-		atomic.StoreUint32(&encoding, old)
+-	})
+-
+-	var buf bytes.Buffer
+-	output(&buf, levelInfo, "foo", LogField{
+-		Key:   "first",
+-		Value: "a",
+-	}, LogField{
+-		Key:   "first",
+-		Value: "b",
+-	})
+-	assert.Contains(t, buf.String(), "foo")
+-	assert.NotContains(t, buf.String(), "first=a")
+-	assert.Contains(t, buf.String(), "first=b")
+-
+-	buf.Reset()
+-	output(&buf, levelInfo, "foo", LogField{
+-		Key:   "first",
+-		Value: "a",
+-	}, LogField{
+-		Key:   "first",
+-		Value: "b",
+-	}, LogField{
+-		Key:   "second",
+-		Value: "c",
+-	})
+-	assert.Contains(t, buf.String(), "foo")
+-	assert.NotContains(t, buf.String(), "first=a")
+-	assert.Contains(t, buf.String(), "first=b")
+-	assert.Contains(t, buf.String(), "second=c")
+-}
+-
+ func TestLogWithLimitContentLength(t *testing.T) {
+ 	maxLen := atomic.LoadUint32(&maxContentLength)
+ 	atomic.StoreUint32(&maxContentLength, 10)
+diff --git a/core/mapping/unmarshaler_test.go b/core/mapping/unmarshaler_test.go
+index 2e16df83e2b1bee3359d947853d43557f096f77d..ac5a30c0fb94b9fe5c2250ffd1e41c5561129351 100644
+--- a/core/mapping/unmarshaler_test.go
++++ b/core/mapping/unmarshaler_test.go
+@@ -2,7 +2,6 @@ package mapping
+ 
+ import (
+ 	"encoding/json"
+-	"errors"
+ 	"fmt"
+ 	"reflect"
+ 	"strconv"
+@@ -5761,49 +5760,6 @@ func TestUnmarshalWithIgnoreFields(t *testing.T) {
+ 	}
+ }
+ 
+-func TestUnmarshal_Unmarshaler(t *testing.T) {
+-	t.Run("success", func(t *testing.T) {
+-		v := struct {
+-			Foo *mockUnmarshaler `json:"name"`
+-		}{}
+-		body := `{"name": "hello"}`
+-		assert.NoError(t, UnmarshalJsonBytes([]byte(body), &v))
+-		assert.Equal(t, "hello", v.Foo.Name)
+-	})
+-
+-	t.Run("failure", func(t *testing.T) {
+-		v := struct {
+-			Foo *mockUnmarshalerWithError `json:"name"`
+-		}{}
+-		body := `{"name": "hello"}`
+-		assert.Error(t, UnmarshalJsonBytes([]byte(body), &v))
+-	})
+-
+-	t.Run("not json unmarshaler", func(t *testing.T) {
+-		v := struct {
+-			Foo *struct {
+-				Name string
+-			} `key:"name"`
+-		}{}
+-		u := NewUnmarshaler(defaultKeyName)
+-		assert.Error(t, u.Unmarshal(map[string]any{
+-			"name": "hello",
+-		}, &v))
+-	})
+-
+-	t.Run("not with json key", func(t *testing.T) {
+-		v := struct {
+-			Foo *mockUnmarshaler `json:"name"`
+-		}{}
+-		u := NewUnmarshaler(defaultKeyName)
+-		// with different key, ignore
+-		assert.NoError(t, u.Unmarshal(map[string]any{
+-			"name": "hello",
+-		}, &v))
+-		assert.Nil(t, v.Foo)
+-	})
+-}
+-
+ func BenchmarkDefaultValue(b *testing.B) {
+ 	for i := 0; i < b.N; i++ {
+ 		var a struct {
+@@ -5917,20 +5873,3 @@ func (m mockValuerWithParent) Value(_ string) (any, bool) {
+ func (m mockValuerWithParent) Parent() valuerWithParent {
+ 	return m.parent
+ }
+-
+-type mockUnmarshaler struct {
+-	Name string
+-}
+-
+-func (m *mockUnmarshaler) UnmarshalJSON(b []byte) error {
+-	m.Name = string(b)
+-	return nil
+-}
+-
+-type mockUnmarshalerWithError struct {
+-	Name string
+-}
+-
+-func (m *mockUnmarshalerWithError) UnmarshalJSON(b []byte) error {
+-	return errors.New("foo")
+-}
+diff --git a/core/stat/remotewriter_test.go b/core/stat/remotewriter_test.go
+index 74a14990e98b4da57ee4fe712464923ac42a0034..e36fd80090e92ddea339f47807703e9fd6b079cc 100644
+--- a/core/stat/remotewriter_test.go
++++ b/core/stat/remotewriter_test.go
+@@ -1,7 +1,6 @@
+ package stat
+ 
+ import (
+-	"errors"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -29,14 +28,3 @@ func TestRemoteWriterFail(t *testing.T) {
+ 	})
+ 	assert.NotNil(t, err)
+ }
+-
+-func TestRemoteWriterError(t *testing.T) {
+-	defer gock.Off()
+-
+-	gock.New("http://foo.com").ReplyError(errors.New("foo"))
+-	writer := NewRemoteWriter("http://foo.com")
+-	err := writer.Write(&StatReport{
+-		Name: "bar",
+-	})
+-	assert.NotNil(t, err)
+-}
+diff --git a/core/stores/mon/collection_test.go b/core/stores/mon/collection_test.go
+index 4a3f3b56f58278111427488cbaf497ed26bc2c96..2adc27f092d51ecf6ddb53742421c20b4d0800ca 100644
+--- a/core/stores/mon/collection_test.go
++++ b/core/stores/mon/collection_test.go
+@@ -595,40 +595,19 @@ func (d *dropBreaker) Allow() (breaker.Promise, error) {
+ 	return nil, errDummy
+ }
+ 
+-func (d *dropBreaker) AllowCtx(_ context.Context) (breaker.Promise, error) {
+-	return nil, errDummy
+-}
+-
+ func (d *dropBreaker) Do(_ func() error) error {
+ 	return nil
+ }
+ 
+-func (d *dropBreaker) DoCtx(_ context.Context, _ func() error) error {
+-	return nil
+-}
+-
+ func (d *dropBreaker) DoWithAcceptable(_ func() error, _ breaker.Acceptable) error {
+ 	return errDummy
+ }
+ 
+-func (d *dropBreaker) DoWithAcceptableCtx(_ context.Context, _ func() error, _ breaker.Acceptable) error {
+-	return errDummy
+-}
+-
+ func (d *dropBreaker) DoWithFallback(_ func() error, _ breaker.Fallback) error {
+ 	return nil
+ }
+ 
+-func (d *dropBreaker) DoWithFallbackCtx(_ context.Context, _ func() error, _ breaker.Fallback) error {
+-	return nil
+-}
+-
+ func (d *dropBreaker) DoWithFallbackAcceptable(_ func() error, _ breaker.Fallback,
+ 	_ breaker.Acceptable) error {
+ 	return nil
+ }
+-
+-func (d *dropBreaker) DoWithFallbackAcceptableCtx(_ context.Context, _ func() error,
+-	_ breaker.Fallback, _ breaker.Acceptable) error {
+-	return nil
+-}
+diff --git a/core/stores/redis/breakerhook_test.go b/core/stores/redis/breakerhook_test.go
+deleted file mode 100644
+index ebd415049999397fa112cd158715ae71102b77b4..0000000000000000000000000000000000000000
+--- a/core/stores/redis/breakerhook_test.go
++++ /dev/null
+@@ -1,135 +0,0 @@
+-package redis
+-
+-import (
+-	"context"
+-	"errors"
+-	"testing"
+-	"time"
+-
+-	"github.com/alicebob/miniredis/v2"
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/breaker"
+-)
+-
+-func TestBreakerHook_ProcessHook(t *testing.T) {
+-	t.Run("breakerHookOpen", func(t *testing.T) {
+-		s := miniredis.RunT(t)
+-
+-		rds := MustNewRedis(RedisConf{
+-			Host: s.Addr(),
+-			Type: NodeType,
+-		})
+-
+-		someError := errors.New("ERR some error")
+-		s.SetError(someError.Error())
+-
+-		var err error
+-		for i := 0; i < 1000; i++ {
+-			_, err = rds.Get("key")
+-			if err != nil && err.Error() != someError.Error() {
+-				break
+-			}
+-		}
+-		assert.Equal(t, breaker.ErrServiceUnavailable, err)
+-	})
+-
+-	t.Run("breakerHookClose", func(t *testing.T) {
+-		s := miniredis.RunT(t)
+-
+-		rds := MustNewRedis(RedisConf{
+-			Host: s.Addr(),
+-			Type: NodeType,
+-		})
+-
+-		var err error
+-		for i := 0; i < 1000; i++ {
+-			_, err = rds.Get("key")
+-			if err != nil {
+-				break
+-			}
+-		}
+-		assert.NotEqual(t, breaker.ErrServiceUnavailable, err)
+-	})
+-
+-	t.Run("breakerHook_ignoreCmd", func(t *testing.T) {
+-		s := miniredis.RunT(t)
+-
+-		rds := MustNewRedis(RedisConf{
+-			Host: s.Addr(),
+-			Type: NodeType,
+-		})
+-
+-		someError := errors.New("ERR some error")
+-		s.SetError(someError.Error())
+-
+-		var err error
+-
+-		node, err := getRedis(rds)
+-		assert.NoError(t, err)
+-
+-		for i := 0; i < 1000; i++ {
+-			_, err = rds.Blpop(node, "key")
+-			if err != nil && err.Error() != someError.Error() {
+-				break
+-			}
+-		}
+-		assert.Equal(t, someError.Error(), err.Error())
+-	})
+-}
+-
+-func TestBreakerHook_ProcessPipelineHook(t *testing.T) {
+-	t.Run("breakerPipelineHookOpen", func(t *testing.T) {
+-		s := miniredis.RunT(t)
+-
+-		rds := MustNewRedis(RedisConf{
+-			Host: s.Addr(),
+-			Type: NodeType,
+-		})
+-
+-		someError := errors.New("ERR some error")
+-		s.SetError(someError.Error())
+-
+-		var err error
+-		for i := 0; i < 1000; i++ {
+-			err = rds.Pipelined(
+-				func(pipe Pipeliner) error {
+-					pipe.Incr(context.Background(), "pipelined_counter")
+-					pipe.Expire(context.Background(), "pipelined_counter", time.Hour)
+-					pipe.ZAdd(context.Background(), "zadd", Z{Score: 12, Member: "zadd"})
+-					return nil
+-				},
+-			)
+-
+-			if err != nil && err.Error() != someError.Error() {
+-				break
+-			}
+-		}
+-		assert.Equal(t, breaker.ErrServiceUnavailable, err)
+-	})
+-
+-	t.Run("breakerPipelineHookClose", func(t *testing.T) {
+-		s := miniredis.RunT(t)
+-
+-		rds := MustNewRedis(RedisConf{
+-			Host: s.Addr(),
+-			Type: NodeType,
+-		})
+-
+-		var err error
+-		for i := 0; i < 1000; i++ {
+-			err = rds.Pipelined(
+-				func(pipe Pipeliner) error {
+-					pipe.Incr(context.Background(), "pipelined_counter")
+-					pipe.Expire(context.Background(), "pipelined_counter", time.Hour)
+-					pipe.ZAdd(context.Background(), "zadd", Z{Score: 12, Member: "zadd"})
+-					return nil
+-				},
+-			)
+-
+-			if err != nil {
+-				break
+-			}
+-		}
+-		assert.NotEqual(t, breaker.ErrServiceUnavailable, err)
+-	})
+-}
+diff --git a/core/stores/redis/durationhook_test.go b/core/stores/redis/durationhook_test.go
+deleted file mode 100644
+index 37c6eb54209318b87b00dfbe450a7892019d29e1..0000000000000000000000000000000000000000
+--- a/core/stores/redis/durationhook_test.go
++++ /dev/null
+@@ -1,156 +0,0 @@
+-package redis
+-
+-import (
+-	"context"
+-	"errors"
+-	"io"
+-	"net"
+-	"strings"
+-	"testing"
+-	"time"
+-
+-	red "github.com/redis/go-redis/v9"
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/breaker"
+-	"github.com/zeromicro/go-zero/core/logx/logtest"
+-	"github.com/zeromicro/go-zero/core/trace/tracetest"
+-	tracesdk "go.opentelemetry.io/otel/trace"
+-)
+-
+-func TestHookProcessCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := defaultDurationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	assert.False(t, strings.Contains(w.String(), "slow"))
+-}
+-
+-func TestHookProcessCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := defaultDurationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
+-}
+-
+-func TestHookProcessPipelineCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		return nil
+-	})(context.Background(), nil)
+-	assert.NoError(t, err)
+-
+-	err = defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.NoError(t, err)
+-
+-	assert.False(t, strings.Contains(w.String(), "slow"))
+-}
+-
+-func TestHookProcessPipelineCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
+-
+-	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.NoError(t, err)
+-
+-	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
+-}
+-
+-func TestHookProcessPipelineCase3(t *testing.T) {
+-	te := tracetest.NewInMemoryExporter(t)
+-
+-	err := defaultDurationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return assert.AnError
+-	})(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background()),
+-	})
+-	assert.ErrorIs(t, err, assert.AnError)
+-	traceLogs := te.GetSpans().Snapshots()[0]
+-	assert.Equal(t, "redis", traceLogs.Name())
+-	assert.Equal(t, assert.AnError.Error(), traceLogs.Events()[0].Attributes[1].Value.AsString(), "trace should record error")
+-}
+-
+-func TestLogDuration(t *testing.T) {
+-	w := logtest.NewCollector(t)
+-
+-	logDuration(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background(), "get", "foo"),
+-	}, 1*time.Second)
+-	assert.True(t, strings.Contains(w.String(), "get foo"))
+-
+-	logDuration(context.Background(), []red.Cmder{
+-		red.NewCmd(context.Background(), "get", "foo"),
+-		red.NewCmd(context.Background(), "set", "bar", 0),
+-	}, 1*time.Second)
+-	assert.True(t, strings.Contains(w.String(), `get foo\nset bar 0`))
+-}
+-
+-func TestFormatError(t *testing.T) {
+-	// Test case: err is OpError
+-	err := &net.OpError{
+-		Err: mockOpError{},
+-	}
+-	assert.Equal(t, "timeout", formatError(err))
+-
+-	// Test case: err is nil
+-	assert.Equal(t, "", formatError(nil))
+-
+-	// Test case: err is red.Nil
+-	assert.Equal(t, "", formatError(red.Nil))
+-
+-	// Test case: err is io.EOF
+-	assert.Equal(t, "eof", formatError(io.EOF))
+-
+-	// Test case: err is context.DeadlineExceeded
+-	assert.Equal(t, "context deadline", formatError(context.DeadlineExceeded))
+-
+-	// Test case: err is breaker.ErrServiceUnavailable
+-	assert.Equal(t, "breaker open", formatError(breaker.ErrServiceUnavailable))
+-
+-	// Test case: err is unknown
+-	assert.Equal(t, "unexpected error", formatError(errors.New("some error")))
+-}
+-
+-type mockOpError struct {
+-}
+-
+-func (mockOpError) Error() string {
+-	return "mock error"
+-}
+-
+-func (mockOpError) Timeout() bool {
+-	return true
+-}
+diff --git a/core/stores/redis/hook_test.go b/core/stores/redis/hook_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..44b2e8fa709378b11c3d94f291550ef268b2465f
+--- /dev/null
++++ b/core/stores/redis/hook_test.go
+@@ -0,0 +1,156 @@
++package redis
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"strings"
++	"testing"
++	"time"
++
++	red "github.com/redis/go-redis/v9"
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/breaker"
++	"github.com/zeromicro/go-zero/core/logx/logtest"
++	"github.com/zeromicro/go-zero/core/trace/tracetest"
++	tracesdk "go.opentelemetry.io/otel/trace"
++)
++
++func TestHookProcessCase1(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return nil
++	})(context.Background(), red.NewCmd(context.Background()))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	assert.False(t, strings.Contains(w.String(), "slow"))
++}
++
++func TestHookProcessCase2(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		time.Sleep(slowThreshold.Load() + time.Millisecond)
++		return nil
++	})(context.Background(), red.NewCmd(context.Background()))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	assert.True(t, strings.Contains(w.String(), "slow"))
++	assert.True(t, strings.Contains(w.String(), "trace"))
++	assert.True(t, strings.Contains(w.String(), "span"))
++}
++
++func TestHookProcessPipelineCase1(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		return nil
++	})(context.Background(), nil)
++	assert.NoError(t, err)
++
++	err = durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return nil
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.NoError(t, err)
++
++	assert.False(t, strings.Contains(w.String(), "slow"))
++}
++
++func TestHookProcessPipelineCase2(t *testing.T) {
++	tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
++
++	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		time.Sleep(slowThreshold.Load() + time.Millisecond)
++		return nil
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.NoError(t, err)
++
++	assert.True(t, strings.Contains(w.String(), "slow"))
++	assert.True(t, strings.Contains(w.String(), "trace"))
++	assert.True(t, strings.Contains(w.String(), "span"))
++}
++
++func TestHookProcessPipelineCase3(t *testing.T) {
++	te := tracetest.NewInMemoryExporter(t)
++
++	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
++		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
++		return assert.AnError
++	})(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background()),
++	})
++	assert.ErrorIs(t, err, assert.AnError)
++	traceLogs := te.GetSpans().Snapshots()[0]
++	assert.Equal(t, "redis", traceLogs.Name())
++	assert.Equal(t, assert.AnError.Error(), traceLogs.Events()[0].Attributes[1].Value.AsString(), "trace should record error")
++}
++
++func TestLogDuration(t *testing.T) {
++	w := logtest.NewCollector(t)
++
++	logDuration(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background(), "get", "foo"),
++	}, 1*time.Second)
++	assert.True(t, strings.Contains(w.String(), "get foo"))
++
++	logDuration(context.Background(), []red.Cmder{
++		red.NewCmd(context.Background(), "get", "foo"),
++		red.NewCmd(context.Background(), "set", "bar", 0),
++	}, 1*time.Second)
++	assert.True(t, strings.Contains(w.String(), `get foo\nset bar 0`))
++}
++
++func TestFormatError(t *testing.T) {
++	// Test case: err is OpError
++	err := &net.OpError{
++		Err: mockOpError{},
++	}
++	assert.Equal(t, "timeout", formatError(err))
++
++	// Test case: err is nil
++	assert.Equal(t, "", formatError(nil))
++
++	// Test case: err is red.Nil
++	assert.Equal(t, "", formatError(red.Nil))
++
++	// Test case: err is io.EOF
++	assert.Equal(t, "eof", formatError(io.EOF))
++
++	// Test case: err is context.DeadlineExceeded
++	assert.Equal(t, "context deadline", formatError(context.DeadlineExceeded))
++
++	// Test case: err is breaker.ErrServiceUnavailable
++	assert.Equal(t, "breaker open", formatError(breaker.ErrServiceUnavailable))
++
++	// Test case: err is unknown
++	assert.Equal(t, "unexpected error", formatError(errors.New("some error")))
++}
++
++type mockOpError struct {
++}
++
++func (mockOpError) Error() string {
++	return "mock error"
++}
++
++func (mockOpError) Timeout() bool {
++	return true
++}
+diff --git a/core/stores/redis/metrics_test.go b/core/stores/redis/metrics_test.go
+index 58be61d5e3a1e3e6f37b7680e19a44e83bafc8b1..45549bde0cda8e2d9d96fcaff5fc6c19efd74981 100644
+--- a/core/stores/redis/metrics_test.go
++++ b/core/stores/redis/metrics_test.go
+@@ -19,7 +19,7 @@ func TestRedisMetric(t *testing.T) {
+ 	cfg := devserver.Config{}
+ 	_ = conf.FillDefault(&cfg)
+ 	server := devserver.NewServer(cfg)
+-	server.StartAsync(cfg)
++	server.StartAsync()
+ 	time.Sleep(time.Second)
+ 
+ 	metricReqDur.Observe(8, "test-cmd")
+diff --git a/core/stores/redis/redis_test.go b/core/stores/redis/redis_test.go
+index 4ddd2bfd77df7c159c3b716715ee2430a8845a80..cdb082abbe206da40ced4ac8372b91f796c6f2f0 100644
+--- a/core/stores/redis/redis_test.go
++++ b/core/stores/redis/redis_test.go
+@@ -36,7 +36,7 @@ func (m myHook) ProcessHook(next red.ProcessHook) red.ProcessHook {
+ 		if cmd.Name() == "ping" && !m.includePing {
+ 			return next(ctx, cmd)
+ 		}
+-		return errors.New("durationHook error")
++		return errors.New("hook error")
+ 	}
+ }
+ 
+@@ -155,7 +155,7 @@ func TestRedis_NonBlock(t *testing.T) {
+ 
+ 	t.Run("nonBlock true", func(t *testing.T) {
+ 		s := miniredis.RunT(t)
+-		// use durationHook to simulate redis ping error
++		// use hook to simulate redis ping error
+ 		_, err := NewRedis(RedisConf{
+ 			Host:     s.Addr(),
+ 			NonBlock: true,
+diff --git a/core/stores/redis/redisclustermanager_test.go b/core/stores/redis/redisclustermanager_test.go
+index ad4185583e9d6e91a3a32f39bd40bfb4badba6ac..ac31517e4901c81a58a16e8863792851b1eb3cee 100644
+--- a/core/stores/redis/redisclustermanager_test.go
++++ b/core/stores/redis/redisclustermanager_test.go
+@@ -51,7 +51,7 @@ func TestGetCluster(t *testing.T) {
+ 		Addr:  r.Addr(),
+ 		Type:  ClusterType,
+ 		tls:   true,
+-		hooks: []red.Hook{defaultDurationHook},
++		hooks: []red.Hook{durationHook},
+ 	})
+ 	if assert.NoError(t, err) {
+ 		assert.NotNil(t, c)
+diff --git a/core/stores/sqlx/metrics_test.go b/core/stores/sqlx/metrics_test.go
+index 0f4c4fd97f3bda0c525a1dd3199f5fa5492b8ca6..01bf3f839173c8b4f96d787bf4e1b9faa016369b 100644
+--- a/core/stores/sqlx/metrics_test.go
++++ b/core/stores/sqlx/metrics_test.go
+@@ -20,7 +20,7 @@ func TestSqlxMetric(t *testing.T) {
+ 	_ = conf.FillDefault(&cfg)
+ 	cfg.Port = 6480
+ 	server := devserver.NewServer(cfg)
+-	server.StartAsync(cfg)
++	server.StartAsync()
+ 	time.Sleep(time.Second)
+ 
+ 	metricReqDur.Observe(8, "test-cmd")
+diff --git a/core/stores/sqlx/stmt_test.go b/core/stores/sqlx/stmt_test.go
+index 8d44337949c59602cda4dea7a796f96ef68ab680..84de7577b40069559204a117e00949bde3d181db 100644
+--- a/core/stores/sqlx/stmt_test.go
++++ b/core/stores/sqlx/stmt_test.go
+@@ -4,7 +4,6 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
+-	"strconv"
+ 	"testing"
+ 	"time"
+ 
+@@ -291,24 +290,6 @@ func TestStmtBreaker(t *testing.T) {
+ 	})
+ }
+ 
+-func TestQueryRowsScanTimeout(t *testing.T) {
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rows := sqlmock.NewRows([]string{"foo"})
+-		for i := 0; i < 10000; i++ {
+-			rows = rows.AddRow("bar" + strconv.Itoa(i))
+-		}
+-		mock.ExpectQuery("any").WillReturnRows(rows)
+-		var val []struct {
+-			Foo string
+-		}
+-		conn := NewSqlConnFromDB(db)
+-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*2)
+-		err := conn.QueryRowsCtx(ctx, &val, "any")
+-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+-		cancel()
+-	})
+-}
+-
+ type mockedSessionConn struct {
+ 	lastInsertId int64
+ 	rowsAffected int64
+diff --git a/internal/health/health_test.go b/internal/health/health_test.go
+index 1184d91ca10b61401f17e4e29335672415749059..4bdf7e2c7a00e8a5220976c950aa7f6053e0c89f 100644
+--- a/internal/health/health_test.go
++++ b/internal/health/health_test.go
+@@ -121,7 +121,7 @@ func TestAddGlobalProbes(t *testing.T) {
+ 
+ func TestCreateHttpHandler(t *testing.T) {
+ 	cleanupForTest(t)
+-	srv := httptest.NewServer(CreateHttpHandler("OK"))
++	srv := httptest.NewServer(CreateHttpHandler())
+ 	defer srv.Close()
+ 
+ 	resp, err := http.Get(srv.URL)
+diff --git a/rest/httpx/requests_test.go b/rest/httpx/requests_test.go
+index e2930ee449c021532495217c66b3d241ed1d615b..a1d3f6a8e020711bcab4877f23caa7c24174583a 100644
+--- a/rest/httpx/requests_test.go
++++ b/rest/httpx/requests_test.go
+@@ -1,7 +1,6 @@
+ package httpx
+ 
+ import (
+-	"bytes"
+ 	"errors"
+ 	"net/http"
+ 	"net/http/httptest"
+@@ -16,37 +15,18 @@ import (
+ )
+ 
+ func TestParseForm(t *testing.T) {
+-	t.Run("slice", func(t *testing.T) {
+-		var v struct {
+-			Name    string  `form:"name"`
+-			Age     int     `form:"age"`
+-			Percent float64 `form:"percent,optional"`
+-		}
+-
+-		r, err := http.NewRequest(
+-			http.MethodGet,
+-			"/a?name=hello&age=18&percent=3.4",
+-			http.NoBody)
+-		assert.Nil(t, err)
+-		assert.Nil(t, Parse(r, &v))
+-		assert.Equal(t, "hello", v.Name)
+-		assert.Equal(t, 18, v.Age)
+-		assert.Equal(t, 3.4, v.Percent)
+-	})
+-
+-	t.Run("no value", func(t *testing.T) {
+-		var v struct {
+-			NoValue string `form:"noValue,optional"`
+-		}
++	var v struct {
++		Name    string  `form:"name"`
++		Age     int     `form:"age"`
++		Percent float64 `form:"percent,optional"`
++	}
+ 
+-		r, err := http.NewRequest(
+-			http.MethodGet,
+-			"/a?name=hello&age=18&percent=3.4&statuses=try&statuses=done&singleValue=one",
+-			http.NoBody)
+-		assert.Nil(t, err)
+-		assert.Nil(t, Parse(r, &v))
+-		assert.Equal(t, 0, len(v.NoValue))
+-	})
++	r, err := http.NewRequest(http.MethodGet, "/a?name=hello&age=18&percent=3.4", http.NoBody)
++	assert.Nil(t, err)
++	assert.Nil(t, Parse(r, &v))
++	assert.Equal(t, "hello", v.Name)
++	assert.Equal(t, 18, v.Age)
++	assert.Equal(t, 3.4, v.Percent)
+ }
+ 
+ func TestParseForm_Error(t *testing.T) {
+@@ -442,17 +422,6 @@ func TestParseWithEscapedParams(t *testing.T) {
+ 	})
+ }
+ 
+-func TestCustomUnmarshalerStructRequest(t *testing.T) {
+-	reqBody := `{"name": "hello"}`
+-	r := httptest.NewRequest(http.MethodPost, "/a", bytes.NewReader([]byte(reqBody)))
+-	r.Header.Set(ContentType, JsonContentType)
+-	v := struct {
+-		Foo *mockUnmarshaler `json:"name"`
+-	}{}
+-	assert.Nil(t, Parse(r, &v))
+-	assert.Equal(t, "hello", v.Foo.Name)
+-}
+-
+ func BenchmarkParseRaw(b *testing.B) {
+ 	r, err := http.NewRequest(http.MethodGet, "http://hello.com/a?name=hello&age=18&percent=3.4", http.NoBody)
+ 	if err != nil {
+@@ -527,12 +496,3 @@ func (m mockRequest) Validate() error {
+ 
+ 	return nil
+ }
+-
+-type mockUnmarshaler struct {
+-	Name string
+-}
+-
+-func (m *mockUnmarshaler) UnmarshalJSON(b []byte) error {
+-	m.Name = string(b)
+-	return nil
+-}
+diff --git a/rest/httpx/responses_test.go b/rest/httpx/responses_test.go
+index 00e099daf83ac25a59a431a84713d6dc36b002fe..44d4d720875117d30159e6d604b0a23c70db4d9a 100644
+--- a/rest/httpx/responses_test.go
++++ b/rest/httpx/responses_test.go
+@@ -1,13 +1,10 @@
+ package httpx
+ 
+ import (
+-	"bytes"
+ 	"context"
+ 	"errors"
+ 	"fmt"
+-	"io"
+ 	"net/http"
+-	"net/http/httptest"
+ 	"strings"
+ 	"testing"
+ 
+@@ -242,60 +239,6 @@ func TestWriteJsonMarshalFailed(t *testing.T) {
+ 	assert.Equal(t, http.StatusInternalServerError, w.code)
+ }
+ 
+-func TestStream(t *testing.T) {
+-	t.Run("regular case", func(t *testing.T) {
+-		channel := make(chan string)
+-		go func() {
+-			defer close(channel)
+-			for index := 0; index < 5; index++ {
+-				channel <- fmt.Sprintf("%d", index)
+-			}
+-		}()
+-
+-		w := httptest.NewRecorder()
+-		Stream(context.Background(), w, func(w io.Writer) bool {
+-			output, ok := <-channel
+-			if !ok {
+-				return false
+-			}
+-
+-			outputBytes := bytes.NewBufferString(output)
+-			_, err := w.Write(append(outputBytes.Bytes(), []byte("\n")...))
+-			return err == nil
+-		})
+-
+-		assert.Equal(t, http.StatusOK, w.Code)
+-		assert.Equal(t, "0\n1\n2\n3\n4\n", w.Body.String())
+-	})
+-
+-	t.Run("context done", func(t *testing.T) {
+-		channel := make(chan string)
+-		go func() {
+-			defer close(channel)
+-			for index := 0; index < 5; index++ {
+-				channel <- fmt.Sprintf("num: %d", index)
+-			}
+-		}()
+-
+-		w := httptest.NewRecorder()
+-		ctx, cancel := context.WithCancel(context.Background())
+-		cancel()
+-		Stream(ctx, w, func(w io.Writer) bool {
+-			output, ok := <-channel
+-			if !ok {
+-				return false
+-			}
+-
+-			outputBytes := bytes.NewBufferString(output)
+-			_, err := w.Write(append(outputBytes.Bytes(), []byte("\n")...))
+-			return err == nil
+-		})
+-
+-		assert.Equal(t, http.StatusOK, w.Code)
+-		assert.Equal(t, "", w.Body.String())
+-	})
+-}
+-
+ type tracedResponseWriter struct {
+ 	headers     map[string][]string
+ 	builder     strings.Builder
+diff --git a/tools/goctl/api/gogen/gen_test.go b/tools/goctl/api/gogen/gen_test.go
+index 349312e50c1de626de9262809067b02d433dddb4..d2cb6842671777c441e43f43ad3d29dec458d172 100644
+--- a/tools/goctl/api/gogen/gen_test.go
++++ b/tools/goctl/api/gogen/gen_test.go
+@@ -2,12 +2,7 @@ package gogen
+ 
+ import (
+ 	_ "embed"
+-	"go/ast"
+ 	goformat "go/format"
+-	"go/importer"
+-	goparser "go/parser"
+-	"go/token"
+-	"go/types"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -53,10 +48,6 @@ var (
+ 	noStructTagApi string
+ 	//go:embed testdata/nest_type_api.api
+ 	nestTypeApi string
+-	//go:embed testdata/import_twice.api
+-	importTwiceApi string
+-	//go:embed testdata/another_import_api.api
+-	anotherImportApi string
+ )
+ 
+ func TestParser(t *testing.T) {
+@@ -241,46 +232,6 @@ func TestHasImportApi(t *testing.T) {
+ 	validate(t, filename)
+ }
+ 
+-func TestImportTwiceOnExperimental(t *testing.T) {
+-	defaultExperimental := env.Get(env.GoctlExperimental)
+-	env.Set(t, env.GoctlExperimental, "on")
+-	defer env.Set(t, env.GoctlExperimental, defaultExperimental)
+-
+-	filename := "greet.api"
+-	err := os.WriteFile(filename, []byte(importTwiceApi), os.ModePerm)
+-	assert.Nil(t, err)
+-	defer os.Remove(filename)
+-
+-	importApiName := "importApi.api"
+-	err = os.WriteFile(importApiName, []byte(importApi), os.ModePerm)
+-	assert.Nil(t, err)
+-	defer os.Remove(importApiName)
+-
+-	hasImportApiName := "hasImportApi.api"
+-	err = os.WriteFile(hasImportApiName, []byte(hasImportApi), os.ModePerm)
+-	assert.Nil(t, err)
+-	defer os.Remove(hasImportApiName)
+-
+-	anotherImportApiName := "anotherImportApi.api"
+-	err = os.WriteFile(anotherImportApiName, []byte(anotherImportApi), os.ModePerm)
+-	assert.Nil(t, err)
+-	defer os.Remove(anotherImportApiName)
+-
+-	api, err := parser.Parse(filename)
+-	assert.Nil(t, err)
+-
+-	var hasInline bool
+-	for _, ty := range api.Types {
+-		if ty.Name() == "ImportData" {
+-			hasInline = true
+-			break
+-		}
+-	}
+-	assert.True(t, hasInline)
+-
+-	validate(t, filename)
+-}
+-
+ func TestNoStructApi(t *testing.T) {
+ 	filename := "greet.api"
+ 	err := os.WriteFile(filename, []byte(noStructTagApi), os.ModePerm)
+@@ -336,9 +287,6 @@ func validateWithCamel(t *testing.T, api, camel string) {
+ 			code, err := os.ReadFile(path)
+ 			assert.Nil(t, err)
+ 			assert.Nil(t, validateCode(string(code)))
+-			if strings.HasSuffix(path, "types.go") {
+-				assert.Nil(t, checkRedeclaredType(string(code)))
+-			}
+ 		}
+ 		return nil
+ 	})
+@@ -353,20 +301,3 @@ func validateCode(code string) error {
+ 	_, err := goformat.Source([]byte(code))
+ 	return err
+ }
+-
+-func checkRedeclaredType(code string) error {
+-	fset := token.NewFileSet()
+-	f, err := goparser.ParseFile(fset, "", code, goparser.ParseComments)
+-	if err != nil {
+-		return err
+-	}
+-
+-	conf := types.Config{
+-		Error:    func(err error) {},
+-		Importer: importer.Default(),
+-	}
+-
+-	info := types.Info{Types: make(map[ast.Expr]types.TypeAndValue)}
+-	_, err = conf.Check(f.Name.Name, fset, []*ast.File{f}, &info)
+-	return err
+-}
+diff --git a/tools/goctl/api/gogen/testdata/another_import_api.api b/tools/goctl/api/gogen/testdata/another_import_api.api
+deleted file mode 100644
+index 1973b80b69833db88d2968ef1edfc60ed09b3d2b..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/testdata/another_import_api.api
++++ /dev/null
+@@ -1,17 +0,0 @@
+-import "importApi.api"
+-
+-type AnotherRequest {
+-    Name string `path:"name,options=you|me"`
+-}
+-
+-type AnotherResponse {
+-    Message string `json:"message"` // message
+-}
+-
+-@server(
+-    group: greet
+-)
+-service A-api {
+-    @handler AnotherImportHandler
+-    get /greet/from/another/:name(AnotherRequest) returns (AnotherResponse)
+-}
+diff --git a/tools/goctl/api/gogen/testdata/has_comment_api_test.api b/tools/goctl/api/gogen/testdata/has_comment_api_test.api
+index 490ecb3e2ddd2c6061087820d00a25ce5098253b..3bd89f8eab0660b5dc25a7995f80d9b5a837fc53 100644
+--- a/tools/goctl/api/gogen/testdata/has_comment_api_test.api
++++ b/tools/goctl/api/gogen/testdata/has_comment_api_test.api
+@@ -16,11 +16,5 @@ service A-api {
+     @server(
+         handler: GreetHandler
+     )
+-    get /greet/from/:name (Request) returns (Response)
+-
+-    @doc(
+-        summary: "comment comment comment"
+-    )
+-    @handler NoResponseHandler
+-    get /greet/get (Request)
+-}
++    get /greet/from/:name(Request) returns (Response)
++}
+\ No newline at end of file
+diff --git a/tools/goctl/api/gogen/testdata/has_import_api.api b/tools/goctl/api/gogen/testdata/has_import_api.api
+index e61fc5123f78f86496396017819246724cc2cbe3..6710280e6bc49d6fff0fabed83e6dce6bcd7820e 100644
+--- a/tools/goctl/api/gogen/testdata/has_import_api.api
++++ b/tools/goctl/api/gogen/testdata/has_import_api.api
+@@ -1,17 +1,16 @@
+ import "importApi.api"
+ 
+-type Request {
++type Request struct {
+     Name string `path:"name,options=you|me"`
+ }
+ 
+-type Response {
++type Response struct {
+     Message string `json:"message"` // message
+ }
+ 
+-@server(
+-    group: greet
+-)
+ service A-api {
+-    @handler GreetHandler
++    @server(
++        handler: GreetHandler
++    )
+     get /greet/from/:name(Request) returns (Response)
+-}
++}
+\ No newline at end of file
+diff --git a/tools/goctl/api/gogen/testdata/import_api.api b/tools/goctl/api/gogen/testdata/import_api.api
+index 594c5c5752d37f119a7ce2ff7e12e1e91180ee46..b663997d1f1adc8103273fa9de63d59a6eacc506 100644
+--- a/tools/goctl/api/gogen/testdata/import_api.api
++++ b/tools/goctl/api/gogen/testdata/import_api.api
+@@ -1,3 +1,3 @@
+-type ImportData {
++type ImportData struct {
+     Name string `path:"name,options=you|me"`
+-}
++}
+\ No newline at end of file
+diff --git a/tools/goctl/api/gogen/testdata/import_twice.api b/tools/goctl/api/gogen/testdata/import_twice.api
+deleted file mode 100644
+index 00e6c0b5b79ab73ed46e10bda5d71f9d943740b2..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/testdata/import_twice.api
++++ /dev/null
+@@ -1,2 +0,0 @@
+-import "hasImportApi.api"
+-import "anotherImportApi.api"
+diff --git a/tools/goctl/model/sql/converter/types_test.go b/tools/goctl/model/sql/converter/types_test.go
+index 8a5e17e5c6583de6bccdcafa3413446f45e056fa..c5f8353d91727a1321f58dadcaf3c3de6d3ea68b 100644
+--- a/tools/goctl/model/sql/converter/types_test.go
++++ b/tools/goctl/model/sql/converter/types_test.go
+@@ -8,102 +8,23 @@ import (
+ )
+ 
+ func TestConvertDataType(t *testing.T) {
+-	v, _, err := ConvertDataType(parser.TinyInt, false, false, true)
++	v, err := ConvertDataType(parser.TinyInt, false, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "int64", v)
+ 
+-	v, _, err = ConvertDataType(parser.TinyInt, false, true, true)
++	v, err = ConvertDataType(parser.TinyInt, false, true, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "uint64", v)
+ 
+-	v, _, err = ConvertDataType(parser.TinyInt, true, false, true)
++	v, err = ConvertDataType(parser.TinyInt, true, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "sql.NullInt64", v)
+ 
+-	v, _, err = ConvertDataType(parser.Timestamp, false, false, true)
++	v, err = ConvertDataType(parser.Timestamp, false, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "time.Time", v)
+ 
+-	v, _, err = ConvertDataType(parser.Timestamp, true, false, true)
++	v, err = ConvertDataType(parser.Timestamp, true, false, true)
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "sql.NullTime", v)
+-
+-	v, _, err = ConvertDataType(parser.Decimal, false, false, true)
+-	assert.Nil(t, err)
+-	assert.Equal(t, "float64", v)
+-}
+-
+-func TestConvertStringDataType(t *testing.T) {
+-	type (
+-		input struct {
+-			dataType      string
+-			isDefaultNull bool
+-			unsigned      bool
+-			strict        bool
+-		}
+-		result struct {
+-			goType    string
+-			thirdPkg  string
+-			isPQArray bool
+-		}
+-	)
+-	var testData = []struct {
+-		input input
+-		want  result
+-	}{
+-		{
+-			input: input{
+-				dataType:      "bigint",
+-				isDefaultNull: false,
+-				unsigned:      false,
+-				strict:        false,
+-			},
+-			want: result{
+-				goType: "int64",
+-			},
+-		},
+-		{
+-			input: input{
+-				dataType:      "bigint",
+-				isDefaultNull: true,
+-				unsigned:      false,
+-				strict:        false,
+-			},
+-			want: result{
+-				goType: "sql.NullInt64",
+-			},
+-		},
+-		{
+-			input: input{
+-				dataType:      "bigint",
+-				isDefaultNull: false,
+-				unsigned:      true,
+-				strict:        false,
+-			},
+-			want: result{
+-				goType: "uint64",
+-			},
+-		},
+-		{
+-			input: input{
+-				dataType:      "_int2",
+-				isDefaultNull: false,
+-				unsigned:      false,
+-				strict:        false,
+-			},
+-			want: result{
+-				goType:    "pq.Int64Array",
+-				isPQArray: true,
+-			},
+-		},
+-	}
+-	for _, data := range testData {
+-		tp, thirdPkg, isPQArray, err := ConvertStringDataType(data.input.dataType, data.input.isDefaultNull, data.input.unsigned, data.input.strict)
+-		assert.NoError(t, err)
+-		assert.Equal(t, data.want, result{
+-			goType:    tp,
+-			thirdPkg:  thirdPkg,
+-			isPQArray: isPQArray,
+-		})
+-	}
+ }
+diff --git a/tools/goctl/pkg/parser/api/parser/parser_test.go b/tools/goctl/pkg/parser/api/parser/parser_test.go
+index 7e4b6524fc3b01aa79db424d9a9a9c3846986749..e49eb2c6a6d03ffa18e8c7a632358435e65e6fff 100644
+--- a/tools/goctl/pkg/parser/api/parser/parser_test.go
++++ b/tools/goctl/pkg/parser/api/parser/parser_test.go
+@@ -303,7 +303,6 @@ func TestParser_Parse_atServerStmt(t *testing.T) {
+ 			"prefix1:":    "/v1/v2_test/v2-beta",
+ 			"prefix2:":    "v1/v2_test/v2-beta",
+ 			"prefix3:":    "v1/v2_",
+-			"prefix4:":    "a-b-c",
+ 			"summary:":    `"test"`,
+ 		}
+ 
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api b/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
+index 5980510e9b26c5069b38313622e1be2751569bc3..14b2b4a98b644700faa1a91eb5a8ce9705dfe2b1 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
+@@ -17,6 +17,5 @@
+     prefix1: /v1/v2_test/v2-beta
+     prefix2: v1/v2_test/v2-beta
+     prefix3: v1/v2_
+-    prefix4: a-b-c
+     summary:"test"
+ )
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/example.api b/tools/goctl/pkg/parser/api/parser/testdata/example.api
+index 078ef04c8aa3bb80b7f3022354fdcf769cb418c6..85cb5173b5863d8c9ac447a1b23fb62eba55e0fe 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/example.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/example.api
+@@ -180,14 +180,12 @@ service example {
+ 	post /example/array/base (DemoOfArrayReq) returns ([]string)
+ }
+ 
+-@server (
+-	group:    /prefix
+-	prefix:   foo-bar
+-	summary: "test"
+-)
+ service example {
+-	@handler prefixDemo
+-	post /example/prefix (PostFormReq) returns (PostFormResp)
++	@handler nestDemo1
++	post /example/nest (NestDemoReq1) returns (NestDemoResp1)
++
++	@handler nestDemo2
++	post /example/nest2 (NestDemoReq2) returns (NestDemoResp2)
+ }
+ 
+ @server (
+diff --git a/zrpc/internal/serverinterceptors/breakerinterceptor_test.go b/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
+index 344709bc4877d04e04ba0c0e0a7224065ce84400..58662de26099975ac7c0284f83aaab6b6ee791c5 100644
+--- a/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
+@@ -29,15 +29,6 @@ func TestUnaryBreakerInterceptor(t *testing.T) {
+ 	assert.NotNil(t, err)
+ }
+ 
+-func TestUnaryBreakerInterceptorOK(t *testing.T) {
+-	_, err := UnaryBreakerInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{
+-		FullMethod: "any",
+-	}, func(_ context.Context, _ any) (any, error) {
+-		return nil, nil
+-	})
+-	assert.NoError(t, err)
+-}
+-
+ func TestUnaryBreakerInterceptor_Unavailable(t *testing.T) {
+ 	_, err := UnaryBreakerInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{
+ 		FullMethod: "any",
+@@ -45,37 +36,4 @@ func TestUnaryBreakerInterceptor_Unavailable(t *testing.T) {
+ 		return nil, breaker.ErrServiceUnavailable
+ 	})
+ 	assert.NotNil(t, err)
+-	code := status.Code(err)
+-	assert.Equal(t, codes.Unavailable, code)
+-}
+-
+-func TestUnaryBreakerInterceptor_Deadline(t *testing.T) {
+-	for i := 0; i < 1000; i++ {
+-		_, err := UnaryBreakerInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{
+-			FullMethod: "any",
+-		}, func(_ context.Context, _ any) (any, error) {
+-			return nil, context.DeadlineExceeded
+-		})
+-		switch status.Code(err) {
+-		case codes.Unavailable:
+-		default:
+-			assert.Equal(t, context.DeadlineExceeded, err)
+-		}
+-	}
+-
+-	var dropped bool
+-	for i := 0; i < 100; i++ {
+-		_, err := UnaryBreakerInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{
+-			FullMethod: "any",
+-		}, func(_ context.Context, _ any) (any, error) {
+-			return nil, context.DeadlineExceeded
+-		})
+-		switch status.Code(err) {
+-		case codes.Unavailable:
+-			dropped = true
+-		default:
+-			assert.Equal(t, context.DeadlineExceeded, err)
+-		}
+-	}
+-	assert.True(t, dropped)
+ }

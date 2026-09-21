@@ -1,0 +1,948 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index e0938bc92ff2cf8264b8099ac1e1afc63b995b5e..33622fcabc99698e6fb132d5db35c18d778749b0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -99,11 +99,14 @@ jobs:
+           os: macos-latest
+           rust: nightly
+         - build: win-msvc
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly
+         - build: win-gnu
+-          os: windows-2022
++          os: windows-latest
+           rust: nightly-x86_64-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
+     steps:
+     - name: Checkout repository
+       uses: actions/checkout@v4
+@@ -177,7 +180,7 @@ jobs:
+       # 'rg' binary (done in test-complete) with qemu, which is a pain and
+       # doesn't really gain us much. If shell completion works in one place,
+       # it probably works everywhere.
+-      if: matrix.target == '' && matrix.os != 'windows-2022'
++      if: matrix.target == '' && !startsWith(matrix.os, 'windows')
+       shell: bash
+       run: ci/test-complete
+ 
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index f6ea3d926f44da95a1b1fb68867530243978e203..9a9cc0386ee1748cb76a4e4cfae6f916380aa907 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -122,6 +122,10 @@ jobs:
+           os: windows-latest
+           rust: nightly-x86_64-gnu
+           target: x86_64-pc-windows-gnu
++        - build: winaarch64-msvc
++          os: windows-11-arm
++          rust: nightly
++          target: aarch64-pc-windows-msvc
+         - build: win32-msvc
+           os: windows-latest
+           rust: nightly
+@@ -175,7 +179,7 @@ jobs:
+       shell: bash
+       run: |
+         ${{ env.CARGO }} build --verbose --release --features pcre2 ${{ env.TARGET_FLAGS }}
+-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
++        if [[ "${{ matrix.os }}" == windows-* ]]; then
+           bin="target/${{ matrix.target }}/release/rg.exe"
+         else
+           bin="target/${{ matrix.target }}/release/rg"
+@@ -258,7 +262,7 @@ jobs:
+ 
+     - name: Build archive (Windows)
+       shell: bash
+-      if: matrix.os == 'windows-latest'
++      if: startsWith(matrix.os, 'windows')
+       run: |
+         7z a "$ARCHIVE.zip" "$ARCHIVE"
+         certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+@@ -267,7 +271,7 @@ jobs:
+ 
+     - name: Build archive (Unix)
+       shell: bash
+-      if: matrix.os != 'windows-latest'
++      if: ${{ !startsWith(matrix.os, 'windows') }}
+       run: |
+         tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+         shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9601936b22457ccfe206a30ab6c5d9e0adb013c6..dcc23d021552e6047d76999b5f5a2f72a6ed1814 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -16,8 +16,21 @@ Bug fixes:
+   [BUG #2836](https://github.com/BurntSushi/ripgrep/issues/2836),
+   [BUG #2933](https://github.com/BurntSushi/ripgrep/pull/2933):
+   Fix bug related to gitignores from parent directories.
++* [BUG #1332](https://github.com/BurntSushi/ripgrep/issues/1332),
++  [BUG #3001](https://github.com/BurntSushi/ripgrep/issues/3001):
++  Make `rg -vf file` where `file` is empty match everything.
+ * [BUG #2177](https://github.com/BurntSushi/ripgrep/issues/2177):
+   Ignore a UTF-8 BOM marker at the start of `.gitignore` (and similar files).
++* [BUG #2944](https://github.com/BurntSushi/ripgrep/pull/2944):
++  Fix a bug where the "bytes searched" in `--stats` output could be incorrect.
++* [BUG #2990](https://github.com/BurntSushi/ripgrep/issues/2990):
++  Fix a bug where ripgrep would mishandle globs that ended with a `.`.
++* [BUG #3076](https://github.com/BurntSushi/ripgrep/issues/3076):
++  Fix bug with `-m/--max-count` and `-U/--multiline` showing too many matches.
++* [BUG #3108](https://github.com/BurntSushi/ripgrep/issues/3108):
++  Fix a bug where `-q --files-without-match` inverted the exit code.
++* [BUG #3140](https://github.com/BurntSushi/ripgrep/issues/3140):
++  Ensure hyphens in flag names are escaped in the roff text for the man page.
+ 
+ Feature enhancements:
+ 
+@@ -32,6 +45,16 @@ Feature enhancements:
+   Directories containing `.jj` are now treated as git repositories.
+ * [FEATURE #2849](https://github.com/BurntSushi/ripgrep/pull/2849):
+   When using multithreading, schedule files to search in order given on CLI.
++* [FEATURE #2943](https://github.com/BurntSushi/ripgrep/issues/2943):
++  Add `aarch64` release artifacts for Windows.
++* [FEATURE #3024](https://github.com/BurntSushi/ripgrep/issues/3024):
++  Add `highlight` color type, for styling non-matching text in a matching line.
++* [FEATURE #3048](https://github.com/BurntSushi/ripgrep/pull/3048):
++  Globs in ripgrep (and the `globset` crate) now support nested alternates.
++* [FEATURE #3096](https://github.com/BurntSushi/ripgrep/pull/3096):
++  Improve completions for `--hyperlink-format` in bash and fish.
++* [FEATURE #3102](https://github.com/BurntSushi/ripgrep/pull/3102):
++  Improve completions for `--hyperlink-format` in zsh.
+ 
+ 
+ 14.1.1 (2024-09-08)
+diff --git a/Cargo.lock b/Cargo.lock
+index fac37ce8bcbf5898d6f6d7db5be46e2d6efefb58..49af1f7871600f61d7b6140a6d90aa4854e0e51e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -261,26 +261,6 @@ version = "1.0.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+ 
+-[[package]]
+-name = "jemalloc-sys"
+-version = "0.5.4+5.3.0-patched"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ac6c1946e1cea1788cbfde01c993b52a10e2da07f4bac608228d1bed20bfebf2"
+-dependencies = [
+- "cc",
+- "libc",
+-]
+-
+-[[package]]
+-name = "jemallocator"
+-version = "0.5.4"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a0de374a9f8e63150e6f5e8a60cc14c668226d7a347d8aee1a45766e3c4dd3bc"
+-dependencies = [
+- "jemalloc-sys",
+- "libc",
+-]
+-
+ [[package]]
+ name = "jobserver"
+ version = "0.1.33"
+@@ -413,7 +393,6 @@ dependencies = [
+  "bstr",
+  "grep",
+  "ignore",
+- "jemallocator",
+  "lexopt",
+  "log",
+  "serde",
+@@ -421,6 +400,7 @@ dependencies = [
+  "serde_json",
+  "termcolor",
+  "textwrap",
++ "tikv-jemallocator",
+  "walkdir",
+ ]
+ 
+@@ -503,6 +483,26 @@ version = "0.16.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+ 
++[[package]]
++name = "tikv-jemalloc-sys"
++version = "0.6.0+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cd3c60906412afa9c2b5b5a48ca6a5abe5736aec9eb48ad05037a677e52e4e2d"
++dependencies = [
++ "cc",
++ "libc",
++]
++
++[[package]]
++name = "tikv-jemallocator"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4cec5ff18518d81584f477e9bfdf957f5bb0979b0bac3af4ca30b5b3ae2d2865"
++dependencies = [
++ "libc",
++ "tikv-jemalloc-sys",
++]
++
+ [[package]]
+ name = "unicode-ident"
+ version = "1.0.18"
+diff --git a/Cargo.toml b/Cargo.toml
+index 46fdf31ab83e1e419565e787065f6f207bf0f4dd..ad58eca02e223c2899c902d64a5fdb16598e7620 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,7 +24,7 @@ exclude = [
+ ]
+ build = "build.rs"
+ autotests = false
+-edition = "2021"
++edition = "2024"
+ rust-version = "1.88"
+ 
+ [[bin]]
+@@ -60,8 +60,8 @@ serde_json = "1.0.23"
+ termcolor = "1.1.0"
+ textwrap = { version = "0.16.0", default-features = false }
+ 
+-[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.jemallocator]
+-version = "0.5.0"
++[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies.tikv-jemallocator]
++version = "0.6.0"
+ 
+ [dev-dependencies]
+ serde = "1.0.77"
+diff --git a/FAQ.md b/FAQ.md
+index f244250bed7366e2e75c56583da18b6dffe3d4c8..0ca3760c222ea473b7d44243a9db99b1ac136212 100644
+--- a/FAQ.md
++++ b/FAQ.md
+@@ -285,8 +285,8 @@ As a special case, `--colors '{type}:none'` will clear all colors and styles
+ associated with `{type}`, which lets you start with a clean slate (instead of
+ building on top of ripgrep's default color settings).
+ 
+-Here's an example that makes highlights the matches with a nice blue background
+-with bolded white text:
++Here's an example that highlights the matches with a nice blue background with
++bolded white text:
+ 
+ ```
+ $ rg somepattern \
+@@ -1055,7 +1055,7 @@ How can I donate to ripgrep or its maintainers?
+ 
+ I welcome [sponsorship](https://github.com/sponsors/BurntSushi/).
+ 
+-Or if you'd prefer, donating to a charitably organization that you like would
++Or if you'd prefer, donating to a charitable organization that you like would
+ also be most welcome. My favorites are:
+ 
+ * [The Internet Archive](https://archive.org/donate/)
+diff --git a/README.md b/README.md
+index 4502d7619b785268682e9e17e2148cc20866b26c..e68a3fae2f3a702e9d779a0b336423f4c355467b 100644
+--- a/README.md
++++ b/README.md
+@@ -302,17 +302,19 @@ and **openSUSE Leap** since 15.1.
+ $ sudo zypper install ripgrep
+ ```
+ 
+-If you're a **RHEL/CentOS 7/8** user, you can install ripgrep from
+-[copr](https://copr.fedorainfracloud.org/coprs/carlwgeorge/ripgrep/):
++If you're a **RHEL/CentOS/Rocky Linux 9** user, you can install ripgrep from
++the [EPEL](https://docs.fedoraproject.org/en-US/epel/) repository:
+ 
+ ```
+-$ sudo yum install -y yum-utils
+-$ sudo yum-config-manager --add-repo=https://copr.fedorainfracloud.org/coprs/carlwgeorge/ripgrep/repo/epel-7/carlwgeorge-ripgrep-epel-7.repo
+-$ sudo yum install ripgrep
++$ sudo dnf config-manager --set-enabled crb
++$ sudo dnf install -y \
++    https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm \
++    https://dl.fedoraproject.org/pub/epel/epel-next-release-latest-9.noarch.rpm
++$ sudo dnf install -y ripgrep
+ ```
+ 
+ If you're a **Nix** user, you can install ripgrep from
+-[nixpkgs](https://github.com/NixOS/nixpkgs/blob/master/pkgs/tools/text/ripgrep/default.nix):
++[nixpkgs](https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/ri/ripgrep/package.nix):
+ 
+ ```
+ $ nix-env --install ripgrep
+@@ -336,7 +338,7 @@ then ripgrep can be installed using a binary `.deb` file provided in each
+ [ripgrep release](https://github.com/BurntSushi/ripgrep/releases).
+ 
+ ```
+-$ curl -LO https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep_14.1.1-1_amd64.deb
++$ curl -LO https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep_14.1.1-1_amd64.deb
+ $ sudo dpkg -i ripgrep_14.1.1-1_amd64.deb
+ ```
+ 
+diff --git a/build.rs b/build.rs
+index db9584bff5369df8a67ce7dc023c0ab5bf483a0c..3479b69e9c36cba90e4fe3e96f997fd12e217032 100644
+--- a/build.rs
++++ b/build.rs
+@@ -22,7 +22,7 @@ fn set_windows_exe_options() {
+     manifest.push(MANIFEST);
+     let Some(manifest) = manifest.to_str() else { return };
+ 
+-    println!("cargo:rerun-if-changed={}", MANIFEST);
++    println!("cargo:rerun-if-changed={MANIFEST}");
+     // Embed the Windows application manifest file.
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFEST:EMBED");
+     println!("cargo:rustc-link-arg-bin=rg=/MANIFESTINPUT:{manifest}");
+@@ -37,10 +37,25 @@ fn set_git_revision_hash() {
+     use std::process::Command;
+ 
+     let args = &["rev-parse", "--short=10", "HEAD"];
+-    let Ok(output) = Command::new("git").args(args).output() else { return };
+-    let rev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+-    if rev.is_empty() {
+-        return;
++    let output = Command::new("git").args(args).output();
++    match output {
++        Ok(output) => {
++            let rev =
++                String::from_utf8_lossy(&output.stdout).trim().to_string();
++            if rev.is_empty() {
++                println!(
++                    "cargo:warning=output from `git rev-parse` is empty, \
++                     so skipping embedding of commit hash"
++                );
++                return;
++            }
++            println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={rev}");
++        }
++        Err(e) => {
++            println!(
++                "cargo:warning=failed to run `git rev-parse`, \
++                 so skipping embedding of commit hash: {e}"
++            );
++        }
+     }
+-    println!("cargo:rustc-env=RIPGREP_BUILD_GIT_HASH={}", rev);
+ }
+diff --git a/crates/core/flags/complete/rg.zsh b/crates/core/flags/complete/rg.zsh
+index 25de4c4fb60ea0c9a371c5b023a69ad28db485df..ae9f1194014d97d8bdbe5856cf508fbc533c3650 100644
+--- a/crates/core/flags/complete/rg.zsh
++++ b/crates/core/flags/complete/rg.zsh
+@@ -319,7 +319,7 @@ _rg() {
+     '--field-context-separator[set string to delimit fields in context lines]'
+     '--field-match-separator[set string to delimit fields in matching lines]'
+     '--hostname-bin=[executable for getting system hostname]:hostname executable:_command_names -e'
+-    '--hyperlink-format=[specify pattern for hyperlinks]:pattern'
++    '--hyperlink-format=[specify pattern for hyperlinks]: :_rg_hyperlink_formats'
+     '--trace[show more verbose debug messages]'
+     '--dfa-size-limit=[specify upper size limit of generated DFA]:DFA size (bytes)'
+     "(1 stats)--files[show each file that would be searched (but don't search)]"
+@@ -363,10 +363,11 @@ _rg() {
+           'column:specify coloring for column numbers'
+           'line:specify coloring for line numbers'
+           'match:specify coloring for match text'
++          'highlight:specify coloring for matching lines'
+           'path:specify coloring for file names'
+         )
+         descr='color/style type'
+-      elif [[ ${IPREFIX#--*=}$PREFIX == (column|line|match|path):[^:]# ]]; then
++      elif [[ ${IPREFIX#--*=}$PREFIX == (column|line|match|highlight|path):[^:]# ]]; then
+         suf=( -qS: )
+         tmp=(
+           'none:clear color/style for type'
+@@ -409,6 +410,7 @@ _rg() {
+ }
+ 
+ # Complete encodings
++(( $+functions[_rg_encodings] )) ||
+ _rg_encodings() {
+   local -a expl
+   local -aU _encodings
+@@ -421,6 +423,7 @@ _rg_encodings() {
+ }
+ 
+ # Complete file types
++(( $+functions[_rg_types] )) ||
+ _rg_types() {
+   local -a expl
+   local -aU _types
+@@ -434,6 +437,49 @@ _rg_types() {
+   fi
+ }
+ 
++# Complete hyperlink format-string aliases
++(( $+functions[_rg_hyperlink_format_aliases] )) ||
++_rg_hyperlink_format_aliases() {
++  _describe -t format-aliases 'hyperlink format alias' '(
++!HYPERLINK_ALIASES!
++  )'
++}
++
++# Complete custom hyperlink format strings
++(( $+functions[_rg_hyperlink_format_strings] )) ||
++_rg_hyperlink_format_strings() {
++  local op='{' ed='}'
++  local -a pfx sfx rmv
++
++  compquote op ed
++
++  sfx=( -S $ed )
++  rmv=( -r ${(q)ed[1]} )
++
++  compset -S "$op*"
++  compset -S "$ed*" && sfx=( -S '' )
++  compset -P "*$ed"
++  compset -p ${#PREFIX%$op*}
++  compset -P $op || pfx=( -P $op )
++
++  WSL_DISTRO_NAME=${WSL_DISTRO_NAME:-\$WSL_DISTRO_NAME} \
++  _describe -t format-variables 'hyperlink format variable' '(
++    path:"absolute path to file containing match (required)"
++    host:"system host name or output of --hostname-bin executable"
++    line:"line number of match"
++    column:"column of match (requires {line})"
++    wslprefix:"\"wsl$/$WSL_DISTRO_NAME\" (for WSL share)"
++  )' "${(@)pfx}" "${(@)sfx}" "${(@)rmv}"
++}
++
++# Complete hyperlink formats
++(( $+functions[_rg_hyperlink_formats] )) ||
++_rg_hyperlink_formats() {
++  _alternative \
++    'format-string-aliases: :_rg_hyperlink_format_aliases' \
++    'format-strings: :_rg_hyperlink_format_strings'
++}
++
+ # Don't run the completion function when being sourced by itself.
+ #
+ # See https://github.com/BurntSushi/ripgrep/issues/2956
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index df09dcedae4df7474ec9f00fa3b3ed011c99dcc8..f7e67b17dde7e1e1464ef5f3c1fe7d9b894673ad 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -788,7 +788,7 @@ impl HiArgs {
+                 attach_timestamps(haystacks, |md| md.created()).collect()
+             }
+         };
+-        with_timestamps.sort_by(|(_, ref t1), (_, ref t2)| {
++        with_timestamps.sort_by(|(_, t1), (_, t2)| {
+             let ordering = match (*t1, *t2) {
+                 // Both have metadata, do the obvious thing.
+                 (Some(t1), Some(t2)) => t1.cmp(&t2),
+@@ -1179,16 +1179,16 @@ fn types(low: &LowArgs) -> anyhow::Result<ignore::types::Types> {
+     builder.add_defaults();
+     for tychange in low.type_changes.iter() {
+         match tychange {
+-            TypeChange::Clear { ref name } => {
++            TypeChange::Clear { name } => {
+                 builder.clear(name);
+             }
+-            TypeChange::Add { ref def } => {
++            TypeChange::Add { def } => {
+                 builder.add_def(def)?;
+             }
+-            TypeChange::Select { ref name } => {
++            TypeChange::Select { name } => {
+                 builder.select(name);
+             }
+-            TypeChange::Negate { ref name } => {
++            TypeChange::Negate { name } => {
+                 builder.negate(name);
+             }
+         }
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index c25e3f22227d855bc839523c471b30444c6d65f9..5f521120b7b17e03e93b381915299578d8e06c02 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -206,6 +206,11 @@ struct GlobOptions {
+     /// Whether or not an empty case in an alternate will be removed.
+     /// e.g., when enabled, `{,a}` will match "" and "a".
+     empty_alternates: bool,
++    /// Whether or not an unclosed character class is allowed. When an unclosed
++    /// character class is found, the opening `[` is treated as a literal `[`.
++    /// When this isn't enabled, an opening `[` without a corresponding `]` is
++    /// treated as an error.
++    allow_unclosed_class: bool,
+ }
+ 
+ impl GlobOptions {
+@@ -215,6 +220,7 @@ impl GlobOptions {
+             literal_separator: false,
+             backslash_escape: !is_separator('\\'),
+             empty_alternates: false,
++            allow_unclosed_class: false,
+         }
+     }
+ }
+@@ -564,25 +570,27 @@ impl<'a> GlobBuilder<'a> {
+     pub fn build(&self) -> Result<Glob, Error> {
+         let mut p = Parser {
+             glob: &self.glob,
+-            stack: vec![Tokens::default()],
++            alternates_stack: Vec::new(),
++            branches: vec![Tokens::default()],
+             chars: self.glob.chars().peekable(),
+             prev: None,
+             cur: None,
++            found_unclosed_class: false,
+             opts: &self.opts,
+         };
+         p.parse()?;
+-        if p.stack.is_empty() {
+-            Err(Error {
+-                glob: Some(self.glob.to_string()),
+-                kind: ErrorKind::UnopenedAlternates,
+-            })
+-        } else if p.stack.len() > 1 {
++        if p.branches.is_empty() {
++            // OK because of how the the branches/alternate_stack are managed.
++            // If we end up here, then there *must* be a bug in the parser
++            // somewhere.
++            unreachable!()
++        } else if p.branches.len() > 1 {
+             Err(Error {
+                 glob: Some(self.glob.to_string()),
+                 kind: ErrorKind::UnclosedAlternates,
+             })
+         } else {
+-            let tokens = p.stack.pop().unwrap();
++            let tokens = p.branches.pop().unwrap();
+             Ok(Glob {
+                 glob: self.glob.to_string(),
+                 re: tokens.to_regex_with(&self.opts),
+@@ -631,6 +639,22 @@ impl<'a> GlobBuilder<'a> {
+         self.opts.empty_alternates = yes;
+         self
+     }
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is false. Generally speaking, enabling this leads to
++    /// worse failure modes since the glob parser becomes more permissive. You
++    /// might want to enable this when compatibility (e.g., with POSIX glob
++    /// implementations) is more important than good error messages.
++    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut GlobBuilder<'a> {
++        self.opts.allow_unclosed_class = yes;
++        self
++    }
+ }
+ 
+ impl Tokens {
+@@ -756,11 +780,29 @@ fn bytes_to_escaped_literal(bs: &[u8]) -> String {
+ }
+ 
+ struct Parser<'a> {
++    /// The glob to parse.
+     glob: &'a str,
+-    stack: Vec<Tokens>,
++    /// Marks the index in `stack` where the alternation started.
++    alternates_stack: Vec<usize>,
++    /// The set of active alternation branches being parsed.
++    /// Tokens are added to the end of the last one.
++    branches: Vec<Tokens>,
++    /// A character iterator over the glob pattern to parse.
+     chars: std::iter::Peekable<std::str::Chars<'a>>,
++    /// The previous character seen.
+     prev: Option<char>,
++    /// The current character.
+     cur: Option<char>,
++    /// Whether we failed to find a closing `]` for a character
++    /// class. This can only be true when `GlobOptions::allow_unclosed_class`
++    /// is enabled. When enabled, it is impossible to ever parse another
++    /// character class with this glob. That's because classes cannot be
++    /// nested *and* the only way this happens is when there is never a `]`.
++    ///
++    /// We track this state so that we don't end up spending quadratic time
++    /// trying to parse something like `[[[[[[[[[[[[[[[[[[[[[[[...`.
++    found_unclosed_class: bool,
++    /// Glob options, which may influence parsing.
+     opts: &'a GlobOptions,
+ }
+ 
+@@ -774,7 +816,7 @@ impl<'a> Parser<'a> {
+             match c {
+                 '?' => self.push_token(Token::Any)?,
+                 '*' => self.parse_star()?,
+-                '[' => self.parse_class()?,
++                '[' if !self.found_unclosed_class => self.parse_class()?,
+                 '{' => self.push_alternate()?,
+                 '}' => self.pop_alternate()?,
+                 ',' => self.parse_comma()?,
+@@ -786,36 +828,37 @@ impl<'a> Parser<'a> {
+     }
+ 
+     fn push_alternate(&mut self) -> Result<(), Error> {
+-        if self.stack.len() > 1 {
+-            return Err(self.error(ErrorKind::NestedAlternates));
+-        }
+-        Ok(self.stack.push(Tokens::default()))
++        self.alternates_stack.push(self.branches.len());
++        self.branches.push(Tokens::default());
++        Ok(())
+     }
+ 
+     fn pop_alternate(&mut self) -> Result<(), Error> {
+-        let mut alts = vec![];
+-        while self.stack.len() >= 2 {
+-            alts.push(self.stack.pop().unwrap());
+-        }
+-        self.push_token(Token::Alternates(alts))
++        let Some(start) = self.alternates_stack.pop() else {
++            return Err(self.error(ErrorKind::UnopenedAlternates));
++        };
++        assert!(start <= self.branches.len());
++        let alts = Token::Alternates(self.branches.drain(start..).collect());
++        self.push_token(alts)?;
++        Ok(())
+     }
+ 
+     fn push_token(&mut self, tok: Token) -> Result<(), Error> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+             return Ok(pat.push(tok));
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn pop_token(&mut self) -> Result<Token, Error> {
+-        if let Some(ref mut pat) = self.stack.last_mut() {
++        if let Some(ref mut pat) = self.branches.last_mut() {
+             return Ok(pat.pop().unwrap());
+         }
+         Err(self.error(ErrorKind::UnopenedAlternates))
+     }
+ 
+     fn have_tokens(&self) -> Result<bool, Error> {
+-        match self.stack.last() {
++        match self.branches.last() {
+             None => Err(self.error(ErrorKind::UnopenedAlternates)),
+             Some(ref pat) => Ok(!pat.is_empty()),
+         }
+@@ -824,11 +867,11 @@ impl<'a> Parser<'a> {
+     fn parse_comma(&mut self) -> Result<(), Error> {
+         // If we aren't inside a group alternation, then don't
+         // treat commas specially. Otherwise, we need to start
+-        // a new alternate.
+-        if self.stack.len() <= 1 {
++        // a new alternate branch.
++        if self.alternates_stack.is_empty() {
+             self.push_token(Token::Literal(','))
+         } else {
+-            Ok(self.stack.push(Tokens::default()))
++            Ok(self.branches.push(Tokens::default()))
+         }
+     }
+ 
+@@ -865,7 +908,7 @@ impl<'a> Parser<'a> {
+         }
+ 
+         if !prev.map(is_separator).unwrap_or(false) {
+-            if self.stack.len() <= 1
++            if self.branches.len() <= 1
+                 || (prev != Some(',') && prev != Some('{'))
+             {
+                 self.push_token(Token::ZeroOrMore)?;
+@@ -878,7 +921,7 @@ impl<'a> Parser<'a> {
+                 assert!(self.bump().is_none());
+                 true
+             }
+-            Some(',') | Some('}') if self.stack.len() >= 2 => true,
++            Some(',') | Some('}') if self.branches.len() >= 2 => true,
+             Some(c) if is_separator(c) => {
+                 assert!(self.bump().map(is_separator).unwrap_or(false));
+                 false
+@@ -908,6 +951,11 @@ impl<'a> Parser<'a> {
+     }
+ 
+     fn parse_class(&mut self) -> Result<(), Error> {
++        // Save parser state for potential rollback to literal '[' parsing.
++        let saved_chars = self.chars.clone();
++        let saved_prev = self.prev;
++        let saved_cur = self.cur;
++
+         fn add_to_last_range(
+             glob: &str,
+             r: &mut (char, char),
+@@ -935,11 +983,17 @@ impl<'a> Parser<'a> {
+         let mut first = true;
+         let mut in_range = false;
+         loop {
+-            let c = match self.bump() {
+-                Some(c) => c,
+-                // The only way to successfully break this loop is to observe
+-                // a ']'.
+-                None => return Err(self.error(ErrorKind::UnclosedClass)),
++            let Some(c) = self.bump() else {
++                return if self.opts.allow_unclosed_class == true {
++                    self.chars = saved_chars;
++                    self.cur = saved_cur;
++                    self.prev = saved_prev;
++                    self.found_unclosed_class = true;
++
++                    self.push_token(Token::Literal('['))
++                } else {
++                    Err(self.error(ErrorKind::UnclosedClass))
++                };
+             };
+             match c {
+                 ']' => {
+@@ -1024,6 +1078,7 @@ mod tests {
+         litsep: Option<bool>,
+         bsesc: Option<bool>,
+         ealtre: Option<bool>,
++        unccls: Option<bool>,
+     }
+ 
+     macro_rules! syntax {
+@@ -1066,6 +1121,10 @@ mod tests {
+                 if let Some(ealtre) = $options.ealtre {
+                     builder.empty_alternates(ealtre);
+                 }
++                if let Some(unccls) = $options.unccls {
++                    builder.allow_unclosed_class(unccls);
++                }
++
+                 let pat = builder.build().unwrap();
+                 assert_eq!(format!("(?-u){}", $re), pat.regex());
+             }
+@@ -1206,25 +1265,80 @@ mod tests {
+     syntaxerr!(err_unclosed4, "[!]", ErrorKind::UnclosedClass);
+     syntaxerr!(err_range1, "[z-a]", ErrorKind::InvalidRange('z', 'a'));
+     syntaxerr!(err_range2, "[z--]", ErrorKind::InvalidRange('z', '-'));
++    syntaxerr!(err_alt1, "{a,b", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt2, "{a,{b,c}", ErrorKind::UnclosedAlternates);
++    syntaxerr!(err_alt3, "a,b}", ErrorKind::UnopenedAlternates);
++    syntaxerr!(err_alt4, "{a,b}}", ErrorKind::UnopenedAlternates);
+ 
+-    const CASEI: Options =
+-        Options { casei: Some(true), litsep: None, bsesc: None, ealtre: None };
+-    const SLASHLIT: Options =
+-        Options { casei: None, litsep: Some(true), bsesc: None, ealtre: None };
++    const CASEI: Options = Options {
++        casei: Some(true),
++        litsep: None,
++        bsesc: None,
++        ealtre: None,
++        unccls: None,
++    };
++    const SLASHLIT: Options = Options {
++        casei: None,
++        litsep: Some(true),
++        bsesc: None,
++        ealtre: None,
++        unccls: None,
++    };
+     const NOBSESC: Options = Options {
+         casei: None,
+         litsep: None,
+         bsesc: Some(false),
+         ealtre: None,
++        unccls: None,
++    };
++    const BSESC: Options = Options {
++        casei: None,
++        litsep: None,
++        bsesc: Some(true),
++        ealtre: None,
++        unccls: None,
+     };
+-    const BSESC: Options =
+-        Options { casei: None, litsep: None, bsesc: Some(true), ealtre: None };
+     const EALTRE: Options = Options {
+         casei: None,
+         litsep: None,
+         bsesc: Some(true),
+         ealtre: Some(true),
++        unccls: None,
+     };
++    const UNCCLS: Options = Options {
++        casei: None,
++        litsep: None,
++        bsesc: None,
++        ealtre: None,
++        unccls: Some(true),
++    };
++
++    toregex!(allow_unclosed_class_single, r"[", r"^\[$", &UNCCLS);
++    toregex!(allow_unclosed_class_many, r"[abc", r"^\[abc$", &UNCCLS);
++    toregex!(allow_unclosed_class_empty1, r"[]", r"^\[\]$", &UNCCLS);
++    toregex!(allow_unclosed_class_empty2, r"[][", r"^\[\]\[$", &UNCCLS);
++    toregex!(allow_unclosed_class_negated_unclosed, r"[!", r"^\[!$", &UNCCLS);
++    toregex!(allow_unclosed_class_negated_empty, r"[!]", r"^\[!\]$", &UNCCLS);
++    toregex!(
++        allow_unclosed_class_brace1,
++        r"{[abc,xyz}",
++        r"^(?:\[abc|xyz)$",
++        &UNCCLS
++    );
++    toregex!(
++        allow_unclosed_class_brace2,
++        r"{[abc,[xyz}",
++        r"^(?:\[abc|\[xyz)$",
++        &UNCCLS
++    );
++    toregex!(
++        allow_unclosed_class_brace3,
++        r"{[abc],[xyz}",
++        r"^(?:[abc]|\[xyz)$",
++        &UNCCLS
++    );
++
++    toregex!(re_empty, "", "^$");
+ 
+     toregex!(re_casei, "a", "(?i)^a$", &CASEI);
+ 
+@@ -1265,7 +1379,9 @@ mod tests {
+     toregex!(re32, "/a**", r"^/a.*.*$");
+     toregex!(re33, "/**a", r"^/.*.*a$");
+     toregex!(re34, "/a**b", r"^/a.*.*b$");
+-    toregex!(re35, "{a,b}", r"^(?:b|a)$");
++    toregex!(re35, "{a,b}", r"^(?:a|b)$");
++    toregex!(re36, "{a,{b,c}}", r"^(?:a|(?:b|c))$");
++    toregex!(re37, "{{a,b},{c,d}}", r"^(?:(?:a|b)|(?:c|d))$");
+ 
+     matches!(match1, "a", "a");
+     matches!(match2, "a*b", "a_b");
+@@ -1353,6 +1469,9 @@ mod tests {
+     matches!(matchalt14, "foo{,.txt}", "foo.txt");
+     nmatches!(matchalt15, "foo{,.txt}", "foo");
+     matches!(matchalt16, "foo{,.txt}", "foo", EALTRE);
++    matches!(matchalt17, "{a,b{c,d}}", "bc");
++    matches!(matchalt18, "{a,b{c,d}}", "bd");
++    matches!(matchalt19, "{a,b{c,d}}", "a");
+ 
+     matches!(matchslash1, "abc/def", "abc/def", SLASHLIT);
+     #[cfg(unix)]
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index b1fc696af2c634ce983254d81eb7712cf06e6db3..c07076d45167870486fbd7807913a1d95e55189b 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -169,8 +169,11 @@ pub enum ErrorKind {
+     UnopenedAlternates,
+     /// Occurs when a `{` is found without a matching `}`.
+     UnclosedAlternates,
+-    /// Occurs when an alternating group is nested inside another alternating
+-    /// group, e.g., `{{a,b},{c,d}}`.
++    /// **DEPRECATED**.
++    ///
++    /// This error used to occur when an alternating group was nested inside
++    /// another alternating group, e.g., `{{a,b},{c,d}}`. However, this is now
++    /// supported and as such this error cannot occur.
+     NestedAlternates,
+     /// Occurs when an unescaped '\' is found at the end of a glob.
+     DanglingEscape,
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index 19a347cdbe2b0680b9e0320631d5ac824f148100..716739bdc0a00afa608e00a37b3804f8b87910e1 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -308,6 +308,7 @@ pub struct GitignoreBuilder {
+     root: PathBuf,
+     globs: Vec<Glob>,
+     case_insensitive: bool,
++    allow_unclosed_class: bool,
+ }
+ 
+ impl GitignoreBuilder {
+@@ -324,6 +325,7 @@ impl GitignoreBuilder {
+             root: strip_prefix("./", root).unwrap_or(root).to_path_buf(),
+             globs: vec![],
+             case_insensitive: false,
++            allow_unclosed_class: true,
+         }
+     }
+ 
+@@ -505,6 +507,7 @@ impl GitignoreBuilder {
+             .literal_separator(true)
+             .case_insensitive(self.case_insensitive)
+             .backslash_escape(true)
++            .allow_unclosed_class(self.allow_unclosed_class)
+             .build()
+             .map_err(|err| Error::Glob {
+                 glob: Some(glob.original.clone()),
+@@ -530,6 +533,26 @@ impl GitignoreBuilder {
+         self.case_insensitive = yes;
+         Ok(self)
+     }
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is true in order to match established `gitignore`
++    /// semantics. Generally speaking, enabling this leads to worse failure
++    /// modes since the glob parser becomes more permissive. You might want to
++    /// enable this when compatibility (e.g., with POSIX glob implementations)
++    /// is more important than good error messages.
++    pub fn allow_unclosed_class(
++        &mut self,
++        yes: bool,
++    ) -> &mut GitignoreBuilder {
++        self.allow_unclosed_class = yes;
++        self
++    }
+ }
+ 
+ /// Return the file path of the current environment's global gitignore file.
+diff --git a/crates/ignore/src/overrides.rs b/crates/ignore/src/overrides.rs
+index 1b02b4d4ee9a1ca3592a517d3d741fdf611292b0..079b02c4132ee63f1b1b3277c51b8ceb0fcae822 100644
+--- a/crates/ignore/src/overrides.rs
++++ b/crates/ignore/src/overrides.rs
+@@ -1,5 +1,6 @@
+ /*!
+ The overrides module provides a way to specify a set of override globs.
++
+ This provides functionality similar to `--include` or `--exclude` in command
+ line tools.
+ */
+@@ -120,7 +121,9 @@ impl OverrideBuilder {
+     ///
+     /// Matching is done relative to the directory path provided.
+     pub fn new<P: AsRef<Path>>(path: P) -> OverrideBuilder {
+-        OverrideBuilder { builder: GitignoreBuilder::new(path) }
++        let mut builder = GitignoreBuilder::new(path);
++        builder.allow_unclosed_class(false);
++        OverrideBuilder { builder }
+     }
+ 
+     /// Builds a new override matcher from the globs added so far.
+@@ -143,7 +146,8 @@ impl OverrideBuilder {
+ 
+     /// Toggle whether the globs should be matched case insensitively or not.
+     ///
+-    /// When this option is changed, only globs added after the change will be affected.
++    /// When this option is changed, only globs added after the change will be
++    /// affected.
+     ///
+     /// This is disabled by default.
+     pub fn case_insensitive(
+@@ -155,6 +159,28 @@ impl OverrideBuilder {
+         self.builder.case_insensitive(yes)?;
+         Ok(self)
+     }
++
++    /// Toggle whether unclosed character classes are allowed. When allowed,
++    /// a `[` without a matching `]` is treated literally instead of resulting
++    /// in a parse error.
++    ///
++    /// For example, if this is set then the glob `[abc` will be treated as the
++    /// literal string `[abc` instead of returning an error.
++    ///
++    /// By default, this is false. Generally speaking, enabling this leads to
++    /// worse failure modes since the glob parser becomes more permissive. You
++    /// might want to enable this when compatibility (e.g., with POSIX glob
++    /// implementations) is more important than good error messages.
++    ///
++    /// This default is different from the default for [`Gitignore`]. Namely,
++    /// [`Gitignore`] is intended to match git's behavior as-is. But this
++    /// abstraction for "override" globs does not necessarily conform to any
++    /// other known specification and instead prioritizes better error
++    /// messages.
++    pub fn allow_unclosed_class(&mut self, yes: bool) -> &mut OverrideBuilder {
++        self.builder.allow_unclosed_class(yes);
++        self
++    }
+ }
+ 
+ #[cfg(test)]

@@ -1,0 +1,3902 @@
+diff --git a/core/breaker/googlebreaker_test.go b/core/breaker/googlebreaker_test.go
+index 85d76660fac0c138686dd9d3840777fc11f50656..7a8c65b8ce618e499d9e34f6fb953f27b1d0e629 100644
+--- a/core/breaker/googlebreaker_test.go
++++ b/core/breaker/googlebreaker_test.go
+@@ -206,7 +206,7 @@ func BenchmarkGoogleBreakerAllow(b *testing.B) {
+ 	breaker := getGoogleBreaker()
+ 	b.ResetTimer()
+ 	for i := 0; i <= b.N; i++ {
+-		_ = breaker.accept()
++		breaker.accept()
+ 		if i%2 == 0 {
+ 			breaker.markSuccess()
+ 		} else {
+@@ -215,16 +215,6 @@ func BenchmarkGoogleBreakerAllow(b *testing.B) {
+ 	}
+ }
+ 
+-func BenchmarkGoogleBreakerDoReq(b *testing.B) {
+-	breaker := getGoogleBreaker()
+-	b.ResetTimer()
+-	for i := 0; i <= b.N; i++ {
+-		_ = breaker.doReq(func() error {
+-			return nil
+-		}, nil, defaultAcceptable)
+-	}
+-}
+-
+ func markSuccess(b *googleBreaker, count int) {
+ 	for i := 0; i < count; i++ {
+ 		p, err := b.allow()
+diff --git a/core/breaker/nopbreaker_test.go b/core/breaker/nopbreaker_test.go
+index ac26428d9ab161aac814fc2d37ca384836bee4d2..1756aa2a5dc7f1b21bdedae1271304cfce526654 100644
+--- a/core/breaker/nopbreaker_test.go
++++ b/core/breaker/nopbreaker_test.go
+@@ -8,7 +8,7 @@ import (
+ )
+ 
+ func TestNopBreaker(t *testing.T) {
+-	b := NopBreaker()
++	b := newNopBreaker()
+ 	assert.Equal(t, nopBreakerName, b.Name())
+ 	p, err := b.Allow()
+ 	assert.Nil(t, err)
+diff --git a/core/errorx/batcherror_test.go b/core/errorx/batcherror_test.go
+index 3e34534364df4305b9830761f684389ee67a0ec6..ae5c8c3e1bb3c32caa4878e95796d97537b4d2c3 100644
+--- a/core/errorx/batcherror_test.go
++++ b/core/errorx/batcherror_test.go
+@@ -3,7 +3,6 @@ package errorx
+ import (
+ 	"errors"
+ 	"fmt"
+-	"sync"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -34,7 +33,7 @@ func TestBatchErrorNilFromFunc(t *testing.T) {
+ func TestBatchErrorOneError(t *testing.T) {
+ 	var batch BatchError
+ 	batch.Add(errors.New(err1))
+-	assert.NotNil(t, batch.Err())
++	assert.NotNil(t, batch)
+ 	assert.Equal(t, err1, batch.Err().Error())
+ 	assert.True(t, batch.NotNil())
+ }
+@@ -43,26 +42,7 @@ func TestBatchErrorWithErrors(t *testing.T) {
+ 	var batch BatchError
+ 	batch.Add(errors.New(err1))
+ 	batch.Add(errors.New(err2))
+-	assert.NotNil(t, batch.Err())
++	assert.NotNil(t, batch)
+ 	assert.Equal(t, fmt.Sprintf("%s\n%s", err1, err2), batch.Err().Error())
+ 	assert.True(t, batch.NotNil())
+ }
+-
+-func TestBatchErrorConcurrentAdd(t *testing.T) {
+-	const count = 10000
+-	var batch BatchError
+-	var wg sync.WaitGroup
+-
+-	wg.Add(count)
+-	for i := 0; i < count; i++ {
+-		go func() {
+-			defer wg.Done()
+-			batch.Add(errors.New(err1))
+-		}()
+-	}
+-	wg.Wait()
+-
+-	assert.NotNil(t, batch.Err())
+-	assert.Equal(t, count, len(batch.errs))
+-	assert.True(t, batch.NotNil())
+-}
+diff --git a/core/fx/retry_test.go b/core/fx/retry_test.go
+index 5a8d06b69960975efe4a0b0553e7b185ea2048bb..045d782af5940e39ed9711bf8e72173c75b57f9d 100644
+--- a/core/fx/retry_test.go
++++ b/core/fx/retry_test.go
+@@ -97,24 +97,6 @@ func TestRetryWithInterval(t *testing.T) {
+ 
+ }
+ 
+-func TestRetryWithWithIgnoreErrors(t *testing.T) {
+-	ignoreErr1 := errors.New("ignore error1")
+-	ignoreErr2 := errors.New("ignore error2")
+-	ignoreErrs := []error{ignoreErr1, ignoreErr2}
+-
+-	assert.Nil(t, DoWithRetry(func() error {
+-		return ignoreErr1
+-	}, WithIgnoreErrors(ignoreErrs)))
+-
+-	assert.Nil(t, DoWithRetry(func() error {
+-		return ignoreErr2
+-	}, WithIgnoreErrors(ignoreErrs)))
+-
+-	assert.NotNil(t, DoWithRetry(func() error {
+-		return errors.New("any")
+-	}))
+-}
+-
+ func TestRetryCtx(t *testing.T) {
+ 	t.Run("with timeout", func(t *testing.T) {
+ 		assert.NotNil(t, DoWithRetryCtx(context.Background(), func(ctx context.Context, retryCount int) error {
+diff --git a/core/load/adaptiveshedder_test.go b/core/load/adaptiveshedder_test.go
+index 104be20e92dd828b183f33593b7a1e3d43d947a9..94789322af1526d884612922395449e94d673453 100644
+--- a/core/load/adaptiveshedder_test.go
++++ b/core/load/adaptiveshedder_test.go
+@@ -19,7 +19,6 @@ import (
+ const (
+ 	buckets        = 10
+ 	bucketDuration = time.Millisecond * 50
+-	windowFactor   = 0.01
+ )
+ 
+ func init() {
+@@ -115,10 +114,10 @@ func TestAdaptiveShedderMaxFlight(t *testing.T) {
+ 	shedder := &adaptiveShedder{
+ 		passCounter:     passCounter,
+ 		rtCounter:       rtCounter,
+-		windowScale:     windowFactor,
++		windows:         buckets,
+ 		droppedRecently: syncx.NewAtomicBool(),
+ 	}
+-	assert.Equal(t, float64(54), shedder.maxFlight())
++	assert.Equal(t, int64(54), shedder.maxFlight())
+ }
+ 
+ func TestAdaptiveShedderShouldDrop(t *testing.T) {
+@@ -137,7 +136,7 @@ func TestAdaptiveShedderShouldDrop(t *testing.T) {
+ 	shedder := &adaptiveShedder{
+ 		passCounter:     passCounter,
+ 		rtCounter:       rtCounter,
+-		windowScale:     windowFactor,
++		windows:         buckets,
+ 		overloadTime:    syncx.NewAtomicDuration(),
+ 		droppedRecently: syncx.NewAtomicBool(),
+ 	}
+@@ -150,8 +149,7 @@ func TestAdaptiveShedderShouldDrop(t *testing.T) {
+ 
+ 	// cpu >=  800, inflight > maxPass
+ 	shedder.avgFlying = 80
+-	// because of the overloadFactor, so we need to make sure maxFlight is greater than flying
+-	shedder.flying = int64(shedder.maxFlight()*shedder.overloadFactor()) - 5
++	shedder.flying = 50
+ 	assert.False(t, shedder.shouldDrop())
+ 
+ 	// cpu >=  800, inflight > maxPass
+@@ -192,7 +190,7 @@ func TestAdaptiveShedderStillHot(t *testing.T) {
+ 	shedder := &adaptiveShedder{
+ 		passCounter:     passCounter,
+ 		rtCounter:       rtCounter,
+-		windowScale:     windowFactor,
++		windows:         buckets,
+ 		overloadTime:    syncx.NewAtomicDuration(),
+ 		droppedRecently: syncx.ForAtomicBool(true),
+ 	}
+@@ -241,30 +239,6 @@ func BenchmarkAdaptiveShedder_Allow(b *testing.B) {
+ 	b.Run("low load", bench)
+ }
+ 
+-func BenchmarkMaxFlight(b *testing.B) {
+-	passCounter := newRollingWindow()
+-	rtCounter := newRollingWindow()
+-	for i := 0; i < 10; i++ {
+-		if i > 0 {
+-			time.Sleep(bucketDuration)
+-		}
+-		passCounter.Add(float64((i + 1) * 100))
+-		for j := i*10 + 1; j <= i*10+10; j++ {
+-			rtCounter.Add(float64(j))
+-		}
+-	}
+-	shedder := &adaptiveShedder{
+-		passCounter:     passCounter,
+-		rtCounter:       rtCounter,
+-		windowScale:     windowFactor,
+-		droppedRecently: syncx.NewAtomicBool(),
+-	}
+-
+-	for i := 0; i < b.N; i++ {
+-		_ = shedder.maxFlight()
+-	}
+-}
+-
+ func newRollingWindow() *collection.RollingWindow {
+ 	return collection.NewRollingWindow(buckets, bucketDuration, collection.IgnoreCurrentBucket())
+ }
+diff --git a/core/logx/logs_test.go b/core/logx/logs_test.go
+index 3780bc2f120c418b1ccd11755f5a8bab308bd26a..0b37960fd61169357327f94baae94b062f39dc94 100644
+--- a/core/logx/logs_test.go
++++ b/core/logx/logs_test.go
+@@ -570,7 +570,7 @@ func TestErrorfWithWrappedError(t *testing.T) {
+ 	old := writer.Swap(w)
+ 	defer writer.Store(old)
+ 
+-	Errorf("hello %s", errors.New(message))
++	Errorf("hello %w", errors.New(message))
+ 	assert.True(t, strings.Contains(w.String(), "hello there"))
+ }
+ 
+@@ -666,7 +666,6 @@ func TestDisable(t *testing.T) {
+ 	WithMaxSize(1024)(&opt)
+ 	assert.Nil(t, Close())
+ 	assert.Nil(t, Close())
+-	assert.Equal(t, uint32(disableLevel), atomic.LoadUint32(&logLevel))
+ }
+ 
+ func TestDisableStat(t *testing.T) {
+@@ -681,7 +680,7 @@ func TestDisableStat(t *testing.T) {
+ }
+ 
+ func TestSetWriter(t *testing.T) {
+-	atomic.StoreUint32(&logLevel, 0)
++	atomic.StoreUint32(&disableLog, 0)
+ 	Reset()
+ 	SetWriter(nopWriter{})
+ 	assert.NotNil(t, writer.Load())
+diff --git a/core/mapping/unmarshaler_test.go b/core/mapping/unmarshaler_test.go
+index ac5a30c0fb94b9fe5c2250ffd1e41c5561129351..fd02fd6d2b0e04ede1b6701c9236b4676b032ccd 100644
+--- a/core/mapping/unmarshaler_test.go
++++ b/core/mapping/unmarshaler_test.go
+@@ -976,19 +976,6 @@ func TestUnmarshalFloat32WithOverflow(t *testing.T) {
+ 		assert.Error(t, UnmarshalKey(m, &in))
+ 	})
+ 
+-	t.Run("float32 from string less than float32", func(t *testing.T) {
+-		type inner struct {
+-			Value float32 `key:"float, string"`
+-		}
+-
+-		m := map[string]any{
+-			"float": "-1.79769313486231570814527423731704356798070e+300", // overflow
+-		}
+-
+-		var in inner
+-		assert.Error(t, UnmarshalKey(m, &in))
+-	})
+-
+ 	t.Run("float32 from json.Number greater than float64", func(t *testing.T) {
+ 		type inner struct {
+ 			Value float32 `key:"float"`
+@@ -1014,19 +1001,6 @@ func TestUnmarshalFloat32WithOverflow(t *testing.T) {
+ 		var in inner
+ 		assert.Error(t, UnmarshalKey(m, &in))
+ 	})
+-
+-	t.Run("float32 from json number less than float32", func(t *testing.T) {
+-		type inner struct {
+-			Value float32 `key:"float"`
+-		}
+-
+-		m := map[string]any{
+-			"float": json.Number("-1.79769313486231570814527423731704356798070e+300"), // overflow
+-		}
+-
+-		var in inner
+-		assert.Error(t, UnmarshalKey(m, &in))
+-	})
+ }
+ 
+ func TestUnmarshalFloat64WithOverflow(t *testing.T) {
+@@ -1329,47 +1303,6 @@ func TestUnmarshalInt64Slice(t *testing.T) {
+ 	}
+ }
+ 
+-func TestUnmarshalNullableSlice(t *testing.T) {
+-	var v struct {
+-		Ages  []int64 `key:"ages"`
+-		Slice []int8  `key:"slice"`
+-	}
+-	m := map[string]any{
+-		"ages":  []int64{1, 2},
+-		"slice": `[null,2]`,
+-	}
+-
+-	assert.New(t).Equal(UnmarshalKey(m, &v), errNilSliceElement)
+-}
+-
+-func TestUnmarshalWithFloatPtr(t *testing.T) {
+-	t.Run("*float32", func(t *testing.T) {
+-		var v struct {
+-			WeightFloat32 *float32 `key:"weightFloat32,optional"`
+-		}
+-		m := map[string]any{
+-			"weightFloat32": json.Number("3.2"),
+-		}
+-
+-		if assert.NoError(t, UnmarshalKey(m, &v)) {
+-			assert.Equal(t, float32(3.2), *v.WeightFloat32)
+-		}
+-	})
+-
+-	t.Run("**float32", func(t *testing.T) {
+-		var v struct {
+-			WeightFloat32 **float32 `key:"weightFloat32,optional"`
+-		}
+-		m := map[string]any{
+-			"weightFloat32": json.Number("3.2"),
+-		}
+-
+-		if assert.NoError(t, UnmarshalKey(m, &v)) {
+-			assert.Equal(t, float32(3.2), **v.WeightFloat32)
+-		}
+-	})
+-}
+-
+ func TestUnmarshalIntSlice(t *testing.T) {
+ 	var v struct {
+ 		Ages  []int `key:"ages"`
+@@ -5411,15 +5344,6 @@ func TestFillDefaultUnmarshal(t *testing.T) {
+ 		assert.Equal(t, "c", st.C)
+ 	})
+ 
+-	t.Run("optional !", func(t *testing.T) {
+-		var st struct {
+-			A string `json:",optional"`
+-			B string `json:",optional=!A"`
+-		}
+-		err := fillDefaultUnmarshal.Unmarshal(map[string]any{}, &st)
+-		assert.NoError(t, err)
+-	})
+-
+ 	t.Run("has value", func(t *testing.T) {
+ 		type St struct {
+ 			A string `json:",default=a"`
+@@ -5866,7 +5790,7 @@ type mockValuerWithParent struct {
+ 	ok     bool
+ }
+ 
+-func (m mockValuerWithParent) Value(_ string) (any, bool) {
++func (m mockValuerWithParent) Value(key string) (any, bool) {
+ 	return m.value, m.ok
+ }
+ 
+diff --git a/core/mathx/entropy_test.go b/core/mathx/entropy_test.go
+index 03db018d154df563960d36b6b25291789d93effa..3b6c26594018b7fd573e98e383b2f4e91170c152 100644
+--- a/core/mathx/entropy_test.go
++++ b/core/mathx/entropy_test.go
+@@ -15,17 +15,3 @@ func TestCalcEntropy(t *testing.T) {
+ 	}
+ 	assert.True(t, CalcEntropy(m) > .99)
+ }
+-
+-func TestCalcEmptyEntropy(t *testing.T) {
+-	m := make(map[any]int)
+-	assert.Equal(t, float64(1), CalcEntropy(m))
+-}
+-
+-func TestCalcDiffEntropy(t *testing.T) {
+-	const total = 1000
+-	m := make(map[any]int, total)
+-	for i := 0; i < total; i++ {
+-		m[i] = i
+-	}
+-	assert.True(t, CalcEntropy(m) < .99)
+-}
+diff --git a/core/mathx/range_test.go b/core/mathx/range_test.go
+deleted file mode 100644
+index bff9c2bceba4bad599f6fb1883a8c4e1a7d69270..0000000000000000000000000000000000000000
+--- a/core/mathx/range_test.go
++++ /dev/null
+@@ -1,513 +0,0 @@
+-package mathx
+-
+-import "testing"
+-
+-func TestAtLeast(t *testing.T) {
+-	t.Run("test int", func(t *testing.T) {
+-		if got := AtLeast(10, 5); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(3, 5); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(5, 5); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int8", func(t *testing.T) {
+-		if got := AtLeast(int8(10), int8(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(int8(3), int8(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(int8(5), int8(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int16", func(t *testing.T) {
+-		if got := AtLeast(int16(10), int16(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(int16(3), int16(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(int16(5), int16(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int32", func(t *testing.T) {
+-		if got := AtLeast(int32(10), int32(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(int32(3), int32(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(int32(5), int32(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int64", func(t *testing.T) {
+-		if got := AtLeast(int64(10), int64(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(int64(3), int64(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(int64(5), int64(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint", func(t *testing.T) {
+-		if got := AtLeast(uint(10), uint(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(uint(3), uint(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(uint(5), uint(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint8", func(t *testing.T) {
+-		if got := AtLeast(uint8(10), uint8(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(uint8(3), uint8(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(uint8(5), uint8(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint16", func(t *testing.T) {
+-		if got := AtLeast(uint16(10), uint16(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(uint16(3), uint16(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(uint16(5), uint16(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint32", func(t *testing.T) {
+-		if got := AtLeast(uint32(10), uint32(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(uint32(3), uint32(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(uint32(5), uint32(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint64", func(t *testing.T) {
+-		if got := AtLeast(uint64(10), uint64(5)); got != 10 {
+-			t.Errorf("AtLeast() = %v, want 10", got)
+-		}
+-		if got := AtLeast(uint64(3), uint64(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-		if got := AtLeast(uint64(5), uint64(5)); got != 5 {
+-			t.Errorf("AtLeast() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test float32", func(t *testing.T) {
+-		if got := AtLeast(float32(10.0), float32(5.0)); got != 10.0 {
+-			t.Errorf("AtLeast() = %v, want 10.0", got)
+-		}
+-		if got := AtLeast(float32(3.0), float32(5.0)); got != 5.0 {
+-			t.Errorf("AtLeast() = %v, want 5.0", got)
+-		}
+-		if got := AtLeast(float32(5.0), float32(5.0)); got != 5.0 {
+-			t.Errorf("AtLeast() = %v, want 5.0", got)
+-		}
+-	})
+-
+-	t.Run("test float64", func(t *testing.T) {
+-		if got := AtLeast(10.0, 5.0); got != 10.0 {
+-			t.Errorf("AtLeast() = %v, want 10.0", got)
+-		}
+-		if got := AtLeast(3.0, 5.0); got != 5.0 {
+-			t.Errorf("AtLeast() = %v, want 5.0", got)
+-		}
+-		if got := AtLeast(5.0, 5.0); got != 5.0 {
+-			t.Errorf("AtLeast() = %v, want 5.0", got)
+-		}
+-	})
+-}
+-
+-func TestAtMost(t *testing.T) {
+-	t.Run("test int", func(t *testing.T) {
+-		if got := AtMost(10, 5); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(3, 5); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(5, 5); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int8", func(t *testing.T) {
+-		if got := AtMost(int8(10), int8(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(int8(3), int8(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(int8(5), int8(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int16", func(t *testing.T) {
+-		if got := AtMost(int16(10), int16(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(int16(3), int16(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(int16(5), int16(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int32", func(t *testing.T) {
+-		if got := AtMost(int32(10), int32(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(int32(3), int32(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(int32(5), int32(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test int64", func(t *testing.T) {
+-		if got := AtMost(int64(10), int64(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(int64(3), int64(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(int64(5), int64(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint", func(t *testing.T) {
+-		if got := AtMost(uint(10), uint(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(uint(3), uint(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(uint(5), uint(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint8", func(t *testing.T) {
+-		if got := AtMost(uint8(10), uint8(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(uint8(3), uint8(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(uint8(5), uint8(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint16", func(t *testing.T) {
+-		if got := AtMost(uint16(10), uint16(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(uint16(3), uint16(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(uint16(5), uint16(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint32", func(t *testing.T) {
+-		if got := AtMost(uint32(10), uint32(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(uint32(3), uint32(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(uint32(5), uint32(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test uint64", func(t *testing.T) {
+-		if got := AtMost(uint64(10), uint64(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-		if got := AtMost(uint64(3), uint64(5)); got != 3 {
+-			t.Errorf("AtMost() = %v, want 3", got)
+-		}
+-		if got := AtMost(uint64(5), uint64(5)); got != 5 {
+-			t.Errorf("AtMost() = %v, want 5", got)
+-		}
+-	})
+-
+-	t.Run("test float32", func(t *testing.T) {
+-		if got := AtMost(float32(10.0), float32(5.0)); got != 5.0 {
+-			t.Errorf("AtMost() = %v, want 5.0", got)
+-		}
+-		if got := AtMost(float32(3.0), float32(5.0)); got != 3.0 {
+-			t.Errorf("AtMost() = %v, want 3.0", got)
+-		}
+-		if got := AtMost(float32(5.0), float32(5.0)); got != 5.0 {
+-			t.Errorf("AtMost() = %v, want 5.0", got)
+-		}
+-	})
+-
+-	t.Run("test float64", func(t *testing.T) {
+-		if got := AtMost(10.0, 5.0); got != 5.0 {
+-			t.Errorf("AtMost() = %v, want 5.0", got)
+-		}
+-		if got := AtMost(3.0, 5.0); got != 3.0 {
+-			t.Errorf("AtMost() = %v, want 3.0", got)
+-		}
+-		if got := AtMost(5.0, 5.0); got != 5.0 {
+-			t.Errorf("AtMost() = %v, want 5.0", got)
+-		}
+-	})
+-}
+-
+-func TestBetween(t *testing.T) {
+-	t.Run("test int", func(t *testing.T) {
+-		if got := Between(10, 5, 15); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(3, 5, 15); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(20, 5, 15); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(5, 5, 15); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(15, 5, 15); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test int8", func(t *testing.T) {
+-		if got := Between(int8(10), int8(5), int8(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(int8(3), int8(5), int8(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int8(20), int8(5), int8(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(int8(5), int8(5), int8(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int8(15), int8(5), int8(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test int16", func(t *testing.T) {
+-		if got := Between(int16(10), int16(5), int16(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(int16(3), int16(5), int16(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int16(20), int16(5), int16(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(int16(5), int16(5), int16(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int16(15), int16(5), int16(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test int32", func(t *testing.T) {
+-		if got := Between(int32(10), int32(5), int32(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(int32(3), int32(5), int32(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int32(20), int32(5), int32(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(int32(5), int32(5), int32(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int32(15), int32(5), int32(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test int64", func(t *testing.T) {
+-		if got := Between(int64(10), int64(5), int64(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(int64(3), int64(5), int64(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int64(20), int64(5), int64(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(int64(5), int64(5), int64(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(int64(15), int64(5), int64(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test uint", func(t *testing.T) {
+-		if got := Between(uint(10), uint(5), uint(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(uint(3), uint(5), uint(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint(20), uint(5), uint(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(uint(5), uint(5), uint(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint(15), uint(5), uint(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test uint8", func(t *testing.T) {
+-		if got := Between(uint8(10), uint8(5), uint8(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(uint8(3), uint8(5), uint8(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint8(20), uint8(5), uint8(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(uint8(5), uint8(5), uint8(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint8(15), uint8(5), uint8(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test uint16", func(t *testing.T) {
+-		if got := Between(uint16(10), uint16(5), uint16(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(uint16(3), uint16(5), uint16(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint16(20), uint16(5), uint16(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(uint16(5), uint16(5), uint16(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint16(15), uint16(5), uint16(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test uint32", func(t *testing.T) {
+-		if got := Between(uint32(10), uint32(5), uint32(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(uint32(3), uint32(5), uint32(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint32(20), uint32(5), uint32(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(uint32(5), uint32(5), uint32(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint32(15), uint32(5), uint32(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test uint64", func(t *testing.T) {
+-		if got := Between(uint64(10), uint64(5), uint64(15)); got != 10 {
+-			t.Errorf("Between() = %v, want 10", got)
+-		}
+-		if got := Between(uint64(3), uint64(5), uint64(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint64(20), uint64(5), uint64(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-		if got := Between(uint64(5), uint64(5), uint64(15)); got != 5 {
+-			t.Errorf("Between() = %v, want 5", got)
+-		}
+-		if got := Between(uint64(15), uint64(5), uint64(15)); got != 15 {
+-			t.Errorf("Between() = %v, want 15", got)
+-		}
+-	})
+-
+-	t.Run("test float32", func(t *testing.T) {
+-		if got := Between(float32(10.0), float32(5.0), float32(15.0)); got != 10.0 {
+-			t.Errorf("Between() = %v, want 10.0", got)
+-		}
+-		if got := Between(float32(3.0), float32(5.0), float32(15.0)); got != 5.0 {
+-			t.Errorf("Between() = %v, want 5.0", got)
+-		}
+-		if got := Between(float32(20.0), float32(5.0), float32(15.0)); got != 15.0 {
+-			t.Errorf("Between() = %v, want 15.0", got)
+-		}
+-		if got := Between(float32(5.0), float32(5.0), float32(15.0)); got != 5.0 {
+-			t.Errorf("Between() = %v, want 5.0", got)
+-		}
+-		if got := Between(float32(15.0), float32(5.0), float32(15.0)); got != 15.0 {
+-			t.Errorf("Between() = %v, want 15.0", got)
+-		}
+-	})
+-
+-	t.Run("test float64", func(t *testing.T) {
+-		if got := Between(10.0, 5.0, 15.0); got != 10.0 {
+-			t.Errorf("Between() = %v, want 10.0", got)
+-		}
+-		if got := Between(3.0, 5.0, 15.0); got != 5.0 {
+-			t.Errorf("Between() = %v, want 5.0", got)
+-		}
+-		if got := Between(20.0, 5.0, 15.0); got != 15.0 {
+-			t.Errorf("Between() = %v, want 15.0", got)
+-		}
+-		if got := Between(5.0, 5.0, 15.0); got != 5.0 {
+-			t.Errorf("Between() = %v, want 5.0", got)
+-		}
+-		if got := Between(15.0, 5.0, 15.0); got != 15.0 {
+-			t.Errorf("Between() = %v, want 15.0", got)
+-		}
+-	})
+-}
+diff --git a/core/mr/mapreduce_fuzz_test.go b/core/mr/mapreduce_fuzz_test.go
+index a275a3cefb1eced50ce0a5c8a1399ea2ef1276c9..936d362386643f268c4625eec284cda78c4e995a 100644
+--- a/core/mr/mapreduce_fuzz_test.go
++++ b/core/mr/mapreduce_fuzz_test.go
+@@ -13,7 +13,7 @@ import (
+ )
+ 
+ func FuzzMapReduce(f *testing.F) {
+-	rand.NewSource(time.Now().UnixNano())
++	rand.Seed(time.Now().UnixNano())
+ 
+ 	f.Add(int64(10), runtime.NumCPU())
+ 	f.Fuzz(func(t *testing.T, n int64, workers int) {
+diff --git a/core/mr/mapreduce_fuzzcase_test.go b/core/mr/mapreduce_fuzzcase_test.go
+index ffa3515e5d6fa8841e035c39ed0df3f5788b7321..3b30c31b1733ab30765b310bc59891b1552a39a1 100644
+--- a/core/mr/mapreduce_fuzzcase_test.go
++++ b/core/mr/mapreduce_fuzzcase_test.go
+@@ -20,7 +20,7 @@ import (
+ // If Fuzz stuck, we don't know why, because it only returns hung or unexpected,
+ // so we need to simulate the fuzz test in test mode.
+ func TestMapReduceRandom(t *testing.T) {
+-	rand.NewSource(time.Now().UnixNano())
++	rand.Seed(time.Now().UnixNano())
+ 
+ 	const (
+ 		times  = 10000
+diff --git a/core/proc/goroutines_test.go b/core/proc/goroutines_test.go
+index 4d5154623cf1d779dfa48453b3aab07f8a2fd248..827d0233d2c41428f3930999b1e68a398836e77c 100644
+--- a/core/proc/goroutines_test.go
++++ b/core/proc/goroutines_test.go
+@@ -36,6 +36,6 @@ type fakeCreator struct {
+ 	err  error
+ }
+ 
+-func (fc fakeCreator) Create(_ string) (file *os.File, err error) {
++func (fc fakeCreator) Create(name string) (file *os.File, err error) {
+ 	return fc.file, fc.err
+ }
+diff --git a/core/queue/util_test.go b/core/queue/util_test.go
+index eca6b797ab2cbadb40818d8bd26360fe9f5773ce..f578c364fc7f82af365b81f9676e260d951fb662 100644
+--- a/core/queue/util_test.go
++++ b/core/queue/util_test.go
+@@ -67,7 +67,7 @@ func (p *mockedPusher) Name() string {
+ 	return p.name
+ }
+ 
+-func (p *mockedPusher) Push(_ string) error {
++func (p *mockedPusher) Push(s string) error {
+ 	if proba.TrueOnProba(failProba) {
+ 		return errors.New("dummy")
+ 	}
+diff --git a/core/stat/internal/cgroup_linux_test.go b/core/stat/internal/cgroup_linux_test.go
+index a8a54678eaf37d2785f79d7cea71e18c49cdef7e..15ab1d4355436db02aa9c8465c97996838581cfa 100644
+--- a/core/stat/internal/cgroup_linux_test.go
++++ b/core/stat/internal/cgroup_linux_test.go
+@@ -12,29 +12,18 @@ func TestRunningInUserNS(t *testing.T) {
+ 	assert.False(t, runningInUserNS())
+ }
+ 
+-func TestCgroups(t *testing.T) {
+-	// test cgroup legacy(v1) & hybrid
+-	if !isCgroup2UnifiedMode() {
+-		cg, err := currentCgroupV1()
+-		assert.NoError(t, err)
+-		_, err = cg.effectiveCpus()
+-		assert.NoError(t, err)
+-		_, err = cg.cpuQuota()
+-		assert.NoError(t, err)
+-		_, err = cg.cpuUsage()
+-		assert.NoError(t, err)
+-	}
+-
+-	// test cgroup v2
++func TestCgroupV1(t *testing.T) {
+ 	if isCgroup2UnifiedMode() {
+-		cg, err := currentCgroupV2()
+-		assert.NoError(t, err)
+-		_, err = cg.effectiveCpus()
++		cg, err := currentCgroupV1()
+ 		assert.NoError(t, err)
+-		_, err = cg.cpuQuota()
++		_, err = cg.cpus()
++		assert.Error(t, err)
++		_, err = cg.cpuPeriodUs()
++		assert.Error(t, err)
++		_, err = cg.cpuQuotaUs()
++		assert.Error(t, err)
++		_, err = cg.usageAllCpus()
+ 		assert.Error(t, err)
+-		_, err = cg.cpuUsage()
+-		assert.NoError(t, err)
+ 	}
+ }
+ 
+diff --git a/core/stat/metrics_test.go b/core/stat/metrics_test.go
+index ea686560ba0f3390b5a60813cf2f27d96c139d31..7172994f8a6a88c70b81008ad75fc292e59abd3d 100644
+--- a/core/stat/metrics_test.go
++++ b/core/stat/metrics_test.go
+@@ -1,13 +1,11 @@
+ package stat
+ 
+ import (
+-	"errors"
+ 	"strconv"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/logx/logtest"
+ )
+ 
+ func TestMetrics(t *testing.T) {
+@@ -32,34 +30,6 @@ func TestMetrics(t *testing.T) {
+ 	}
+ }
+ 
+-func TestTopDurationWithEmpty(t *testing.T) {
+-	assert.Equal(t, float32(0), getTopDuration(nil))
+-	assert.Equal(t, float32(0), getTopDuration([]Task{}))
+-}
+-
+-func TestLogAndReport(t *testing.T) {
+-	buf := logtest.NewCollector(t)
+-	old := logEnabled.True()
+-	logEnabled.Set(true)
+-	t.Cleanup(func() {
+-		logEnabled.Set(old)
+-	})
+-
+-	log(&StatReport{})
+-	assert.NotEmpty(t, buf.String())
+-
+-	writerLock.Lock()
+-	writer := reportWriter
+-	writerLock.Unlock()
+-	buf = logtest.NewCollector(t)
+-	t.Cleanup(func() {
+-		SetReportWriter(writer)
+-	})
+-	SetReportWriter(&badWriter{})
+-	writeReport(&StatReport{})
+-	assert.NotEmpty(t, buf.String())
+-}
+-
+ type mockedWriter struct {
+ 	report *StatReport
+ }
+@@ -68,9 +38,3 @@ func (m *mockedWriter) Write(report *StatReport) error {
+ 	m.report = report
+ 	return nil
+ }
+-
+-type badWriter struct{}
+-
+-func (b *badWriter) Write(_ *StatReport) error {
+-	return errors.New("bad")
+-}
+diff --git a/core/stores/mon/collection_test.go b/core/stores/mon/collection_test.go
+index 2adc27f092d51ecf6ddb53742421c20b4d0800ca..ac65bbd9e7eb6c96a61743b126a27c10c6ad6ccd 100644
+--- a/core/stores/mon/collection_test.go
++++ b/core/stores/mon/collection_test.go
+@@ -603,11 +603,11 @@ func (d *dropBreaker) DoWithAcceptable(_ func() error, _ breaker.Acceptable) err
+ 	return errDummy
+ }
+ 
+-func (d *dropBreaker) DoWithFallback(_ func() error, _ breaker.Fallback) error {
++func (d *dropBreaker) DoWithFallback(_ func() error, _ func(err error) error) error {
+ 	return nil
+ }
+ 
+-func (d *dropBreaker) DoWithFallbackAcceptable(_ func() error, _ breaker.Fallback,
++func (d *dropBreaker) DoWithFallbackAcceptable(_ func() error, _ func(err error) error,
+ 	_ breaker.Acceptable) error {
+ 	return nil
+ }
+diff --git a/core/stores/mon/options_test.go b/core/stores/mon/options_test.go
+index 48024dbd9fc460be4984057044b36662f9e97538..ee944f94578cdcd3434700a15354ce06be93c265 100644
+--- a/core/stores/mon/options_test.go
++++ b/core/stores/mon/options_test.go
+@@ -1,14 +1,10 @@
+ package mon
+ 
+ import (
+-	"fmt"
+-	"reflect"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"go.mongodb.org/mongo-driver/bson/bsoncodec"
+-	"go.mongodb.org/mongo-driver/bson/bsonrw"
+ 	mopt "go.mongodb.org/mongo-driver/mongo/options"
+ )
+ 
+@@ -55,56 +51,3 @@ func TestDisableInfoLog(t *testing.T) {
+ 	assert.False(t, logMon.True())
+ 	assert.True(t, logSlowMon.True())
+ }
+-
+-func TestWithRegistryForTimestampRegisterType(t *testing.T) {
+-	opts := mopt.Client()
+-
+-	// mongoDateTimeEncoder allow user convert time.Time to primitive.DateTime.
+-	var mongoDateTimeEncoder bsoncodec.ValueEncoderFunc = func(ect bsoncodec.EncodeContext, w bsonrw.ValueWriter, value reflect.Value) error {
+-		// Use reflect, determine if it can be converted to time.Time.
+-		dec, ok := value.Interface().(time.Time)
+-		if !ok {
+-			return fmt.Errorf("value %v to encode is not of type time.Time", value)
+-		}
+-		return w.WriteDateTime(dec.Unix())
+-	}
+-
+-	// mongoDateTimeEncoder allow user convert primitive.DateTime to time.Time.
+-	var mongoDateTimeDecoder bsoncodec.ValueDecoderFunc = func(ect bsoncodec.DecodeContext, r bsonrw.ValueReader, value reflect.Value) error {
+-		primTime, err := r.ReadDateTime()
+-		if err != nil {
+-			return fmt.Errorf("error reading primitive.DateTime from ValueReader: %v", err)
+-		}
+-		value.Set(reflect.ValueOf(time.Unix(primTime, 0)))
+-		return nil
+-	}
+-
+-	codecs := []TypeCodec{
+-		{
+-			ValueType: reflect.TypeOf(time.Time{}),
+-			Encoder:   mongoDateTimeEncoder,
+-			Decoder:   mongoDateTimeDecoder,
+-		},
+-	}
+-	WithTypeCodec(codecs...)(opts)
+-
+-	for _, v := range codecs {
+-		// Validate Encoder
+-		enc, err := opts.Registry.LookupEncoder(v.ValueType)
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		if assert.ObjectsAreEqual(v.Encoder, enc) {
+-			t.Errorf("Encoder got from Registry: %v, but want: %v", enc, v.Encoder)
+-		}
+-
+-		// Validate Decoder
+-		dec, err := opts.Registry.LookupDecoder(v.ValueType)
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		if assert.ObjectsAreEqual(v.Decoder, dec) {
+-			t.Errorf("Decoder got from Registry: %v, but want: %v", dec, v.Decoder)
+-		}
+-	}
+-}
+diff --git a/core/stores/redis/hook_test.go b/core/stores/redis/hook_test.go
+index 44b2e8fa709378b11c3d94f291550ef268b2465f..78556ef9111fb08d61d14d48b98317284e7efcd0 100644
+--- a/core/stores/redis/hook_test.go
++++ b/core/stores/redis/hook_test.go
+@@ -4,103 +4,167 @@ import (
+ 	"context"
+ 	"errors"
+ 	"io"
++	"log"
+ 	"net"
+ 	"strings"
+ 	"testing"
+ 	"time"
+ 
+-	red "github.com/redis/go-redis/v9"
++	red "github.com/go-redis/redis/v8"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx/logtest"
+-	"github.com/zeromicro/go-zero/core/trace/tracetest"
++	ztrace "github.com/zeromicro/go-zero/core/trace"
+ 	tracesdk "go.opentelemetry.io/otel/trace"
+ )
+ 
+ func TestHookProcessCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
++	ztrace.StartAgent(ztrace.Config{
++		Name:     "go-zero-test",
++		Endpoint: "http://localhost:14268/api/traces",
++		Batcher:  "jaeger",
++		Sampler:  1.0,
++	})
++	defer ztrace.StopAgent()
++
++	writer := log.Writer()
++	var buf strings.Builder
++	log.SetOutput(&buf)
++	defer log.SetOutput(writer)
+ 
+-	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
++	ctx, err := durationHook.BeforeProcess(context.Background(), red.NewCmd(context.Background()))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 
+-	assert.False(t, strings.Contains(w.String(), "slow"))
++	assert.Nil(t, durationHook.AfterProcess(ctx, red.NewCmd(context.Background())))
++	assert.False(t, strings.Contains(buf.String(), "slow"))
++	assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+ }
+ 
+ func TestHookProcessCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
++	ztrace.StartAgent(ztrace.Config{
++		Name:     "go-zero-test",
++		Endpoint: "http://localhost:14268/api/traces",
++		Batcher:  "jaeger",
++		Sampler:  1.0,
++	})
++	defer ztrace.StopAgent()
+ 
+-	err := durationHook.ProcessHook(func(ctx context.Context, cmd red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), red.NewCmd(context.Background()))
++	w := logtest.NewCollector(t)
++	ctx, err := durationHook.BeforeProcess(context.Background(), red.NewCmd(context.Background()))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 
++	time.Sleep(slowThreshold.Load() + time.Millisecond)
++
++	assert.Nil(t, durationHook.AfterProcess(ctx, red.NewCmd(context.Background(), "foo", "bar")))
+ 	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
++}
++
++func TestHookProcessCase3(t *testing.T) {
++	writer := log.Writer()
++	var buf strings.Builder
++	log.SetOutput(&buf)
++	defer log.SetOutput(writer)
++
++	assert.Nil(t, durationHook.AfterProcess(context.Background(), red.NewCmd(context.Background())))
++	assert.True(t, buf.Len() == 0)
++}
++
++func TestHookProcessCase4(t *testing.T) {
++	writer := log.Writer()
++	var buf strings.Builder
++	log.SetOutput(&buf)
++	defer log.SetOutput(writer)
++
++	ctx := context.WithValue(context.Background(), startTimeKey, "foo")
++	assert.Nil(t, durationHook.AfterProcess(ctx, red.NewCmd(context.Background())))
++	assert.True(t, buf.Len() == 0)
+ }
+ 
+ func TestHookProcessPipelineCase1(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
++	ztrace.StartAgent(ztrace.Config{
++		Name:     "go-zero-test",
++		Endpoint: "http://localhost:14268/api/traces",
++		Batcher:  "jaeger",
++		Sampler:  1.0,
++	})
++	defer ztrace.StopAgent()
+ 
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		return nil
+-	})(context.Background(), nil)
+-	assert.NoError(t, err)
++	writer := log.Writer()
++	var buf strings.Builder
++	log.SetOutput(&buf)
++	defer log.SetOutput(writer)
+ 
+-	err = durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return nil
+-	})(context.Background(), []red.Cmder{
++	_, err := durationHook.BeforeProcessPipeline(context.Background(), []red.Cmder{})
++	assert.NoError(t, err)
++	ctx, err := durationHook.BeforeProcessPipeline(context.Background(), []red.Cmder{
+ 		red.NewCmd(context.Background()),
+ 	})
+ 	assert.NoError(t, err)
+ 
+-	assert.False(t, strings.Contains(w.String(), "slow"))
++	assert.NoError(t, durationHook.AfterProcessPipeline(ctx, []red.Cmder{}))
++	assert.NoError(t, durationHook.AfterProcessPipeline(ctx, []red.Cmder{
++		red.NewCmd(context.Background()),
++	}))
++	assert.False(t, strings.Contains(buf.String(), "slow"))
+ }
+ 
+ func TestHookProcessPipelineCase2(t *testing.T) {
+-	tracetest.NewInMemoryExporter(t)
+-	w := logtest.NewCollector(t)
++	ztrace.StartAgent(ztrace.Config{
++		Name:     "go-zero-test",
++		Endpoint: "http://localhost:14268/api/traces",
++		Batcher:  "jaeger",
++		Sampler:  1.0,
++	})
++	defer ztrace.StopAgent()
+ 
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		time.Sleep(slowThreshold.Load() + time.Millisecond)
+-		return nil
+-	})(context.Background(), []red.Cmder{
++	w := logtest.NewCollector(t)
++	ctx, err := durationHook.BeforeProcessPipeline(context.Background(), []red.Cmder{
+ 		red.NewCmd(context.Background()),
+ 	})
+ 	assert.NoError(t, err)
+ 
++	time.Sleep(slowThreshold.Load() + time.Millisecond)
++
++	assert.Nil(t, durationHook.AfterProcessPipeline(ctx, []red.Cmder{
++		red.NewCmd(context.Background(), "foo", "bar"),
++	}))
+ 	assert.True(t, strings.Contains(w.String(), "slow"))
+-	assert.True(t, strings.Contains(w.String(), "trace"))
+-	assert.True(t, strings.Contains(w.String(), "span"))
+ }
+ 
+ func TestHookProcessPipelineCase3(t *testing.T) {
+-	te := tracetest.NewInMemoryExporter(t)
++	w := logtest.NewCollector(t)
+ 
+-	err := durationHook.ProcessPipelineHook(func(ctx context.Context, cmds []red.Cmder) error {
+-		assert.Equal(t, "redis", tracesdk.SpanFromContext(ctx).(interface{ Name() string }).Name())
+-		return assert.AnError
+-	})(context.Background(), []red.Cmder{
++	assert.Nil(t, durationHook.AfterProcessPipeline(context.Background(), []red.Cmder{
+ 		red.NewCmd(context.Background()),
+-	})
+-	assert.ErrorIs(t, err, assert.AnError)
+-	traceLogs := te.GetSpans().Snapshots()[0]
+-	assert.Equal(t, "redis", traceLogs.Name())
+-	assert.Equal(t, assert.AnError.Error(), traceLogs.Events()[0].Attributes[1].Value.AsString(), "trace should record error")
++	}))
++	assert.True(t, len(w.String()) == 0)
++}
++
++func TestHookProcessPipelineCase4(t *testing.T) {
++	w := logtest.NewCollector(t)
++
++	ctx := context.WithValue(context.Background(), startTimeKey, "foo")
++	assert.Nil(t, durationHook.AfterProcessPipeline(ctx, []red.Cmder{
++		red.NewCmd(context.Background()),
++	}))
++	assert.True(t, len(w.String()) == 0)
++}
++
++func TestHookProcessPipelineCase5(t *testing.T) {
++	writer := log.Writer()
++	var buf strings.Builder
++	log.SetOutput(&buf)
++	defer log.SetOutput(writer)
++
++	ctx := context.WithValue(context.Background(), startTimeKey, "foo")
++	assert.Nil(t, durationHook.AfterProcessPipeline(ctx, []red.Cmder{
++		red.NewCmd(context.Background()),
++	}))
++	assert.True(t, buf.Len() == 0)
+ }
+ 
+ func TestLogDuration(t *testing.T) {
+@@ -138,7 +202,7 @@ func TestFormatError(t *testing.T) {
+ 	assert.Equal(t, "context deadline", formatError(context.DeadlineExceeded))
+ 
+ 	// Test case: err is breaker.ErrServiceUnavailable
+-	assert.Equal(t, "breaker open", formatError(breaker.ErrServiceUnavailable))
++	assert.Equal(t, "breaker", formatError(breaker.ErrServiceUnavailable))
+ 
+ 	// Test case: err is unknown
+ 	assert.Equal(t, "unexpected error", formatError(errors.New("some error")))
+diff --git a/core/stores/redis/metrics_test.go b/core/stores/redis/metrics_test.go
+index 45549bde0cda8e2d9d96fcaff5fc6c19efd74981..29c5f771ce4e8e26cdad79a98da9494fb9494935 100644
+--- a/core/stores/redis/metrics_test.go
++++ b/core/stores/redis/metrics_test.go
+@@ -7,9 +7,9 @@ import (
+ 	"testing"
+ 	"time"
+ 
++	red "github.com/go-redis/redis/v8"
+ 	"github.com/prometheus/client_golang/prometheus"
+ 	"github.com/prometheus/client_golang/prometheus/testutil"
+-	red "github.com/redis/go-redis/v9"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/conf"
+ 	"github.com/zeromicro/go-zero/internal/devserver"
+diff --git a/core/stores/redis/redis_test.go b/core/stores/redis/redis_test.go
+index cdb082abbe206da40ced4ac8372b91f796c6f2f0..8053a66198942c088a20b97de49811d2d7d8f9bb 100644
+--- a/core/stores/redis/redis_test.go
++++ b/core/stores/redis/redis_test.go
+@@ -10,34 +10,29 @@ import (
+ 	"time"
+ 
+ 	"github.com/alicebob/miniredis/v2"
+-	red "github.com/redis/go-redis/v9"
++	red "github.com/go-redis/redis/v8"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/stringx"
+ )
+ 
+ type myHook struct {
++	red.Hook
+ 	includePing bool
+ }
+ 
+ var _ red.Hook = myHook{}
+ 
+-func (m myHook) DialHook(next red.DialHook) red.DialHook {
+-	return next
++func (m myHook) BeforeProcess(ctx context.Context, cmd red.Cmder) (context.Context, error) {
++	return ctx, nil
+ }
+ 
+-func (m myHook) ProcessPipelineHook(next red.ProcessPipelineHook) red.ProcessPipelineHook {
+-	return next
+-}
+-
+-func (m myHook) ProcessHook(next red.ProcessHook) red.ProcessHook {
+-	return func(ctx context.Context, cmd red.Cmder) error {
+-		// skip ping cmd
+-		if cmd.Name() == "ping" && !m.includePing {
+-			return next(ctx, cmd)
+-		}
+-		return errors.New("hook error")
++func (m myHook) AfterProcess(ctx context.Context, cmd red.Cmder) error {
++	// skip ping cmd
++	if cmd.Name() == "ping" && !m.includePing {
++		return nil
+ 	}
++	return errors.New("hook error")
+ }
+ 
+ func TestNewRedis(t *testing.T) {
+@@ -177,7 +172,7 @@ func TestRedis_NonBlock(t *testing.T) {
+ 
+ func TestRedis_Decr(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Decr("a")
++		_, err := New(client.Addr, badType()).Decr("a")
+ 		assert.NotNil(t, err)
+ 		val, err := client.Decr("a")
+ 		assert.Nil(t, err)
+@@ -190,7 +185,7 @@ func TestRedis_Decr(t *testing.T) {
+ 
+ func TestRedis_DecrBy(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Decrby("a", 2)
++		_, err := New(client.Addr, badType()).Decrby("a", 2)
+ 		assert.NotNil(t, err)
+ 		val, err := client.Decrby("a", 2)
+ 		assert.Nil(t, err)
+@@ -203,7 +198,7 @@ func TestRedis_DecrBy(t *testing.T) {
+ 
+ func TestRedis_Exists(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Exists("a")
++		_, err := New(client.Addr, badType()).Exists("a")
+ 		assert.NotNil(t, err)
+ 		ok, err := client.Exists("a")
+ 		assert.Nil(t, err)
+@@ -217,7 +212,7 @@ func TestRedis_Exists(t *testing.T) {
+ 
+ func TestRedisTLS_Exists(t *testing.T) {
+ 	runOnRedisTLS(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Exists("a")
++		_, err := New(client.Addr, badType()).Exists("a")
+ 		assert.NotNil(t, err)
+ 		ok, err := client.Exists("a")
+ 		assert.NotNil(t, err)
+@@ -229,39 +224,9 @@ func TestRedisTLS_Exists(t *testing.T) {
+ 	})
+ }
+ 
+-func TestRedis_ExistsMany(t *testing.T) {
+-	runOnRedis(t, func(client *Redis) {
+-		// Attempt to create a new Redis instance with an incorrect type and call ExistsMany
+-		_, err := newRedis(client.Addr, badType()).ExistsMany("key1", "key2")
+-		assert.NotNil(t, err)
+-
+-		// Check if key1 and key2 exist, expecting that they do not
+-		val, err := client.ExistsMany("key1", "key2")
+-		assert.Nil(t, err)
+-		assert.Equal(t, int64(0), val)
+-
+-		// Set the value for key1 and check if key1 exists
+-		assert.Nil(t, client.Set("key1", "value1"))
+-		val, err = client.ExistsMany("key1")
+-		assert.Nil(t, err)
+-		assert.Equal(t, int64(1), val)
+-
+-		// Set the value for key2 and check if key1 and key2 exist
+-		assert.Nil(t, client.Set("key2", "value2"))
+-		val, err = client.ExistsMany("key1", "key2")
+-		assert.Nil(t, err)
+-		assert.Equal(t, int64(2), val)
+-
+-		// Check if key1, key2, and a non-existent key3 exist, expecting that key1 and key2 do
+-		val, err = client.ExistsMany("key1", "key2", "key3")
+-		assert.Nil(t, err)
+-		assert.Equal(t, int64(2), val)
+-	})
+-}
+-
+ func TestRedis_Eval(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Eval(`redis.call("EXISTS", KEYS[1])`, []string{"notexist"})
++		_, err := New(client.Addr, badType()).Eval(`redis.call("EXISTS", KEYS[1])`, []string{"notexist"})
+ 		assert.NotNil(t, err)
+ 		_, err = client.Eval(`redis.call("EXISTS", KEYS[1])`, []string{"notexist"})
+ 		assert.Equal(t, Nil, err)
+@@ -279,7 +244,7 @@ func TestRedis_ScriptRun(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		sc := NewScript(`redis.call("EXISTS", KEYS[1])`)
+ 		sc2 := NewScript(`return redis.call("EXISTS", KEYS[1])`)
+-		_, err := newRedis(client.Addr, badType()).ScriptRun(sc, []string{"notexist"})
++		_, err := New(client.Addr, badType()).ScriptRun(sc, []string{"notexist"})
+ 		assert.NotNil(t, err)
+ 		_, err = client.ScriptRun(sc, []string{"notexist"})
+ 		assert.Equal(t, Nil, err)
+@@ -297,7 +262,7 @@ func TestRedis_GeoHash(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		_, err := client.GeoHash("parent", "child1", "child2")
+ 		assert.Error(t, err)
+-		_, err = newRedis(client.Addr, badType()).GeoHash("parent", "child1", "child2")
++		_, err = New(client.Addr, badType()).GeoHash("parent", "child1", "child2")
+ 		assert.Error(t, err)
+ 	})
+ }
+@@ -306,7 +271,7 @@ func TestRedis_Hgetall(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hgetall("a")
++		_, err := New(client.Addr, badType()).Hgetall("a")
+ 		assert.NotNil(t, err)
+ 		vals, err := client.Hgetall("a")
+ 		assert.Nil(t, err)
+@@ -319,10 +284,10 @@ func TestRedis_Hgetall(t *testing.T) {
+ 
+ func TestRedis_Hvals(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		assert.NotNil(t, newRedis(client.Addr, badType()).Hset("a", "aa", "aaa"))
++		assert.NotNil(t, New(client.Addr, badType()).Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hvals("a")
++		_, err := New(client.Addr, badType()).Hvals("a")
+ 		assert.NotNil(t, err)
+ 		vals, err := client.Hvals("a")
+ 		assert.Nil(t, err)
+@@ -334,7 +299,7 @@ func TestRedis_Hsetnx(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hsetnx("a", "bb", "ccc")
++		_, err := New(client.Addr, badType()).Hsetnx("a", "bb", "ccc")
+ 		assert.NotNil(t, err)
+ 		ok, err := client.Hsetnx("a", "bb", "ccc")
+ 		assert.Nil(t, err)
+@@ -352,7 +317,7 @@ func TestRedis_HdelHlen(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hlen("a")
++		_, err := New(client.Addr, badType()).Hlen("a")
+ 		assert.NotNil(t, err)
+ 		num, err := client.Hlen("a")
+ 		assert.Nil(t, err)
+@@ -368,7 +333,7 @@ func TestRedis_HdelHlen(t *testing.T) {
+ 
+ func TestRedis_HIncrBy(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Hincrby("key", "field", 2)
++		_, err := New(client.Addr, badType()).Hincrby("key", "field", 2)
+ 		assert.NotNil(t, err)
+ 		val, err := client.Hincrby("key", "field", 2)
+ 		assert.Nil(t, err)
+@@ -383,7 +348,7 @@ func TestRedis_Hkeys(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hkeys("a")
++		_, err := New(client.Addr, badType()).Hkeys("a")
+ 		assert.NotNil(t, err)
+ 		vals, err := client.Hkeys("a")
+ 		assert.Nil(t, err)
+@@ -395,7 +360,7 @@ func TestRedis_Hmget(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		assert.Nil(t, client.Hset("a", "aa", "aaa"))
+ 		assert.Nil(t, client.Hset("a", "bb", "bbb"))
+-		_, err := newRedis(client.Addr, badType()).Hmget("a", "aa", "bb")
++		_, err := New(client.Addr, badType()).Hmget("a", "aa", "bb")
+ 		assert.NotNil(t, err)
+ 		vals, err := client.Hmget("a", "aa", "bb")
+ 		assert.Nil(t, err)
+@@ -408,7 +373,7 @@ func TestRedis_Hmget(t *testing.T) {
+ 
+ func TestRedis_Hmset(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		assert.NotNil(t, newRedis(client.Addr, badType()).Hmset("a", nil))
++		assert.NotNil(t, New(client.Addr, badType()).Hmset("a", nil))
+ 		assert.Nil(t, client.Hmset("a", map[string]string{
+ 			"aa": "aaa",
+ 			"bb": "bbb",
+@@ -433,7 +398,7 @@ func TestRedis_Hscan(t *testing.T) {
+ 			var cursor uint64 = 0
+ 			sum := 0
+ 			for {
+-				_, _, err := newRedis(client.Addr, badType()).Hscan(key, cursor, "*", 100)
++				_, _, err := New(client.Addr, badType()).Hscan(key, cursor, "*", 100)
+ 				assert.NotNil(t, err)
+ 				reMap, next, err := client.Hscan(key, cursor, "*", 100)
+ 				assert.Nil(t, err)
+@@ -445,7 +410,7 @@ func TestRedis_Hscan(t *testing.T) {
+ 			}
+ 
+ 			assert.Equal(t, sum, 3100)
+-			_, err = newRedis(client.Addr, badType()).Del(key)
++			_, err = New(client.Addr, badType()).Del(key)
+ 			assert.Error(t, err)
+ 			_, err = client.Del(key)
+ 			assert.NoError(t, err)
+@@ -462,7 +427,7 @@ func TestRedis_Hscan(t *testing.T) {
+ 
+ func TestRedis_Incr(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Incr("a")
++		_, err := New(client.Addr, badType()).Incr("a")
+ 		assert.NotNil(t, err)
+ 		val, err := client.Incr("a")
+ 		assert.Nil(t, err)
+@@ -475,7 +440,7 @@ func TestRedis_Incr(t *testing.T) {
+ 
+ func TestRedis_IncrBy(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Incrby("a", 2)
++		_, err := New(client.Addr, badType()).Incrby("a", 2)
+ 		assert.NotNil(t, err)
+ 		val, err := client.Incrby("a", 2)
+ 		assert.Nil(t, err)
+@@ -492,7 +457,7 @@ func TestRedis_Keys(t *testing.T) {
+ 		assert.Nil(t, err)
+ 		err = client.Set("key2", "value2")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).Keys("*")
++		_, err = New(client.Addr, badType()).Keys("*")
+ 		assert.NotNil(t, err)
+ 		keys, err := client.Keys("*")
+ 		assert.Nil(t, err)
+@@ -504,13 +469,13 @@ func TestRedis_HyperLogLog(t *testing.T) {
+ 	t.Run("hyperloglog", func(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+ 			client.Ping()
+-			r := newRedis(client.Addr)
+-			_, err := newRedis(client.Addr, badType()).Pfadd("key1", "val1")
++			r := New(client.Addr)
++			_, err := New(client.Addr, badType()).Pfadd("key1", "val1")
+ 			assert.Error(t, err)
+ 			ok, err := r.Pfadd("key1", "val1")
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Pfcount("key1")
++			_, err = New(client.Addr, badType()).Pfcount("key1")
+ 			assert.Error(t, err)
+ 			val, err := r.Pfcount("key1")
+ 			assert.Nil(t, err)
+@@ -521,7 +486,7 @@ func TestRedis_HyperLogLog(t *testing.T) {
+ 			val, err = r.Pfcount("key2")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(1), val)
+-			err = newRedis(client.Addr, badType()).Pfmerge("key3", "key1", "key2")
++			err = New(client.Addr, badType()).Pfmerge("key3", "key1", "key2")
+ 			assert.Error(t, err)
+ 			err = r.Pfmerge("key1", "key2")
+ 			assert.Nil(t, err)
+@@ -542,22 +507,22 @@ func TestRedis_HyperLogLog(t *testing.T) {
+ func TestRedis_List(t *testing.T) {
+ 	t.Run("list", func(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+-			_, err := newRedis(client.Addr, badType()).Lpush("key", "value1", "value2")
++			_, err := New(client.Addr, badType()).Lpush("key", "value1", "value2")
+ 			assert.NotNil(t, err)
+ 			val, err := client.Lpush("key", "value1", "value2")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, val)
+-			_, err = newRedis(client.Addr, badType()).Rpush("key", "value3", "value4")
++			_, err = New(client.Addr, badType()).Rpush("key", "value3", "value4")
+ 			assert.NotNil(t, err)
+ 			val, err = client.Rpush("key", "value3", "value4")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 4, val)
+-			_, err = newRedis(client.Addr, badType()).Llen("key")
++			_, err = New(client.Addr, badType()).Llen("key")
+ 			assert.NotNil(t, err)
+ 			val, err = client.Llen("key")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 4, val)
+-			_, err = newRedis(client.Addr, badType()).Lindex("key", 1)
++			_, err = New(client.Addr, badType()).Lindex("key", 1)
+ 			assert.NotNil(t, err)
+ 			value, err := client.Lindex("key", 0)
+ 			assert.Nil(t, err)
+@@ -565,7 +530,7 @@ func TestRedis_List(t *testing.T) {
+ 			vals, err := client.Lrange("key", 0, 10)
+ 			assert.Nil(t, err)
+ 			assert.EqualValues(t, []string{"value2", "value1", "value3", "value4"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Lpop("key")
++			_, err = New(client.Addr, badType()).Lpop("key")
+ 			assert.NotNil(t, err)
+ 			v, err := client.Lpop("key")
+ 			assert.Nil(t, err)
+@@ -573,7 +538,7 @@ func TestRedis_List(t *testing.T) {
+ 			val, err = client.Lpush("key", "value1", "value2")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 5, val)
+-			_, err = newRedis(client.Addr, badType()).Rpop("key")
++			_, err = New(client.Addr, badType()).Rpop("key")
+ 			assert.NotNil(t, err)
+ 			v, err = client.Rpop("key")
+ 			assert.Nil(t, err)
+@@ -581,12 +546,12 @@ func TestRedis_List(t *testing.T) {
+ 			val, err = client.Rpush("key", "value4", "value3", "value3")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 7, val)
+-			_, err = newRedis(client.Addr, badType()).Lrem("key", 2, "value1")
++			_, err = New(client.Addr, badType()).Lrem("key", 2, "value1")
+ 			assert.NotNil(t, err)
+ 			n, err := client.Lrem("key", 2, "value1")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, n)
+-			_, err = newRedis(client.Addr, badType()).Lrange("key", 0, 10)
++			_, err = New(client.Addr, badType()).Lrange("key", 0, 10)
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Lrange("key", 0, 10)
+ 			assert.Nil(t, err)
+@@ -597,7 +562,7 @@ func TestRedis_List(t *testing.T) {
+ 			vals, err = client.Lrange("key", 0, 10)
+ 			assert.Nil(t, err)
+ 			assert.EqualValues(t, []string{"value2", "value3", "value4"}, vals)
+-			err = newRedis(client.Addr, badType()).Ltrim("key", 0, 1)
++			err = New(client.Addr, badType()).Ltrim("key", 0, 1)
+ 			assert.Error(t, err)
+ 			err = client.Ltrim("key", 0, 1)
+ 			assert.Nil(t, err)
+@@ -660,33 +625,6 @@ func TestRedis_List(t *testing.T) {
+ 	})
+ }
+ 
+-func TestRedis_Mset(t *testing.T) {
+-	t.Run("mset", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			// Attempt to Mget with a bad client type, expecting an error.
+-			_, err := New(client.Addr, badType()).Mset("key1", "value1")
+-			assert.NotNil(t, err)
+-
+-			// Set multiple key-value pairs using Mset and expect no error.
+-			_, err = client.Mset("key1", "value1", "key2", "value2")
+-			assert.Nil(t, err)
+-
+-			// Retrieve the values for the keys set above using Mget and expect no error.
+-			vals, err := client.Mget("key1", "key2")
+-			assert.Nil(t, err)
+-			assert.EqualValues(t, []string{"value1", "value2"}, vals)
+-		})
+-	})
+-
+-	// Test case for Mset operation with an incorrect number of arguments, expecting an error.
+-	t.Run("mset error", func(t *testing.T) {
+-		runOnRedisWithError(t, func(client *Redis) {
+-			_, err := client.Mset("key1", "value1", "key2")
+-			assert.Error(t, err)
+-		})
+-	})
+-}
+-
+ func TestRedis_Mget(t *testing.T) {
+ 	t.Run("mget", func(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+@@ -694,7 +632,7 @@ func TestRedis_Mget(t *testing.T) {
+ 			assert.Nil(t, err)
+ 			err = client.Set("key2", "value2")
+ 			assert.Nil(t, err)
+-			_, err = newRedis(client.Addr, badType()).Mget("key1", "key0", "key2", "key3")
++			_, err = New(client.Addr, badType()).Mget("key1", "key0", "key2", "key3")
+ 			assert.NotNil(t, err)
+ 			vals, err := client.Mget("key1", "key0", "key2", "key3")
+ 			assert.Nil(t, err)
+@@ -713,7 +651,7 @@ func TestRedis_Mget(t *testing.T) {
+ func TestRedis_SetBit(t *testing.T) {
+ 	t.Run("setbit", func(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+-			_, err := newRedis(client.Addr, badType()).SetBit("key", 1, 1)
++			_, err := New(client.Addr, badType()).SetBit("key", 1, 1)
+ 			assert.Error(t, err)
+ 			val, err := client.SetBit("key", 1, 1)
+ 			if assert.NoError(t, err) {
+@@ -736,7 +674,7 @@ func TestRedis_GetBit(t *testing.T) {
+ 			val, err := client.SetBit("key", 2, 1)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 0, val)
+-			_, err = newRedis(client.Addr, badType()).GetBit("key", 2)
++			_, err = New(client.Addr, badType()).GetBit("key", 2)
+ 			assert.NotNil(t, err)
+ 			v, err := client.GetBit("key", 2)
+ 			assert.Nil(t, err)
+@@ -760,7 +698,7 @@ func TestRedis_BitCount(t *testing.T) {
+ 			assert.Equal(t, 0, val)
+ 		}
+ 
+-		_, err := newRedis(client.Addr, badType()).BitCount("key", 0, -1)
++		_, err := New(client.Addr, badType()).BitCount("key", 0, -1)
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitCount("key", 0, -1)
+ 		assert.Nil(t, err)
+@@ -790,7 +728,7 @@ func TestRedis_BitOpAnd(t *testing.T) {
+ 		assert.Nil(t, err)
+ 		err = client.Set("key2", "1")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).BitOpAnd("destKey", "key1", "key2")
++		_, err = New(client.Addr, badType()).BitOpAnd("destKey", "key1", "key2")
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitOpAnd("destKey", "key1", "key2")
+ 		assert.Nil(t, err)
+@@ -806,7 +744,7 @@ func TestRedis_BitOpNot(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		err := client.Set("key1", "\u0000")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).BitOpNot("destKey", "key1")
++		_, err = New(client.Addr, badType()).BitOpNot("destKey", "key1")
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitOpNot("destKey", "key1")
+ 		assert.Nil(t, err)
+@@ -823,7 +761,7 @@ func TestRedis_BitOpOr(t *testing.T) {
+ 		assert.Nil(t, err)
+ 		err = client.Set("key2", "0")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).BitOpOr("destKey", "key1", "key2")
++		_, err = New(client.Addr, badType()).BitOpOr("destKey", "key1", "key2")
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitOpOr("destKey", "key1", "key2")
+ 		assert.Nil(t, err)
+@@ -840,7 +778,7 @@ func TestRedis_BitOpXor(t *testing.T) {
+ 		assert.Nil(t, err)
+ 		err = client.Set("key2", "\x0f")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).BitOpXor("destKey", "key1", "key2")
++		_, err = New(client.Addr, badType()).BitOpXor("destKey", "key1", "key2")
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitOpXor("destKey", "key1", "key2")
+ 		assert.Nil(t, err)
+@@ -857,7 +795,7 @@ func TestRedis_BitPos(t *testing.T) {
+ 		err := client.Set("key", "\xff\xf0\x00")
+ 		assert.Nil(t, err)
+ 
+-		_, err = newRedis(client.Addr, badType()).BitPos("key", 0, 0, -1)
++		_, err = New(client.Addr, badType()).BitPos("key", 0, 0, -1)
+ 		assert.NotNil(t, err)
+ 		val, err := client.BitPos("key", 0, 0, 2)
+ 		assert.Nil(t, err)
+@@ -883,7 +821,7 @@ func TestRedis_BitPos(t *testing.T) {
+ 
+ func TestRedis_Persist(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Persist("key")
++		_, err := New(client.Addr, badType()).Persist("key")
+ 		assert.NotNil(t, err)
+ 		ok, err := client.Persist("key")
+ 		assert.Nil(t, err)
+@@ -893,14 +831,14 @@ func TestRedis_Persist(t *testing.T) {
+ 		ok, err = client.Persist("key")
+ 		assert.Nil(t, err)
+ 		assert.False(t, ok)
+-		err = newRedis(client.Addr, badType()).Expire("key", 5)
++		err = New(client.Addr, badType()).Expire("key", 5)
+ 		assert.NotNil(t, err)
+ 		err = client.Expire("key", 5)
+ 		assert.Nil(t, err)
+ 		ok, err = client.Persist("key")
+ 		assert.Nil(t, err)
+ 		assert.True(t, ok)
+-		err = newRedis(client.Addr, badType()).Expireat("key", time.Now().Unix()+5)
++		err = New(client.Addr, badType()).Expireat("key", time.Now().Unix()+5)
+ 		assert.NotNil(t, err)
+ 		err = client.Expireat("key", time.Now().Unix()+5)
+ 		assert.Nil(t, err)
+@@ -911,11 +849,9 @@ func TestRedis_Persist(t *testing.T) {
+ }
+ 
+ func TestRedis_Ping(t *testing.T) {
+-	t.Run("ping", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			ok := client.Ping()
+-			assert.True(t, ok)
+-		})
++	runOnRedis(t, func(client *Redis) {
++		ok := client.Ping()
++		assert.True(t, ok)
+ 	})
+ }
+ 
+@@ -925,7 +861,7 @@ func TestRedis_Scan(t *testing.T) {
+ 		assert.Nil(t, err)
+ 		err = client.Set("key2", "value2")
+ 		assert.Nil(t, err)
+-		_, _, err = newRedis(client.Addr, badType()).Scan(0, "*", 100)
++		_, _, err = New(client.Addr, badType()).Scan(0, "*", 100)
+ 		assert.NotNil(t, err)
+ 		keys, _, err := client.Scan(0, "*", 100)
+ 		assert.Nil(t, err)
+@@ -947,7 +883,7 @@ func TestRedis_Sscan(t *testing.T) {
+ 		var cursor uint64 = 0
+ 		sum := 0
+ 		for {
+-			_, _, err := newRedis(client.Addr, badType()).Sscan(key, cursor, "", 100)
++			_, _, err := New(client.Addr, badType()).Sscan(key, cursor, "", 100)
+ 			assert.NotNil(t, err)
+ 			keys, next, err := client.Sscan(key, cursor, "", 100)
+ 			assert.Nil(t, err)
+@@ -959,7 +895,7 @@ func TestRedis_Sscan(t *testing.T) {
+ 		}
+ 
+ 		assert.Equal(t, sum, 1550)
+-		_, err = newRedis(client.Addr, badType()).Del(key)
++		_, err = New(client.Addr, badType()).Del(key)
+ 		assert.NotNil(t, err)
+ 		_, err = client.Del(key)
+ 		assert.Nil(t, err)
+@@ -969,48 +905,48 @@ func TestRedis_Sscan(t *testing.T) {
+ func TestRedis_Set(t *testing.T) {
+ 	t.Run("set", func(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+-			_, err := newRedis(client.Addr, badType()).Sadd("key", 1, 2, 3, 4)
++			_, err := New(client.Addr, badType()).Sadd("key", 1, 2, 3, 4)
+ 			assert.NotNil(t, err)
+ 			num, err := client.Sadd("key", 1, 2, 3, 4)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 4, num)
+-			_, err = newRedis(client.Addr, badType()).Scard("key")
++			_, err = New(client.Addr, badType()).Scard("key")
+ 			assert.NotNil(t, err)
+ 			val, err := client.Scard("key")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(4), val)
+-			_, err = newRedis(client.Addr, badType()).Sismember("key", 2)
++			_, err = New(client.Addr, badType()).Sismember("key", 2)
+ 			assert.NotNil(t, err)
+ 			ok, err := client.Sismember("key", 2)
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Srem("key", 3, 4)
++			_, err = New(client.Addr, badType()).Srem("key", 3, 4)
+ 			assert.NotNil(t, err)
+ 			num, err = client.Srem("key", 3, 4)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, num)
+-			_, err = newRedis(client.Addr, badType()).Smembers("key")
++			_, err = New(client.Addr, badType()).Smembers("key")
+ 			assert.NotNil(t, err)
+ 			vals, err := client.Smembers("key")
+ 			assert.Nil(t, err)
+ 			assert.ElementsMatch(t, []string{"1", "2"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Srandmember("key", 1)
++			_, err = New(client.Addr, badType()).Srandmember("key", 1)
+ 			assert.NotNil(t, err)
+ 			members, err := client.Srandmember("key", 1)
+ 			assert.Nil(t, err)
+ 			assert.Len(t, members, 1)
+ 			assert.Contains(t, []string{"1", "2"}, members[0])
+-			_, err = newRedis(client.Addr, badType()).Spop("key")
++			_, err = New(client.Addr, badType()).Spop("key")
+ 			assert.NotNil(t, err)
+ 			member, err := client.Spop("key")
+ 			assert.Nil(t, err)
+ 			assert.Contains(t, []string{"1", "2"}, member)
+-			_, err = newRedis(client.Addr, badType()).Smembers("key")
++			_, err = New(client.Addr, badType()).Smembers("key")
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Smembers("key")
+ 			assert.Nil(t, err)
+ 			assert.NotContains(t, vals, member)
+-			_, err = newRedis(client.Addr, badType()).Sadd("key1", 1, 2, 3, 4)
++			_, err = New(client.Addr, badType()).Sadd("key1", 1, 2, 3, 4)
+ 			assert.NotNil(t, err)
+ 			num, err = client.Sadd("key1", 1, 2, 3, 4)
+ 			assert.Nil(t, err)
+@@ -1018,32 +954,32 @@ func TestRedis_Set(t *testing.T) {
+ 			num, err = client.Sadd("key2", 2, 3, 4, 5)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 4, num)
+-			_, err = newRedis(client.Addr, badType()).Sunion("key1", "key2")
++			_, err = New(client.Addr, badType()).Sunion("key1", "key2")
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Sunion("key1", "key2")
+ 			assert.Nil(t, err)
+ 			assert.ElementsMatch(t, []string{"1", "2", "3", "4", "5"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Sunionstore("key3", "key1", "key2")
++			_, err = New(client.Addr, badType()).Sunionstore("key3", "key1", "key2")
+ 			assert.NotNil(t, err)
+ 			num, err = client.Sunionstore("key3", "key1", "key2")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 5, num)
+-			_, err = newRedis(client.Addr, badType()).Sdiff("key1", "key2")
++			_, err = New(client.Addr, badType()).Sdiff("key1", "key2")
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Sdiff("key1", "key2")
+ 			assert.Nil(t, err)
+ 			assert.EqualValues(t, []string{"1"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Sdiffstore("key4", "key1", "key2")
++			_, err = New(client.Addr, badType()).Sdiffstore("key4", "key1", "key2")
+ 			assert.NotNil(t, err)
+ 			num, err = client.Sdiffstore("key4", "key1", "key2")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 1, num)
+-			_, err = newRedis(client.Addr, badType()).Sinter("key1", "key2")
++			_, err = New(client.Addr, badType()).Sinter("key1", "key2")
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Sinter("key1", "key2")
+ 			assert.Nil(t, err)
+ 			assert.ElementsMatch(t, []string{"2", "3", "4"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Sinterstore("key4", "key1", "key2")
++			_, err = New(client.Addr, badType()).Sinterstore("key4", "key1", "key2")
+ 			assert.NotNil(t, err)
+ 			num, err = client.Sinterstore("key4", "key1", "key2")
+ 			assert.Nil(t, err)
+@@ -1072,50 +1008,34 @@ func TestRedis_Set(t *testing.T) {
+ }
+ 
+ func TestRedis_GetSet(t *testing.T) {
+-	t.Run("set_get", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			_, err := newRedis(client.Addr, badType()).GetSet("hello", "world")
+-			assert.NotNil(t, err)
+-			val, err := client.GetSet("hello", "world")
+-			assert.Nil(t, err)
+-			assert.Equal(t, "", val)
+-			val, err = client.Get("hello")
+-			assert.Nil(t, err)
+-			assert.Equal(t, "world", val)
+-			val, err = client.GetSet("hello", "newworld")
+-			assert.Nil(t, err)
+-			assert.Equal(t, "world", val)
+-			val, err = client.Get("hello")
+-			assert.Nil(t, err)
+-			assert.Equal(t, "newworld", val)
+-			ret, err := client.Del("hello")
+-			assert.Nil(t, err)
+-			assert.Equal(t, 1, ret)
+-		})
+-	})
+-
+-	t.Run("set_get with notexists", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			_, err := client.Get("hello")
+-			assert.NoError(t, err)
+-		})
+-	})
+-
+-	t.Run("set_get with error", func(t *testing.T) {
+-		runOnRedisWithError(t, func(client *Redis) {
+-			_, err := client.Get("hello")
+-			assert.Error(t, err)
+-		})
++	runOnRedis(t, func(client *Redis) {
++		_, err := New(client.Addr, badType()).GetSet("hello", "world")
++		assert.NotNil(t, err)
++		val, err := client.GetSet("hello", "world")
++		assert.Nil(t, err)
++		assert.Equal(t, "", val)
++		val, err = client.Get("hello")
++		assert.Nil(t, err)
++		assert.Equal(t, "world", val)
++		val, err = client.GetSet("hello", "newworld")
++		assert.Nil(t, err)
++		assert.Equal(t, "world", val)
++		val, err = client.Get("hello")
++		assert.Nil(t, err)
++		assert.Equal(t, "newworld", val)
++		ret, err := client.Del("hello")
++		assert.Nil(t, err)
++		assert.Equal(t, 1, ret)
+ 	})
+ }
+ 
+ func TestRedis_SetGetDel(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		err := newRedis(client.Addr, badType()).Set("hello", "world")
++		err := New(client.Addr, badType()).Set("hello", "world")
+ 		assert.NotNil(t, err)
+ 		err = client.Set("hello", "world")
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).Get("hello")
++		_, err = New(client.Addr, badType()).Get("hello")
+ 		assert.NotNil(t, err)
+ 		val, err := client.Get("hello")
+ 		assert.Nil(t, err)
+@@ -1128,11 +1048,11 @@ func TestRedis_SetGetDel(t *testing.T) {
+ 
+ func TestRedis_SetExNx(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		err := newRedis(client.Addr, badType()).Setex("hello", "world", 5)
++		err := New(client.Addr, badType()).Setex("hello", "world", 5)
+ 		assert.NotNil(t, err)
+ 		err = client.Setex("hello", "world", 5)
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).Setnx("hello", "newworld")
++		_, err = New(client.Addr, badType()).Setnx("hello", "newworld")
+ 		assert.NotNil(t, err)
+ 		ok, err := client.Setnx("hello", "newworld")
+ 		assert.Nil(t, err)
+@@ -1149,7 +1069,7 @@ func TestRedis_SetExNx(t *testing.T) {
+ 		ttl, err := client.Ttl("hello")
+ 		assert.Nil(t, err)
+ 		assert.True(t, ttl > 0)
+-		_, err = newRedis(client.Addr, badType()).SetnxEx("newhello", "newworld", 5)
++		_, err = New(client.Addr, badType()).SetnxEx("newhello", "newworld", 5)
+ 		assert.NotNil(t, err)
+ 		ok, err = client.SetnxEx("newhello", "newworld", 5)
+ 		assert.Nil(t, err)
+@@ -1171,17 +1091,17 @@ func TestRedis_SetGetDelHashField(t *testing.T) {
+ 		runOnRedis(t, func(client *Redis) {
+ 			err := client.Hset("key", "field", "value")
+ 			assert.Nil(t, err)
+-			_, err = newRedis(client.Addr, badType()).Hget("key", "field")
++			_, err = New(client.Addr, badType()).Hget("key", "field")
+ 			assert.NotNil(t, err)
+ 			val, err := client.Hget("key", "field")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, "value", val)
+-			_, err = newRedis(client.Addr, badType()).Hexists("key", "field")
++			_, err = New(client.Addr, badType()).Hexists("key", "field")
+ 			assert.NotNil(t, err)
+ 			ok, err := client.Hexists("key", "field")
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Hdel("key", "field")
++			_, err = New(client.Addr, badType()).Hdel("key", "field")
+ 			assert.NotNil(t, err)
+ 			ret, err := client.Hdel("key", "field")
+ 			assert.Nil(t, err)
+@@ -1224,17 +1144,17 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			val, err := client.Zscore("key", "value1")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(2), val)
+-			_, err = newRedis(client.Addr, badType()).Zincrby("key", 3, "value1")
++			_, err = New(client.Addr, badType()).Zincrby("key", 3, "value1")
+ 			assert.NotNil(t, err)
+ 			val, err = client.Zincrby("key", 3, "value1")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(5), val)
+-			_, err = newRedis(client.Addr, badType()).Zscore("key", "value1")
++			_, err = New(client.Addr, badType()).Zscore("key", "value1")
+ 			assert.NotNil(t, err)
+ 			val, err = client.Zscore("key", "value1")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(5), val)
+-			_, err = newRedis(client.Addr, badType()).Zadds("key")
++			_, err = New(client.Addr, badType()).Zadds("key")
+ 			assert.NotNil(t, err)
+ 			val, err = client.Zadds("key", Pair{
+ 				Key:   "value2",
+@@ -1245,7 +1165,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			})
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(2), val)
+-			_, err = newRedis(client.Addr, badType()).ZRevRangeWithScores("key", 1, 3)
++			_, err = New(client.Addr, badType()).ZRevRangeWithScores("key", 1, 3)
+ 			assert.NotNil(t, err)
+ 			_, err = client.ZRevRangeWithScores("key", 1, 3)
+ 			assert.Nil(t, err)
+@@ -1269,11 +1189,11 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			rank, err = client.Zrevrank("key", "value1")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(2), rank)
+-			_, err = newRedis(client.Addr, badType()).Zrank("key", "value4")
++			_, err = New(client.Addr, badType()).Zrank("key", "value4")
+ 			assert.NotNil(t, err)
+ 			_, err = client.Zrank("key", "value4")
+ 			assert.Equal(t, Nil, err)
+-			_, err = newRedis(client.Addr, badType()).Zrem("key", "value2", "value3")
++			_, err = New(client.Addr, badType()).Zrem("key", "value2", "value3")
+ 			assert.NotNil(t, err)
+ 			num, err := client.Zrem("key", "value2", "value3")
+ 			assert.Nil(t, err)
+@@ -1287,7 +1207,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			ok, err = client.Zadd("key", 8, "value4")
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Zremrangebyscore("key", 6, 7)
++			_, err = New(client.Addr, badType()).Zremrangebyscore("key", 6, 7)
+ 			assert.NotNil(t, err)
+ 			num, err = client.Zremrangebyscore("key", 6, 7)
+ 			assert.Nil(t, err)
+@@ -1295,37 +1215,37 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			ok, err = client.Zadd("key", 6, "value2")
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Zadd("key", 7, "value3")
++			_, err = New(client.Addr, badType()).Zadd("key", 7, "value3")
+ 			assert.NotNil(t, err)
+ 			ok, err = client.Zadd("key", 7, "value3")
+ 			assert.Nil(t, err)
+ 			assert.True(t, ok)
+-			_, err = newRedis(client.Addr, badType()).Zcount("key", 6, 7)
++			_, err = New(client.Addr, badType()).Zcount("key", 6, 7)
+ 			assert.NotNil(t, err)
+ 			num, err = client.Zcount("key", 6, 7)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, num)
+-			_, err = newRedis(client.Addr, badType()).Zremrangebyrank("key", 1, 2)
++			_, err = New(client.Addr, badType()).Zremrangebyrank("key", 1, 2)
+ 			assert.NotNil(t, err)
+ 			num, err = client.Zremrangebyrank("key", 1, 2)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, num)
+-			_, err = newRedis(client.Addr, badType()).Zcard("key")
++			_, err = New(client.Addr, badType()).Zcard("key")
+ 			assert.NotNil(t, err)
+ 			card, err := client.Zcard("key")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 2, card)
+-			_, err = newRedis(client.Addr, badType()).Zrange("key", 0, -1)
++			_, err = New(client.Addr, badType()).Zrange("key", 0, -1)
+ 			assert.NotNil(t, err)
+ 			vals, err := client.Zrange("key", 0, -1)
+ 			assert.Nil(t, err)
+ 			assert.EqualValues(t, []string{"value1", "value4"}, vals)
+-			_, err = newRedis(client.Addr, badType()).Zrevrange("key", 0, -1)
++			_, err = New(client.Addr, badType()).Zrevrange("key", 0, -1)
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Zrevrange("key", 0, -1)
+ 			assert.Nil(t, err)
+ 			assert.EqualValues(t, []string{"value4", "value1"}, vals)
+-			_, err = newRedis(client.Addr, badType()).ZrangeWithScores("key", 0, -1)
++			_, err = New(client.Addr, badType()).ZrangeWithScores("key", 0, -1)
+ 			assert.NotNil(t, err)
+ 			pairs, err = client.ZrangeWithScores("key", 0, -1)
+ 			assert.Nil(t, err)
+@@ -1339,7 +1259,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 					Score: 8,
+ 				},
+ 			}, pairs)
+-			_, err = newRedis(client.Addr, badType()).ZrangebyscoreWithScores("key", 5, 8)
++			_, err = New(client.Addr, badType()).ZrangebyscoreWithScores("key", 5, 8)
+ 			assert.NotNil(t, err)
+ 			pairs, err = client.ZrangebyscoreWithScores("key", 5, 8)
+ 			assert.Nil(t, err)
+@@ -1353,7 +1273,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 					Score: 8,
+ 				},
+ 			}, pairs)
+-			_, err = newRedis(client.Addr, badType()).ZrangebyscoreWithScoresAndLimit(
++			_, err = New(client.Addr, badType()).ZrangebyscoreWithScoresAndLimit(
+ 				"key", 5, 8, 1, 1)
+ 			assert.NotNil(t, err)
+ 			pairs, err = client.ZrangebyscoreWithScoresAndLimit("key", 5, 8, 1, 1)
+@@ -1367,7 +1287,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			pairs, err = client.ZrangebyscoreWithScoresAndLimit("key", 5, 8, 1, 0)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 0, len(pairs))
+-			_, err = newRedis(client.Addr, badType()).ZrevrangebyscoreWithScores("key", 5, 8)
++			_, err = New(client.Addr, badType()).ZrevrangebyscoreWithScores("key", 5, 8)
+ 			assert.NotNil(t, err)
+ 			pairs, err = client.ZrevrangebyscoreWithScores("key", 5, 8)
+ 			assert.Nil(t, err)
+@@ -1381,7 +1301,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 					Score: 5,
+ 				},
+ 			}, pairs)
+-			_, err = newRedis(client.Addr, badType()).ZrevrangebyscoreWithScoresAndLimit(
++			_, err = New(client.Addr, badType()).ZrevrangebyscoreWithScoresAndLimit(
+ 				"key", 5, 8, 1, 1)
+ 			assert.NotNil(t, err)
+ 			pairs, err = client.ZrevrangebyscoreWithScoresAndLimit("key", 5, 8, 1, 1)
+@@ -1395,7 +1315,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			pairs, err = client.ZrevrangebyscoreWithScoresAndLimit("key", 5, 8, 1, 0)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 0, len(pairs))
+-			_, err = newRedis(client.Addr, badType()).Zrevrank("key", "value")
++			_, err = New(client.Addr, badType()).Zrevrank("key", "value")
+ 			assert.NotNil(t, err)
+ 			_, _ = client.Zadd("second", 2, "aa")
+ 			_, _ = client.Zadd("third", 3, "bbb")
+@@ -1406,7 +1326,7 @@ func TestRedis_SortedSet(t *testing.T) {
+ 			})
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(2), val)
+-			_, err = newRedis(client.Addr, badType()).Zunionstore("union", &ZStore{})
++			_, err = New(client.Addr, badType()).Zunionstore("union", &ZStore{})
+ 			assert.NotNil(t, err)
+ 			vals, err = client.Zrange("union", 0, 10000)
+ 			assert.Nil(t, err)
+@@ -1533,10 +1453,10 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 		val, err := client.ZscoreByFloat("key", "value1")
+ 		assert.Nil(t, err)
+ 		assert.Equal(t, 10.345, val)
+-		_, err = newRedis(client.Addr, badType()).ZscoreByFloat("key", "value1")
++		_, err = New(client.Addr, badType()).ZscoreByFloat("key", "value1")
+ 		assert.Error(t, err)
+ 		_, _ = client.ZaddFloat("key", 10.346, "value2")
+-		_, err = newRedis(client.Addr, badType()).ZRevRangeWithScoresByFloat("key", 0, -1)
++		_, err = New(client.Addr, badType()).ZRevRangeWithScoresByFloat("key", 0, -1)
+ 		assert.NotNil(t, err)
+ 		_, err = client.ZRevRangeWithScoresByFloat("key", 0, -1)
+ 		assert.Nil(t, err)
+@@ -1555,7 +1475,7 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 			},
+ 		}, pairs)
+ 
+-		_, err = newRedis(client.Addr, badType()).ZrangeWithScoresByFloat("key", 0, -1)
++		_, err = New(client.Addr, badType()).ZrangeWithScoresByFloat("key", 0, -1)
+ 		assert.Error(t, err)
+ 
+ 		pairs, err = client.ZrangeWithScoresByFloat("key", 0, -1)
+@@ -1572,7 +1492,7 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 			}, pairs)
+ 		}
+ 
+-		_, err = newRedis(client.Addr, badType()).ZrangebyscoreWithScoresByFloat("key", 0, 20)
++		_, err = New(client.Addr, badType()).ZrangebyscoreWithScoresByFloat("key", 0, 20)
+ 		assert.NotNil(t, err)
+ 		pairs, err = client.ZrangebyscoreWithScoresByFloat("key", 0, 20)
+ 		assert.Nil(t, err)
+@@ -1588,7 +1508,7 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 		}, pairs)
+ 		_, err = client.ZrangebyscoreWithScoresByFloatAndLimit("key", 10.1, 12.2, 1, 0)
+ 		assert.NoError(t, err)
+-		_, err = newRedis(client.Addr, badType()).ZrangebyscoreWithScoresByFloatAndLimit(
++		_, err = New(client.Addr, badType()).ZrangebyscoreWithScoresByFloatAndLimit(
+ 			"key", 10.1, 12.2, 1, 1)
+ 		assert.NotNil(t, err)
+ 		pairs, err = client.ZrangebyscoreWithScoresByFloatAndLimit("key", 10.1, 12.2, 1, 1)
+@@ -1599,7 +1519,7 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 				Score: 10.346,
+ 			},
+ 		}, pairs)
+-		_, err = newRedis(client.Addr, badType()).ZrevrangebyscoreWithScoresByFloat("key", 10, 12)
++		_, err = New(client.Addr, badType()).ZrevrangebyscoreWithScoresByFloat("key", 10, 12)
+ 		assert.NotNil(t, err)
+ 		pairs, err = client.ZrevrangebyscoreWithScoresByFloat("key", 10, 12)
+ 		assert.Nil(t, err)
+@@ -1615,7 +1535,7 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 		}, pairs)
+ 		_, err = client.ZrevrangebyscoreWithScoresByFloatAndLimit("key", 10, 12, 1, 0)
+ 		assert.NoError(t, err)
+-		_, err = newRedis(client.Addr, badType()).ZrevrangebyscoreWithScoresByFloatAndLimit(
++		_, err = New(client.Addr, badType()).ZrevrangebyscoreWithScoresByFloatAndLimit(
+ 			"key", 10, 12, 1, 1)
+ 		assert.NotNil(t, err)
+ 		pairs, err = client.ZrevrangebyscoreWithScoresByFloatAndLimit("key", 10, 12, 1, 1)
+@@ -1629,43 +1549,17 @@ func TestRedis_SortedSetByFloat64(t *testing.T) {
+ 	})
+ }
+ 
+-func TestRedis_Zaddnx(t *testing.T) {
+-	runOnRedis(t, func(client *Redis) {
+-		_, err := newRedis(client.Addr, badType()).Zaddnx("key", 1, "value1")
+-		assert.Error(t, err)
+-
+-		ok, err := client.Zadd("key", 1, "value1")
+-		assert.NoError(t, err)
+-		assert.True(t, ok)
+-		ok, err = client.Zaddnx("key", 2, "value1")
+-		assert.NoError(t, err)
+-		assert.False(t, ok)
+-
+-		ok, err = client.ZaddFloat("key", 1.1, "value2")
+-		assert.NoError(t, err)
+-		assert.True(t, ok)
+-		ok, err = client.ZaddnxFloat("key", 1.1, "value3")
+-		assert.NoError(t, err)
+-		assert.True(t, ok)
+-
+-		assert.NoError(t, client.Set("newkey", "value"))
+-		ok, err = client.Zaddnx("newkey", 1, "value")
+-		assert.Error(t, err)
+-		assert.False(t, ok)
+-	})
+-}
+-
+ func TestRedis_IncrbyFloat(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		incrVal, err := client.IncrbyFloat("key", 0.002)
+ 		assert.Nil(t, err)
+ 		assert.Equal(t, 0.002, incrVal)
+-		_, err = newRedis(client.Addr, badType()).IncrbyFloat("key", -0.001)
++		_, err = New(client.Addr, badType()).IncrbyFloat("key", -0.001)
+ 		assert.Error(t, err)
+ 		incrVal2, err := client.IncrbyFloat("key", -0.001)
+ 		assert.Nil(t, err)
+ 		assert.Equal(t, 0.001, incrVal2)
+-		_, err = newRedis(client.Addr, badType()).HincrbyFloat("hkey", "i", 0.002)
++		_, err = New(client.Addr, badType()).HincrbyFloat("hkey", "i", 0.002)
+ 		assert.Error(t, err)
+ 		hincrVal, err := client.HincrbyFloat("hkey", "i", 0.002)
+ 		assert.Nil(t, err)
+@@ -1678,19 +1572,19 @@ func TestRedis_IncrbyFloat(t *testing.T) {
+ 
+ func TestRedis_Pipelined(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		assert.NotNil(t, newRedis(client.Addr, badType()).Pipelined(func(pipeliner Pipeliner) error {
++		assert.NotNil(t, New(client.Addr, badType()).Pipelined(func(pipeliner Pipeliner) error {
+ 			return nil
+ 		}))
+ 		err := client.Pipelined(
+ 			func(pipe Pipeliner) error {
+ 				pipe.Incr(context.Background(), "pipelined_counter")
+ 				pipe.Expire(context.Background(), "pipelined_counter", time.Hour)
+-				pipe.ZAdd(context.Background(), "zadd", Z{Score: 12, Member: "zadd"})
++				pipe.ZAdd(context.Background(), "zadd", &Z{Score: 12, Member: "zadd"})
+ 				return nil
+ 			},
+ 		)
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).Ttl("pipelined_counter")
++		_, err = New(client.Addr, badType()).Ttl("pipelined_counter")
+ 		assert.NotNil(t, err)
+ 		ttl, err := client.Ttl("pipelined_counter")
+ 		assert.Nil(t, err)
+@@ -1707,17 +1601,17 @@ func TestRedis_Pipelined(t *testing.T) {
+ func TestRedisString(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		client.Ping()
+-		_, err := getRedis(newRedis(client.Addr, Cluster()))
++		_, err := getRedis(New(client.Addr, Cluster()))
+ 		assert.Nil(t, err)
+ 		assert.Equal(t, client.Addr, client.String())
+-		assert.NotNil(t, newRedis(client.Addr, badType()).Ping())
++		assert.NotNil(t, New(client.Addr, badType()).Ping())
+ 	})
+ }
+ 
+ func TestRedisScriptLoad(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+ 		client.Ping()
+-		_, err := newRedis(client.Addr, badType()).ScriptLoad("foo")
++		_, err := New(client.Addr, badType()).ScriptLoad("foo")
+ 		assert.NotNil(t, err)
+ 		_, err = client.ScriptLoad("foo")
+ 		assert.NotNil(t, err)
+@@ -1729,7 +1623,7 @@ func TestRedisEvalSha(t *testing.T) {
+ 		client.Ping()
+ 		scriptHash, err := client.ScriptLoad(`return redis.call("EXISTS", KEYS[1])`)
+ 		assert.Nil(t, err)
+-		_, err = newRedis(client.Addr, badType()).EvalSha(scriptHash, []string{"key1"})
++		_, err = New(client.Addr, badType()).EvalSha(scriptHash, []string{"key1"})
+ 		assert.Error(t, err)
+ 		result, err := client.EvalSha(scriptHash, []string{"key1"})
+ 		assert.Nil(t, err)
+@@ -1812,7 +1706,7 @@ func TestRedis_Zscan(t *testing.T) {
+ 		var cursor uint64 = 0
+ 		sum := 0
+ 		for {
+-			_, _, err := newRedis(client.Addr, badType()).Zscan(key, cursor, "value_*", 100)
++			_, _, err := New(client.Addr, badType()).Zscan(key, cursor, "value_*", 100)
+ 			assert.NotNil(t, err)
+ 			keys, next, err := client.Zscan(key, cursor, "value_*", 100)
+ 			assert.Nil(t, err)
+@@ -1824,7 +1718,7 @@ func TestRedis_Zscan(t *testing.T) {
+ 		}
+ 
+ 		assert.Equal(t, sum, 3100)
+-		_, err := newRedis(client.Addr, badType()).Del(key)
++		_, err := New(client.Addr, badType()).Del(key)
+ 		assert.NotNil(t, err)
+ 		_, err = client.Del(key)
+ 		assert.Nil(t, err)
+@@ -1841,9 +1735,9 @@ func TestRedisBlpop(t *testing.T) {
+ 		client.Ping()
+ 		var node mockedNode
+ 		_, err := client.Blpop(nil, "foo")
+-		assert.Error(t, err)
++		assert.NotNil(t, err)
+ 		_, err = client.Blpop(node, "foo")
+-		assert.NoError(t, err)
++		assert.NotNil(t, err)
+ 	})
+ }
+ 
+@@ -1855,60 +1749,19 @@ func TestRedisBlpopEx(t *testing.T) {
+ 			_, _, err := client.BlpopEx(nil, "foo")
+ 			assert.Error(t, err)
+ 			_, _, err = client.BlpopEx(node, "foo")
+-			assert.NoError(t, err)
+-		})
+-	})
+-
+-	t.Run("blpopex with expire", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			client.Ping()
+-			node, err := getRedis(client)
+-			assert.NoError(t, err)
+-			assert.NoError(t, client.Set("foo", "bar"))
+-			_, _, err = client.BlpopEx(node, "foo")
+-			assert.Error(t, err)
+-		})
+-	})
+-
+-	t.Run("blpopex with bad return", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			client.Ping()
+-			node := &mockedNode{args: []string{"bar"}}
+-			_, _, err := client.BlpopEx(node, "foo")
+ 			assert.Error(t, err)
+ 		})
+ 	})
+ }
+ 
+ func TestRedisBlpopWithTimeout(t *testing.T) {
+-	t.Run("blpop_withTimeout", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			client.Ping()
+-			var node mockedNode
+-			_, err := client.BlpopWithTimeout(nil, 10*time.Second, "foo")
+-			assert.Error(t, err)
+-			_, err = client.BlpopWithTimeout(node, 10*time.Second, "foo")
+-			assert.NoError(t, err)
+-		})
+-	})
+-
+-	t.Run("blpop_withTimeout_error", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			client.Ping()
+-			node, err := getRedis(client)
+-			assert.NoError(t, err)
+-			assert.NoError(t, client.Set("foo", "bar"))
+-			_, err = client.BlpopWithTimeout(node, time.Millisecond, "foo")
+-			assert.Error(t, err)
+-		})
+-	})
+-
+-	t.Run("blpop_with_bad_return", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			node := &mockedNode{args: []string{"foo"}}
+-			_, err := client.Blpop(node, "foo")
+-			assert.Error(t, err)
+-		})
++	runOnRedis(t, func(client *Redis) {
++		client.Ping()
++		var node mockedNode
++		_, err := client.BlpopWithTimeout(nil, 10*time.Second, "foo")
++		assert.NotNil(t, err)
++		_, err = client.BlpopWithTimeout(node, 10*time.Second, "foo")
++		assert.NotNil(t, err)
+ 	})
+ }
+ 
+@@ -1921,13 +1774,13 @@ func TestRedisGeo(t *testing.T) {
+ 			v, err := client.GeoAdd("sicily", geoLocation...)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(2), v)
+-			_, err = newRedis(client.Addr, badType()).GeoDist("sicily", "Palermo", "Catania", "m")
++			_, err = New(client.Addr, badType()).GeoDist("sicily", "Palermo", "Catania", "m")
+ 			assert.Error(t, err)
+ 			v2, err := client.GeoDist("sicily", "Palermo", "Catania", "m")
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, 166274, int(v2))
+ 			// GeoHash not support
+-			_, err = newRedis(client.Addr, badType()).GeoPos("sicily", "Palermo", "Catania")
++			_, err = New(client.Addr, badType()).GeoPos("sicily", "Palermo", "Catania")
+ 			assert.Error(t, err)
+ 			v3, err := client.GeoPos("sicily", "Palermo", "Catania")
+ 			assert.Nil(t, err)
+@@ -1935,7 +1788,7 @@ func TestRedisGeo(t *testing.T) {
+ 			assert.Equal(t, int64(v3[0].Latitude), int64(38))
+ 			assert.Equal(t, int64(v3[1].Longitude), int64(15))
+ 			assert.Equal(t, int64(v3[1].Latitude), int64(37))
+-			_, err = newRedis(client.Addr, badType()).GeoRadius("sicily", 15, 37,
++			_, err = New(client.Addr, badType()).GeoRadius("sicily", 15, 37,
+ 				&red.GeoRadiusQuery{WithDist: true, Unit: "km", Radius: 200})
+ 			assert.Error(t, err)
+ 			v4, err := client.GeoRadius("sicily", 15, 37, &red.GeoRadiusQuery{
+@@ -1946,12 +1799,12 @@ func TestRedisGeo(t *testing.T) {
+ 			assert.Equal(t, int64(v4[0].Dist), int64(190))
+ 			assert.Equal(t, int64(v4[1].Dist), int64(56))
+ 			geoLocation2 := []*GeoLocation{{Longitude: 13.583333, Latitude: 37.316667, Name: "Agrigento"}}
+-			_, err = newRedis(client.Addr, badType()).GeoAdd("sicily", geoLocation2...)
++			_, err = New(client.Addr, badType()).GeoAdd("sicily", geoLocation2...)
+ 			assert.Error(t, err)
+ 			v5, err := client.GeoAdd("sicily", geoLocation2...)
+ 			assert.Nil(t, err)
+ 			assert.Equal(t, int64(1), v5)
+-			_, err = newRedis(client.Addr, badType()).GeoRadiusByMember("sicily", "Agrigento",
++			_, err = New(client.Addr, badType()).GeoRadiusByMember("sicily", "Agrigento",
+ 				&red.GeoRadiusQuery{Unit: "km", Radius: 100})
+ 			assert.Error(t, err)
+ 			v6, err := client.GeoRadiusByMember("sicily", "Agrigento",
+@@ -1998,27 +1851,11 @@ func TestSetSlowThreshold(t *testing.T) {
+ 
+ func TestRedis_WithPass(t *testing.T) {
+ 	runOnRedis(t, func(client *Redis) {
+-		err := newRedis(client.Addr, WithPass("any")).Ping()
++		err := New(client.Addr, WithPass("any")).Ping()
+ 		assert.NotNil(t, err)
+ 	})
+ }
+ 
+-func TestRedis_checkConnection(t *testing.T) {
+-	t.Run("checkConnection", func(t *testing.T) {
+-		runOnRedis(t, func(client *Redis) {
+-			client.Ping()
+-			assert.NoError(t, client.checkConnection(time.Millisecond))
+-		})
+-	})
+-
+-	t.Run("checkConnection error", func(t *testing.T) {
+-		runOnRedisWithError(t, func(client *Redis) {
+-			assert.Error(t, newRedis(client.Addr, badType()).checkConnection(time.Millisecond))
+-			assert.Error(t, client.checkConnection(time.Millisecond))
+-		})
+-	})
+-}
+-
+ func runOnRedis(t *testing.T, fn func(client *Redis)) {
+ 	logx.Disable()
+ 
+@@ -2034,7 +1871,7 @@ func runOnRedisWithError(t *testing.T, fn func(client *Redis)) {
+ 
+ 	s := miniredis.RunT(t)
+ 	s.SetError("mock error")
+-	fn(newRedis(s.Addr()))
++	fn(New(s.Addr()))
+ }
+ 
+ func runOnRedisTLS(t *testing.T, fn func(client *Redis)) {
+@@ -2056,7 +1893,7 @@ func runOnRedisTLS(t *testing.T, fn func(client *Redis)) {
+ 			_ = client.Close()
+ 		}
+ 	}()
+-	fn(newRedis(s.Addr(), WithTLS()))
++	fn(New(s.Addr(), WithTLS()))
+ }
+ 
+ func badType() Option {
+@@ -2067,16 +1904,8 @@ func badType() Option {
+ 
+ type mockedNode struct {
+ 	RedisNode
+-	args []string
+ }
+ 
+ func (n mockedNode) BLPop(_ context.Context, _ time.Duration, _ ...string) *red.StringSliceCmd {
+-	cmd := red.NewStringSliceCmd(context.Background())
+-	if len(n.args) == 0 {
+-		cmd.SetVal([]string{"foo", "bar"})
+-	} else {
+-		cmd.SetVal(n.args)
+-	}
+-
+-	return cmd
++	return red.NewStringSliceCmd(context.Background(), "foo", "bar")
+ }
+diff --git a/core/stores/redis/redisclustermanager_test.go b/core/stores/redis/redisclustermanager_test.go
+index ac31517e4901c81a58a16e8863792851b1eb3cee..4d53a63236e95b34485e14a0703e9388a3e007ab 100644
+--- a/core/stores/redis/redisclustermanager_test.go
++++ b/core/stores/redis/redisclustermanager_test.go
+@@ -4,7 +4,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/alicebob/miniredis/v2"
+-	red "github.com/redis/go-redis/v9"
++	red "github.com/go-redis/redis/v8"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+diff --git a/core/stores/sqlx/metrics_test.go b/core/stores/sqlx/metrics_test.go
+index 01bf3f839173c8b4f96d787bf4e1b9faa016369b..192d1f321b6c2160fb768171af10a373e7324db0 100644
+--- a/core/stores/sqlx/metrics_test.go
++++ b/core/stores/sqlx/metrics_test.go
+@@ -34,10 +34,10 @@ func TestSqlxMetric(t *testing.T) {
+ 	s, err := io.ReadAll(resp.Body)
+ 	assert.Nil(t, err)
+ 	content := string(s)
+-	assert.Contains(t, content, "sql_client_requests_duration_ms_sum{command=\"test-cmd\"} 8\n")
+-	assert.Contains(t, content, "sql_client_requests_duration_ms_count{command=\"test-cmd\"} 1\n")
+-	assert.Contains(t, content, "sql_client_requests_error_total{command=\"test-cmd\",error=\"internal-error\"} 1\n")
+-	assert.Contains(t, content, "sql_client_requests_slow_total{command=\"test-cmd\"} 1\n")
++	assert.Contains(t, content, "mysql_client_requests_duration_ms_sum{command=\"test-cmd\"} 8\n")
++	assert.Contains(t, content, "mysql_client_requests_duration_ms_count{command=\"test-cmd\"} 1\n")
++	assert.Contains(t, content, "mysql_client_requests_error_total{command=\"test-cmd\",error=\"internal-error\"} 1\n")
++	assert.Contains(t, content, "mysql_client_requests_slow_total{command=\"test-cmd\"} 1\n")
+ }
+ 
+ func TestMetricCollector(t *testing.T) {
+@@ -95,51 +95,51 @@ func TestMetricCollector(t *testing.T) {
+ 		},
+ 	})
+ 	val := `
+-		# HELP sql_client_idle_connections The number of idle connections.
+-		# TYPE sql_client_idle_connections gauge
+-		sql_client_idle_connections{db_name="db-1",hash="hash-1"} 4
+-		sql_client_idle_connections{db_name="db-1",hash="hash-2"} 40
+-		sql_client_idle_connections{db_name="db-2",hash="hash-2"} 400
+-		# HELP sql_client_in_use_connections The number of connections currently in use.
+-		# TYPE sql_client_in_use_connections gauge
+-		sql_client_in_use_connections{db_name="db-1",hash="hash-1"} 3
+-		sql_client_in_use_connections{db_name="db-1",hash="hash-2"} 30
+-		sql_client_in_use_connections{db_name="db-2",hash="hash-2"} 300
+-		# HELP sql_client_max_idle_closed_total The total number of connections closed due to SetMaxIdleConns.
+-		# TYPE sql_client_max_idle_closed_total counter
+-		sql_client_max_idle_closed_total{db_name="db-1",hash="hash-1"} 7
+-		sql_client_max_idle_closed_total{db_name="db-1",hash="hash-2"} 70
+-		sql_client_max_idle_closed_total{db_name="db-2",hash="hash-2"} 700
+-		# HELP sql_client_max_idle_time_closed_total The total number of connections closed due to SetConnMaxIdleTime.
+-		# TYPE sql_client_max_idle_time_closed_total counter
+-		sql_client_max_idle_time_closed_total{db_name="db-1",hash="hash-1"} 8
+-		sql_client_max_idle_time_closed_total{db_name="db-1",hash="hash-2"} 80
+-		sql_client_max_idle_time_closed_total{db_name="db-2",hash="hash-2"} 800
+-		# HELP sql_client_max_lifetime_closed_total The total number of connections closed due to SetConnMaxLifetime.
+-		# TYPE sql_client_max_lifetime_closed_total counter
+-		sql_client_max_lifetime_closed_total{db_name="db-1",hash="hash-1"} 9
+-		sql_client_max_lifetime_closed_total{db_name="db-1",hash="hash-2"} 90
+-		sql_client_max_lifetime_closed_total{db_name="db-2",hash="hash-2"} 900
+-		# HELP sql_client_max_open_connections Maximum number of open connections to the database.
+-		# TYPE sql_client_max_open_connections gauge
+-		sql_client_max_open_connections{db_name="db-1",hash="hash-1"} 1
+-		sql_client_max_open_connections{db_name="db-1",hash="hash-2"} 10
+-		sql_client_max_open_connections{db_name="db-2",hash="hash-2"} 100
+-		# HELP sql_client_open_connections The number of established connections both in use and idle.
+-		# TYPE sql_client_open_connections gauge
+-		sql_client_open_connections{db_name="db-1",hash="hash-1"} 2
+-		sql_client_open_connections{db_name="db-1",hash="hash-2"} 20
+-		sql_client_open_connections{db_name="db-2",hash="hash-2"} 200
+-		# HELP sql_client_wait_count_total The total number of connections waited for.
+-		# TYPE sql_client_wait_count_total counter
+-		sql_client_wait_count_total{db_name="db-1",hash="hash-1"} 5
+-		sql_client_wait_count_total{db_name="db-1",hash="hash-2"} 50
+-		sql_client_wait_count_total{db_name="db-2",hash="hash-2"} 500
+-		# HELP sql_client_wait_duration_seconds_total The total time blocked waiting for a new connection.
+-		# TYPE sql_client_wait_duration_seconds_total counter
+-		sql_client_wait_duration_seconds_total{db_name="db-1",hash="hash-1"} 6
+-		sql_client_wait_duration_seconds_total{db_name="db-1",hash="hash-2"} 60
+-		sql_client_wait_duration_seconds_total{db_name="db-2",hash="hash-2"} 600
++		# HELP mysql_client_idle_connections The number of idle connections.
++		# TYPE mysql_client_idle_connections gauge
++		mysql_client_idle_connections{db_name="db-1",hash="hash-1"} 4
++		mysql_client_idle_connections{db_name="db-1",hash="hash-2"} 40
++		mysql_client_idle_connections{db_name="db-2",hash="hash-2"} 400
++		# HELP mysql_client_in_use_connections The number of connections currently in use.
++		# TYPE mysql_client_in_use_connections gauge
++		mysql_client_in_use_connections{db_name="db-1",hash="hash-1"} 3
++		mysql_client_in_use_connections{db_name="db-1",hash="hash-2"} 30
++		mysql_client_in_use_connections{db_name="db-2",hash="hash-2"} 300
++		# HELP mysql_client_max_idle_closed_total The total number of connections closed due to SetMaxIdleConns.
++		# TYPE mysql_client_max_idle_closed_total counter
++		mysql_client_max_idle_closed_total{db_name="db-1",hash="hash-1"} 7
++		mysql_client_max_idle_closed_total{db_name="db-1",hash="hash-2"} 70
++		mysql_client_max_idle_closed_total{db_name="db-2",hash="hash-2"} 700
++		# HELP mysql_client_max_idle_time_closed_total The total number of connections closed due to SetConnMaxIdleTime.
++		# TYPE mysql_client_max_idle_time_closed_total counter
++		mysql_client_max_idle_time_closed_total{db_name="db-1",hash="hash-1"} 8
++		mysql_client_max_idle_time_closed_total{db_name="db-1",hash="hash-2"} 80
++		mysql_client_max_idle_time_closed_total{db_name="db-2",hash="hash-2"} 800
++		# HELP mysql_client_max_lifetime_closed_total The total number of connections closed due to SetConnMaxLifetime.
++		# TYPE mysql_client_max_lifetime_closed_total counter
++		mysql_client_max_lifetime_closed_total{db_name="db-1",hash="hash-1"} 9
++		mysql_client_max_lifetime_closed_total{db_name="db-1",hash="hash-2"} 90
++		mysql_client_max_lifetime_closed_total{db_name="db-2",hash="hash-2"} 900
++		# HELP mysql_client_max_open_connections Maximum number of open connections to the database.
++		# TYPE mysql_client_max_open_connections gauge
++		mysql_client_max_open_connections{db_name="db-1",hash="hash-1"} 1
++		mysql_client_max_open_connections{db_name="db-1",hash="hash-2"} 10
++		mysql_client_max_open_connections{db_name="db-2",hash="hash-2"} 100
++		# HELP mysql_client_open_connections The number of established connections both in use and idle.
++		# TYPE mysql_client_open_connections gauge
++		mysql_client_open_connections{db_name="db-1",hash="hash-1"} 2
++		mysql_client_open_connections{db_name="db-1",hash="hash-2"} 20
++		mysql_client_open_connections{db_name="db-2",hash="hash-2"} 200
++		# HELP mysql_client_wait_count_total The total number of connections waited for.
++		# TYPE mysql_client_wait_count_total counter
++		mysql_client_wait_count_total{db_name="db-1",hash="hash-1"} 5
++		mysql_client_wait_count_total{db_name="db-1",hash="hash-2"} 50
++		mysql_client_wait_count_total{db_name="db-2",hash="hash-2"} 500
++		# HELP mysql_client_wait_duration_seconds_total The total time blocked waiting for a new connection.
++		# TYPE mysql_client_wait_duration_seconds_total counter
++		mysql_client_wait_duration_seconds_total{db_name="db-1",hash="hash-1"} 6
++		mysql_client_wait_duration_seconds_total{db_name="db-1",hash="hash-2"} 60
++		mysql_client_wait_duration_seconds_total{db_name="db-2",hash="hash-2"} 600
+ `
+ 
+ 	err := testutil.CollectAndCompare(c, strings.NewReader(val))
+diff --git a/core/stores/sqlx/mysql_test.go b/core/stores/sqlx/mysql_test.go
+index 1bf33630f6005393ed5a8b8e7de28d4ce5a0b3f0..68698e4b44f1c6601f9fdb18b7abd4da1332193c 100644
+--- a/core/stores/sqlx/mysql_test.go
++++ b/core/stores/sqlx/mysql_test.go
+@@ -2,6 +2,7 @@ package sqlx
+ 
+ import (
+ 	"errors"
++	"reflect"
+ 	"testing"
+ 
+ 	"github.com/go-sql-driver/mysql"
+@@ -37,6 +38,7 @@ func TestBreakerOnNotHandlingDuplicateEntry(t *testing.T) {
+ func TestMysqlAcceptable(t *testing.T) {
+ 	conn := NewMysql("nomysql").(*commonSqlConn)
+ 	withMysqlAcceptable()(conn)
++	assert.EqualValues(t, reflect.ValueOf(mysqlAcceptable).Pointer(), reflect.ValueOf(conn.accept).Pointer())
+ 	assert.True(t, mysqlAcceptable(nil))
+ 	assert.False(t, mysqlAcceptable(errors.New("any")))
+ 	assert.False(t, mysqlAcceptable(new(mysql.MySQLError)))
+diff --git a/core/stores/sqlx/sqlconn_test.go b/core/stores/sqlx/sqlconn_test.go
+index 53ea0d5ace98b0e4498718bbfe19fa9be99d2b83..339d30cca2d7cd230d51a11f061de052ea4e2e2e 100644
+--- a/core/stores/sqlx/sqlconn_test.go
++++ b/core/stores/sqlx/sqlconn_test.go
+@@ -156,7 +156,6 @@ func TestStatement(t *testing.T) {
+ 		st := statement{
+ 			query: "foo",
+ 			stmt:  stmt,
+-			brk:   breaker.NopBreaker(),
+ 		}
+ 		assert.NoError(t, st.Close())
+ 	})
+@@ -264,45 +263,6 @@ func TestBreakerWithScanError(t *testing.T) {
+ 	})
+ }
+ 
+-func TestWithAcceptable(t *testing.T) {
+-	var (
+-		acceptableErr  = errors.New("acceptable")
+-		acceptableErr2 = errors.New("acceptable2")
+-		acceptableErr3 = errors.New("acceptable3")
+-	)
+-	opts := []SqlOption{
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr)
+-		}),
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr2)
+-		}),
+-		WithAcceptable(func(err error) bool {
+-			if err == nil {
+-				return true
+-			}
+-			return errors.Is(err, acceptableErr3)
+-		}),
+-	}
+-
+-	var conn = &commonSqlConn{}
+-	for _, opt := range opts {
+-		opt(conn)
+-	}
+-
+-	assert.True(t, conn.accept(nil))
+-	assert.False(t, conn.accept(assert.AnError))
+-	assert.True(t, conn.accept(acceptableErr))
+-	assert.True(t, conn.accept(acceptableErr2))
+-	assert.True(t, conn.accept(acceptableErr3))
+-}
+-
+ func buildConn() (mock sqlmock.Sqlmock, err error) {
+ 	_, err = connManager.GetResource(mockedDatasource, func() (io.Closer, error) {
+ 		var db *sql.DB
+diff --git a/core/stores/sqlx/stmt_test.go b/core/stores/sqlx/stmt_test.go
+index 84de7577b40069559204a117e00949bde3d181db..215bf2b2b4730e165248076e233cb3d1af753416 100644
+--- a/core/stores/sqlx/stmt_test.go
++++ b/core/stores/sqlx/stmt_test.go
+@@ -7,10 +7,7 @@ import (
+ 	"testing"
+ 	"time"
+ 
+-	"github.com/DATA-DOG/go-sqlmock"
+ 	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/breaker"
+-	"github.com/zeromicro/go-zero/core/stores/dbtest"
+ )
+ 
+ var errMockedPlaceholder = errors.New("placeholder")
+@@ -222,74 +219,6 @@ func TestNilGuard(t *testing.T) {
+ 	assert.Equal(t, nilGuard{}, guard)
+ }
+ 
+-func TestStmtBreaker(t *testing.T) {
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		mock.ExpectPrepare("any")
+-
+-		conn := NewSqlConnFromDB(db)
+-		stmt, err := conn.Prepare("any")
+-		assert.NoError(t, err)
+-
+-		var val struct {
+-			Foo int
+-			Bar string
+-		}
+-		for i := 0; i < 1000; i++ {
+-			row := sqlmock.NewRows([]string{"foo"}).AddRow("bar")
+-			mock.ExpectQuery("any").WillReturnRows(row)
+-			err := stmt.QueryRow(&val)
+-			assert.Error(t, err)
+-			assert.NotErrorIs(t, err, breaker.ErrServiceUnavailable)
+-		}
+-	})
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		mock.ExpectPrepare("any")
+-		conn := NewSqlConnFromDB(db)
+-		stmt, err := conn.Prepare("any")
+-		assert.NoError(t, err)
+-
+-		for i := 0; i < 1000; i++ {
+-			assert.Error(t, conn.Transact(func(session Session) error {
+-				return nil
+-			}))
+-		}
+-
+-		var breakerTriggered bool
+-		for i := 0; i < 1000; i++ {
+-			_, err = stmt.Exec("any")
+-			if errors.Is(err, breaker.ErrServiceUnavailable) {
+-				breakerTriggered = true
+-				break
+-			}
+-		}
+-		assert.True(t, breakerTriggered)
+-	})
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		mock.ExpectPrepare("any")
+-		conn := NewSqlConnFromDB(db)
+-		stmt, err := conn.Prepare("any")
+-		assert.NoError(t, err)
+-
+-		for i := 0; i < 1000; i++ {
+-			assert.Error(t, conn.Transact(func(session Session) error {
+-				return nil
+-			}))
+-		}
+-
+-		var breakerTriggered bool
+-		for i := 0; i < 1000; i++ {
+-			err = stmt.QueryRows(&struct{}{}, "any")
+-			if errors.Is(err, breaker.ErrServiceUnavailable) {
+-				breakerTriggered = true
+-				break
+-			}
+-		}
+-		assert.True(t, breakerTriggered)
+-	})
+-}
+-
+ type mockedSessionConn struct {
+ 	lastInsertId int64
+ 	rowsAffected int64
+diff --git a/core/stringx/node_fuzz_test.go b/core/stringx/node_fuzz_test.go
+index d256b513648dd5740cf4d6fb225685161dbafe63..6d752100df0c5ed9a202a70861bb82318f994606 100644
+--- a/core/stringx/node_fuzz_test.go
++++ b/core/stringx/node_fuzz_test.go
+@@ -11,7 +11,7 @@ import (
+ )
+ 
+ func FuzzNodeFind(f *testing.F) {
+-	rand.NewSource(time.Now().UnixNano())
++	rand.Seed(time.Now().UnixNano())
+ 
+ 	f.Add(10)
+ 	f.Fuzz(func(t *testing.T, keys int) {
+diff --git a/core/threading/stablerunner_test.go b/core/threading/stablerunner_test.go
+deleted file mode 100644
+index b2da997c4bc517b8b751a8db355ecd70df9845c7..0000000000000000000000000000000000000000
+--- a/core/threading/stablerunner_test.go
++++ /dev/null
+@@ -1,97 +0,0 @@
+-package threading
+-
+-import (
+-	"math/rand"
+-	"sort"
+-	"sync"
+-	"testing"
+-	"time"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestStableRunner(t *testing.T) {
+-	size := bufSize * 2
+-	rand.NewSource(time.Now().UnixNano())
+-	runner := NewStableRunner(func(v int) float64 {
+-		if v == 0 {
+-			time.Sleep(time.Millisecond * 100)
+-		} else {
+-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
+-		}
+-		return float64(v) + 0.5
+-	})
+-
+-	var waitGroup sync.WaitGroup
+-	waitGroup.Add(1)
+-	go func() {
+-		for i := 0; i < size; i++ {
+-			assert.NoError(t, runner.Push(i))
+-		}
+-		runner.Wait()
+-		waitGroup.Done()
+-	}()
+-
+-	values := make([]float64, size)
+-	for i := 0; i < size; i++ {
+-		var err error
+-		values[i], err = runner.Get()
+-		assert.NoError(t, err)
+-		time.Sleep(time.Millisecond)
+-	}
+-
+-	assert.True(t, sort.Float64sAreSorted(values))
+-	waitGroup.Wait()
+-
+-	assert.Equal(t, ErrRunnerClosed, runner.Push(1))
+-	_, err := runner.Get()
+-	assert.Equal(t, ErrRunnerClosed, err)
+-}
+-
+-func FuzzStableRunner(f *testing.F) {
+-	rand.NewSource(time.Now().UnixNano())
+-	f.Add(uint64(bufSize))
+-	f.Fuzz(func(t *testing.T, n uint64) {
+-		runner := NewStableRunner(func(v int) float64 {
+-			if v == 0 {
+-				time.Sleep(time.Millisecond * 100)
+-			} else {
+-				time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
+-			}
+-			return float64(v) + 0.5
+-		})
+-
+-		go func() {
+-			for i := 0; i < int(n); i++ {
+-				assert.NoError(t, runner.Push(i))
+-			}
+-		}()
+-
+-		values := make([]float64, n)
+-		for i := 0; i < int(n); i++ {
+-			var err error
+-			values[i], err = runner.Get()
+-			assert.NoError(t, err)
+-		}
+-
+-		runner.Wait()
+-		assert.True(t, sort.Float64sAreSorted(values))
+-
+-		// make sure returning errors after runner is closed
+-		assert.Equal(t, ErrRunnerClosed, runner.Push(1))
+-		_, err := runner.Get()
+-		assert.Equal(t, ErrRunnerClosed, err)
+-	})
+-}
+-
+-func BenchmarkStableRunner(b *testing.B) {
+-	runner := NewStableRunner(func(v int) float64 {
+-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
+-		return float64(v) + 0.5
+-	})
+-
+-	for i := 0; i < b.N; i++ {
+-		_ = runner.Push(i)
+-		_, _ = runner.Get()
+-	}
+-}
+diff --git a/core/threading/taskrunner_test.go b/core/threading/taskrunner_test.go
+index 7771760a34fe48ae1be1c60f8393b18386828b96..81cefc8224cfb53346f2e9c73aa7f7bdcb19e620 100644
+--- a/core/threading/taskrunner_test.go
++++ b/core/threading/taskrunner_test.go
+@@ -2,52 +2,32 @@ package threading
+ 
+ import (
+ 	"runtime"
++	"sync"
+ 	"sync/atomic"
+ 	"testing"
+-	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+-func TestTaskRunner_Schedule(t *testing.T) {
++func TestRoutinePool(t *testing.T) {
+ 	times := 100
+ 	pool := NewTaskRunner(runtime.NumCPU())
+ 
+ 	var counter int32
++	var waitGroup sync.WaitGroup
+ 	for i := 0; i < times; i++ {
++		waitGroup.Add(1)
+ 		pool.Schedule(func() {
+ 			atomic.AddInt32(&counter, 1)
++			waitGroup.Done()
+ 		})
+ 	}
+ 
+-	pool.Wait()
++	waitGroup.Wait()
+ 
+ 	assert.Equal(t, times, int(counter))
+ }
+ 
+-func TestTaskRunner_ScheduleImmediately(t *testing.T) {
+-	cpus := runtime.NumCPU()
+-	times := cpus * 2
+-	pool := NewTaskRunner(cpus)
+-
+-	var counter int32
+-	for i := 0; i < times; i++ {
+-		err := pool.ScheduleImmediately(func() {
+-			atomic.AddInt32(&counter, 1)
+-			time.Sleep(time.Millisecond * 100)
+-		})
+-		if i < cpus {
+-			assert.Nil(t, err)
+-		} else {
+-			assert.ErrorIs(t, err, ErrTaskRunnerBusy)
+-		}
+-	}
+-
+-	pool.Wait()
+-
+-	assert.Equal(t, cpus, int(counter))
+-}
+-
+ func BenchmarkRoutinePool(b *testing.B) {
+ 	queue := NewTaskRunner(runtime.NumCPU())
+ 	for i := 0; i < b.N; i++ {
+diff --git a/core/trace/message_test.go b/core/trace/message_test.go
+index 290158f81e3a1cab377524473e59c60d1c760f06..039a5e760d8c0870f9824751ac1aded7c518e641 100644
+--- a/core/trace/message_test.go
++++ b/core/trace/message_test.go
+@@ -34,7 +34,7 @@ type mockSpan struct {
+ 	options []trace.EventOption
+ }
+ 
+-func (m *mockSpan) End(_ ...trace.SpanEndOption) {
++func (m *mockSpan) End(options ...trace.SpanEndOption) {
+ }
+ 
+ func (m *mockSpan) AddEvent(name string, options ...trace.EventOption) {
+@@ -46,20 +46,20 @@ func (m *mockSpan) IsRecording() bool {
+ 	return false
+ }
+ 
+-func (m *mockSpan) RecordError(_ error, _ ...trace.EventOption) {
++func (m *mockSpan) RecordError(err error, options ...trace.EventOption) {
+ }
+ 
+ func (m *mockSpan) SpanContext() trace.SpanContext {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockSpan) SetStatus(_ codes.Code, _ string) {
++func (m *mockSpan) SetStatus(code codes.Code, description string) {
+ }
+ 
+-func (m *mockSpan) SetName(_ string) {
++func (m *mockSpan) SetName(name string) {
+ }
+ 
+-func (m *mockSpan) SetAttributes(_ ...attribute.KeyValue) {
++func (m *mockSpan) SetAttributes(kv ...attribute.KeyValue) {
+ }
+ 
+ func (m *mockSpan) TracerProvider() trace.TracerProvider {
+diff --git a/rest/engine_test.go b/rest/engine_test.go
+index 4f86d2173efdd421c87b8ba5e772832c56d1390c..fe5358f1bebb76c8308f74306465ccfc7fd33299 100644
+--- a/rest/engine_test.go
++++ b/rest/engine_test.go
+@@ -435,7 +435,7 @@ type mockedRouter struct {
+ func (m mockedRouter) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {
+ }
+ 
+-func (m mockedRouter) Handle(_, _ string, _ http.Handler) error {
++func (m mockedRouter) Handle(_, _ string, handler http.Handler) error {
+ 	return errors.New("foo")
+ }
+ 
+diff --git a/rest/handler/contentsecurityhandler_test.go b/rest/handler/contentsecurityhandler_test.go
+index 6da9820c52dcbe26a5f01ca858beca3c0bd32174..dfbcc9db192ffb9f6a4eafde8a797794a00a1246 100644
+--- a/rest/handler/contentsecurityhandler_test.go
++++ b/rest/handler/contentsecurityhandler_test.go
+@@ -327,7 +327,7 @@ func buildRequest(rs requestSettings) (*http.Request, error) {
+ 			query,
+ 			bodySign,
+ 		}, "\n")
+-		rs.signature = codec.HmacBase64(key, contentOfSign)
++		rs.signature = codec.HmacBase64([]byte(key), contentOfSign)
+ 	}
+ 
+ 	var mode string
+diff --git a/rest/handler/cryptionhandler_test.go b/rest/handler/cryptionhandler_test.go
+index f993cac581510e5847f8039f3757c5e8a26e850b..b76384d6a03e573d6f7cbeb9e9d5c577783b1394 100644
+--- a/rest/handler/cryptionhandler_test.go
++++ b/rest/handler/cryptionhandler_test.go
+@@ -224,7 +224,7 @@ func (m flushableResponseWriter) Write(p []byte) (int, error) {
+ 	return m.writer.Write(p)
+ }
+ 
+-func (m flushableResponseWriter) WriteHeader(_ int) {
++func (m flushableResponseWriter) WriteHeader(statusCode int) {
+ 	panic("implement me")
+ }
+ 
+@@ -240,6 +240,6 @@ func (t *halfWriter) Write(p []byte) (n int, err error) {
+ type badWriter struct {
+ }
+ 
+-func (b *badWriter) Write(_ []byte) (n int, err error) {
++func (b *badWriter) Write(p []byte) (n int, err error) {
+ 	return 0, io.ErrClosedPipe
+ }
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index b6f81e1d993e22000ba26065d85849e1821379c2..c57633796b8aff447bd2edd2412339908d4f1e39 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -164,7 +164,7 @@ type mockedReadCloser struct {
+ 	errMsg string
+ }
+ 
+-func (m mockedReadCloser) Read(_ []byte) (n int, err error) {
++func (m mockedReadCloser) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New(m.errMsg)
+ }
+ 
+diff --git a/rest/handler/timeouthandler_test.go b/rest/handler/timeouthandler_test.go
+index f4f97d4588f989734022573fc78851bd7e73a799..0d96c59256a97d15ef7a6f1a50584af97249d6f0 100644
+--- a/rest/handler/timeouthandler_test.go
++++ b/rest/handler/timeouthandler_test.go
+@@ -156,23 +156,6 @@ func TestTimeoutPanic(t *testing.T) {
+ 	})
+ }
+ 
+-func TestTimeoutSSE(t *testing.T) {
+-	timeoutHandler := TimeoutHandler(time.Millisecond)
+-	handler := timeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		time.Sleep(time.Millisecond * 10)
+-		r.Header.Set("Content-Type", "text/event-stream")
+-		r.Header.Set("Cache-Control", "no-cache")
+-		r.Header.Set("Connection", "keep-alive")
+-		r.Header.Set("Transfer-Encoding", "chunked")
+-	}))
+-
+-	req := httptest.NewRequest(http.MethodGet, "http://localhost", nil)
+-	req.Header.Set(headerAccept, valueSSE)
+-	resp := httptest.NewRecorder()
+-	handler.ServeHTTP(resp, req)
+-	assert.Equal(t, http.StatusOK, resp.Code)
+-}
+-
+ func TestTimeoutWebsocket(t *testing.T) {
+ 	timeoutHandler := TimeoutHandler(time.Millisecond)
+ 	handler := timeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+diff --git a/rest/httpc/responses_test.go b/rest/httpc/responses_test.go
+index c6c7dd3ef7e9056964b2d46369a69f2804a397ac..31369ee1b6d008afe7146b6eaf0325ea88263571 100644
+--- a/rest/httpc/responses_test.go
++++ b/rest/httpc/responses_test.go
+@@ -175,6 +175,6 @@ func (m mockedReader) Close() error {
+ 	return nil
+ }
+ 
+-func (m mockedReader) Read(_ []byte) (n int, err error) {
++func (m mockedReader) Read(p []byte) (n int, err error) {
+ 	return 0, errors.New("dummy")
+ }
+diff --git a/rest/httpx/requests_test.go b/rest/httpx/requests_test.go
+index a1d3f6a8e020711bcab4877f23caa7c24174583a..04b6f21cf50dfcf8dba4338b24729b3d676333bb 100644
+--- a/rest/httpx/requests_test.go
++++ b/rest/httpx/requests_test.go
+@@ -395,33 +395,6 @@ func TestParsePathWithDot(t *testing.T) {
+ 	assert.Equal(t, 18, v.Age)
+ }
+ 
+-func TestParseWithFloatPtr(t *testing.T) {
+-	t.Run("has float32 pointer", func(t *testing.T) {
+-		var v struct {
+-			WeightFloat32 *float32 `json:"weightFloat32,optional"`
+-		}
+-		body := `{"weightFloat32": 3.2}`
+-		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+-		r.Header.Set(ContentType, header.JsonContentType)
+-
+-		if assert.NoError(t, Parse(r, &v)) {
+-			assert.Equal(t, float32(3.2), *v.WeightFloat32)
+-		}
+-	})
+-}
+-
+-func TestParseWithEscapedParams(t *testing.T) {
+-	t.Run("escaped", func(t *testing.T) {
+-		var v struct {
+-			Dev string `form:"dev"`
+-		}
+-		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v2/dev/test?dev=se205%5fy1205%5fj109%26verRelease=v01%26iid1=863494061186673%26iid2=863494061186681%26mcc=636%26mnc=1", http.NoBody)
+-		if assert.NoError(t, Parse(r, &v)) {
+-			assert.Equal(t, "se205_y1205_j109&verRelease=v01&iid1=863494061186673&iid2=863494061186681&mcc=636&mnc=1", v.Dev)
+-		}
+-	})
+-}
+-
+ func BenchmarkParseRaw(b *testing.B) {
+ 	r, err := http.NewRequest(http.MethodGet, "http://hello.com/a?name=hello&age=18&percent=3.4", http.NoBody)
+ 	if err != nil {
+diff --git a/tools/goctl/model/sql/gen/gen_test.go b/tools/goctl/model/sql/gen/gen_test.go
+index 721a7e38b6cde192970822f88256f3a4549baa72..676e044c3a2b3d389275f0be2a85fd4db8835402 100644
+--- a/tools/goctl/model/sql/gen/gen_test.go
++++ b/tools/goctl/model/sql/gen/gen_test.go
+@@ -192,10 +192,7 @@ func Test_genPublicModel(t *testing.T) {
+ 	code, err := g.genModelCustom(*tables[0], false)
+ 	assert.NoError(t, err)
+ 	assert.True(t, strings.Contains(code, "package model"))
+-	assert.True(t, strings.Contains(code, `	TestUserModel interface {
+-		testUserModel
+-		withSession(session sqlx.Session) TestUserModel
+-	}`))
++	assert.True(t, strings.Contains(code, "TestUserModel interface {\n\t\ttestUserModel\n\t}\n"))
+ 	assert.True(t, strings.Contains(code, "customTestUserModel struct {\n\t\t*defaultTestUserModel\n\t}\n"))
+ 	assert.True(t, strings.Contains(code, "func NewTestUserModel(conn sqlx.SqlConn) TestUserModel {"))
+ }
+diff --git a/tools/goctl/pkg/parser/api/parser/analyzer_test.go b/tools/goctl/pkg/parser/api/parser/analyzer_test.go
+index 9f7976e47f143cee7eb3e1845fd7d5508da78776..de4193b6f5d847f15541f6bba1ac376642eee3a3 100644
+--- a/tools/goctl/pkg/parser/api/parser/analyzer_test.go
++++ b/tools/goctl/pkg/parser/api/parser/analyzer_test.go
+@@ -9,40 +9,14 @@ import (
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/assertx"
+ )
+ 
+ func Test_Parse(t *testing.T) {
+ 	t.Run("valid", func(t *testing.T) {
+-		apiSpec, err := Parse("./testdata/example.api", nil)
++		_, err := Parse("./testdata/example.api", nil)
+ 		assert.Nil(t, err)
+-		ast := assert.New(t)
+-		ast.Equal(spec.Info{
+-			Title:   "type title here",
+-			Desc:    "type desc here",
+-			Version: "type version here",
+-			Author:  "type author here",
+-			Email:   "type email here",
+-			Properties: map[string]string{
+-				"title":   "type title here",
+-				"desc":    "type desc here",
+-				"version": "type version here",
+-				"author":  "type author here",
+-				"email":   "type email here",
+-			},
+-		}, apiSpec.Info)
+-		ast.True(func() bool {
+-			for _, group := range apiSpec.Service.Groups {
+-				value, ok := group.Annotation.Properties["summary"]
+-				if ok {
+-					return value == "test"
+-				}
+-			}
+-			return false
+-		}())
+ 	})
+-
+ 	t.Run("invalid", func(t *testing.T) {
+ 		data, err := os.ReadFile("./testdata/invalid.api")
+ 		assert.NoError(t, err)
+@@ -64,19 +38,8 @@ func Test_Parse(t *testing.T) {
+ 			assertx.Error(t, err)
+ 		}
+ 	})
+-
+ 	t.Run("circleImport", func(t *testing.T) {
+ 		_, err := Parse("./testdata/base.api", nil)
+ 		assertx.Error(t, err)
+ 	})
+-
+-	t.Run("link_import", func(t *testing.T) {
+-		_, err := Parse("./testdata/link_import.api", nil)
+-		assert.Nil(t, err)
+-	})
+-
+-	t.Run("duplicate_types", func(t *testing.T) {
+-		_, err := Parse("./testdata/duplicate_type.api", nil)
+-		assertx.Error(t, err)
+-	})
+ }
+diff --git a/tools/goctl/pkg/parser/api/parser/parser_test.go b/tools/goctl/pkg/parser/api/parser/parser_test.go
+index e49eb2c6a6d03ffa18e8c7a632358435e65e6fff..9fac7a5f6e05ecdfe67eb9df13600f567226efdf 100644
+--- a/tools/goctl/pkg/parser/api/parser/parser_test.go
++++ b/tools/goctl/pkg/parser/api/parser/parser_test.go
+@@ -299,11 +299,6 @@ func TestParser_Parse_atServerStmt(t *testing.T) {
+ 			"timeout6:":   "10ns",
+ 			"timeout7:":   "1h10m10s10ms10µs10ns",
+ 			"maxBytes:":   `1024`,
+-			"prefix:":     "/v1",
+-			"prefix1:":    "/v1/v2_test/v2-beta",
+-			"prefix2:":    "v1/v2_test/v2-beta",
+-			"prefix3:":    "v1/v2_",
+-			"summary:":    `"test"`,
+ 		}
+ 
+ 		p := New("foo.api", atServerTestAPI)
+@@ -354,8 +349,6 @@ func TestParser_Parse_atServerStmt(t *testing.T) {
+ 			`@server(foo:/v1/v2`,
+ 			`@server(foo: m1,`,
+ 			`@server(foo: m1,)`,
+-			`@server(foo: v1/v2-)`,
+-			`@server(foo:"test")`,
+ 		}
+ 		for _, v := range testData {
+ 			p := New("foo.api", v)
+@@ -528,19 +521,6 @@ func TestParser_Parse_service(t *testing.T) {
+ 				LBrace: ast.NewTokenNode(token.Token{Type: token.LBRACE, Text: "{"}),
+ 				RBrace: ast.NewTokenNode(token.Token{Type: token.RBRACE, Text: "}"}),
+ 				Routes: []*ast.ServiceItemStmt{
+-					{
+-						AtHandler: &ast.AtHandlerStmt{
+-							AtHandler: ast.NewTokenNode(token.Token{Type: token.AT_HANDLER, Text: "@handler"}),
+-							Name:      ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "root"}),
+-						},
+-						Route: &ast.RouteStmt{
+-							Method: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "get"}),
+-							Path: &ast.PathExpr{Value: ast.NewTokenNode(token.Token{
+-								Type: token.PATH,
+-								Text: "/",
+-							})},
+-						},
+-					},
+ 					{
+ 						AtHandler: &ast.AtHandlerStmt{
+ 							AtHandler: ast.NewTokenNode(token.Token{Type: token.AT_HANDLER, Text: "@handler"}),
+@@ -577,93 +557,6 @@ func TestParser_Parse_service(t *testing.T) {
+ 				LBrace: ast.NewTokenNode(token.Token{Type: token.LBRACE, Text: "{"}),
+ 				RBrace: ast.NewTokenNode(token.Token{Type: token.RBRACE, Text: "}"}),
+ 				Routes: []*ast.ServiceItemStmt{
+-					{
+-						AtDoc: &ast.AtDocLiteralStmt{
+-							AtDoc: ast.NewTokenNode(token.Token{Type: token.AT_DOC, Text: "@doc"}),
+-							Value: ast.NewTokenNode(token.Token{Type: token.STRING, Text: `"bar"`}),
+-						},
+-						AtHandler: &ast.AtHandlerStmt{
+-							AtHandler: ast.NewTokenNode(token.Token{Type: token.AT_HANDLER, Text: "@handler"}),
+-							Name:      ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "root"}),
+-						},
+-						Route: &ast.RouteStmt{
+-							Method: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "get"}),
+-							Path: &ast.PathExpr{
+-								Value: ast.NewTokenNode(token.Token{
+-									Type: token.PATH,
+-									Text: "/",
+-								}),
+-							},
+-							Request: &ast.BodyStmt{
+-								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+-								Body: &ast.BodyExpr{
+-									Value: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "Foo"}),
+-								},
+-								RParen: ast.NewTokenNode(token.Token{Type: token.RPAREN, Text: ")"}),
+-							},
+-						},
+-					},
+-					{
+-						AtDoc: &ast.AtDocLiteralStmt{
+-							AtDoc: ast.NewTokenNode(token.Token{Type: token.AT_DOC, Text: "@doc"}),
+-							Value: ast.NewTokenNode(token.Token{Type: token.STRING, Text: `"bar"`}),
+-						},
+-						AtHandler: &ast.AtHandlerStmt{
+-							AtHandler: ast.NewTokenNode(token.Token{Type: token.AT_HANDLER, Text: "@handler"}),
+-							Name:      ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "root2"}),
+-						},
+-						Route: &ast.RouteStmt{
+-							Method: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "get"}),
+-							Path: &ast.PathExpr{
+-								Value: ast.NewTokenNode(token.Token{
+-									Type: token.PATH,
+-									Text: "/",
+-								}),
+-							},
+-							Returns: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "returns"}),
+-							Response: &ast.BodyStmt{
+-								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+-								Body: &ast.BodyExpr{
+-									Value: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "Foo"}),
+-								},
+-								RParen: ast.NewTokenNode(token.Token{Type: token.RPAREN, Text: ")"}),
+-							},
+-						},
+-					},
+-					{
+-						AtDoc: &ast.AtDocLiteralStmt{
+-							AtDoc: ast.NewTokenNode(token.Token{Type: token.AT_DOC, Text: "@doc"}),
+-							Value: ast.NewTokenNode(token.Token{Type: token.STRING, Text: `"bar"`}),
+-						},
+-						AtHandler: &ast.AtHandlerStmt{
+-							AtHandler: ast.NewTokenNode(token.Token{Type: token.AT_HANDLER, Text: "@handler"}),
+-							Name:      ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "root3"}),
+-						},
+-						Route: &ast.RouteStmt{
+-							Method: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "get"}),
+-							Path: &ast.PathExpr{
+-								Value: ast.NewTokenNode(token.Token{
+-									Type: token.PATH,
+-									Text: "/",
+-								}),
+-							},
+-							Request: &ast.BodyStmt{
+-								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+-								Body: &ast.BodyExpr{
+-									Value: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "Foo"}),
+-								},
+-								RParen: ast.NewTokenNode(token.Token{Type: token.RPAREN, Text: ")"}),
+-							},
+-							Returns: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "returns"}),
+-							Response: &ast.BodyStmt{
+-								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+-								Body: &ast.BodyExpr{
+-									Value: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "Bar"}),
+-								},
+-								RParen: ast.NewTokenNode(token.Token{Type: token.RPAREN, Text: ")"}),
+-							},
+-						},
+-					},
+ 					{
+ 						AtDoc: &ast.AtDocLiteralStmt{
+ 							AtDoc: ast.NewTokenNode(token.Token{Type: token.AT_DOC, Text: "@doc"}),
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api b/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
+index 14b2b4a98b644700faa1a91eb5a8ce9705dfe2b1..c321a031235379bb0cb404e777303c4814a79df0 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/atserver_test.api
+@@ -13,9 +13,4 @@
+     timeout6: 10ns
+     timeout7: 1h10m10s10ms10µs10ns
+     maxBytes: 1024
+-    prefix: /v1
+-    prefix1: /v1/v2_test/v2-beta
+-    prefix2: v1/v2_test/v2-beta
+-    prefix3: v1/v2_
+-    summary:"test"
+-)
++)
+\ No newline at end of file
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/base/request.api b/tools/goctl/pkg/parser/api/parser/testdata/base/request.api
+deleted file mode 100644
+index fc1f3ac9b801d49aef415a9e6603bf4ca012f8ba..0000000000000000000000000000000000000000
+--- a/tools/goctl/pkg/parser/api/parser/testdata/base/request.api
++++ /dev/null
+@@ -1,6 +0,0 @@
+-syntax = "v1"
+-
+-type Baz {
+-    Foo string `json:"foo"`
+-    Baz bool `json:"bar"`
+-}
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/base/response.api b/tools/goctl/pkg/parser/api/parser/testdata/base/response.api
+deleted file mode 100644
+index 830911902a117fe7dc34b14a11ae84a7a2a05a04..0000000000000000000000000000000000000000
+--- a/tools/goctl/pkg/parser/api/parser/testdata/base/response.api
++++ /dev/null
+@@ -1,10 +0,0 @@
+-syntax = "v1"
+-
+-import "request.api"
+-type Bar {
+-    Foo int `json:"foo"`
+-    Bar bool `json:"bar"`
+-    Baz
+-    Qux map[string]string `json:"qux"`
+-}
+-
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/duplicate_type.api b/tools/goctl/pkg/parser/api/parser/testdata/duplicate_type.api
+deleted file mode 100644
+index 381931db6fdf6a3fa47b5d572ab1fdaaf85a950b..0000000000000000000000000000000000000000
+--- a/tools/goctl/pkg/parser/api/parser/testdata/duplicate_type.api
++++ /dev/null
+@@ -1,8 +0,0 @@
+-syntax = "v1"
+-
+-type Example{
+-    A string
+-}
+-type Example{
+-    B string
+-}
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/example.api b/tools/goctl/pkg/parser/api/parser/testdata/example.api
+index 85cb5173b5863d8c9ac447a1b23fb62eba55e0fe..2a1f8d3cdfdea08aa6a051578e791d570d82eefd 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/example.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/example.api
+@@ -93,12 +93,6 @@ type (
+ 	NestDemoResp2 {
+ *Nest `json:"nest"`
+ 	}
+-	RootReq{
+-
+-	}
+-	RootResp{
+-
+-	}
+ )
+ 
+ @server (
+@@ -130,23 +124,6 @@ service example {
+ 	prefix:     /v1/v2
+ 	timeout:    100ms
+ )
+-service example {
+-	@doc (
+-		desc: "path demo"
+-	)
+-	@handler postPath
+-	post /example/path (PostPathReq) returns (PostPathResp)
+-
+-	@handler root
+-	post / (RootReq) returns (RootResp)
+-}
+-
+-@server (
+-	group:      path2
+-	middleware: Path
+-	prefix:     /v1/v3
+-	timeout:    100ms
+-)
+ service example {
+ 	@doc (
+ 		desc: "path demo"
+@@ -188,17 +165,3 @@ service example {
+ 	post /example/nest2 (NestDemoReq2) returns (NestDemoResp2)
+ }
+ 
+-@server (
+-	group:    /g1/g2_test/g2_beta
+-	prefix:   /v1/v2_test/v2-beta
+-	summary: "test"
+-)
+-service example {
+-	@handler nestDemo1
+-	post /a/b_c/d-e/:f/123/g (NestDemoReq1) returns (NestDemoResp1)
+-
+-	@handler nestDemo2
+-	post /example/nest2 (NestDemoReq2) returns (NestDemoResp2)
+-}
+-
+-
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/example_base.api b/tools/goctl/pkg/parser/api/parser/testdata/example_base.api
+deleted file mode 100644
+index 24cfc7e5e89c27c2fc16fc42ad092735569409e3..0000000000000000000000000000000000000000
+--- a/tools/goctl/pkg/parser/api/parser/testdata/example_base.api
++++ /dev/null
+@@ -1,3 +0,0 @@
+-syntax = "v1"
+-
+-type Base{}
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/example_base1.api b/tools/goctl/pkg/parser/api/parser/testdata/example_base1.api
+index 4b8c71e4244798d1bd5369d01c0a62919d138db1..c0bd132bdbda6b3c79aee797600d811313cb66a7 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/example_base1.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/example_base1.api
+@@ -1,7 +1,5 @@
+ syntax = "v1"
+ 
+-import "example_base.api"
+-
+ info(
+     title: "type title here"
+     desc: "type desc here"
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/example_base2.api b/tools/goctl/pkg/parser/api/parser/testdata/example_base2.api
+index cdaf794000817b5cf96d4355178254daf4af4f48..ecc07779e73aef44a33e75616fd6bfba2353bade 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/example_base2.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/example_base2.api
+@@ -1,7 +1,5 @@
+ syntax = "v1"
+ 
+-import "example_base.api"
+-
+ info(
+     title: "type title here"
+     desc: "type desc here"
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/link_import.api b/tools/goctl/pkg/parser/api/parser/testdata/link_import.api
+deleted file mode 100644
+index fb08003fdfc8b66e3df4a7a9836706e6edf9dffd..0000000000000000000000000000000000000000
+--- a/tools/goctl/pkg/parser/api/parser/testdata/link_import.api
++++ /dev/null
+@@ -1,12 +0,0 @@
+-syntax = "v1"
+-
+-import "base/request.api"
+-import "base/response.api"
+-
+-type Foo {}
+-
+-service demo {
+-    @handler handlerName
+-    get /users/id/:userId (Baz) returns (Bar)
+-}
+-
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/service_test.api b/tools/goctl/pkg/parser/api/parser/testdata/service_test.api
+index 7d9323d3cb3a331cd1ef96828d0f2163ac2d0f70..f967e7312c61efe8c5bbc0ebfd2af7b890a2c6bb 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/service_test.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/service_test.api
+@@ -1,7 +1,4 @@
+ service foo {
+-    @handler root
+-    get /
+-
+     @handler bar
+     get /ping
+ 
+@@ -10,18 +7,6 @@ service foo {
+ }
+ 
+ service bar {
+-    @doc "bar"
+-    @handler root
+-    get / (Foo)
+-
+-    @doc "bar"
+-    @handler root2
+-    get / returns (Foo)
+-
+-    @doc "bar"
+-    @handler root3
+-    get / (Foo) returns (Bar)
+-
+     @doc "bar"
+     @handler foo
+     get /foo/:bar (Foo)
+diff --git a/tools/goctl/rpc/generator/gen_test.go b/tools/goctl/rpc/generator/gen_test.go
+index 1c87a1d72be8ade5b64940bdb99f172ad582068d..093d89a00a10bf175d1d48a86134de4e88825e58 100644
+--- a/tools/goctl/rpc/generator/gen_test.go
++++ b/tools/goctl/rpc/generator/gen_test.go
+@@ -5,6 +5,7 @@ import (
+ 	"go/build"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -50,7 +51,12 @@ func TestRpcGenerate(t *testing.T) {
+ 		err = g.Generate(ctx)
+ 		assert.Nil(t, err)
+ 		_, err = execx.Run("go test "+projectName, projectDir)
+-		assert.Error(t, err)
++		if err != nil {
++			assert.True(t, func() bool {
++				return strings.Contains(err.Error(),
++					"not in GOROOT") || strings.Contains(err.Error(), "cannot find package")
++			}())
++		}
+ 	})
+ 
+ 	// case go mod
+diff --git a/zrpc/internal/balancer/p2c/p2c_test.go b/zrpc/internal/balancer/p2c/p2c_test.go
+index 8e1ec4b22bf1f570ba6626d5a70d018946fe3723..8d42362269ce09edd843fac6512366d242bac31e 100644
+--- a/zrpc/internal/balancer/p2c/p2c_test.go
++++ b/zrpc/internal/balancer/p2c/p2c_test.go
+@@ -142,7 +142,7 @@ func (m mockClientConn) GetOrBuildProducer(builder balancer.ProducerBuilder) (
+ 	return builder.Build(m)
+ }
+ 
+-func (m mockClientConn) UpdateAddresses(_ []resolver.Address) {
++func (m mockClientConn) UpdateAddresses(addresses []resolver.Address) {
+ }
+ 
+ func (m mockClientConn) Connect() {
+diff --git a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+index 3c25d50c7a8a9cd795435e3777171c715ab3f0d0..91952ef4d6d063a7e4b6aec32480eb65e5a38cb3 100644
+--- a/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/clientinterceptors/tracinginterceptor_test.go
+@@ -420,10 +420,10 @@ func (m *mockedClientStream) Context() context.Context {
+ 	return context.Background()
+ }
+ 
+-func (m *mockedClientStream) SendMsg(_ any) error {
++func (m *mockedClientStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientStream) RecvMsg(_ any) error {
++func (m *mockedClientStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/internal/serverinterceptors/authinterceptor_test.go b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+index 3b09b7cb37011c36ec36c0db4bb3d5fde7e997f5..12d83a096a4b70d10645da38bb8ee2ce38a1a1df 100644
+--- a/zrpc/internal/serverinterceptors/authinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/authinterceptor_test.go
+@@ -169,25 +169,25 @@ type mockedStream struct {
+ 	ctx context.Context
+ }
+ 
+-func (m mockedStream) SetHeader(_ metadata.MD) error {
++func (m mockedStream) SetHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SendHeader(_ metadata.MD) error {
++func (m mockedStream) SendHeader(md metadata.MD) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) SetTrailer(_ metadata.MD) {
++func (m mockedStream) SetTrailer(md metadata.MD) {
+ }
+ 
+ func (m mockedStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m mockedStream) SendMsg(_ any) error {
++func (m mockedStream) SendMsg(v any) error {
+ 	return nil
+ }
+ 
+-func (m mockedStream) RecvMsg(_ any) error {
++func (m mockedStream) RecvMsg(v any) error {
+ 	return nil
+ }
+diff --git a/zrpc/internal/serverinterceptors/breakerinterceptor_test.go b/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
+index 58662de26099975ac7c0284f83aaab6b6ee791c5..26538c2755d2369fd369631c0c7974bf306f2066 100644
+--- a/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/breakerinterceptor_test.go
+@@ -5,7 +5,6 @@ import (
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/breaker"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+@@ -28,12 +27,3 @@ func TestUnaryBreakerInterceptor(t *testing.T) {
+ 	})
+ 	assert.NotNil(t, err)
+ }
+-
+-func TestUnaryBreakerInterceptor_Unavailable(t *testing.T) {
+-	_, err := UnaryBreakerInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{
+-		FullMethod: "any",
+-	}, func(_ context.Context, _ any) (any, error) {
+-		return nil, breaker.ErrServiceUnavailable
+-	})
+-	assert.NotNil(t, err)
+-}
+diff --git a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+index 2b3fee86bd04d3753f26d8feb5b863db5adaf29a..9fb85a9bc50729c52dd5f0dbd72d32f0cc88b430 100644
+--- a/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
++++ b/zrpc/internal/serverinterceptors/tracinginterceptor_test.go
+@@ -309,15 +309,15 @@ type mockedServerStream struct {
+ 	err error
+ }
+ 
+-func (m *mockedServerStream) SetHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SetHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SendHeader(_ metadata.MD) error {
++func (m *mockedServerStream) SendHeader(md metadata.MD) error {
+ 	panic("implement me")
+ }
+ 
+-func (m *mockedServerStream) SetTrailer(_ metadata.MD) {
++func (m *mockedServerStream) SetTrailer(md metadata.MD) {
+ 	panic("implement me")
+ }
+ 
+@@ -329,10 +329,10 @@ func (m *mockedServerStream) Context() context.Context {
+ 	return m.ctx
+ }
+ 
+-func (m *mockedServerStream) SendMsg(_ any) error {
++func (m *mockedServerStream) SendMsg(v any) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedServerStream) RecvMsg(_ any) error {
++func (m *mockedServerStream) RecvMsg(v any) error {
+ 	return m.err
+ }
+diff --git a/zrpc/resolver/internal/resolver_test.go b/zrpc/resolver/internal/resolver_test.go
+index 7dd10ee79d10123ff7a236885f684ffdbd6d71c1..62c8238707bccb97e0840b925d81c82348373af5 100644
+--- a/zrpc/resolver/internal/resolver_test.go
++++ b/zrpc/resolver/internal/resolver_test.go
+@@ -28,15 +28,15 @@ func (m *mockedClientConn) UpdateState(state resolver.State) error {
+ 	return m.err
+ }
+ 
+-func (m *mockedClientConn) ReportError(_ error) {
++func (m *mockedClientConn) ReportError(err error) {
+ }
+ 
+-func (m *mockedClientConn) NewAddress(_ []resolver.Address) {
++func (m *mockedClientConn) NewAddress(addresses []resolver.Address) {
+ }
+ 
+-func (m *mockedClientConn) NewServiceConfig(_ string) {
++func (m *mockedClientConn) NewServiceConfig(serviceConfig string) {
+ }
+ 
+-func (m *mockedClientConn) ParseServiceConfig(_ string) *serviceconfig.ParseResult {
++func (m *mockedClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
+ 	return nil
+ }

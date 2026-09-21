@@ -1,0 +1,407 @@
+diff --git a/crates/nu-cli/tests/completions/mod.rs b/crates/nu-cli/tests/completions/mod.rs
+index de4ffbfbcbbc83ff7d3c02b66acdef1ce2ba9432..8bcba180951f508494922e87a24e27fe50e328b6 100644
+--- a/crates/nu-cli/tests/completions/mod.rs
++++ b/crates/nu-cli/tests/completions/mod.rs
+@@ -1057,6 +1057,13 @@ fn file_completions() {
+ 
+     // Match the results
+     match_suggestions_by_string(&expected_paths, &suggestions);
++
++    // Don't suggest files as fallback when no directories match for commands expecting directories
++    let suggestions = completer.complete("cd n", 4);
++    let expected_paths: Vec<_> = vec![];
++
++    // Match the results
++    match_suggestions(&expected_paths, &suggestions)
+ }
+ 
+ #[test]
+diff --git a/crates/nu-command/tests/commands/config_env_default.rs b/crates/nu-command/tests/commands/config_env_default.rs
+index e59cc7500a3f521c4ce32eba3b6f7a8ef291a297..1d1282838b468b2e7ce6e10e2e1ee09db689583e 100644
+--- a/crates/nu-command/tests/commands/config_env_default.rs
++++ b/crates/nu-command/tests/commands/config_env_default.rs
+@@ -1,13 +1,13 @@
+-// [ENV-PATCH] use nu_test_support::nu;
++use nu_test_support::nu;
+ 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] fn print_config_env_default_to_stdout() {
+-// [ENV-PATCH]     let actual = nu!("config env --default");
+-// [ENV-PATCH]     assert_eq!(
+-// [ENV-PATCH]         actual.out,
+-// [ENV-PATCH]         nu_utils::ConfigFileKind::Env
+-// [ENV-PATCH]             .default()
+-// [ENV-PATCH]             .replace(['\n', '\r'], "")
+-// [ENV-PATCH]     );
+-// [ENV-PATCH]     assert!(actual.err.is_empty());
+-// [ENV-PATCH] }
++#[test]
++fn print_config_env_default_to_stdout() {
++    let actual = nu!("config env --default");
++    assert_eq!(
++        actual.out,
++        nu_utils::ConfigFileKind::Env
++            .default()
++            .replace(['\n', '\r'], "")
++    );
++    assert!(actual.err.is_empty());
++}
+diff --git a/crates/nu-command/tests/commands/config_nu_default.rs b/crates/nu-command/tests/commands/config_nu_default.rs
+index 8fcfcab4aa75d756e0b48bcf45f172a4cb8aacf1..c4391d6fbec28c07c96035d0197ac2ba30887dc9 100644
+--- a/crates/nu-command/tests/commands/config_nu_default.rs
++++ b/crates/nu-command/tests/commands/config_nu_default.rs
+@@ -1,13 +1,13 @@
+-// [ENV-PATCH] use nu_test_support::nu;
++use nu_test_support::nu;
+ 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] fn print_config_nu_default_to_stdout() {
+-// [ENV-PATCH]     let actual = nu!("config nu --default");
+-// [ENV-PATCH]     assert_eq!(
+-// [ENV-PATCH]         actual.out,
+-// [ENV-PATCH]         nu_utils::ConfigFileKind::Config
+-// [ENV-PATCH]             .default()
+-// [ENV-PATCH]             .replace(['\n', '\r'], "")
+-// [ENV-PATCH]     );
+-// [ENV-PATCH]     assert!(actual.err.is_empty());
+-// [ENV-PATCH] }
++#[test]
++fn print_config_nu_default_to_stdout() {
++    let actual = nu!("config nu --default");
++    assert_eq!(
++        actual.out,
++        nu_utils::ConfigFileKind::Config
++            .default()
++            .replace(['\n', '\r'], "")
++    );
++    assert!(actual.err.is_empty());
++}
+diff --git a/crates/nu-command/tests/commands/mut_.rs b/crates/nu-command/tests/commands/mut_.rs
+index 455f6aa5cb60866d85996893aa8150313e7812c1..e2ab0f417f2fcbe599f466efd463364b17c48ae1 100644
+--- a/crates/nu-command/tests/commands/mut_.rs
++++ b/crates/nu-command/tests/commands/mut_.rs
+@@ -129,10 +129,14 @@ fn mut_path_upsert_list() {
+ }
+ 
+ #[test]
+-fn mut_path_operator_assign() {
+-    let actual = nu!("mut a = {b:1}; $a.b += 3; $a.b -= 2; $a.b *= 10; $a.b /= 4; $a.b");
++fn mut_path_operator_assign_should_error_enforce_runtime() {
++    // should error on the division
++    let actual = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        "mut a: record<b: int> = {b:1}; $a.b += 3; $a.b -= 2; $a.b *= 10; $a.b /= 4; $a.b",
++    );
+ 
+-    assert_eq!(actual.out, "5.0");
++    assert!(actual.err.contains("nu::shell::cant_convert"));
+ }
+ 
+ #[test]
+@@ -149,7 +153,7 @@ fn mut_value_with_if() {
+ 
+ #[test]
+ fn mut_value_with_match() {
+-    let actual = nu!("mut a = 3; $a = match 3 { 1 => { 'yes!' }, _ => { 'no!' } }; echo $a");
++    let actual = nu!("mut a = 'maybe?'; $a = match 3 { 1 => { 'yes!' }, _ => { 'no!' } }; echo $a");
+     assert_eq!(actual.out, "no!");
+ }
+ 
+diff --git a/crates/nu-parser/tests/test_parser.rs b/crates/nu-parser/tests/test_parser.rs
+index b0f3e856f269c08c3e7bbb3ac763e3ff8dcf4e48..c1668d8993d1914d5d9d028bf6114efa0d7255e4 100644
+--- a/crates/nu-parser/tests/test_parser.rs
++++ b/crates/nu-parser/tests/test_parser.rs
+@@ -494,47 +494,47 @@ pub fn parse_binary_with_incomplete_octal_format() {
+     assert_eq!(element.expr.expr, Expr::Binary(vec![0o2]));
+ }
+ 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_invalid_octal_format() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, b"0o[90]", true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)));
+-// [ENV-PATCH] }
+-// [ENV-PATCH] 
+-// [ENV-PATCH] #[test]
+-// [ENV-PATCH] pub fn parse_binary_with_multi_byte_char() {
+-// [ENV-PATCH]     let engine_state = EngineState::new();
+-// [ENV-PATCH]     let mut working_set = StateWorkingSet::new(&engine_state);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     // found using fuzzing, Rust can panic if you slice into this string
+-// [ENV-PATCH]     let contents = b"0x[\xEF\xBF\xBD]";
+-// [ENV-PATCH]     let block = parse(&mut working_set, None, contents, true);
+-// [ENV-PATCH] 
+-// [ENV-PATCH]     assert_eq!(working_set.parse_errors.len(), 1);
+-// [ENV-PATCH]     assert!(matches!(
+-// [ENV-PATCH]         working_set.parse_errors.first(),
+-// [ENV-PATCH]         Some(ParseError::InvalidBinaryString(_, _))
+-// [ENV-PATCH]     ));
+-// [ENV-PATCH]     assert_eq!(block.len(), 1);
+-// [ENV-PATCH]     let pipeline = &block.pipelines[0];
+-// [ENV-PATCH]     assert_eq!(pipeline.len(), 1);
+-// [ENV-PATCH]     let element = &pipeline.elements[0];
+-// [ENV-PATCH]     assert!(element.redirection.is_none());
+-// [ENV-PATCH]     assert!(!matches!(element.expr.expr, Expr::Binary(_)))
+-// [ENV-PATCH] }
++#[test]
++pub fn parse_binary_with_invalid_octal_format() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    let block = parse(&mut working_set, None, b"0o[90]", true);
++
++    assert_eq!(working_set.parse_errors.len(), 1);
++    assert!(matches!(
++        working_set.parse_errors.first(),
++        Some(ParseError::InvalidBinaryString(_, _))
++    ));
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)));
++}
++
++#[test]
++pub fn parse_binary_with_multi_byte_char() {
++    let engine_state = EngineState::new();
++    let mut working_set = StateWorkingSet::new(&engine_state);
++
++    // found using fuzzing, Rust can panic if you slice into this string
++    let contents = b"0x[\xEF\xBF\xBD]";
++    let block = parse(&mut working_set, None, contents, true);
++
++    assert_eq!(working_set.parse_errors.len(), 1);
++    assert!(matches!(
++        working_set.parse_errors.first(),
++        Some(ParseError::InvalidBinaryString(_, _))
++    ));
++    assert_eq!(block.len(), 1);
++    let pipeline = &block.pipelines[0];
++    assert_eq!(pipeline.len(), 1);
++    let element = &pipeline.elements[0];
++    assert!(element.redirection.is_none());
++    assert!(!matches!(element.expr.expr, Expr::Binary(_)))
++}
+ 
+ #[test]
+ pub fn parse_call() {
+diff --git a/crates/nu-protocol/tests/test_signature.rs b/crates/nu-protocol/tests/test_signature.rs
+index 704c885347a54edacde0a1023ac10b116a5ee99d..e2d0d3b9c074faf86e8351bcec0f471d170d16e3 100644
+--- a/crates/nu-protocol/tests/test_signature.rs
++++ b/crates/nu-protocol/tests/test_signature.rs
+@@ -45,7 +45,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -56,7 +56,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
++            completion: None,
+         })
+     );
+     assert_eq!(
+@@ -67,7 +67,7 @@ fn test_signature_chained() {
+             shape: SyntaxShape::String,
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
++            completion: None,
+         })
+     );
+ 
+@@ -81,7 +81,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
++            completion: None,
+         })
+     );
+ 
+@@ -95,7 +95,7 @@ fn test_signature_chained() {
+             desc: "required named description".to_string(),
+             var_id: None,
+             default_value: None,
+-            custom_completion: None,
++            completion: None,
+         })
+     );
+ }
+diff --git a/tests/repl/test_custom_commands.rs b/tests/repl/test_custom_commands.rs
+index e176863e91e8576ef99094eb6ae7597d3fbc539f..c18cceb4c487c49e7a9c3327ac213abf8b7c9ed1 100644
+--- a/tests/repl/test_custom_commands.rs
++++ b/tests/repl/test_custom_commands.rs
+@@ -295,11 +295,11 @@ fn path_argument_dont_make_absolute_if_unquoted() -> TestResult {
+ fn dont_allow_implicit_casting_between_glob_and_string() -> TestResult {
+     let _ = fail_test(
+         r#"def spam [foo: string] { echo $foo }; let f: glob = 'aa'; spam $f"#,
+-        "expected string",
++        "expected string, found glob",
+     );
+-    fail_test(
++    run_test(
+         r#"def spam [foo: glob] { echo $foo }; let f = 'aa'; spam $f"#,
+-        "can't convert",
++        "aa",
+     )
+ }
+ 
+diff --git a/tests/repl/test_parser.rs b/tests/repl/test_parser.rs
+index d6a97434837c6af4e22a81ae47b5092bc87a5632..3d03c52fd228698b67d8be17283ba3312690b159 100644
+--- a/tests/repl/test_parser.rs
++++ b/tests/repl/test_parser.rs
+@@ -824,6 +824,76 @@ fn let_variable_type_mismatch() -> TestResult {
+     fail_test(r#"let x: int = "foo""#, "expected int, found string")
+ }
+ 
++#[test]
++fn let_variable_table_runtime_cast() -> TestResult {
++    let outcome = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        r#"let x: table = ([[a]; [1]] | to nuon | from nuon); $x | describe"#,
++    );
++
++    // Type::Any should be accepted by compatible types (record can convert to table)
++    assert!(outcome.out.contains("table<a: int>"));
++    Ok(())
++}
++
++#[test]
++fn let_variable_table_runtime_mismatch() -> TestResult {
++    let outcome = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        r#"mut x: table<b: int> = ([[b]; [1]]  | to nuon | from nuon); $x = [[a]; [1]]"#,
++    );
++
++    // This conversion should fail due to a key mismatch
++    assert!(
++        outcome
++            .err
++            .contains("does not operate between 'table<b: int>' and 'table<a: int>'")
++    );
++    Ok(())
++}
++
++#[test]
++fn mut_variable_table_runtime_mismatch() -> TestResult {
++    let outcome = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        r#"mut x: table<b: int> = ([[b]; [1]]  | to nuon | from nuon); $x = [[a]; [1]]"#,
++    );
++
++    assert!(
++        outcome
++            .err
++            .contains("does not operate between 'table<b: int>' and 'table<a: int>'")
++    );
++    Ok(())
++}
++
++#[test]
++fn let_variable_record_runtime_cast() -> TestResult {
++    let outcome = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        r#"let x: record<a: int> = ({a: 1} | to nuon | from nuon); $x | describe"#,
++    );
++    // Records from Type::Any sources should be convertible to tables when field types match
++    assert!(outcome.out.contains("record<a: int>"));
++    Ok(())
++}
++
++#[test]
++fn let_variable_record_runtime_mismatch() -> TestResult {
++    let outcome = nu!(
++        experimental: vec!["enforce-runtime-annotations".to_string()],
++        r#"let x: record<b: int> = ({a: 1} | to nuon | from nuon); $x | describe"#,
++    );
++
++    // This conversion should fail due to a key mismatch
++    assert!(
++        outcome
++            .err
++            .contains("can't convert record<a: int> to record<b: int>")
++    );
++    Ok(())
++}
++
+ #[test]
+ fn let_variable_disallows_completer() -> TestResult {
+     fail_test(
+diff --git a/tests/shell/pipeline/commands/external.rs b/tests/shell/pipeline/commands/external.rs
+index cef078fae8a0702b5c4a64318224f39c4353bd26..0ae6215b2575c91db7e9fd42bd578a09cfc4946e 100644
+--- a/tests/shell/pipeline/commands/external.rs
++++ b/tests/shell/pipeline/commands/external.rs
+@@ -707,27 +707,27 @@ fn sub_external_expression_with_and_op_should_raise_proper_error() {
+ }
+ 
+ // FIXME: ignore these cases for now, the value inside a pipeline
+-// [ENV-PATCH] // makes all previous exit status untracked.
+-// [ENV-PATCH] // #[case("nu --testbin fail 10 | nu --testbin fail 20 | 10", 10)]
+-// [ENV-PATCH] // #[case("nu --testbin fail 20 | 10 | nu --testbin fail", 20)]
+-// [ENV-PATCH] // #[case("30 | nu --testbin fail | nu --testbin fail 30", 1)]
+-// [ENV-PATCH] #[rstest]
+-// [ENV-PATCH] #[case("nu --testbin fail | print aa", 1)]
+-// [ENV-PATCH] #[case("nu --testbin nonu a | print bb", 0)]
+-// [ENV-PATCH] #[case("nu --testbin fail 30 | nu --testbin nonu a | print aa", 30)]
+-// [ENV-PATCH] #[case("print aa | print cc | nu --testbin fail 40", 40)]
+-// [ENV-PATCH] #[case("nu --testbin fail 20 | print aa | nu --testbin fail", 1)]
+-// [ENV-PATCH] #[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
+-// [ENV-PATCH] fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
+-// [ENV-PATCH]     let actual = nu!(
+-// [ENV-PATCH]         experimental: vec!["pipefail".to_string()],
+-// [ENV-PATCH]         inp
+-// [ENV-PATCH]     );
+-// [ENV-PATCH]     assert_eq!(
+-// [ENV-PATCH]         actual
+-// [ENV-PATCH]             .status
+-// [ENV-PATCH]             .code()
+-// [ENV-PATCH]             .expect("exit_status should not be none"),
+-// [ENV-PATCH]         expect_code
+-// [ENV-PATCH]     );
+-// [ENV-PATCH] }
++// makes all previous exit status untracked.
++// #[case("nu --testbin fail 10 | nu --testbin fail 20 | 10", 10)]
++// #[case("nu --testbin fail 20 | 10 | nu --testbin fail", 20)]
++// #[case("30 | nu --testbin fail | nu --testbin fail 30", 1)]
++#[rstest]
++#[case("nu --testbin fail | print aa", 1)]
++#[case("nu --testbin nonu a | print bb", 0)]
++#[case("nu --testbin fail 30 | nu --testbin nonu a | print aa", 30)]
++#[case("print aa | print cc | nu --testbin fail 40", 40)]
++#[case("nu --testbin fail 20 | print aa | nu --testbin fail", 1)]
++#[case("nu --testbin fail | print aa | nu --testbin fail 20", 20)]
++fn pipefail_feature(#[case] inp: &str, #[case] expect_code: i32) {
++    let actual = nu!(
++        experimental: vec!["pipefail".to_string()],
++        inp
++    );
++    assert_eq!(
++        actual
++            .status
++            .code()
++            .expect("exit_status should not be none"),
++        expect_code
++    );
++}

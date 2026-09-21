@@ -1,0 +1,578 @@
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index be55d55a2b2cc619c4bd7f997f4d30f49f96c4b1..d32f8c5fed2697ea621f1adc3015270ae1a8c14c 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -59,7 +59,7 @@ func GetBreaker(name string) Breaker {
+ // NoBreakerFor disables the circuit breaker for the given name.
+ func NoBreakerFor(name string) {
+ 	lock.Lock()
+-	breakers[name] = newNopBreaker()
++	breakers[name] = NopBreaker()
+ 	lock.Unlock()
+ }
+ 
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index a1b2e7ccb95b985dadb765c0e038f521b99c6023..f72dc358229c22417767218e68dfee401ef73bd7 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -4,7 +4,8 @@ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+ 
+-func newNopBreaker() Breaker {
++// NopBreaker returns a breaker that never trigger breaker circuit.
++func NopBreaker() Breaker {
+ 	return nopBreaker{}
+ }
+ 
+diff --git a/core/stores/sqlx/orm.go b/core/stores/sqlx/orm.go
+index 1cc7271ad6cc47cf7e9fad546910d9bf08a0de3d..5b308581d608b1589c6880b0a0108a098d6d2863 100644
+--- a/core/stores/sqlx/orm.go
++++ b/core/stores/sqlx/orm.go
+@@ -1,6 +1,7 @@
+ package sqlx
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"reflect"
+ 	"strings"
+@@ -90,6 +91,10 @@ func getValueInterface(value reflect.Value) (any, error) {
+ 	}
+ }
+ 
++func isScanFailed(err error) bool {
++	return err != nil && !errors.Is(err, context.DeadlineExceeded)
++}
++
+ func mapStructFieldsIntoSlice(v reflect.Value, columns []string, strict bool) ([]any, error) {
+ 	fields := unwrapFields(v)
+ 	if strict && len(columns) < len(fields) {
+@@ -251,7 +256,7 @@ func unmarshalRows(v any, scanner rowsScanner, strict bool) error {
+ 			return ErrUnsupportedValueType
+ 		}
+ 
+-		return nil
++		return scanner.Err()
+ 	default:
+ 		return ErrUnsupportedValueType
+ 	}
+diff --git a/core/stores/sqlx/orm_test.go b/core/stores/sqlx/orm_test.go
+index c3e9e46eaf6bfd241370cf8132652eeb62ffa982..d8561c86907b97052087d6ec365f25c909ea8124 100644
+--- a/core/stores/sqlx/orm_test.go
++++ b/core/stores/sqlx/orm_test.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
++	"reflect"
+ 	"testing"
+ 	"time"
+ 
+@@ -2205,6 +2206,145 @@ func TestUnmarshalRowsSqlNullStringEmptyVsNull(t *testing.T) {
+ 	})
+ }
+ 
++func TestGetValueInterface(t *testing.T) {
++	t.Run("non_pointer_field", func(t *testing.T) {
++		type testStruct struct {
++			Name string
++			Age  int
++		}
++		s := testStruct{}
++		v := reflect.ValueOf(&s).Elem()
++
++		nameField := v.Field(0)
++		result, err := getValueInterface(nameField)
++		assert.NoError(t, err)
++		assert.NotNil(t, result)
++
++		// Should return pointer to the field
++		ptr, ok := result.(*string)
++		assert.True(t, ok)
++		*ptr = "test"
++		assert.Equal(t, "test", s.Name)
++	})
++
++	t.Run("pointer_field_nil", func(t *testing.T) {
++		type testStruct struct {
++			NamePtr *string
++			AgePtr  *int64
++		}
++		s := testStruct{}
++		v := reflect.ValueOf(&s).Elem()
++
++		// Test with nil pointer field
++		namePtrField := v.Field(0)
++		assert.True(t, namePtrField.IsNil(), "initial pointer should be nil")
++
++		result, err := getValueInterface(namePtrField)
++		assert.NoError(t, err)
++		assert.NotNil(t, result)
++
++		// Should have allocated the pointer
++		assert.False(t, namePtrField.IsNil(), "pointer should be allocated after getValueInterface")
++
++		// Should return pointer to pointer field
++		ptrPtr, ok := result.(**string)
++		assert.True(t, ok)
++		testValue := "initialized"
++		*ptrPtr = &testValue
++		assert.NotNil(t, s.NamePtr)
++		assert.Equal(t, "initialized", *s.NamePtr)
++	})
++
++	t.Run("pointer_field_already_allocated", func(t *testing.T) {
++		type testStruct struct {
++			NamePtr *string
++		}
++		initial := "existing"
++		s := testStruct{NamePtr: &initial}
++		v := reflect.ValueOf(&s).Elem()
++
++		namePtrField := v.Field(0)
++		assert.False(t, namePtrField.IsNil(), "pointer should not be nil initially")
++
++		result, err := getValueInterface(namePtrField)
++		assert.NoError(t, err)
++		assert.NotNil(t, result)
++
++		// Should return pointer to pointer field
++		ptrPtr, ok := result.(**string)
++		assert.True(t, ok)
++
++		// Verify it points to the existing value
++		assert.Equal(t, "existing", **ptrPtr)
++
++		// Modify through the returned pointer
++		newValue := "modified"
++		*ptrPtr = &newValue
++		assert.Equal(t, "modified", *s.NamePtr)
++	})
++
++	t.Run("pointer_field_zero_value", func(t *testing.T) {
++		type testStruct struct {
++			IntPtr *int
++		}
++		s := testStruct{}
++		v := reflect.ValueOf(&s).Elem()
++
++		intPtrField := v.Field(0)
++		result, err := getValueInterface(intPtrField)
++		assert.NoError(t, err)
++
++		// After calling getValueInterface, nil pointer should be allocated
++		assert.NotNil(t, s.IntPtr)
++
++		// Set zero value through returned interface
++		ptrPtr, ok := result.(**int)
++		assert.True(t, ok)
++		zero := 0
++		*ptrPtr = &zero
++		assert.Equal(t, 0, *s.IntPtr)
++	})
++
++	t.Run("not_addressable_value", func(t *testing.T) {
++		type testStruct struct {
++			Name string
++		}
++		s := testStruct{Name: "test"}
++		v := reflect.ValueOf(s) // Non-pointer, not addressable
++
++		nameField := v.Field(0)
++		result, err := getValueInterface(nameField)
++		assert.Error(t, err)
++		assert.Equal(t, ErrNotReadableValue, err)
++		assert.Nil(t, result)
++	})
++
++	t.Run("multiple_pointer_types", func(t *testing.T) {
++		type testStruct struct {
++			StringPtr *string
++			IntPtr    *int
++			Int64Ptr  *int64
++			FloatPtr  *float64
++			BoolPtr   *bool
++		}
++		s := testStruct{}
++		v := reflect.ValueOf(&s).Elem()
++
++		// Test each pointer type gets properly initialized
++		for i := 0; i < v.NumField(); i++ {
++			field := v.Field(i)
++			assert.True(t, field.IsNil(), "field %d should start as nil", i)
++
++			result, err := getValueInterface(field)
++			assert.NoError(t, err, "field %d should not error", i)
++			assert.NotNil(t, result, "field %d result should not be nil", i)
++
++			// After getValueInterface, pointer should be allocated
++			assert.False(t, field.IsNil(), "field %d should be allocated", i)
++		}
++	})
++}
++
+ func stringPtr(s string) *string {
+ 	return &s
+ }
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 87b944d5a916ef2ec469426f6bfeabb560e0c655..4dde5d43f034b896c420caf119b067754cbaac48 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -42,21 +42,6 @@ type (
+ 	// SqlOption defines the method to customize a sql connection.
+ 	SqlOption func(*commonSqlConn)
+ 
+-	// StmtSession interface represents a session that can be used to execute statements.
+-	StmtSession interface {
+-		Close() error
+-		Exec(args ...any) (sql.Result, error)
+-		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
+-		QueryRow(v any, args ...any) error
+-		QueryRowCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowPartial(v any, args ...any) error
+-		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
+-		QueryRows(v any, args ...any) error
+-		QueryRowsCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowsPartial(v any, args ...any) error
+-		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
+-	}
+-
+ 	// thread-safe
+ 	// Because CORBA doesn't support PREPARE, so we need to combine the
+ 	// query arguments into one string and do underlying query without arguments
+@@ -65,7 +50,7 @@ type (
+ 		onError  func(context.Context, error)
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+-		accept   func(error) bool
++		accept   breaker.Acceptable
+ 	}
+ 
+ 	connProvider func() (*sql.DB, error)
+@@ -76,18 +61,6 @@ type (
+ 		Query(query string, args ...any) (*sql.Rows, error)
+ 		QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+ 	}
+-
+-	statement struct {
+-		query string
+-		stmt  *sql.Stmt
+-	}
+-
+-	stmtConn interface {
+-		Exec(args ...any) (sql.Result, error)
+-		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
+-		Query(args ...any) (*sql.Rows, error)
+-		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
+-	}
+ )
+ 
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+@@ -189,8 +162,10 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 		}
+ 
+ 		stmt = statement{
+-			query: query,
+-			stmt:  st,
++			query:  query,
++			stmt:   st,
++			brk:    db.brk,
++			accept: db.acceptable,
+ 		}
+ 		return nil
+ 	}, db.acceptable)
+@@ -311,7 +286,7 @@ func (db *commonSqlConn) acceptable(err error) bool {
+ 
+ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows) error,
+ 	q string, args ...any) (err error) {
+-	var qerr error
++	var scanFailed bool
+ 	err = db.brk.DoWithAcceptable(func() error {
+ 		conn, err := db.connProv()
+ 		if err != nil {
+@@ -320,11 +295,14 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 		}
+ 
+ 		return query(ctx, conn, func(rows *sql.Rows) error {
+-			qerr = scanner(rows)
+-			return qerr
++			e := scanner(rows)
++			if isScanFailed(e) {
++				scanFailed = true
++			}
++			return e
+ 		}, q, args...)
+ 	}, func(err error) bool {
+-		return errors.Is(err, qerr) || db.acceptable(err)
++		return scanFailed || db.acceptable(err)
+ 	})
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+ 		metricReqErr.Inc("queryRows", "breaker")
+@@ -333,83 +311,6 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func (s statement) Close() error {
+-	return s.stmt.Close()
+-}
+-
+-func (s statement) Exec(args ...any) (sql.Result, error) {
+-	return s.ExecCtx(context.Background(), args...)
+-}
+-
+-func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
+-	ctx, span := startSpan(ctx, "Exec")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return execStmt(ctx, s.stmt, s.query, args...)
+-}
+-
+-func (s statement) QueryRow(v any, args ...any) error {
+-	return s.QueryRowCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRow")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowPartial(v any, args ...any) error {
+-	return s.QueryRowPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRows(v any, args ...any) error {
+-	return s.QueryRowsCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRows")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowsPartial(v any, args ...any) error {
+-	return s.QueryRowsPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowsPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+diff --git a/core/stores/sqlx/stmt.go b/core/stores/sqlx/stmt.go
+index ab688abbd586575e29adab5e81e25fac50e3eaa9..5813b9d65face5730d17171d03599830680854fc 100644
+--- a/core/stores/sqlx/stmt.go
++++ b/core/stores/sqlx/stmt.go
+@@ -3,8 +3,10 @@ package sqlx
+ import (
+ 	"context"
+ 	"database/sql"
++	"errors"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -18,6 +20,146 @@ var (
+ 	logSlowSql    = syncx.ForAtomicBool(true)
+ )
+ 
++type (
++	// StmtSession interface represents a session that can be used to execute statements.
++	StmtSession interface {
++		Close() error
++		Exec(args ...any) (sql.Result, error)
++		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
++		QueryRow(v any, args ...any) error
++		QueryRowCtx(ctx context.Context, v any, args ...any) error
++		QueryRowPartial(v any, args ...any) error
++		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
++		QueryRows(v any, args ...any) error
++		QueryRowsCtx(ctx context.Context, v any, args ...any) error
++		QueryRowsPartial(v any, args ...any) error
++		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
++	}
++
++	statement struct {
++		query  string
++		stmt   *sql.Stmt
++		brk    breaker.Breaker
++		accept breaker.Acceptable
++	}
++
++	stmtConn interface {
++		Exec(args ...any) (sql.Result, error)
++		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
++		Query(args ...any) (*sql.Rows, error)
++		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
++	}
++)
++
++func (s statement) Close() error {
++	return s.stmt.Close()
++}
++
++func (s statement) Exec(args ...any) (sql.Result, error) {
++	return s.ExecCtx(context.Background(), args...)
++}
++
++func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
++	ctx, span := startSpan(ctx, "Exec")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	err = s.brk.DoWithAcceptable(func() error {
++		result, err = execStmt(ctx, s.stmt, s.query, args...)
++		return err
++	}, func(err error) bool {
++		return s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_exec", "breaker")
++	}
++
++	return
++}
++
++func (s statement) QueryRow(v any, args ...any) error {
++	return s.QueryRowCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRow")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowPartial(v any, args ...any) error {
++	return s.QueryRowPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) QueryRows(v any, args ...any) error {
++	return s.QueryRowsCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRows")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowsPartial(v any, args ...any) error {
++	return s.QueryRowsPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowsPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) queryRows(ctx context.Context, scanFn func(any, rowsScanner) error,
++	v any, args ...any) error {
++	var scanFailed bool
++
++	err := s.brk.DoWithAcceptable(func() error {
++		return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
++			err := scanFn(v, rows)
++			if isScanFailed(err) {
++				scanFailed = true
++			}
++			return err
++		}, s.query, args...)
++	}, func(err error) bool {
++		return scanFailed || s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_queryRows", "breaker")
++	}
++
++	return err
++}
++
+ // DisableLog disables logging of sql statements, includes info and slow logs.
+ func DisableLog() {
+ 	logSql.Set(false)
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index d983077ce4994064a1d4d4862a83360b2449479d..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"fmt"
++
++	"github.com/zeromicro/go-zero/core/breaker"
+ )
+ 
+ type (
+@@ -75,6 +77,7 @@ func (t txSession) PrepareCtx(ctx context.Context, q string) (stmtSession StmtSe
+ 	return statement{
+ 		query: q,
+ 		stmt:  stmt,
++		brk:   breaker.NopBreaker(),
+ 	}, nil
+ }
+ 

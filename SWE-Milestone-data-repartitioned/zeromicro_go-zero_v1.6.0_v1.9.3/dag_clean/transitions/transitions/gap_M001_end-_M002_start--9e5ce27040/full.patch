@@ -1,0 +1,2927 @@
+diff --git a/core/bloom/bloom.go b/core/bloom/bloom.go
+index 897f4bc8b3bddc39886f98f58b483d44a32a42e2..3a72cf84d78b3037655165b28ef596a87a4425be 100644
+--- a/core/bloom/bloom.go
++++ b/core/bloom/bloom.go
+@@ -130,7 +130,7 @@ func (r *redisBitSet) check(ctx context.Context, offsets []uint) (bool, error) {
+ 	}
+ 
+ 	resp, err := r.store.ScriptRunCtx(ctx, testScript, []string{r.key}, args)
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return false, nil
+ 	} else if err != nil {
+ 		return false, err
+@@ -162,7 +162,7 @@ func (r *redisBitSet) set(ctx context.Context, offsets []uint) error {
+ 	}
+ 
+ 	_, err = r.store.ScriptRunCtx(ctx, setScript, []string{r.key}, args)
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return nil
+ 	}
+ 
+diff --git a/core/breaker/breaker.go b/core/breaker/breaker.go
+index 9fc4a48321df4a94196ea1888a47affd0a4aa30e..3da681cdf1385245ae46ae73ff9b7db547acc5f4 100644
+--- a/core/breaker/breaker.go
++++ b/core/breaker/breaker.go
+@@ -53,16 +53,19 @@ type (
+ 		// DoWithFallback runs the fallback if the Breaker rejects the request.
+ 		// If a panic occurs in the request, the Breaker handles it as an error
+ 		// and causes the same panic again.
+-		DoWithFallback(req func() error, fallback func(err error) error) error
++		DoWithFallback(req func() error, fallback Fallback) error
+ 
+ 		// DoWithFallbackAcceptable runs the given request if the Breaker accepts it.
+ 		// DoWithFallbackAcceptable runs the fallback if the Breaker rejects the request.
+ 		// If a panic occurs in the request, the Breaker handles it as an error
+ 		// and causes the same panic again.
+ 		// acceptable checks if it's a successful call, even if the error is not nil.
+-		DoWithFallbackAcceptable(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		DoWithFallbackAcceptable(req func() error, fallback Fallback, acceptable Acceptable) error
+ 	}
+ 
++	// Fallback is the func to be called if the request is rejected.
++	Fallback func(err error) error
++
+ 	// Option defines the method to customize a Breaker.
+ 	Option func(breaker *circuitBreaker)
+ 
+@@ -86,12 +89,12 @@ type (
+ 
+ 	internalThrottle interface {
+ 		allow() (internalPromise, error)
+-		doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		doReq(req func() error, fallback Fallback, acceptable Acceptable) error
+ 	}
+ 
+ 	throttle interface {
+ 		allow() (Promise, error)
+-		doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error
++		doReq(req func() error, fallback Fallback, acceptable Acceptable) error
+ 	}
+ )
+ 
+@@ -122,11 +125,11 @@ func (cb *circuitBreaker) DoWithAcceptable(req func() error, acceptable Acceptab
+ 	return cb.throttle.doReq(req, nil, acceptable)
+ }
+ 
+-func (cb *circuitBreaker) DoWithFallback(req func() error, fallback func(err error) error) error {
++func (cb *circuitBreaker) DoWithFallback(req func() error, fallback Fallback) error {
+ 	return cb.throttle.doReq(req, fallback, defaultAcceptable)
+ }
+ 
+-func (cb *circuitBreaker) DoWithFallbackAcceptable(req func() error, fallback func(err error) error,
++func (cb *circuitBreaker) DoWithFallbackAcceptable(req func() error, fallback Fallback,
+ 	acceptable Acceptable) error {
+ 	return cb.throttle.doReq(req, fallback, acceptable)
+ }
+@@ -168,7 +171,7 @@ func (lt loggedThrottle) allow() (Promise, error) {
+ 	}, lt.logError(err)
+ }
+ 
+-func (lt loggedThrottle) doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error {
++func (lt loggedThrottle) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
+ 	return lt.logError(lt.internalThrottle.doReq(req, fallback, func(err error) bool {
+ 		accept := acceptable(err)
+ 		if !accept && err != nil {
+diff --git a/core/breaker/breakers.go b/core/breaker/breakers.go
+index be55d55a2b2cc619c4bd7f997f4d30f49f96c4b1..1df42d3e678f7ee213d57b0e313ba6ffbcc5e2e1 100644
+--- a/core/breaker/breakers.go
++++ b/core/breaker/breakers.go
+@@ -22,14 +22,14 @@ func DoWithAcceptable(name string, req func() error, acceptable Acceptable) erro
+ }
+ 
+ // DoWithFallback calls Breaker.DoWithFallback on the Breaker with given name.
+-func DoWithFallback(name string, req func() error, fallback func(err error) error) error {
++func DoWithFallback(name string, req func() error, fallback Fallback) error {
+ 	return do(name, func(b Breaker) error {
+ 		return b.DoWithFallback(req, fallback)
+ 	})
+ }
+ 
+ // DoWithFallbackAcceptable calls Breaker.DoWithFallbackAcceptable on the Breaker with given name.
+-func DoWithFallbackAcceptable(name string, req func() error, fallback func(err error) error,
++func DoWithFallbackAcceptable(name string, req func() error, fallback Fallback,
+ 	acceptable Acceptable) error {
+ 	return do(name, func(b Breaker) error {
+ 		return b.DoWithFallbackAcceptable(req, fallback, acceptable)
+@@ -59,7 +59,7 @@ func GetBreaker(name string) Breaker {
+ // NoBreakerFor disables the circuit breaker for the given name.
+ func NoBreakerFor(name string) {
+ 	lock.Lock()
+-	breakers[name] = newNopBreaker()
++	breakers[name] = NopBreaker()
+ 	lock.Unlock()
+ }
+ 
+diff --git a/core/breaker/googlebreaker.go b/core/breaker/googlebreaker.go
+index a8432e30faccdfa4eee8c2bd1ab3be04a566dc26..f58566b0376b2a77fca4507a3368cba51537a64f 100644
+--- a/core/breaker/googlebreaker.go
++++ b/core/breaker/googlebreaker.go
+@@ -1,7 +1,6 @@
+ package breaker
+ 
+ import (
+-	"math"
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/collection"
+@@ -38,7 +37,8 @@ func (b *googleBreaker) accept() error {
+ 	accepts, total := b.history()
+ 	weightedAccepts := b.k * float64(accepts)
+ 	// https://landing.google.com/sre/sre-book/chapters/handling-overload/#eq2101
+-	dropRatio := math.Max(0, (float64(total-protection)-weightedAccepts)/float64(total+1))
++	// for better performance, no need to care about negative ratio
++	dropRatio := (float64(total-protection) - weightedAccepts) / float64(total+1)
+ 	if dropRatio <= 0 {
+ 		return nil
+ 	}
+@@ -60,8 +60,9 @@ func (b *googleBreaker) allow() (internalPromise, error) {
+ 	}, nil
+ }
+ 
+-func (b *googleBreaker) doReq(req func() error, fallback func(err error) error, acceptable Acceptable) error {
++func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
+ 	if err := b.accept(); err != nil {
++		b.markFailure()
+ 		if fallback != nil {
+ 			return fallback(err)
+ 		}
+@@ -69,18 +70,19 @@ func (b *googleBreaker) doReq(req func() error, fallback func(err error) error,
+ 		return err
+ 	}
+ 
++	var success bool
+ 	defer func() {
+-		if e := recover(); e != nil {
++		// if req() panic, success is false, mark as failure
++		if success {
++			b.markSuccess()
++		} else {
+ 			b.markFailure()
+-			panic(e)
+ 		}
+ 	}()
+ 
+ 	err := req()
+ 	if acceptable(err) {
+-		b.markSuccess()
+-	} else {
+-		b.markFailure()
++		success = true
+ 	}
+ 
+ 	return err
+diff --git a/core/breaker/nopbreaker.go b/core/breaker/nopbreaker.go
+index a1b2e7ccb95b985dadb765c0e038f521b99c6023..baa09801e8542a011a55d4a4805cdd2ca96202cd 100644
+--- a/core/breaker/nopbreaker.go
++++ b/core/breaker/nopbreaker.go
+@@ -4,7 +4,8 @@ const nopBreakerName = "nopBreaker"
+ 
+ type nopBreaker struct{}
+ 
+-func newNopBreaker() Breaker {
++// NopBreaker returns a breaker that never trigger breaker circuit.
++func NopBreaker() Breaker {
+ 	return nopBreaker{}
+ }
+ 
+@@ -24,12 +25,11 @@ func (b nopBreaker) DoWithAcceptable(req func() error, _ Acceptable) error {
+ 	return req()
+ }
+ 
+-func (b nopBreaker) DoWithFallback(req func() error, _ func(err error) error) error {
++func (b nopBreaker) DoWithFallback(req func() error, _ Fallback) error {
+ 	return req()
+ }
+ 
+-func (b nopBreaker) DoWithFallbackAcceptable(req func() error, _ func(err error) error,
+-	_ Acceptable) error {
++func (b nopBreaker) DoWithFallbackAcceptable(req func() error, _ Fallback, _ Acceptable) error {
+ 	return req()
+ }
+ 
+diff --git a/core/codec/dh.go b/core/codec/dh.go
+index 49d839b43e62a16602e793adea8f01f94ca55568..63dd2d9c9434429808ddd63422161ff26867c198 100644
+--- a/core/codec/dh.go
++++ b/core/codec/dh.go
+@@ -23,7 +23,7 @@ var (
+ 	zero = big.NewInt(0)
+ )
+ 
+-// DhKey defines the Diffie Hellman key.
++// DhKey defines the Diffie-Hellman key.
+ type DhKey struct {
+ 	PriKey *big.Int
+ 	PubKey *big.Int
+@@ -46,7 +46,7 @@ func ComputeKey(pubKey, priKey *big.Int) (*big.Int, error) {
+ 	return new(big.Int).Exp(pubKey, priKey, p), nil
+ }
+ 
+-// GenerateKey returns a Diffie Hellman key.
++// GenerateKey returns a Diffie-Hellman key.
+ func GenerateKey() (*DhKey, error) {
+ 	var err error
+ 	var x *big.Int
+diff --git a/core/collection/cache.go b/core/collection/cache.go
+index ace21ece60d33dcd4ca4e0fcab026a1599e311ae..56b31811bf5ce04fe9eb0a86a0d205bac6598922 100644
+--- a/core/collection/cache.go
++++ b/core/collection/cache.go
+@@ -128,8 +128,8 @@ func (c *Cache) Take(key string, fetch func() (any, error)) (any, error) {
+ 
+ 	var fresh bool
+ 	val, err := c.barrier.Do(key, func() (any, error) {
+-		// because O(1) on map search in memory, and fetch is an IO query
+-		// so we do double check, cache might be taken by another call
++		// because O(1) on map search in memory, and fetch is an IO query,
++		// so we do double-check, cache might be taken by another call
+ 		if val, ok := c.doGet(key); ok {
+ 			return val, nil
+ 		}
+diff --git a/core/collection/ring.go b/core/collection/ring.go
+index 8218d60dcb20b93b1f38365a7e818f1848753db7..c7ad4fcba787308387fb34f6d79904ada224e6ac 100644
+--- a/core/collection/ring.go
++++ b/core/collection/ring.go
+@@ -25,8 +25,14 @@ func (r *Ring) Add(v any) {
+ 	r.lock.Lock()
+ 	defer r.lock.Unlock()
+ 
+-	r.elements[r.index%len(r.elements)] = v
++	rlen := len(r.elements)
++	r.elements[r.index%rlen] = v
+ 	r.index++
++
++	// prevent ring index overflow
++	if r.index >= rlen<<1 {
++		r.index -= rlen
++	}
+ }
+ 
+ // Take takes all items from r.
+@@ -36,16 +42,18 @@ func (r *Ring) Take() []any {
+ 
+ 	var size int
+ 	var start int
+-	if r.index > len(r.elements) {
+-		size = len(r.elements)
+-		start = r.index % len(r.elements)
++	rlen := len(r.elements)
++
++	if r.index > rlen {
++		size = rlen
++		start = r.index % rlen
+ 	} else {
+ 		size = r.index
+ 	}
+ 
+ 	elements := make([]any, size)
+ 	for i := 0; i < size; i++ {
+-		elements[i] = r.elements[(start+i)%len(r.elements)]
++		elements[i] = r.elements[(start+i)%rlen]
+ 	}
+ 
+ 	return elements
+diff --git a/core/conf/config.go b/core/conf/config.go
+index 64796ef78b16ddd2224a9ea3aedb776368b9605e..d3795c0a494b6a713677768475ad87bc109f72df 100644
+--- a/core/conf/config.go
++++ b/core/conf/config.go
+@@ -133,7 +133,7 @@ func addOrMergeFields(info *fieldInfo, key string, child *fieldInfo, fullName st
+ 			return newConflictKeyError(fullName)
+ 		}
+ 
+-		if err := mergeFields(prev, key, child.children, fullName); err != nil {
++		if err := mergeFields(prev, child.children, fullName); err != nil {
+ 			return err
+ 		}
+ 	} else {
+@@ -281,7 +281,7 @@ func getTagName(field reflect.StructField) string {
+ 	return field.Name
+ }
+ 
+-func mergeFields(prev *fieldInfo, key string, children map[string]*fieldInfo, fullName string) error {
++func mergeFields(prev *fieldInfo, children map[string]*fieldInfo, fullName string) error {
+ 	if len(prev.children) == 0 || len(children) == 0 {
+ 		return newConflictKeyError(fullName)
+ 	}
+diff --git a/core/conf/readme.md b/core/conf/readme.md
+index 7bd5854062a6dc60e19c87a117b39308dc7301c5..c34a3b6718bd411e577f893b945f086c68d78cdf 100644
+--- a/core/conf/readme.md
++++ b/core/conf/readme.md
+@@ -12,7 +12,7 @@ type RestfulConf struct {
+ 	MaxConns     int           `json:",default=10000"`
+ 	MaxBytes     int64         `json:",default=1048576"`
+ 	Timeout      time.Duration `json:",default=3s"`
+-	CpuThreshold int64         `json:",default=900,range=[0:1000]"`
++	CpuThreshold int64         `json:",default=900,range=[0:1000)"`
+ }
+ ```
+ 
+diff --git a/core/discov/internal/registry.go b/core/discov/internal/registry.go
+index 97dd97aa8113d2a854ce3d2929253d84adf11589..462906fcc8f1cf60a0a2f1c1598adfafb0c403f7 100644
+--- a/core/discov/internal/registry.go
++++ b/core/discov/internal/registry.go
+@@ -2,6 +2,7 @@ package internal
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"io"
+ 	"sort"
+@@ -14,6 +15,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
++	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+ 	clientv3 "go.etcd.io/etcd/client/v3"
+ )
+ 
+@@ -22,6 +24,7 @@ var (
+ 		clusters: make(map[string]*cluster),
+ 	}
+ 	connManager = syncx.NewResourceManager()
++	errClosed   = errors.New("etcd monitor chan has been closed")
+ )
+ 
+ // A Registry is a registry that manages the etcd client connections.
+@@ -219,7 +222,7 @@ func (c *cluster) load(cli EtcdClient, key string) int64 {
+ 			break
+ 		}
+ 
+-		logx.Error(err)
++		logx.Errorf("%s, key is %s", err.Error(), key)
+ 		time.Sleep(coolDownInterval)
+ 	}
+ 
+@@ -288,40 +291,47 @@ func (c *cluster) reload(cli EtcdClient) {
+ 
+ func (c *cluster) watch(cli EtcdClient, key string, rev int64) {
+ 	for {
+-		if c.watchStream(cli, key, rev) {
++		err := c.watchStream(cli, key, rev)
++		if err == nil {
+ 			return
+ 		}
++
++		if rev != 0 && errors.Is(err, rpctypes.ErrCompacted) {
++			logx.Errorf("etcd watch stream has been compacted, try to reload, rev %d", rev)
++			rev = c.load(cli, key)
++		}
++
++		// log the error and retry
++		logx.Error(err)
+ 	}
+ }
+ 
+-func (c *cluster) watchStream(cli EtcdClient, key string, rev int64) bool {
++func (c *cluster) watchStream(cli EtcdClient, key string, rev int64) error {
+ 	var rch clientv3.WatchChan
+ 	if rev != 0 {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix(),
+-			clientv3.WithRev(rev+1))
++		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key),
++			clientv3.WithPrefix(), clientv3.WithRev(rev+1))
+ 	} else {
+-		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key), clientv3.WithPrefix())
++		rch = cli.Watch(clientv3.WithRequireLeader(c.context(cli)), makeKeyPrefix(key),
++			clientv3.WithPrefix())
+ 	}
+ 
+ 	for {
+ 		select {
+ 		case wresp, ok := <-rch:
+ 			if !ok {
+-				logx.Error("etcd monitor chan has been closed")
+-				return false
++				return errClosed
+ 			}
+ 			if wresp.Canceled {
+-				logx.Errorf("etcd monitor chan has been canceled, error: %v", wresp.Err())
+-				return false
++				return fmt.Errorf("etcd monitor chan has been canceled, error: %w", wresp.Err())
+ 			}
+ 			if wresp.Err() != nil {
+-				logx.Error(fmt.Sprintf("etcd monitor chan error: %v", wresp.Err()))
+-				return false
++				return fmt.Errorf("etcd monitor chan error: %w", wresp.Err())
+ 			}
+ 
+ 			c.handleWatchEvents(key, wresp.Events)
+ 		case <-c.done:
+-			return true
++			return nil
+ 		}
+ 	}
+ }
+diff --git a/core/errorx/batcherror.go b/core/errorx/batcherror.go
+index 92ae644d41d10da34cd297796ac82e56d7eb5c43..e0fcbb2729c3fdbaa88a845eb2ff79a4e66fc994 100644
+--- a/core/errorx/batcherror.go
++++ b/core/errorx/batcherror.go
+@@ -1,11 +1,15 @@
+ package errorx
+ 
+-import "bytes"
++import (
++	"bytes"
++	"sync"
++)
+ 
+ type (
+ 	// A BatchError is an error that can hold multiple errors.
+ 	BatchError struct {
+ 		errs errorArray
++		lock sync.Mutex
+ 	}
+ 
+ 	errorArray []error
+@@ -13,6 +17,9 @@ type (
+ 
+ // Add adds errs to be, nil errors are ignored.
+ func (be *BatchError) Add(errs ...error) {
++	be.lock.Lock()
++	defer be.lock.Unlock()
++
+ 	for _, err := range errs {
+ 		if err != nil {
+ 			be.errs = append(be.errs, err)
+@@ -22,6 +29,9 @@ func (be *BatchError) Add(errs ...error) {
+ 
+ // Err returns an error that represents all errors.
+ func (be *BatchError) Err() error {
++	be.lock.Lock()
++	defer be.lock.Unlock()
++
+ 	switch len(be.errs) {
+ 	case 0:
+ 		return nil
+@@ -34,6 +44,9 @@ func (be *BatchError) Err() error {
+ 
+ // NotNil checks if any error inside.
+ func (be *BatchError) NotNil() bool {
++	be.lock.Lock()
++	defer be.lock.Unlock()
++
+ 	return len(be.errs) > 0
+ }
+ 
+diff --git a/core/filex/progressscanner.go b/core/filex/progressscanner.go
+index 11f3c1a543c4803730c3e6f026468c86c08a055e..e4f187f6f67a9416332d63d8b31e4c42feaf682e 100644
+--- a/core/filex/progressscanner.go
++++ b/core/filex/progressscanner.go
+@@ -5,7 +5,7 @@ import "gopkg.in/cheggaaa/pb.v1"
+ type (
+ 	// A Scanner is used to read lines.
+ 	Scanner interface {
+-		// Scan checks if has remaining to read.
++		// Scan checks if it has remaining to read.
+ 		Scan() bool
+ 		// Text returns next line.
+ 		Text() string
+diff --git a/core/fx/retry.go b/core/fx/retry.go
+index e79c900224fc13d6b294f91ccb3804aaabd160b3..836564c7a3759e664630669d7c11dd6a002f3c72 100644
+--- a/core/fx/retry.go
++++ b/core/fx/retry.go
+@@ -2,6 +2,7 @@ package fx
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/errorx"
+@@ -14,9 +15,10 @@ type (
+ 	RetryOption func(*retryOptions)
+ 
+ 	retryOptions struct {
+-		times    int
+-		interval time.Duration
+-		timeout  time.Duration
++		times        int
++		interval     time.Duration
++		timeout      time.Duration
++		ignoreErrors []error
+ 	}
+ )
+ 
+@@ -62,6 +64,11 @@ func retry(ctx context.Context, fn func(errChan chan error, retryCount int), opt
+ 		select {
+ 		case err := <-errChan:
+ 			if err != nil {
++				for _, ignoreErr := range options.ignoreErrors {
++					if errors.Is(err, ignoreErr) {
++						return nil
++					}
++				}
+ 				berr.Add(err)
+ 			} else {
+ 				return nil
+@@ -84,19 +91,28 @@ func retry(ctx context.Context, fn func(errChan chan error, retryCount int), opt
+ 	return berr.Err()
+ }
+ 
+-// WithRetry customize a DoWithRetry call with given retry times.
+-func WithRetry(times int) RetryOption {
++// WithIgnoreErrors Ignore the specified errors
++func WithIgnoreErrors(ignoreErrors []error) RetryOption {
+ 	return func(options *retryOptions) {
+-		options.times = times
++		options.ignoreErrors = ignoreErrors
+ 	}
+ }
+ 
++// WithInterval customizes a DoWithRetry call with given interval.
+ func WithInterval(interval time.Duration) RetryOption {
+ 	return func(options *retryOptions) {
+ 		options.interval = interval
+ 	}
+ }
+ 
++// WithRetry customizes a DoWithRetry call with given retry times.
++func WithRetry(times int) RetryOption {
++	return func(options *retryOptions) {
++		options.times = times
++	}
++}
++
++// WithTimeout customizes a DoWithRetry call with given timeout.
+ func WithTimeout(timeout time.Duration) RetryOption {
+ 	return func(options *retryOptions) {
+ 		options.timeout = timeout
+diff --git a/core/fx/stream.go b/core/fx/stream.go
+index cebb11e3673173e1250c794978f1d87474fbf8fa..e0c3cd28126450bb735ec0ba47ca755461e5bf2d 100644
+--- a/core/fx/stream.go
++++ b/core/fx/stream.go
+@@ -352,7 +352,7 @@ func (s Stream) Parallel(fn ParallelFunc, opts ...Option) {
+ 	}, opts...).Done()
+ }
+ 
+-// Reduce is an utility method to let the caller deal with the underlying channel.
++// Reduce is a utility method to let the caller deal with the underlying channel.
+ func (s Stream) Reduce(fn ReduceFunc) (any, error) {
+ 	return fn(s.source)
+ }
+diff --git a/core/iox/pipe.go b/core/iox/pipe.go
+index be36479ce266fabe516b486239953269479fc7ce..044de38042875910a234d3fccf94158fd23ed1b9 100644
+--- a/core/iox/pipe.go
++++ b/core/iox/pipe.go
+@@ -2,7 +2,7 @@ package iox
+ 
+ import "os"
+ 
+-// RedirectInOut redirects stdin to r, stdout to w, and callers need to call restore afterwards.
++// RedirectInOut redirects stdin to r, stdout to w, and callers need to call restore afterward.
+ func RedirectInOut() (restore func(), err error) {
+ 	var r, w *os.File
+ 	r, w, err = os.Pipe()
+diff --git a/core/iox/textfile.go b/core/iox/textfile.go
+index 89083cea684acabd28fd271a96bd34eb9820cb42..963097167637b6079ef481e11d9216081880e857 100644
+--- a/core/iox/textfile.go
++++ b/core/iox/textfile.go
+@@ -9,7 +9,7 @@ import (
+ 
+ const bufSize = 32 * 1024
+ 
+-// CountLines returns the number of lines in file.
++// CountLines returns the number of lines in the file.
+ func CountLines(file string) (int, error) {
+ 	f, err := os.Open(file)
+ 	if err != nil {
+diff --git a/core/iox/textlinescanner.go b/core/iox/textlinescanner.go
+index 0a9f6687e105dbc9fbf91c8e1491500be88f5f0b..9f20498f1091e8557db0789cc4c223dc1b7dca05 100644
+--- a/core/iox/textlinescanner.go
++++ b/core/iox/textlinescanner.go
+@@ -7,7 +7,7 @@ import (
+ 	"strings"
+ )
+ 
+-// A TextLineScanner is a scanner that can scan lines from given reader.
++// A TextLineScanner is a scanner that can scan lines from the given reader.
+ type TextLineScanner struct {
+ 	reader  *bufio.Reader
+ 	hasNext bool
+@@ -15,7 +15,7 @@ type TextLineScanner struct {
+ 	err     error
+ }
+ 
+-// NewTextLineScanner returns a TextLineScanner with given reader.
++// NewTextLineScanner returns a TextLineScanner with the given reader.
+ func NewTextLineScanner(reader io.Reader) *TextLineScanner {
+ 	return &TextLineScanner{
+ 		reader:  bufio.NewReader(reader),
+diff --git a/core/limit/tokenlimit.go b/core/limit/tokenlimit.go
+index fe576dd9d0fa08eaaf6f39c1e32a01717638d301..e33b4b951c6de1e7e01ae4be86c95fe4a628baaf 100644
+--- a/core/limit/tokenlimit.go
++++ b/core/limit/tokenlimit.go
+@@ -125,7 +125,7 @@ func (lim *TokenLimiter) reserveN(ctx context.Context, now time.Time, n int) boo
+ 		})
+ 	// redis allowed == false
+ 	// Lua boolean false -> r Nil bulk reply
+-	if err == redis.Nil {
++	if errors.Is(err, redis.Nil) {
+ 		return false
+ 	}
+ 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+diff --git a/core/load/adaptiveshedder.go b/core/load/adaptiveshedder.go
+index f925ec4d2adfcae862a3ff5172d4a727eeaa0b85..2afc43a2225ea2640ba6e75c0a8730e2c19a8ccf 100644
+--- a/core/load/adaptiveshedder.go
++++ b/core/load/adaptiveshedder.go
+@@ -9,6 +9,7 @@ import (
+ 
+ 	"github.com/zeromicro/go-zero/core/collection"
+ 	"github.com/zeromicro/go-zero/core/logx"
++	"github.com/zeromicro/go-zero/core/mathx"
+ 	"github.com/zeromicro/go-zero/core/stat"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -21,8 +22,11 @@ const (
+ 	defaultCpuThreshold = 900
+ 	defaultMinRt        = float64(time.Second / time.Millisecond)
+ 	// moving average hyperparameter beta for calculating requests on the fly
+-	flyingBeta      = 0.9
+-	coolOffDuration = time.Second
++	flyingBeta               = 0.9
++	coolOffDuration          = time.Second
++	cpuMax                   = 1000 // millicpu
++	millisecondsPerSecond    = 1000
++	overloadFactorLowerBound = 0.1
+ )
+ 
+ var (
+@@ -66,7 +70,7 @@ type (
+ 
+ 	adaptiveShedder struct {
+ 		cpuThreshold    int64
+-		windows         int64
++		windowScale     float64
+ 		flying          int64
+ 		avgFlying       float64
+ 		avgFlyingLock   syncx.SpinLock
+@@ -105,7 +109,7 @@ func NewAdaptiveShedder(opts ...ShedderOption) Shedder {
+ 	bucketDuration := options.window / time.Duration(options.buckets)
+ 	return &adaptiveShedder{
+ 		cpuThreshold:    options.cpuThreshold,
+-		windows:         int64(time.Second / bucketDuration),
++		windowScale:     float64(time.Second) / float64(bucketDuration) / millisecondsPerSecond,
+ 		overloadTime:    syncx.NewAtomicDuration(),
+ 		droppedRecently: syncx.NewAtomicBool(),
+ 		passCounter: collection.NewRollingWindow(options.buckets, bucketDuration,
+@@ -134,10 +138,10 @@ func (as *adaptiveShedder) Allow() (Promise, error) {
+ func (as *adaptiveShedder) addFlying(delta int64) {
+ 	flying := atomic.AddInt64(&as.flying, delta)
+ 	// update avgFlying when the request is finished.
+-	// this strategy makes avgFlying have a little bit lag against flying, and smoother.
++	// this strategy makes avgFlying have a little bit of lag against flying, and smoother.
+ 	// when the flying requests increase rapidly, avgFlying increase slower, accept more requests.
+-	// when the flying requests drop rapidly, avgFlying drop slower, accept less requests.
+-	// it makes the service to serve as more requests as possible.
++	// when the flying requests drop rapidly, avgFlying drop slower, accept fewer requests.
++	// it makes the service to serve as many requests as possible.
+ 	if delta < 0 {
+ 		as.avgFlyingLock.Lock()
+ 		as.avgFlying = as.avgFlying*flyingBeta + float64(flying)*(1-flyingBeta)
+@@ -149,16 +153,17 @@ func (as *adaptiveShedder) highThru() bool {
+ 	as.avgFlyingLock.Lock()
+ 	avgFlying := as.avgFlying
+ 	as.avgFlyingLock.Unlock()
+-	maxFlight := as.maxFlight()
+-	return int64(avgFlying) > maxFlight && atomic.LoadInt64(&as.flying) > maxFlight
++	maxFlight := as.maxFlight() * as.overloadFactor()
++	return avgFlying > maxFlight && float64(atomic.LoadInt64(&as.flying)) > maxFlight
+ }
+ 
+-func (as *adaptiveShedder) maxFlight() int64 {
++func (as *adaptiveShedder) maxFlight() float64 {
+ 	// windows = buckets per second
+ 	// maxQPS = maxPASS * windows
+ 	// minRT = min average response time in milliseconds
+-	// maxQPS * minRT / milliseconds_per_second
+-	return int64(math.Max(1, float64(as.maxPass()*as.windows)*(as.minRt()/1e3)))
++	// allowedFlying = maxQPS * minRT / milliseconds_per_second
++	maxFlight := float64(as.maxPass()) * as.minRt() * as.windowScale
++	return mathx.AtLeast(maxFlight, 1)
+ }
+ 
+ func (as *adaptiveShedder) maxPass() int64 {
+@@ -174,6 +179,8 @@ func (as *adaptiveShedder) maxPass() int64 {
+ }
+ 
+ func (as *adaptiveShedder) minRt() float64 {
++	// if no requests in previous windows, return defaultMinRt,
++	// its a reasonable large value to avoid dropping requests.
+ 	result := defaultMinRt
+ 
+ 	as.rtCounter.Reduce(func(b *collection.Bucket) {
+@@ -190,6 +197,13 @@ func (as *adaptiveShedder) minRt() float64 {
+ 	return result
+ }
+ 
++func (as *adaptiveShedder) overloadFactor() float64 {
++	// as.cpuThreshold must be less than cpuMax
++	factor := (cpuMax - float64(stat.CpuUsage())) / (cpuMax - float64(as.cpuThreshold))
++	// at least accept 10% of acceptable requests, even cpu is highly overloaded.
++	return mathx.Between(factor, overloadFactorLowerBound, 1)
++}
++
+ func (as *adaptiveShedder) shouldDrop() bool {
+ 	if as.systemOverloaded() || as.stillHot() {
+ 		if as.highThru() {
+@@ -236,14 +250,14 @@ func (as *adaptiveShedder) systemOverloaded() bool {
+ 	return true
+ }
+ 
+-// WithBuckets customizes the Shedder with given number of buckets.
++// WithBuckets customizes the Shedder with the given number of buckets.
+ func WithBuckets(buckets int) ShedderOption {
+ 	return func(opts *shedderOptions) {
+ 		opts.buckets = buckets
+ 	}
+ }
+ 
+-// WithCpuThreshold customizes the Shedder with given cpu threshold.
++// WithCpuThreshold customizes the Shedder with the given cpu threshold.
+ func WithCpuThreshold(threshold int64) ShedderOption {
+ 	return func(opts *shedderOptions) {
+ 		opts.cpuThreshold = threshold
+diff --git a/core/load/sheddergroup.go b/core/load/sheddergroup.go
+index c3d624026c3e1fcdcf1bdd704f37ae60204c3fd5..8cc742f5ed3f4f0025a1335c16723471bdd217d8 100644
+--- a/core/load/sheddergroup.go
++++ b/core/load/sheddergroup.go
+@@ -6,7 +6,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ )
+ 
+-// A ShedderGroup is a manager to manage key based shedders.
++// A ShedderGroup is a manager to manage key-based shedders.
+ type ShedderGroup struct {
+ 	options []ShedderOption
+ 	manager *syncx.ResourceManager
+diff --git a/core/logc/logs.go b/core/logc/logs.go
+index 7123354554fe6972b6e8b8be12f3ad43c6685121..b8343fa26ce8887d34e2c5dcb5ab6e668ffa6fb8 100644
+--- a/core/logc/logs.go
++++ b/core/logc/logs.go
+@@ -42,7 +42,7 @@ func Debugv(ctx context.Context, v interface{}) {
+ 	getLogger(ctx).Debugv(v)
+ }
+ 
+-// Debugw writes msg along with fields into access log.
++// Debugw writes msg along with fields into the access log.
+ func Debugw(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Debugw(msg, fields...)
+ }
+@@ -63,7 +63,7 @@ func Errorv(ctx context.Context, v any) {
+ 	getLogger(ctx).Errorv(v)
+ }
+ 
+-// Errorw writes msg along with fields into error log.
++// Errorw writes msg along with fields into the error log.
+ func Errorw(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Errorw(msg, fields...)
+ }
+@@ -88,7 +88,7 @@ func Infov(ctx context.Context, v any) {
+ 	getLogger(ctx).Infov(v)
+ }
+ 
+-// Infow writes msg along with fields into access log.
++// Infow writes msg along with fields into the access log.
+ func Infow(ctx context.Context, msg string, fields ...LogField) {
+ 	getLogger(ctx).Infow(msg, fields...)
+ }
+@@ -108,10 +108,11 @@ func SetLevel(level uint32) {
+ 	logx.SetLevel(level)
+ }
+ 
+-// SetUp sets up the logx. If already set up, just return nil.
+-// we allow SetUp to be called multiple times, because for example
++// SetUp sets up the logx.
++// If already set up, return nil.
++// We allow SetUp to be called multiple times, because, for example,
+ // we need to allow different service frameworks to initialize logx respectively.
+-// the same logic for SetUp
++// The same logic for SetUp
+ func SetUp(c LogConf) error {
+ 	return logx.SetUp(c)
+ }
+diff --git a/core/logx/lesslogger.go b/core/logx/lesslogger.go
+index 35ca20516cae7cc790cc6c65aa11c414b3309bb6..04113929b97014bb8a809bf826c08cab845540e8 100644
+--- a/core/logx/lesslogger.go
++++ b/core/logx/lesslogger.go
+@@ -1,6 +1,6 @@
+ package logx
+ 
+-// A LessLogger is a logger that control to log once during the given duration.
++// A LessLogger is a logger that controls to log once during the given duration.
+ type LessLogger struct {
+ 	*limitedExecutor
+ }
+diff --git a/core/logx/logs.go b/core/logx/logs.go
+index 817cb557b132795468511c4292dff0296b50cb3d..780093ebd104100481097337663b7d7da66d12dd 100644
+--- a/core/logx/logs.go
++++ b/core/logx/logs.go
+@@ -17,14 +17,13 @@ import (
+ const callerDepth = 4
+ 
+ var (
+-	timeFormat = "2006-01-02T15:04:05.000Z07:00"
+-	logLevel   uint32
++	timeFormat        = "2006-01-02T15:04:05.000Z07:00"
+ 	encoding   uint32 = jsonEncodingType
+ 	// maxContentLength is used to truncate the log content, 0 for not truncating.
+ 	maxContentLength uint32
+ 	// use uint32 for atomic operations
+-	disableLog  uint32
+ 	disableStat uint32
++	logLevel    uint32
+ 	options     logOptions
+ 	writer      = new(atomicWriter)
+ 	setupOnce   sync.Once
+@@ -87,7 +86,7 @@ func Debugv(v any) {
+ 	}
+ }
+ 
+-// Debugw writes msg along with fields into access log.
++// Debugw writes msg along with fields into the access log.
+ func Debugw(msg string, fields ...LogField) {
+ 	if shallLog(DebugLevel) {
+ 		writeDebug(msg, fields...)
+@@ -96,7 +95,7 @@ func Debugw(msg string, fields ...LogField) {
+ 
+ // Disable disables the logging.
+ func Disable() {
+-	atomic.StoreUint32(&disableLog, 1)
++	atomic.StoreUint32(&logLevel, disableLevel)
+ 	writer.Store(nopWriter{})
+ }
+ 
+@@ -143,7 +142,7 @@ func Errorv(v any) {
+ 	}
+ }
+ 
+-// Errorw writes msg along with fields into error log.
++// Errorw writes msg along with fields into the error log.
+ func Errorw(msg string, fields ...LogField) {
+ 	if shallLog(ErrorLevel) {
+ 		writeError(msg, fields...)
+@@ -209,7 +208,7 @@ func Infov(v any) {
+ 	}
+ }
+ 
+-// Infow writes msg along with fields into access log.
++// Infow writes msg along with fields into the access log.
+ func Infow(msg string, fields ...LogField) {
+ 	if shallLog(InfoLevel) {
+ 		writeInfo(msg, fields...)
+@@ -250,16 +249,17 @@ func SetLevel(level uint32) {
+ 
+ // SetWriter sets the logging writer. It can be used to customize the logging.
+ func SetWriter(w Writer) {
+-	if atomic.LoadUint32(&disableLog) == 0 {
++	if atomic.LoadUint32(&logLevel) != disableLevel {
+ 		writer.Store(w)
+ 	}
+ }
+ 
+-// SetUp sets up the logx. If already set up, just return nil.
+-// we allow SetUp to be called multiple times, because for example
++// SetUp sets up the logx.
++// If already set up, return nil.
++// We allow SetUp to be called multiple times, because, for example,
+ // we need to allow different service frameworks to initialize logx respectively.
+ func SetUp(c LogConf) (err error) {
+-	// Just ignore the subsequent SetUp calls.
++	// Ignore the later SetUp calls.
+ 	// Because multiple services in one process might call SetUp respectively.
+ 	// Need to wait for the first caller to complete the execution.
+ 	setupOnce.Do(func() {
+@@ -481,7 +481,7 @@ func writeDebug(val any, fields ...LogField) {
+ 	getWriter().Debug(val, addCaller(fields...)...)
+ }
+ 
+-// writeError writes v into error log.
++// writeError writes v into the error log.
+ // Not checking shallLog here is for performance consideration.
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+@@ -521,7 +521,7 @@ func writeStack(msg string) {
+ 	getWriter().Stack(fmt.Sprintf("%s\n%s", msg, string(debug.Stack())))
+ }
+ 
+-// writeStat writes v into stat log.
++// writeStat writes v into the stat log.
+ // Not checking shallLog here is for performance consideration.
+ // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
+ // The caller should check shallLog before calling this function.
+diff --git a/core/logx/rotatelogger.go b/core/logx/rotatelogger.go
+index 4b7f31e764fc15640c830a1004f36db3d4fa6fc9..61f9a9d03f795cf6005108cae5eb3ca1c8d1cf1c 100644
+--- a/core/logx/rotatelogger.go
++++ b/core/logx/rotatelogger.go
+@@ -319,7 +319,7 @@ func (l *RotateLogger) maybeCompressFile(file string) {
+ 	}()
+ 
+ 	if _, err := os.Stat(file); err != nil {
+-		// file not exists or other error, ignore compression
++		// file doesn't exist or another error, ignore compression
+ 		return
+ 	}
+ 
+diff --git a/core/logx/vars.go b/core/logx/vars.go
+index 59688e875d4e7144bbbe04495497ac969c94739b..90ef3628e800601114db40744279c71d889a6428 100644
+--- a/core/logx/vars.go
++++ b/core/logx/vars.go
+@@ -15,6 +15,8 @@ const (
+ 	ErrorLevel
+ 	// SevereLevel only log severe messages
+ 	SevereLevel
++	// disableLevel doesn't log any messages
++	disableLevel = 0xff
+ )
+ 
+ const (
+diff --git a/core/mapping/marshaler.go b/core/mapping/marshaler.go
+index c54ae7476c90c3d1fc3b32e5a8142717cfb84935..fbe31a923a6cb3f3f38cd6ed0a76cafc0c85f424 100644
+--- a/core/mapping/marshaler.go
++++ b/core/mapping/marshaler.go
+@@ -12,7 +12,7 @@ const (
+ )
+ 
+ // Marshal marshals the given val and returns the map that contains the fields.
+-// optional=another is not implemented, and it's hard to implement and not common used.
++// optional=another is not implemented, and it's hard to implement and not commonly used.
+ func Marshal(val any) (map[string]map[string]any, error) {
+ 	ret := make(map[string]map[string]any)
+ 	tp := reflect.TypeOf(val)
+diff --git a/core/mapping/unmarshaler.go b/core/mapping/unmarshaler.go
+index 15215693b62a24f7fb0c659dd50c2a4f806f3128..12cbe46bd22dd715bcc90292bda28aa9d922a2f8 100644
+--- a/core/mapping/unmarshaler.go
++++ b/core/mapping/unmarshaler.go
+@@ -5,7 +5,6 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+-	"math"
+ 	"reflect"
+ 	"strconv"
+ 	"strings"
+@@ -40,7 +39,7 @@ var (
+ )
+ 
+ type (
+-	// Unmarshaler is used to unmarshal with given tag key.
++	// Unmarshaler is used to unmarshal with the given tag key.
+ 	Unmarshaler struct {
+ 		key  string
+ 		opts unmarshalOptions
+@@ -70,7 +69,7 @@ func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
+ 	return &unmarshaler
+ }
+ 
+-// UnmarshalKey unmarshals m into v with tag key.
++// UnmarshalKey unmarshals m into v with the tag key.
+ func UnmarshalKey(m map[string]any, v any) error {
+ 	return keyUnmarshaler.Unmarshal(m, v)
+ }
+@@ -224,11 +223,11 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 	switch v := mapValue.(type) {
+ 	case fmt.Stringer:
+ 		if err := jsonx.UnmarshalFromString(v.String(), &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	case string:
+ 		if err := jsonx.UnmarshalFromString(v, &slice); err != nil {
+-			return err
++			return fmt.Errorf("fullName: `%s`, error: `%w`", fullName, err)
+ 		}
+ 	default:
+ 		return errUnsupportedType
+@@ -250,6 +249,10 @@ func (u *Unmarshaler) fillSliceFromString(fieldType reflect.Type, value reflect.
+ 
+ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int,
+ 	baseKind reflect.Kind, value any, fullName string) error {
++	if value == nil {
++		return errNilSliceElement
++	}
++
+ 	ithVal := slice.Index(index)
+ 	switch v := value.(type) {
+ 	case fmt.Stringer:
+@@ -425,6 +428,10 @@ func (u *Unmarshaler) parseOptionsWithContext(field reflect.StructField, m Value
+ 		}
+ 	}
+ 
++	if u.opts.fillDefault {
++		return key, &options.fieldOptionsWithContext, nil
++	}
++
+ 	optsWithContext, err := options.toOptionsWithContext(key, m, fullName)
+ 	if err != nil {
+ 		return "", nil, err
+@@ -622,7 +629,12 @@ func (u *Unmarshaler) processFieldPrimitiveWithJSONNumber(fieldType reflect.Type
+ 			return err
+ 		}
+ 
+-		if fValue > math.MaxFloat32 {
++		// if the value is a pointer, we need to check overflow with the pointer's value.
++		derefedValue := value
++		for derefedValue.Type().Kind() == reflect.Ptr {
++			derefedValue = derefedValue.Elem()
++		}
++		if derefedValue.CanFloat() && derefedValue.OverflowFloat(fValue) {
+ 			return fmt.Errorf("parsing %q as float32: value out of range", v.String())
+ 		}
+ 
+diff --git a/core/mapping/utils.go b/core/mapping/utils.go
+index 67ea0ae3393ef4e14c812949937de928504a72a0..f84167e3fa352f98053fe17ae9cfd58858de81b9 100644
+--- a/core/mapping/utils.go
++++ b/core/mapping/utils.go
+@@ -36,6 +36,7 @@ const (
+ var (
+ 	errUnsupportedType  = errors.New("unsupported type on setting field value")
+ 	errNumberRange      = errors.New("wrong number range setting")
++	errNilSliceElement  = errors.New("null element for slice")
+ 	optionsCache        = make(map[string]optionsCacheValue)
+ 	cacheLock           sync.RWMutex
+ 	structRequiredCache = make(map[reflect.Type]requiredCacheValue)
+@@ -415,7 +416,7 @@ func parseOption(fieldOpts *fieldOptions, fieldName, option string) error {
+ }
+ 
+ // parseOptions parses the given options in tag.
+-// for example: `json:"name,options=foo|bar"` or `json:"name,options=[foo,bar]"`
++// for example, `json:"name,options=foo|bar"` or `json:"name,options=[foo,bar]"`
+ func parseOptions(val string) []string {
+ 	if len(val) == 0 {
+ 		return nil
+diff --git a/core/mapping/valuer.go b/core/mapping/valuer.go
+index 206b1b137a8af00ff0bfddb38f917ca0b5e8951d..24f6f7f3744975673b50b826c224ecc4e921bb0c 100644
+--- a/core/mapping/valuer.go
++++ b/core/mapping/valuer.go
+@@ -26,9 +26,9 @@ type (
+ 		parent valuerWithParent
+ 	}
+ 
+-	// mapValuer is a type for map to meet the Valuer interface.
++	// mapValuer is a type for the map to meet the Valuer interface.
+ 	mapValuer map[string]any
+-	// simpleValuer is a type to get value from current node.
++	// simpleValuer is a type to get value from the current node.
+ 	simpleValuer node
+ 	// recursiveValuer is a type to get the value recursively from current and parent nodes.
+ 	recursiveValuer node
+diff --git a/core/mathx/range.go b/core/mathx/range.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..d74ac4dd6e32a1872c7932207c63832458f27d39
+--- /dev/null
++++ b/core/mathx/range.go
+@@ -0,0 +1,34 @@
++package mathx
++
++type numerical interface {
++	~int | ~int8 | ~int16 | ~int32 | ~int64 |
++		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
++		~float32 | ~float64
++}
++
++// AtLeast returns the greater of x or lower.
++func AtLeast[T numerical](x, lower T) T {
++	if x < lower {
++		return lower
++	}
++	return x
++}
++
++// AtMost returns the smaller of x or upper.
++func AtMost[T numerical](x, upper T) T {
++	if x > upper {
++		return upper
++	}
++	return x
++}
++
++// Between returns the value of x clamped to the range [lower, upper].
++func Between[T numerical](x, lower, upper T) T {
++	if x < lower {
++		return lower
++	}
++	if x > upper {
++		return upper
++	}
++	return x
++}
+diff --git a/core/proc/signals.go b/core/proc/signals.go
+index f4a57b0887498b6c59f5aacf80059e76302d78c0..b8996cbaa9fd4821595848f7173dcb4950b2de67 100644
+--- a/core/proc/signals.go
++++ b/core/proc/signals.go
+@@ -6,18 +6,20 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"syscall"
++	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/logx"
+ )
+ 
+-const timeFormat = "0102150405"
++const (
++	profileDuration = time.Minute
++	timeFormat      = "0102150405"
++)
+ 
+ var done = make(chan struct{})
+ 
+ func init() {
+ 	go func() {
+-		var profiler Stopper
+-
+ 		// https://golang.org/pkg/os/signal/#Notify
+ 		signals := make(chan os.Signal, 1)
+ 		signal.Notify(signals, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM, syscall.SIGINT)
+@@ -28,12 +30,8 @@ func init() {
+ 			case syscall.SIGUSR1:
+ 				dumpGoroutines(fileCreator{})
+ 			case syscall.SIGUSR2:
+-				if profiler == nil {
+-					profiler = StartProfile()
+-				} else {
+-					profiler.Stop()
+-					profiler = nil
+-				}
++				profiler := StartProfile()
++				time.AfterFunc(profileDuration, profiler.Stop)
+ 			case syscall.SIGTERM:
+ 				stopOnSignal()
+ 				gracefulStop(signals, syscall.SIGTERM)
+diff --git a/core/queue/queue.go b/core/queue/queue.go
+index 81aaaae4f882bb76208ef3e1d7c560393fb430f2..5a9fd5c9ba34620d4905a62171fc3a11631bd756 100644
+--- a/core/queue/queue.go
++++ b/core/queue/queue.go
+@@ -76,7 +76,7 @@ func (q *Queue) AddListener(listener Listener) {
+ 	q.listeners = append(q.listeners, listener)
+ }
+ 
+-// Broadcast broadcasts message to all event channels.
++// Broadcast broadcasts the message to all event channels.
+ func (q *Queue) Broadcast(message any) {
+ 	go func() {
+ 		q.eventLock.Lock()
+@@ -202,7 +202,7 @@ func (q *Queue) produce() {
+ }
+ 
+ func (q *Queue) produceOne(producer Producer) (string, bool) {
+-	// avoid panic quit the producer, just log it and continue
++	// avoid panic quit the producer, log it and continue
+ 	defer rescue.Recover()
+ 
+ 	return producer.Produce()
+diff --git a/core/service/servicegroup.go b/core/service/servicegroup.go
+index 27ec45ad0fa29cbd3edf1d7b01674f0ca7094564..031abb5d30402d6d89c990f38190d8911d942a52 100644
+--- a/core/service/servicegroup.go
++++ b/core/service/servicegroup.go
+@@ -1,8 +1,7 @@
+ package service
+ 
+ import (
+-	"log"
+-
++	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/proc"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/threading"
+@@ -51,7 +50,7 @@ func (sg *ServiceGroup) Add(service Service) {
+ // Also, quitting this method will close the logx output.
+ func (sg *ServiceGroup) Start() {
+ 	proc.AddShutdownListener(func() {
+-		log.Println("Shutting down...")
++		logx.Info("Shutting down services in group")
+ 		sg.stopOnce()
+ 	})
+ 
+diff --git a/core/stat/internal/cgroup_linux.go b/core/stat/internal/cgroup_linux.go
+index 6ac1985375321988332343ccd12a82754846740f..a95037035591c3248b2f002715e685b46b3c2689 100644
+--- a/core/stat/internal/cgroup_linux.go
++++ b/core/stat/internal/cgroup_linux.go
+@@ -2,6 +2,7 @@ package internal
+ 
+ import (
+ 	"bufio"
++	"errors"
+ 	"fmt"
+ 	"math"
+ 	"os"
+@@ -18,6 +19,7 @@ import (
+ 
+ const (
+ 	cgroupDir   = "/sys/fs/cgroup"
++	cpuMaxFile  = cgroupDir + "/cpu.max"
+ 	cpuStatFile = cgroupDir + "/cpu.stat"
+ 	cpusetFile  = cgroupDir + "/cpuset.cpus.effective"
+ )
+@@ -30,10 +32,9 @@ var (
+ )
+ 
+ type cgroup interface {
+-	cpuQuotaUs() (int64, error)
+-	cpuPeriodUs() (uint64, error)
+-	cpus() ([]uint64, error)
+-	usageAllCpus() (uint64, error)
++	cpuQuota() (float64, error)
++	cpuUsage() (uint64, error)
++	effectiveCpus() (int, error)
+ }
+ 
+ func currentCgroup() (cgroup, error) {
+@@ -48,13 +49,22 @@ type cgroupV1 struct {
+ 	cgroups map[string]string
+ }
+ 
+-func (c *cgroupV1) cpuQuotaUs() (int64, error) {
+-	data, err := iox.ReadText(path.Join(c.cgroups["cpu"], "cpu.cfs_quota_us"))
++func (c *cgroupV1) cpuQuota() (float64, error) {
++	quotaUs, err := c.cpuQuotaUs()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return strconv.ParseInt(data, 10, 64)
++	if quotaUs == -1 {
++		return -1, nil
++	}
++
++	periodUs, err := c.cpuPeriodUs()
++	if err != nil {
++		return 0, err
++	}
++
++	return float64(quotaUs) / float64(periodUs), nil
+ }
+ 
+ func (c *cgroupV1) cpuPeriodUs() (uint64, error) {
+@@ -66,16 +76,16 @@ func (c *cgroupV1) cpuPeriodUs() (uint64, error) {
+ 	return parseUint(data)
+ }
+ 
+-func (c *cgroupV1) cpus() ([]uint64, error) {
+-	data, err := iox.ReadText(path.Join(c.cgroups["cpuset"], "cpuset.cpus"))
++func (c *cgroupV1) cpuQuotaUs() (int64, error) {
++	data, err := iox.ReadText(path.Join(c.cgroups["cpu"], "cpu.cfs_quota_us"))
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return parseUints(data)
++	return strconv.ParseInt(data, 10, 64)
+ }
+ 
+-func (c *cgroupV1) usageAllCpus() (uint64, error) {
++func (c *cgroupV1) cpuUsage() (uint64, error) {
+ 	data, err := iox.ReadText(path.Join(c.cgroups["cpuacct"], "cpuacct.usage"))
+ 	if err != nil {
+ 		return 0, err
+@@ -84,38 +94,53 @@ func (c *cgroupV1) usageAllCpus() (uint64, error) {
+ 	return parseUint(data)
+ }
+ 
++func (c *cgroupV1) effectiveCpus() (int, error) {
++	data, err := iox.ReadText(path.Join(c.cgroups["cpuset"], "cpuset.cpus"))
++	if err != nil {
++		return 0, err
++	}
++
++	cpus, err := parseUints(data)
++	if err != nil {
++		return 0, err
++	}
++
++	return len(cpus), nil
++}
++
+ type cgroupV2 struct {
+ 	cgroups map[string]string
+ }
+ 
+-func (c *cgroupV2) cpuQuotaUs() (int64, error) {
+-	data, err := iox.ReadText(path.Join(cgroupDir, "cpu.cfs_quota_us"))
++func (c *cgroupV2) cpuQuota() (float64, error) {
++	data, err := iox.ReadText(cpuMaxFile)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return strconv.ParseInt(data, 10, 64)
+-}
++	fields := strings.Fields(data)
++	if len(fields) != 2 {
++		return 0, fmt.Errorf("cgroup: bad /sys/fs/cgroup/cpu.max file: %s", data)
++	}
++
++	if fields[0] == "max" {
++		return -1, nil
++	}
+ 
+-func (c *cgroupV2) cpuPeriodUs() (uint64, error) {
+-	data, err := iox.ReadText(path.Join(cgroupDir, "cpu.cfs_period_us"))
++	quotaUs, err := strconv.ParseInt(fields[0], 10, 64)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return parseUint(data)
+-}
+-
+-func (c *cgroupV2) cpus() ([]uint64, error) {
+-	data, err := iox.ReadText(cpusetFile)
++	periodUs, err := strconv.ParseUint(fields[1], 10, 64)
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return parseUints(data)
++	return float64(quotaUs) / float64(periodUs), nil
+ }
+ 
+-func (c *cgroupV2) usageAllCpus() (uint64, error) {
++func (c *cgroupV2) cpuUsage() (uint64, error) {
+ 	usec, err := parseUint(c.cgroups["usage_usec"])
+ 	if err != nil {
+ 		return 0, err
+@@ -124,6 +149,20 @@ func (c *cgroupV2) usageAllCpus() (uint64, error) {
+ 	return usec * uint64(time.Microsecond), nil
+ }
+ 
++func (c *cgroupV2) effectiveCpus() (int, error) {
++	data, err := iox.ReadText(cpusetFile)
++	if err != nil {
++		return 0, err
++	}
++
++	cpus, err := parseUints(data)
++	if err != nil {
++		return 0, err
++	}
++
++	return len(cpus), nil
++}
++
+ func currentCgroupV1() (cgroup, error) {
+ 	cgroupFile := fmt.Sprintf("/proc/%d/cgroup", os.Getpid())
+ 	lines, err := iox.ReadTextLines(cgroupFile, iox.WithoutBlank())
+@@ -200,7 +239,7 @@ func isCgroup2UnifiedMode() bool {
+ func parseUint(s string) (uint64, error) {
+ 	v, err := strconv.ParseInt(s, 10, 64)
+ 	if err != nil {
+-		if err.(*strconv.NumError).Err == strconv.ErrRange {
++		if errors.Is(err, strconv.ErrRange) {
+ 			return 0, nil
+ 		}
+ 
+@@ -225,21 +264,21 @@ func parseUints(val string) ([]uint64, error) {
+ 	for _, r := range cols {
+ 		if strings.Contains(r, "-") {
+ 			fields := strings.SplitN(r, "-", 2)
+-			min, err := parseUint(fields[0])
++			minimum, err := parseUint(fields[0])
+ 			if err != nil {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			max, err := parseUint(fields[1])
++			maximum, err := parseUint(fields[1])
+ 			if err != nil {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			if max < min {
++			if maximum < minimum {
+ 				return nil, fmt.Errorf("cgroup: bad int list format: %s", val)
+ 			}
+ 
+-			for i := min; i <= max; i++ {
++			for i := minimum; i <= maximum; i++ {
+ 				if _, ok := ints[i]; !ok {
+ 					ints[i] = lang.Placeholder
+ 					sets = append(sets, i)
+diff --git a/core/stat/internal/cpu_linux.go b/core/stat/internal/cpu_linux.go
+index 6d1173177c66326201387e801635f61d68a0501c..c10196c1f857acca3d41cc02751a1eb68aa8653a 100644
+--- a/core/stat/internal/cpu_linux.go
++++ b/core/stat/internal/cpu_linux.go
+@@ -14,60 +14,28 @@ import (
+ const (
+ 	cpuTicks  = 100
+ 	cpuFields = 8
++	cpuMax    = 1000
++	statFile  = "/proc/stat"
+ )
+ 
+ var (
+ 	preSystem uint64
+ 	preTotal  uint64
+-	quota     float64
++	limit     float64
+ 	cores     uint64
++	noCgroup  bool
+ 	initOnce  sync.Once
+ )
+ 
+-// if /proc not present, ignore the cpu calculation, like wsl linux
+-func initialize() {
+-	cpus, err := cpuSets()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-
+-	cores = uint64(len(cpus))
+-	quota = float64(len(cpus))
+-	cq, err := cpuQuota()
+-	if err == nil {
+-		if cq != -1 {
+-			period, err := cpuPeriod()
+-			if err != nil {
+-				logx.Error(err)
+-				return
+-			}
+-
+-			limit := float64(cq) / float64(period)
+-			if limit < quota {
+-				quota = limit
+-			}
+-		}
+-	}
+-
+-	preSystem, err = systemCpuUsage()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-
+-	preTotal, err = totalCpuUsage()
+-	if err != nil {
+-		logx.Error(err)
+-		return
+-	}
+-}
+-
+ // RefreshCpu refreshes cpu usage and returns.
+ func RefreshCpu() uint64 {
+-	initOnce.Do(initialize)
++	initializeOnce()
+ 
+-	total, err := totalCpuUsage()
++	if noCgroup {
++		return 0
++	}
++
++	total, err := cpuUsage()
+ 	if err != nil {
+ 		return 0
+ 	}
+@@ -81,7 +49,10 @@ func RefreshCpu() uint64 {
+ 	cpuDelta := total - preTotal
+ 	systemDelta := system - preSystem
+ 	if cpuDelta > 0 && systemDelta > 0 {
+-		usage = uint64(float64(cpuDelta*cores*1e3) / (float64(systemDelta) * quota))
++		usage = uint64(float64(cpuDelta*cores*cpuMax) / (float64(systemDelta) * limit))
++		if usage > cpuMax {
++			usage = cpuMax
++		}
+ 	}
+ 	preSystem = system
+ 	preTotal = total
+@@ -89,35 +60,76 @@ func RefreshCpu() uint64 {
+ 	return usage
+ }
+ 
+-func cpuQuota() (int64, error) {
++func cpuQuota() (float64, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return cg.cpuQuotaUs()
++	return cg.cpuQuota()
+ }
+ 
+-func cpuPeriod() (uint64, error) {
++func cpuUsage() (uint64, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 
+-	return cg.cpuPeriodUs()
++	return cg.cpuUsage()
+ }
+ 
+-func cpuSets() ([]uint64, error) {
++func effectiveCpus() (int, error) {
+ 	cg, err := currentCgroup()
+ 	if err != nil {
+-		return nil, err
++		return 0, err
+ 	}
+ 
+-	return cg.cpus()
++	return cg.effectiveCpus()
++}
++
++// if /proc not present, ignore the cpu calculation, like wsl linux
++func initialize() error {
++	cpus, err := effectiveCpus()
++	if err != nil {
++		return err
++	}
++
++	cores = uint64(cpus)
++	limit = float64(cpus)
++	quota, err := cpuQuota()
++	if err == nil && quota > 0 {
++		if quota < limit {
++			limit = quota
++		}
++	}
++
++	preSystem, err = systemCpuUsage()
++	if err != nil {
++		return err
++	}
++
++	preTotal, err = cpuUsage()
++	return err
++}
++
++func initializeOnce() {
++	initOnce.Do(func() {
++		defer func() {
++			if p := recover(); p != nil {
++				noCgroup = true
++				logx.Error(p)
++			}
++		}()
++
++		if err := initialize(); err != nil {
++			noCgroup = true
++			logx.Error(err)
++		}
++	})
+ }
+ 
+ func systemCpuUsage() (uint64, error) {
+-	lines, err := iox.ReadTextLines("/proc/stat", iox.WithoutBlank())
++	lines, err := iox.ReadTextLines(statFile, iox.WithoutBlank())
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -145,12 +157,3 @@ func systemCpuUsage() (uint64, error) {
+ 
+ 	return 0, errors.New("bad stats format")
+ }
+-
+-func totalCpuUsage() (usage uint64, err error) {
+-	var cg cgroup
+-	if cg, err = currentCgroup(); err != nil {
+-		return
+-	}
+-
+-	return cg.usageAllCpus()
+-}
+diff --git a/core/stat/task.go b/core/stat/task.go
+index 637e0b7678c6c90c753ae629baacf5fd4363fb78..203248f236d1b5c7693122cbf4c6457a17d9168b 100644
+--- a/core/stat/task.go
++++ b/core/stat/task.go
+@@ -2,7 +2,7 @@ package stat
+ 
+ import "time"
+ 
+-// A Task is a task that is reported to Metrics.
++// A Task is a task reported to Metrics.
+ type Task struct {
+ 	Drop        bool
+ 	Duration    time.Duration
+diff --git a/core/stores/cache/cacheopt.go b/core/stores/cache/cacheopt.go
+index cc8d459db7ab0062008bd0a5ee71fb1b264308ad..836c12af0d292e054f0281c02c9485ba9ca5ee01 100644
+--- a/core/stores/cache/cacheopt.go
++++ b/core/stores/cache/cacheopt.go
+@@ -8,7 +8,7 @@ const (
+ )
+ 
+ type (
+-	// An Options is used to store the cache options.
++	// Options is used to store the cache options.
+ 	Options struct {
+ 		Expiry         time.Duration
+ 		NotFoundExpiry time.Duration
+diff --git a/core/stores/dbtest/sql.go b/core/stores/dbtest/sql.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e1be298c9478dafa9c2caa24ffb4a32f523a02a
+--- /dev/null
++++ b/core/stores/dbtest/sql.go
+@@ -0,0 +1,37 @@
++package dbtest
++
++import (
++	"database/sql"
++	"testing"
++
++	"github.com/DATA-DOG/go-sqlmock"
++	"github.com/stretchr/testify/assert"
++)
++
++// RunTest runs a test function with a mock database.
++func RunTest(t *testing.T, fn func(db *sql.DB, mock sqlmock.Sqlmock)) {
++	db, mock, err := sqlmock.New()
++	if err != nil {
++		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
++	}
++	defer func() {
++		_ = db.Close()
++	}()
++
++	fn(db, mock)
++
++	if err = mock.ExpectationsWereMet(); err != nil {
++		t.Errorf("there were unfulfilled expectations: %s", err)
++	}
++}
++
++// RunTxTest runs a test function with a mock database in a transaction.
++func RunTxTest(t *testing.T, f func(tx *sql.Tx, mock sqlmock.Sqlmock)) {
++	RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
++		mock.ExpectBegin()
++		tx, err := db.Begin()
++		if assert.NoError(t, err) {
++			f(tx, mock)
++		}
++	})
++}
+diff --git a/core/stores/mon/options.go b/core/stores/mon/options.go
+index 4097328faf0257c7fac9234c52cfac4d8dc72ea2..cebae6f779f4693229c4e741866364295b1df79f 100644
+--- a/core/stores/mon/options.go
++++ b/core/stores/mon/options.go
+@@ -1,9 +1,12 @@
+ package mon
+ 
+ import (
++	"reflect"
+ 	"time"
+ 
+ 	"github.com/zeromicro/go-zero/core/syncx"
++	"go.mongodb.org/mongo-driver/bson"
++	"go.mongodb.org/mongo-driver/bson/bsoncodec"
+ 	mopt "go.mongodb.org/mongo-driver/mongo/options"
+ )
+ 
+@@ -16,10 +19,17 @@ var (
+ )
+ 
+ type (
+-	options = mopt.ClientOptions
+-
+ 	// Option defines the method to customize a mongo model.
+ 	Option func(opts *options)
++
++	// TypeCodec is a struct that stores specific type Encoder/Decoder.
++	TypeCodec struct {
++		ValueType reflect.Type
++		Encoder   bsoncodec.ValueEncoder
++		Decoder   bsoncodec.ValueDecoder
++	}
++
++	options = mopt.ClientOptions
+ )
+ 
+ // DisableLog disables logging of mongo commands, includes info and slow logs.
+@@ -38,15 +48,27 @@ func SetSlowThreshold(threshold time.Duration) {
+ 	slowThreshold.Set(threshold)
+ }
+ 
+-func defaultTimeoutOption() Option {
++// WithTimeout set the mon client operation timeout.
++func WithTimeout(timeout time.Duration) Option {
+ 	return func(opts *options) {
+-		opts.SetTimeout(defaultTimeout)
++		opts.SetTimeout(timeout)
+ 	}
+ }
+ 
+-// WithTimeout set the mon client operation timeout.
+-func WithTimeout(timeout time.Duration) Option {
++// WithTypeCodec registers TypeCodecs to convert custom types.
++func WithTypeCodec(typeCodecs ...TypeCodec) Option {
+ 	return func(opts *options) {
+-		opts.SetTimeout(timeout)
++		registry := bson.NewRegistry()
++		for _, v := range typeCodecs {
++			registry.RegisterTypeEncoder(v.ValueType, v.Encoder)
++			registry.RegisterTypeDecoder(v.ValueType, v.Decoder)
++		}
++		opts.SetRegistry(registry)
++	}
++}
++
++func defaultTimeoutOption() Option {
++	return func(opts *options) {
++		opts.SetTimeout(defaultTimeout)
+ 	}
+ }
+diff --git a/core/stores/redis/conf.go b/core/stores/redis/conf.go
+index c54210870ef7f8c51b345318d47d0fce23631bd6..5328757fddc4e9409dd7e7ad9a109593f5b81534 100644
+--- a/core/stores/redis/conf.go
++++ b/core/stores/redis/conf.go
+@@ -47,7 +47,7 @@ func (rc RedisConf) NewRedis() *Redis {
+ 		opts = append(opts, WithTLS())
+ 	}
+ 
+-	return New(rc.Host, opts...)
++	return newRedis(rc.Host, opts...)
+ }
+ 
+ // Validate validates the RedisConf.
+diff --git a/core/stores/redis/redis.go b/core/stores/redis/redis.go
+index a9f19aa42d834dd9efdeb3fc3b3eb9c41b4181ed..8f2ee9f28cf8a9e20a98ba4a9e556f46b6e5b3b3 100644
+--- a/core/stores/redis/redis.go
++++ b/core/stores/redis/redis.go
+@@ -468,6 +468,28 @@ func (s *Redis) ExistsCtx(ctx context.Context, key string) (val bool, err error)
+ 	return
+ }
+ 
++// ExistsMany is the implementation of redis exists command.
++// checks the existence of multiple keys in Redis using the EXISTS command.
++func (s *Redis) ExistsMany(keys ...string) (int64, error) {
++	return s.ExistsManyCtx(context.Background(), keys...)
++}
++
++// ExistsManyCtx is the implementation of redis exists command.
++// checks the existence of multiple keys in Redis using the EXISTS command.
++func (s *Redis) ExistsManyCtx(ctx context.Context, keys ...string) (val int64, err error) {
++	err = s.brk.DoWithAcceptable(func() error {
++		conn, err := getRedis(s)
++		if err != nil {
++			return err
++		}
++
++		val, err = conn.Exists(ctx, keys...).Result()
++		return err
++	}, acceptable)
++
++	return
++}
++
+ // Expire is the implementation of redis expire command.
+ func (s *Redis) Expire(key string, seconds int) error {
+ 	return s.ExpireCtx(context.Background(), key, seconds)
+@@ -516,13 +538,8 @@ func (s *Redis) GeoAddCtx(ctx context.Context, key string, geoLocation ...*GeoLo
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoAdd(ctx, key, geoLocation...).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoAdd(ctx, key, geoLocation...).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -542,13 +559,8 @@ func (s *Redis) GeoDistCtx(ctx context.Context, key, member1, member2, unit stri
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoDist(ctx, key, member1, member2, unit).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoDist(ctx, key, member1, member2, unit).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -568,13 +580,8 @@ func (s *Redis) GeoHashCtx(ctx context.Context, key string, members ...string) (
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoHash(ctx, key, members...).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoHash(ctx, key, members...).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -595,13 +602,8 @@ func (s *Redis) GeoRadiusCtx(ctx context.Context, key string, longitude, latitud
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoRadius(ctx, key, longitude, latitude, query).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoRadius(ctx, key, longitude, latitude, query).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -621,13 +623,8 @@ func (s *Redis) GeoRadiusByMemberCtx(ctx context.Context, key, member string,
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoRadiusByMember(ctx, key, member, query).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoRadiusByMember(ctx, key, member, query).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -647,13 +644,8 @@ func (s *Redis) GeoPosCtx(ctx context.Context, key string, members ...string) (
+ 			return err
+ 		}
+ 
+-		v, err := conn.GeoPos(ctx, key, members...).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.GeoPos(ctx, key, members...).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -672,7 +664,7 @@ func (s *Redis) GetCtx(ctx context.Context, key string) (val string, err error)
+ 			return err
+ 		}
+ 
+-		if val, err = conn.Get(ctx, key).Result(); err == red.Nil {
++		if val, err = conn.Get(ctx, key).Result(); errors.Is(err, red.Nil) {
+ 			return nil
+ 		} else if err != nil {
+ 			return err
+@@ -722,7 +714,7 @@ func (s *Redis) GetSetCtx(ctx context.Context, key, value string) (val string, e
+ 			return err
+ 		}
+ 
+-		if val, err = conn.GetSet(ctx, key, value).Result(); err == red.Nil {
++		if val, err = conn.GetSet(ctx, key, value).Result(); errors.Is(err, red.Nil) {
+ 			return nil
+ 		}
+ 
+@@ -848,17 +840,16 @@ func (s *Redis) HincrbyFloat(key, field string, increment float64) (float64, err
+ }
+ 
+ // HincrbyFloatCtx is the implementation of redis hincrbyfloat command.
+-func (s *Redis) HincrbyFloatCtx(ctx context.Context, key, field string, increment float64) (val float64, err error) {
++func (s *Redis) HincrbyFloatCtx(ctx context.Context, key, field string, increment float64) (
++	val float64, err error) {
+ 	err = s.brk.DoWithAcceptable(func() error {
+ 		conn, err := getRedis(s)
+ 		if err != nil {
+ 			return err
+ 		}
++
+ 		val, err = conn.HIncrByFloat(ctx, key, field, increment).Result()
+-		if err != nil {
+-			return err
+-		}
+-		return nil
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -1312,6 +1303,26 @@ func (s *Redis) MgetCtx(ctx context.Context, keys ...string) (val []string, err
+ 	return
+ }
+ 
++// Mset is the implementation of redis mset command.
++func (s *Redis) Mset(fieldsAndValues ...any) (string, error) {
++	return s.MsetCtx(context.Background(), fieldsAndValues...)
++}
++
++// MsetCtx is the implementation of redis mset command.
++func (s *Redis) MsetCtx(ctx context.Context, fieldsAndValues ...any) (val string, err error) {
++	err = s.brk.DoWithAcceptable(func() error {
++		conn, err := getRedis(s)
++		if err != nil {
++			return err
++		}
++
++		val, err = conn.MSet(ctx, fieldsAndValues...).Result()
++		return err
++	}, acceptable)
++
++	return
++}
++
+ // Persist is the implementation of redis persist command.
+ func (s *Redis) Persist(key string) (bool, error) {
+ 	return s.PersistCtx(context.Background(), key)
+@@ -1994,7 +2005,14 @@ func (s *Redis) TtlCtx(ctx context.Context, key string) (val int, err error) {
+ 			return err
+ 		}
+ 
+-		val = int(duration / time.Second)
++		if duration >= 0 {
++			val = int(duration / time.Second)
++		} else {
++			// -2 means key does not exist
++			// -1 means key exists but has no expire
++			val = int(duration)
++		}
++
+ 		return nil
+ 	}, acceptable)
+ 
+@@ -2041,6 +2059,46 @@ func (s *Redis) ZaddFloatCtx(ctx context.Context, key string, score float64, val
+ 	return
+ }
+ 
++// Zaddnx is the implementation of redis zadd nx command.
++func (s *Redis) Zaddnx(key string, score int64, value string) (val bool, err error) {
++	return s.ZaddnxCtx(context.Background(), key, score, value)
++}
++
++// ZaddnxCtx is the implementation of redis zadd nx command.
++func (s *Redis) ZaddnxCtx(ctx context.Context, key string, score int64, value string) (
++	val bool, err error) {
++	return s.ZaddnxFloatCtx(ctx, key, float64(score), value)
++}
++
++// ZaddnxFloat is the implementation of redis zaddnx command.
++func (s *Redis) ZaddnxFloat(key string, score float64, value string) (bool, error) {
++	return s.ZaddFloatCtx(context.Background(), key, score, value)
++}
++
++// ZaddnxFloatCtx is the implementation of redis zaddnx command.
++func (s *Redis) ZaddnxFloatCtx(ctx context.Context, key string, score float64, value string) (
++	val bool, err error) {
++	err = s.brk.DoWithAcceptable(func() error {
++		conn, err := getRedis(s)
++		if err != nil {
++			return err
++		}
++
++		v, err := conn.ZAddNX(ctx, key, red.Z{
++			Score:  score,
++			Member: value,
++		}).Result()
++		if err != nil {
++			return err
++		}
++
++		val = v == 1
++		return nil
++	}, acceptable)
++
++	return
++}
++
+ // Zadds is the implementation of redis zadds command.
+ func (s *Redis) Zadds(key string, ps ...Pair) (int64, error) {
+ 	return s.ZaddsCtx(context.Background(), key, ps...)
+@@ -2060,13 +2118,8 @@ func (s *Redis) ZaddsCtx(ctx context.Context, key string, ps ...Pair) (val int64
+ 			zs = append(zs, z)
+ 		}
+ 
+-		v, err := conn.ZAdd(ctx, key, zs...).Result()
+-		if err != nil {
+-			return err
+-		}
+-
+-		val = v
+-		return nil
++		val, err = conn.ZAdd(ctx, key, zs...).Result()
++		return err
+ 	}, acceptable)
+ 
+ 	return
+@@ -2186,6 +2239,7 @@ func (s *Redis) ZscoreByFloatCtx(ctx context.Context, key, value string) (val fl
+ 		if err != nil {
+ 			return err
+ 		}
++
+ 		val, err = conn.ZScore(ctx, key, value).Result()
+ 		return err
+ 	}, acceptable)
+@@ -2850,7 +2904,7 @@ func withHook(hook red.Hook) Option {
+ }
+ 
+ func acceptable(err error) bool {
+-	return err == nil || err == red.Nil || errors.Is(err, context.Canceled)
++	return err == nil || errors.Is(err, red.Nil) || errors.Is(err, context.Canceled)
+ }
+ 
+ func getRedis(r *Redis) (RedisNode, error) {
+diff --git a/core/stores/redis/redislock.go b/core/stores/redis/redislock.go
+index 2979ee500c8e12d513efe6162bba6ed0c56c7546..ab26cc9857f207c3c7d660113fe5cf62967d7dd2 100644
+--- a/core/stores/redis/redislock.go
++++ b/core/stores/redis/redislock.go
+@@ -2,6 +2,7 @@ package redis
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"math/rand"
+ 	"strconv"
+ 	"sync/atomic"
+@@ -41,7 +42,7 @@ type RedisLock struct {
+ }
+ 
+ func init() {
+-	rand.Seed(time.Now().UnixNano())
++	rand.NewSource(time.Now().UnixNano())
+ }
+ 
+ // NewRedisLock returns a RedisLock.
+@@ -64,7 +65,7 @@ func (rl *RedisLock) AcquireCtx(ctx context.Context) (bool, error) {
+ 	resp, err := rl.store.ScriptRunCtx(ctx, lockScript, []string{rl.key}, []string{
+ 		rl.id, strconv.Itoa(int(seconds)*millisPerSecond + tolerance),
+ 	})
+-	if err == red.Nil {
++	if errors.Is(err, red.Nil) {
+ 		return false, nil
+ 	} else if err != nil {
+ 		logx.Errorf("Error on acquiring lock for %s, %s", rl.key, err.Error())
+diff --git a/core/stores/sqlx/metrics.go b/core/stores/sqlx/metrics.go
+index 1092c9a201d5087f90d71bd5a0d5b321ca914b7e..a62e2d85fb1bd482b2b62ff05139b8f0453c8990 100644
+--- a/core/stores/sqlx/metrics.go
++++ b/core/stores/sqlx/metrics.go
+@@ -8,7 +8,7 @@ import (
+ 	"github.com/zeromicro/go-zero/core/metric"
+ )
+ 
+-const namespace = "mysql_client"
++const namespace = "sql_client"
+ 
+ var (
+ 	metricReqDur = metric.NewHistogramVec(&metric.HistogramVecOpts{
+diff --git a/core/stores/sqlx/mysql.go b/core/stores/sqlx/mysql.go
+index 3c026921e311465a3df6e33377e8d6dfb50b62ce..e7797095a1b4df09b72568a409b9c8eb910400c4 100644
+--- a/core/stores/sqlx/mysql.go
++++ b/core/stores/sqlx/mysql.go
+@@ -13,7 +13,7 @@ const (
+ 
+ // NewMysql returns a mysql connection.
+ func NewMysql(datasource string, opts ...SqlOption) SqlConn {
+-	opts = append(opts, withMysqlAcceptable())
++	opts = append([]SqlOption{withMysqlAcceptable()}, opts...)
+ 	return NewSqlConn(mysqlDriverName, datasource, opts...)
+ }
+ 
+diff --git a/core/stores/sqlx/sqlconn.go b/core/stores/sqlx/sqlconn.go
+index 9603af5b3b0857e58348d6408dded4c2399d14c3..d6ca746dac2a6d1cb78c2bd65197d04b23b89358 100644
+--- a/core/stores/sqlx/sqlconn.go
++++ b/core/stores/sqlx/sqlconn.go
+@@ -42,21 +42,6 @@ type (
+ 	// SqlOption defines the method to customize a sql connection.
+ 	SqlOption func(*commonSqlConn)
+ 
+-	// StmtSession interface represents a session that can be used to execute statements.
+-	StmtSession interface {
+-		Close() error
+-		Exec(args ...any) (sql.Result, error)
+-		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
+-		QueryRow(v any, args ...any) error
+-		QueryRowCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowPartial(v any, args ...any) error
+-		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
+-		QueryRows(v any, args ...any) error
+-		QueryRowsCtx(ctx context.Context, v any, args ...any) error
+-		QueryRowsPartial(v any, args ...any) error
+-		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
+-	}
+-
+ 	// thread-safe
+ 	// Because CORBA doesn't support PREPARE, so we need to combine the
+ 	// query arguments into one string and do underlying query without arguments
+@@ -65,7 +50,7 @@ type (
+ 		onError  func(context.Context, error)
+ 		beginTx  beginnable
+ 		brk      breaker.Breaker
+-		accept   func(error) bool
++		accept   breaker.Acceptable
+ 	}
+ 
+ 	connProvider func() (*sql.DB, error)
+@@ -76,18 +61,6 @@ type (
+ 		Query(query string, args ...any) (*sql.Rows, error)
+ 		QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+ 	}
+-
+-	statement struct {
+-		query string
+-		stmt  *sql.Stmt
+-	}
+-
+-	stmtConn interface {
+-		Exec(args ...any) (sql.Result, error)
+-		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
+-		Query(args ...any) (*sql.Rows, error)
+-		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
+-	}
+ )
+ 
+ // NewSqlConn returns a SqlConn with given driver name and datasource.
+@@ -189,8 +162,10 @@ func (db *commonSqlConn) PrepareCtx(ctx context.Context, query string) (stmt Stm
+ 		}
+ 
+ 		stmt = statement{
+-			query: query,
+-			stmt:  st,
++			query:  query,
++			stmt:   st,
++			brk:    db.brk,
++			accept: db.acceptable,
+ 		}
+ 		return nil
+ 	}, db.acceptable)
+@@ -311,7 +286,7 @@ func (db *commonSqlConn) acceptable(err error) bool {
+ 
+ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows) error,
+ 	q string, args ...any) (err error) {
+-	var qerr error
++	var scanFailed bool
+ 	err = db.brk.DoWithAcceptable(func() error {
+ 		conn, err := db.connProv()
+ 		if err != nil {
+@@ -320,11 +295,14 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 		}
+ 
+ 		return query(ctx, conn, func(rows *sql.Rows) error {
+-			qerr = scanner(rows)
+-			return qerr
++			e := scanner(rows)
++			if e != nil {
++				scanFailed = true
++			}
++			return e
+ 		}, q, args...)
+ 	}, func(err error) bool {
+-		return errors.Is(err, qerr) || db.acceptable(err)
++		return scanFailed || db.acceptable(err)
+ 	})
+ 	if errors.Is(err, breaker.ErrServiceUnavailable) {
+ 		metricReqErr.Inc("queryRows", "breaker")
+@@ -333,87 +311,17 @@ func (db *commonSqlConn) queryRows(ctx context.Context, scanner func(*sql.Rows)
+ 	return
+ }
+ 
+-func (s statement) Close() error {
+-	return s.stmt.Close()
+-}
+-
+-func (s statement) Exec(args ...any) (sql.Result, error) {
+-	return s.ExecCtx(context.Background(), args...)
+-}
+-
+-func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
+-	ctx, span := startSpan(ctx, "Exec")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return execStmt(ctx, s.stmt, s.query, args...)
+-}
+-
+-func (s statement) QueryRow(v any, args ...any) error {
+-	return s.QueryRowCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRow")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowPartial(v any, args ...any) error {
+-	return s.QueryRowPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRow(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRows(v any, args ...any) error {
+-	return s.QueryRowsCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRows")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, true)
+-	}, s.query, args...)
+-}
+-
+-func (s statement) QueryRowsPartial(v any, args ...any) error {
+-	return s.QueryRowsPartialCtx(context.Background(), v, args...)
+-}
+-
+-func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
+-	ctx, span := startSpan(ctx, "QueryRowsPartial")
+-	defer func() {
+-		endSpan(span, err)
+-	}()
+-
+-	return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
+-		return unmarshalRows(v, rows, false)
+-	}, s.query, args...)
+-}
+-
+ // WithAcceptable returns a SqlOption that setting the acceptable function.
+ // acceptable is the func to check if the error can be accepted.
+ func WithAcceptable(acceptable func(err error) bool) SqlOption {
+ 	return func(conn *commonSqlConn) {
+-		conn.accept = acceptable
++		if conn.accept == nil {
++			conn.accept = acceptable
++		} else {
++			pre := conn.accept
++			conn.accept = func(err error) bool {
++				return pre(err) || acceptable(err)
++			}
++		}
+ 	}
+ }
+diff --git a/core/stores/sqlx/stmt.go b/core/stores/sqlx/stmt.go
+index ab688abbd586575e29adab5e81e25fac50e3eaa9..b66dcc7f58e2a24ba7750d269a09f32c1c1612ba 100644
+--- a/core/stores/sqlx/stmt.go
++++ b/core/stores/sqlx/stmt.go
+@@ -3,8 +3,10 @@ package sqlx
+ import (
+ 	"context"
+ 	"database/sql"
++	"errors"
+ 	"time"
+ 
++	"github.com/zeromicro/go-zero/core/breaker"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/core/syncx"
+ 	"github.com/zeromicro/go-zero/core/timex"
+@@ -18,6 +20,145 @@ var (
+ 	logSlowSql    = syncx.ForAtomicBool(true)
+ )
+ 
++type (
++	// StmtSession interface represents a session that can be used to execute statements.
++	StmtSession interface {
++		Close() error
++		Exec(args ...any) (sql.Result, error)
++		ExecCtx(ctx context.Context, args ...any) (sql.Result, error)
++		QueryRow(v any, args ...any) error
++		QueryRowCtx(ctx context.Context, v any, args ...any) error
++		QueryRowPartial(v any, args ...any) error
++		QueryRowPartialCtx(ctx context.Context, v any, args ...any) error
++		QueryRows(v any, args ...any) error
++		QueryRowsCtx(ctx context.Context, v any, args ...any) error
++		QueryRowsPartial(v any, args ...any) error
++		QueryRowsPartialCtx(ctx context.Context, v any, args ...any) error
++	}
++
++	statement struct {
++		query  string
++		stmt   *sql.Stmt
++		brk    breaker.Breaker
++		accept breaker.Acceptable
++	}
++
++	stmtConn interface {
++		Exec(args ...any) (sql.Result, error)
++		ExecContext(ctx context.Context, args ...any) (sql.Result, error)
++		Query(args ...any) (*sql.Rows, error)
++		QueryContext(ctx context.Context, args ...any) (*sql.Rows, error)
++	}
++)
++
++func (s statement) Close() error {
++	return s.stmt.Close()
++}
++
++func (s statement) Exec(args ...any) (sql.Result, error) {
++	return s.ExecCtx(context.Background(), args...)
++}
++
++func (s statement) ExecCtx(ctx context.Context, args ...any) (result sql.Result, err error) {
++	ctx, span := startSpan(ctx, "Exec")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	err = s.brk.DoWithAcceptable(func() error {
++		result, err = execStmt(ctx, s.stmt, s.query, args...)
++		return err
++	}, func(err error) bool {
++		return s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_exec", "breaker")
++	}
++
++	return
++}
++
++func (s statement) QueryRow(v any, args ...any) error {
++	return s.QueryRowCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRow")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowPartial(v any, args ...any) error {
++	return s.QueryRowPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRow(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) QueryRows(v any, args ...any) error {
++	return s.QueryRowsCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRows")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, true)
++	}, v, args...)
++}
++
++func (s statement) QueryRowsPartial(v any, args ...any) error {
++	return s.QueryRowsPartialCtx(context.Background(), v, args...)
++}
++
++func (s statement) QueryRowsPartialCtx(ctx context.Context, v any, args ...any) (err error) {
++	ctx, span := startSpan(ctx, "QueryRowsPartial")
++	defer func() {
++		endSpan(span, err)
++	}()
++
++	return s.queryRows(ctx, func(v any, scanner rowsScanner) error {
++		return unmarshalRows(v, scanner, false)
++	}, v, args...)
++}
++
++func (s statement) queryRows(ctx context.Context, scanFn func(any, rowsScanner) error,
++	v any, args ...any) error {
++	var scanFailed bool
++	err := s.brk.DoWithAcceptable(func() error {
++		return queryStmt(ctx, s.stmt, func(rows *sql.Rows) error {
++			err := scanFn(v, rows)
++			if err != nil {
++				scanFailed = true
++			}
++			return err
++		}, s.query, args...)
++	}, func(err error) bool {
++		return scanFailed || s.accept(err)
++	})
++	if errors.Is(err, breaker.ErrServiceUnavailable) {
++		metricReqErr.Inc("stmt_queryRows", "breaker")
++	}
++
++	return err
++}
++
+ // DisableLog disables logging of sql statements, includes info and slow logs.
+ func DisableLog() {
+ 	logSql.Set(false)
+diff --git a/core/stores/sqlx/tx.go b/core/stores/sqlx/tx.go
+index d983077ce4994064a1d4d4862a83360b2449479d..ea2fd2bee68b6ad588c250637c5dc06f8588302b 100644
+--- a/core/stores/sqlx/tx.go
++++ b/core/stores/sqlx/tx.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"fmt"
++
++	"github.com/zeromicro/go-zero/core/breaker"
+ )
+ 
+ type (
+@@ -75,6 +77,7 @@ func (t txSession) PrepareCtx(ctx context.Context, q string) (stmtSession StmtSe
+ 	return statement{
+ 		query: q,
+ 		stmt:  stmt,
++		brk:   breaker.NopBreaker(),
+ 	}, nil
+ }
+ 
+diff --git a/core/threading/stablerunner.go b/core/threading/stablerunner.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..0449dae89a8ccfa105d85418aad0d5bda4895aa4
+--- /dev/null
++++ b/core/threading/stablerunner.go
+@@ -0,0 +1,105 @@
++package threading
++
++import (
++	"errors"
++	"runtime"
++	"sync"
++	"sync/atomic"
++)
++
++const factor = 10
++
++var (
++	ErrRunnerClosed = errors.New("runner closed")
++
++	bufSize = runtime.NumCPU() * factor
++)
++
++// StableRunner is a runner that guarantees messages are taken out with the pushed order.
++// This runner is typically useful for Kafka consumers with parallel processing.
++type StableRunner[I, O any] struct {
++	handle        func(I) O
++	consumedIndex uint64
++	writtenIndex  uint64
++	ring          []*struct {
++		value chan O
++		lock  sync.Mutex
++	}
++	runner *TaskRunner
++	done   chan struct{}
++}
++
++// NewStableRunner returns a new StableRunner with given message processor fn.
++func NewStableRunner[I, O any](fn func(I) O) *StableRunner[I, O] {
++	ring := make([]*struct {
++		value chan O
++		lock  sync.Mutex
++	}, bufSize)
++	for i := 0; i < bufSize; i++ {
++		ring[i] = &struct {
++			value chan O
++			lock  sync.Mutex
++		}{
++			value: make(chan O, 1),
++		}
++	}
++
++	return &StableRunner[I, O]{
++		handle: fn,
++		ring:   ring,
++		runner: NewTaskRunner(runtime.NumCPU()),
++		done:   make(chan struct{}),
++	}
++}
++
++// Get returns the next processed message in order.
++// This method should be called in one goroutine.
++func (r *StableRunner[I, O]) Get() (O, error) {
++	defer atomic.AddUint64(&r.consumedIndex, 1)
++
++	index := atomic.LoadUint64(&r.consumedIndex)
++	offset := index % uint64(bufSize)
++	holder := r.ring[offset]
++
++	select {
++	case o := <-holder.value:
++		return o, nil
++	case <-r.done:
++		if atomic.LoadUint64(&r.consumedIndex) < atomic.LoadUint64(&r.writtenIndex) {
++			return <-holder.value, nil
++		}
++
++		var o O
++		return o, ErrRunnerClosed
++	}
++}
++
++// Push pushes the message v into the runner and to be processed concurrently,
++// after processed, it will be cached to let caller take it in pushing order.
++func (r *StableRunner[I, O]) Push(v I) error {
++	select {
++	case <-r.done:
++		return ErrRunnerClosed
++	default:
++		index := atomic.AddUint64(&r.writtenIndex, 1)
++		offset := (index - 1) % uint64(bufSize)
++		holder := r.ring[offset]
++		holder.lock.Lock()
++		r.runner.Schedule(func() {
++			defer holder.lock.Unlock()
++			o := r.handle(v)
++			holder.value <- o
++		})
++
++		return nil
++	}
++}
++
++// Wait waits all the messages to be processed and taken from inner buffer.
++func (r *StableRunner[I, O]) Wait() {
++	close(r.done)
++	r.runner.Wait()
++	for atomic.LoadUint64(&r.consumedIndex) < atomic.LoadUint64(&r.writtenIndex) {
++		runtime.Gosched()
++	}
++}
+diff --git a/core/threading/taskrunner.go b/core/threading/taskrunner.go
+index 955beeabbccd0f309960bd64830a6d3fcfaff88a..18ac4f6cd9a15183d519d65255309bb9f21f8984 100644
+--- a/core/threading/taskrunner.go
++++ b/core/threading/taskrunner.go
+@@ -1,13 +1,20 @@
+ package threading
+ 
+ import (
++	"errors"
++	"sync"
++
+ 	"github.com/zeromicro/go-zero/core/lang"
+ 	"github.com/zeromicro/go-zero/core/rescue"
+ )
+ 
++// ErrTaskRunnerBusy is the error that indicates the runner is busy.
++var ErrTaskRunnerBusy = errors.New("task runner is busy")
++
+ // A TaskRunner is used to control the concurrency of goroutines.
+ type TaskRunner struct {
+ 	limitChan chan lang.PlaceholderType
++	waitGroup sync.WaitGroup
+ }
+ 
+ // NewTaskRunner returns a TaskRunner.
+@@ -19,13 +26,47 @@ func NewTaskRunner(concurrency int) *TaskRunner {
+ 
+ // Schedule schedules a task to run under concurrency control.
+ func (rp *TaskRunner) Schedule(task func()) {
++	// Why we add waitGroup first, in case of race condition on starting a task and wait returns.
++	// For example, limitChan is full, and the task is scheduled to run, but the waitGroup is not added,
++	// then the wait returns, and the task is then scheduled to run, but caller thinks all tasks are done.
++	// the same reason for ScheduleImmediately.
++	rp.waitGroup.Add(1)
+ 	rp.limitChan <- lang.Placeholder
+ 
+ 	go func() {
+ 		defer rescue.Recover(func() {
+ 			<-rp.limitChan
++			rp.waitGroup.Done()
+ 		})
+ 
+ 		task()
+ 	}()
+ }
++
++// ScheduleImmediately schedules a task to run immediately under concurrency control.
++// It returns ErrTaskRunnerBusy if the runner is busy.
++func (rp *TaskRunner) ScheduleImmediately(task func()) error {
++	// Why we add waitGroup first, check the comment in Schedule.
++	rp.waitGroup.Add(1)
++	select {
++	case rp.limitChan <- lang.Placeholder:
++	default:
++		rp.waitGroup.Done()
++		return ErrTaskRunnerBusy
++	}
++
++	go func() {
++		defer rescue.Recover(func() {
++			<-rp.limitChan
++			rp.waitGroup.Done()
++		})
++		task()
++	}()
++
++	return nil
++}
++
++// Wait waits all running tasks to be done.
++func (rp *TaskRunner) Wait() {
++	rp.waitGroup.Wait()
++}
+diff --git a/core/trace/agent.go b/core/trace/agent.go
+index 2a2e8c3726160d02b7dee782cacbaff8be43af3f..59e0e23e7a8e0d96ae5789972fe6e725dcbba778 100644
+--- a/core/trace/agent.go
++++ b/core/trace/agent.go
+@@ -59,7 +59,13 @@ func StartAgent(c Config) {
+ 
+ // StopAgent shuts down the span processors in the order they were registered.
+ func StopAgent() {
+-	_ = tp.Shutdown(context.Background())
++	lock.Lock()
++	defer lock.Unlock()
++
++	if tp != nil {
++		_ = tp.Shutdown(context.Background())
++		tp = nil
++	}
+ }
+ 
+ func createExporter(c Config) (sdktrace.SpanExporter, error) {
+diff --git a/core/trace/vars.go b/core/trace/vars.go
+index d8cee2902c95c64540c2944334616d0eb757601c..33d2e6c9886f1419602cc2df508bcb2e19b93eed 100644
+--- a/core/trace/vars.go
++++ b/core/trace/vars.go
+@@ -4,5 +4,5 @@ import "net/http"
+ 
+ // TraceIdKey is the trace id header.
+ // https://www.w3.org/TR/trace-context/#trace-id
+-// May change it to trace-id afterwards.
++// May change it to trace-id afterward.
+ var TraceIdKey = http.CanonicalHeaderKey("x-trace-id")
+diff --git a/gateway/internal/requestparser.go b/gateway/internal/requestparser.go
+index f239c0a8f25c0ee8c03feac260142eefcac2d8cb..0a3559799fdf6f8c3fab281738de568d82310653 100644
+--- a/gateway/internal/requestparser.go
++++ b/gateway/internal/requestparser.go
+@@ -34,7 +34,7 @@ func NewRequestParser(r *http.Request, resolver jsonpb.AnyResolver) (grpcurl.Req
+ 	}
+ 
+ 	m := make(map[string]any)
+-	if err := json.NewDecoder(body).Decode(&m); err != nil {
++	if err := json.NewDecoder(body).Decode(&m); err != nil && err != io.EOF {
+ 		return nil, err
+ 	}
+ 
+diff --git a/internal/dbtest/sql.go b/internal/dbtest/sql.go
+deleted file mode 100644
+index 2e1be298c9478dafa9c2caa24ffb4a32f523a02a..0000000000000000000000000000000000000000
+--- a/internal/dbtest/sql.go
++++ /dev/null
+@@ -1,37 +0,0 @@
+-package dbtest
+-
+-import (
+-	"database/sql"
+-	"testing"
+-
+-	"github.com/DATA-DOG/go-sqlmock"
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-// RunTest runs a test function with a mock database.
+-func RunTest(t *testing.T, fn func(db *sql.DB, mock sqlmock.Sqlmock)) {
+-	db, mock, err := sqlmock.New()
+-	if err != nil {
+-		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+-	}
+-	defer func() {
+-		_ = db.Close()
+-	}()
+-
+-	fn(db, mock)
+-
+-	if err = mock.ExpectationsWereMet(); err != nil {
+-		t.Errorf("there were unfulfilled expectations: %s", err)
+-	}
+-}
+-
+-// RunTxTest runs a test function with a mock database in a transaction.
+-func RunTxTest(t *testing.T, f func(tx *sql.Tx, mock sqlmock.Sqlmock)) {
+-	RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		mock.ExpectBegin()
+-		tx, err := db.Begin()
+-		if assert.NoError(t, err) {
+-			f(tx, mock)
+-		}
+-	})
+-}
+diff --git a/rest/config.go b/rest/config.go
+index ece29bfd837cae46560f60432f3903cbd0bf7c6a..eb5fdb0ba2340ce12951dbb5092f268cde99ee8e 100644
+--- a/rest/config.go
++++ b/rest/config.go
+@@ -53,7 +53,7 @@ type (
+ 		MaxBytes int64  `json:",default=1048576"`
+ 		// milliseconds
+ 		Timeout      int64         `json:",default=3000"`
+-		CpuThreshold int64         `json:",default=900,range=[0:1000]"`
++		CpuThreshold int64         `json:",default=900,range=[0:1000)"`
+ 		Signature    SignatureConf `json:",optional"`
+ 		// There are default values for all the items in Middlewares.
+ 		Middlewares MiddlewaresConf
+diff --git a/rest/engine.go b/rest/engine.go
+index a206b3cecc3a5ae20ab5396eecb67ff66ca8ad01..e57786caf20525209e935a8bd5aaf5f0c6507280 100644
+--- a/rest/engine.go
++++ b/rest/engine.go
+@@ -217,9 +217,12 @@ func (ng *engine) notFoundHandler(next http.Handler) http.Handler {
+ 			handler.TraceHandler(ng.conf.Name,
+ 				"",
+ 				handler.WithTraceIgnorePaths(ng.conf.TraceIgnorePaths)),
+-			ng.getLogHandler(),
+ 		)
+ 
++		if ng.conf.Middlewares.Log {
++			chn = chn.Append(ng.getLogHandler())
++		}
++
+ 		var h http.Handler
+ 		if next != nil {
+ 			h = chn.Then(next)
+diff --git a/rest/handler/contentsecurityhandler.go b/rest/handler/contentsecurityhandler.go
+index a5b9c182ea6dd585c14350e1e5651c34557a3aa6..bd095fe97476768ea76c024984bf967c242a4236 100644
+--- a/rest/handler/contentsecurityhandler.go
++++ b/rest/handler/contentsecurityhandler.go
+@@ -60,7 +60,8 @@ func executeCallbacks(w http.ResponseWriter, r *http.Request, next http.Handler,
+ 	}
+ }
+ 
+-func handleVerificationFailure(w http.ResponseWriter, r *http.Request, next http.Handler, strict bool, code int) {
++func handleVerificationFailure(w http.ResponseWriter, r *http.Request, next http.Handler,
++	strict bool, _ int) {
+ 	if strict {
+ 		w.WriteHeader(http.StatusForbidden)
+ 	} else {
+diff --git a/rest/handler/prometheushandler.go b/rest/handler/prometheushandler.go
+index 86676d4c0c94a8b1e4a2f4c7f4e7197599c8c840..6abf4dee3a8b55c8a05463538389133ce5506d08 100644
+--- a/rest/handler/prometheushandler.go
++++ b/rest/handler/prometheushandler.go
+@@ -18,7 +18,7 @@ var (
+ 		Name:      "duration_ms",
+ 		Help:      "http server requests duration(ms).",
+ 		Labels:    []string{"path", "method"},
+-		Buckets:   []float64{5, 10, 25, 50, 100, 250, 500, 1000},
++		Buckets:   []float64{5, 10, 25, 50, 100, 250, 500, 750, 1000},
+ 	})
+ 
+ 	metricServerReqCodeTotal = metric.NewCounterVec(&metric.CounterVecOpts{
+diff --git a/rest/handler/timeouthandler.go b/rest/handler/timeouthandler.go
+index 25a9812634ab699f70754bc0de7ee7a15498cfb0..9a1b001d28d384c2e698540355599c2675990fc4 100644
+--- a/rest/handler/timeouthandler.go
++++ b/rest/handler/timeouthandler.go
+@@ -24,6 +24,8 @@ const (
+ 	reason                    = "Request Timeout"
+ 	headerUpgrade             = "Upgrade"
+ 	valueWebsocket            = "websocket"
++	headerAccept              = "Accept"
++	valueSSE                  = "text/event-stream"
+ )
+ 
+ // TimeoutHandler returns the handler with given timeout.
+@@ -56,7 +58,9 @@ func (h *timeoutHandler) errorBody() string {
+ }
+ 
+ func (h *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+-	if r.Header.Get(headerUpgrade) == valueWebsocket {
++	if r.Header.Get(headerUpgrade) == valueWebsocket ||
++		// Server-Sent Event ignore timeout.
++		r.Header.Get(headerAccept) == valueSSE {
+ 		h.handler.ServeHTTP(w, r)
+ 		return
+ 	}
+@@ -110,7 +114,7 @@ func (h *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 			} else {
+ 				w.WriteHeader(http.StatusServiceUnavailable)
+ 			}
+-			io.WriteString(w, h.errorBody())
++			_, _ = io.WriteString(w, h.errorBody())
+ 		})
+ 		tw.timedOut = true
+ 	}
+diff --git a/rest/httpx/util.go b/rest/httpx/util.go
+index 2341961419f398959678068f1a89dd7c0775e69b..9623761adaeb2843834c1b4d6ac4a7ae1b728ce4 100644
+--- a/rest/httpx/util.go
++++ b/rest/httpx/util.go
+@@ -1,6 +1,9 @@
+ package httpx
+ 
+-import "net/http"
++import (
++	"errors"
++	"net/http"
++)
+ 
+ const xForwardedFor = "X-Forwarded-For"
+ 
+@@ -11,7 +14,7 @@ func GetFormValues(r *http.Request) (map[string]any, error) {
+ 	}
+ 
+ 	if err := r.ParseMultipartForm(maxMemory); err != nil {
+-		if err != http.ErrNotMultipart {
++		if !errors.Is(err, http.ErrNotMultipart) {
+ 			return nil, err
+ 		}
+ 	}
+diff --git a/zrpc/config.go b/zrpc/config.go
+index 84a32160dc67833495d6f08f2fe762002cf30c23..5e459a3c43d5c75813ef46c19048455bbd69c581 100644
+--- a/zrpc/config.go
++++ b/zrpc/config.go
+@@ -43,7 +43,7 @@ type (
+ 		StrictControl bool               `json:",optional"`
+ 		// setting 0 means no timeout
+ 		Timeout      int64 `json:",default=2000"`
+-		CpuThreshold int64 `json:",default=900,range=[0:1000]"`
++		CpuThreshold int64 `json:",default=900,range=[0:1000)"`
+ 		// grpc health check switch
+ 		Health      bool `json:",default=true"`
+ 		Middlewares ServerMiddlewaresConf
+diff --git a/zrpc/internal/rpclogger.go b/zrpc/internal/rpclogger.go
+index d20887a2694e5070d7beaf7dc96314056b7e6e47..e871bb586a80ad89949b9332042614a367683fbf 100644
+--- a/zrpc/internal/rpclogger.go
++++ b/zrpc/internal/rpclogger.go
+@@ -46,17 +46,17 @@ func (l *Logger) Fatalln(args ...any) {
+ }
+ 
+ // Info ignores the grpc info logs.
+-func (l *Logger) Info(args ...any) {
++func (l *Logger) Info(_ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+ // Infoln ignores the grpc info logs.
+-func (l *Logger) Infoln(args ...any) {
++func (l *Logger) Infoln(_ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+ // Infof ignores the grpc info logs.
+-func (l *Logger) Infof(format string, args ...any) {
++func (l *Logger) Infof(_ string, _ ...any) {
+ 	// ignore builtin grpc info
+ }
+ 
+@@ -66,16 +66,16 @@ func (l *Logger) V(v int) bool {
+ }
+ 
+ // Warning ignores the grpc warning logs.
+-func (l *Logger) Warning(args ...any) {
++func (l *Logger) Warning(_ ...any) {
+ 	// ignore builtin grpc warning
+ }
+ 
+ // Warningf ignores the grpc warning logs.
+-func (l *Logger) Warningf(format string, args ...any) {
++func (l *Logger) Warningf(_ string, _ ...any) {
+ 	// ignore builtin grpc warning
+ }
+ 
+ // Warningln ignores the grpc warning logs.
+-func (l *Logger) Warningln(args ...any) {
++func (l *Logger) Warningln(_ ...any) {
+ 	// ignore builtin grpc warning
+ }
+diff --git a/zrpc/resolver/internal/resolver.go b/zrpc/resolver/internal/resolver.go
+index 37362a07bb52f3e96ed64fcfdf39a9cd694415dc..2d64ccc84664dc3ed8f8bce2ce08ce1fb1c4ccf6 100644
+--- a/zrpc/resolver/internal/resolver.go
++++ b/zrpc/resolver/internal/resolver.go
+@@ -46,5 +46,5 @@ type nopResolver struct {
+ func (r *nopResolver) Close() {
+ }
+ 
+-func (r *nopResolver) ResolveNow(options resolver.ResolveNowOptions) {
++func (r *nopResolver) ResolveNow(_ resolver.ResolveNowOptions) {
+ }
+diff --git a/zrpc/resolver/register.go b/zrpc/resolver/register.go
+index 43a1ffd226aaeefc8bfb5979afbe335c27d65a23..cc1d04e600b8b9f0704090049dd99d866eb4c78b 100644
+--- a/zrpc/resolver/register.go
++++ b/zrpc/resolver/register.go
+@@ -1,8 +1,6 @@
+ package resolver
+ 
+-import (
+-	"github.com/zeromicro/go-zero/zrpc/resolver/internal"
+-)
++import "github.com/zeromicro/go-zero/zrpc/resolver/internal"
+ 
+ // Register registers schemes defined zrpc.
+ // Keep it in a separated package to let third party register manually.

@@ -1,0 +1,754 @@
+diff --git a/crates/cli/src/decompress.rs b/crates/cli/src/decompress.rs
+index 9e93c98257bbdf226db1a87e5db5d6bdc6498e58..0bfc93e69f20fa0e62ae0f7d5eda9ab40c1e7d81 100644
+--- a/crates/cli/src/decompress.rs
++++ b/crates/cli/src/decompress.rs
+@@ -177,7 +177,7 @@ impl DecompressionMatcher {
+     /// If there are multiple possible commands matching the given path, then
+     /// the command added last takes precedence.
+     pub fn command<P: AsRef<Path>>(&self, path: P) -> Option<Command> {
+-        for i in self.globs.matches(path).into_iter().rev() {
++        if let Some(i) = self.globs.matches(path).into_iter().next_back() {
+             let decomp_cmd = &self.commands[i];
+             let mut cmd = Command::new(&decomp_cmd.bin);
+             cmd.args(&decomp_cmd.args);
+diff --git a/crates/cli/src/hostname.rs b/crates/cli/src/hostname.rs
+index 0a3ae37025fad678ea1717a69d986fe069823c5c..ef5074751ae97e6da395a7ac4f29ae64abf0750c 100644
+--- a/crates/cli/src/hostname.rs
++++ b/crates/cli/src/hostname.rs
+@@ -16,7 +16,7 @@ use std::{ffi::OsString, io};
+ pub fn hostname() -> io::Result<OsString> {
+     #[cfg(windows)]
+     {
+-        use winapi_util::sysinfo::{get_computer_name, ComputerNameKind};
++        use winapi_util::sysinfo::{ComputerNameKind, get_computer_name};
+         get_computer_name(ComputerNameKind::PhysicalDnsHostname)
+     }
+     #[cfg(unix)]
+diff --git a/crates/cli/src/lib.rs b/crates/cli/src/lib.rs
+index b27592d95423f10b0f63cbb99beaf503dbae3334..86d0a46eb689f8b4cc9b5df8ee49c49ed6b3eda4 100644
+--- a/crates/cli/src/lib.rs
++++ b/crates/cli/src/lib.rs
+@@ -133,19 +133,19 @@ mod wtr;
+ 
+ pub use crate::{
+     decompress::{
+-        resolve_binary, DecompressionMatcher, DecompressionMatcherBuilder,
+-        DecompressionReader, DecompressionReaderBuilder,
++        DecompressionMatcher, DecompressionMatcherBuilder,
++        DecompressionReader, DecompressionReaderBuilder, resolve_binary,
+     },
+     escape::{escape, escape_os, unescape, unescape_os},
+     hostname::hostname,
+-    human::{parse_human_readable_size, ParseSizeError},
++    human::{ParseSizeError, parse_human_readable_size},
+     pattern::{
+-        pattern_from_bytes, pattern_from_os, patterns_from_path,
+-        patterns_from_reader, patterns_from_stdin, InvalidPatternError,
++        InvalidPatternError, pattern_from_bytes, pattern_from_os,
++        patterns_from_path, patterns_from_reader, patterns_from_stdin,
+     },
+     process::{CommandError, CommandReader, CommandReaderBuilder},
+     wtr::{
+-        stdout, stdout_buffered_block, stdout_buffered_line, StandardStream,
++        StandardStream, stdout, stdout_buffered_block, stdout_buffered_line,
+     },
+ };
+ 
+diff --git a/crates/core/flags/complete/fish.rs b/crates/core/flags/complete/fish.rs
+index 8952cdd3820cb2aef1ad3d92ab4c146f33d34e19..a1ec2dbde9d83ab975403bd70ec59e1ea54b3603 100644
+--- a/crates/core/flags/complete/fish.rs
++++ b/crates/core/flags/complete/fish.rs
+@@ -2,11 +2,10 @@
+ Provides completions for ripgrep's CLI for the fish shell.
+ */
+ 
+-use crate::flags::{defs::FLAGS, CompletionType};
++use crate::flags::{CompletionType, defs::FLAGS};
+ 
+ const TEMPLATE: &'static str = "complete -c rg !SHORT! -l !LONG! -d '!DOC!'";
+-const TEMPLATE_NEGATED: &'static str =
+-    "complete -c rg -l !NEGATED! -n '__rg_contains_opt !LONG! !SHORT!' -d '!DOC!'\n";
++const TEMPLATE_NEGATED: &'static str = "complete -c rg -l !NEGATED! -n '__rg_contains_opt !LONG! !SHORT!' -d '!DOC!'\n";
+ 
+ /// Generate completions for Fish.
+ ///
+diff --git a/crates/core/flags/complete/powershell.rs b/crates/core/flags/complete/powershell.rs
+index e8a89e2ea0a8dec162e650b53a1c9d36b3993132..bcd0e6f36a3aaa142e771ef970db36282214558e 100644
+--- a/crates/core/flags/complete/powershell.rs
++++ b/crates/core/flags/complete/powershell.rs
+@@ -34,8 +34,7 @@ Register-ArgumentCompleter -Native -CommandName 'rg' -ScriptBlock {
+ }
+ ";
+ 
+-const TEMPLATE_FLAG: &'static str =
+-    "[CompletionResult]::new('!DASH_NAME!', '!NAME!', [CompletionResultType]::ParameterName, '!DOC!')";
++const TEMPLATE_FLAG: &'static str = "[CompletionResult]::new('!DASH_NAME!', '!NAME!', [CompletionResultType]::ParameterName, '!DOC!')";
+ 
+ /// Generate completions for PowerShell.
+ ///
+@@ -72,7 +71,7 @@ pub(crate) fn generate() -> String {
+         }
+ 
+         if let Some(negated) = flag.name_negated() {
+-            let dash_name = format!("--{}", negated);
++            let dash_name = format!("--{negated}");
+             flags.push_str("\n      ");
+             flags.push_str(
+                 &TEMPLATE_FLAG
+diff --git a/crates/core/flags/config.rs b/crates/core/flags/config.rs
+index a081fe7937f3ebdf5cccda1af996a1c9565db8ab..313244f5da736ba1acc7c5451fd7fde8d24dbdf4 100644
+--- a/crates/core/flags/config.rs
++++ b/crates/core/flags/config.rs
+@@ -10,7 +10,7 @@ use std::{
+     path::{Path, PathBuf},
+ };
+ 
+-use bstr::{io::BufReadExt, ByteSlice};
++use bstr::{ByteSlice, io::BufReadExt};
+ 
+ /// Return a sequence of arguments derived from ripgrep rc configuration files.
+ pub fn args() -> Vec<OsString> {
+diff --git a/crates/core/flags/defs.rs b/crates/core/flags/defs.rs
+index 541f55ab1dd35e4ebf2be8d9bb8a2ae3cb9043cb..e3722161e3d9ae04c9099fc2e1e261e1a0d546f8 100644
+--- a/crates/core/flags/defs.rs
++++ b/crates/core/flags/defs.rs
+@@ -22,13 +22,13 @@ use std::{path::PathBuf, sync::LazyLock};
+ use {anyhow::Context as AnyhowContext, bstr::ByteVec};
+ 
+ use crate::flags::{
++    Category, Flag, FlagValue,
+     lowargs::{
+         BinaryMode, BoundaryMode, BufferMode, CaseMode, ColorChoice,
+         ContextMode, EncodingMode, EngineChoice, GenerateMode, LoggingMode,
+         LowArgs, MmapMode, Mode, PatternSource, SearchMode, SortMode,
+         SortModeKind, SpecialMode, TypeChange,
+     },
+-    Category, Flag, FlagValue,
+ };
+ 
+ #[cfg(test)]
+diff --git a/crates/core/flags/doc/help.rs b/crates/core/flags/doc/help.rs
+index 353d1808b5bd25d0deb10dec24e1f6b79c60db9b..c579bd238760fff39677752f972c8b0d1b74517b 100644
+--- a/crates/core/flags/doc/help.rs
++++ b/crates/core/flags/doc/help.rs
+@@ -8,7 +8,7 @@ is used when the `--help` flag is given.
+ 
+ use std::{collections::BTreeMap, fmt::Write};
+ 
+-use crate::flags::{defs::FLAGS, doc::version, Category, Flag};
++use crate::flags::{Category, Flag, defs::FLAGS, doc::version};
+ 
+ const TEMPLATE_SHORT: &'static str = include_str!("template.short.help");
+ const TEMPLATE_LONG: &'static str = include_str!("template.long.help");
+diff --git a/crates/core/flags/doc/man.rs b/crates/core/flags/doc/man.rs
+index e0ed13bae6a071b687456c628399ef14f00ef286..0f1740cbc6e4879ac6743aad3d62e56bf3c0743d 100644
+--- a/crates/core/flags/doc/man.rs
++++ b/crates/core/flags/doc/man.rs
+@@ -4,7 +4,7 @@ Provides routines for generating ripgrep's man page in `roff` format.
+ 
+ use std::{collections::BTreeMap, fmt::Write};
+ 
+-use crate::flags::{defs::FLAGS, doc::version, Flag};
++use crate::flags::{Flag, defs::FLAGS, doc::version};
+ 
+ const TEMPLATE: &'static str = include_str!("template.rg.1");
+ 
+diff --git a/crates/core/flags/doc/version.rs b/crates/core/flags/doc/version.rs
+index d238ba0cd553b8a9fa5e6cd362f026583e92e841..bf15622ef941a2d1cbdebf1ec8264eef9eee70d9 100644
+--- a/crates/core/flags/doc/version.rs
++++ b/crates/core/flags/doc/version.rs
+@@ -169,9 +169,5 @@ fn features() -> Vec<String> {
+ 
+ /// Returns `+` when `enabled` is `true` and `-` otherwise.
+ fn sign(enabled: bool) -> &'static str {
+-    if enabled {
+-        "+"
+-    } else {
+-        "-"
+-    }
++    if enabled { "+" } else { "-" }
+ }
+diff --git a/crates/core/flags/hiargs.rs b/crates/core/flags/hiargs.rs
+index b62bbcc67921ae06355f508470655934fbfe97e7..49c59cc2494b35a89b933591867e7d89530e2501 100644
+--- a/crates/core/flags/hiargs.rs
++++ b/crates/core/flags/hiargs.rs
+@@ -570,10 +570,10 @@ impl HiArgs {
+                 SearchMode::Count => SummaryKind::Count,
+                 SearchMode::CountMatches => SummaryKind::CountMatches,
+                 SearchMode::JSON => {
+-                    return Printer::JSON(self.printer_json(wtr))
++                    return Printer::JSON(self.printer_json(wtr));
+                 }
+                 SearchMode::Standard => {
+-                    return Printer::Standard(self.printer_standard(wtr))
++                    return Printer::Standard(self.printer_standard(wtr));
+                 }
+             }
+         };
+@@ -800,11 +800,7 @@ impl HiArgs {
+                 // When both error, we can't distinguish, so treat as equal.
+                 (None, None) => Ordering::Equal,
+             };
+-            if sort.reverse {
+-                ordering.reverse()
+-            } else {
+-                ordering
+-            }
++            if sort.reverse { ordering.reverse() } else { ordering }
+         });
+         Box::new(with_timestamps.into_iter().map(|(s, _)| s))
+     }
+diff --git a/crates/core/flags/mod.rs b/crates/core/flags/mod.rs
+index 54aec5725331b8117610f2cce803b761d4d992c5..b1cc4b265306f86ca85966c7c7edbc2f490fda8c 100644
+--- a/crates/core/flags/mod.rs
++++ b/crates/core/flags/mod.rs
+@@ -36,7 +36,7 @@ pub(crate) use crate::flags::{
+     },
+     hiargs::HiArgs,
+     lowargs::{GenerateMode, Mode, SearchMode, SpecialMode},
+-    parse::{parse, ParseResult},
++    parse::{ParseResult, parse},
+ };
+ 
+ mod complete;
+diff --git a/crates/core/flags/parse.rs b/crates/core/flags/parse.rs
+index 37a74b6f1bcc1e6353f9374f49e82338a1ce1b0c..edda40a40ba4d6c4e00ca201bb4b1439dbbc617b 100644
+--- a/crates/core/flags/parse.rs
++++ b/crates/core/flags/parse.rs
+@@ -7,10 +7,10 @@ use std::{borrow::Cow, collections::BTreeSet, ffi::OsString};
+ use anyhow::Context;
+ 
+ use crate::flags::{
++    Flag, FlagValue,
+     defs::FLAGS,
+     hiargs::HiArgs,
+     lowargs::{LoggingMode, LowArgs, SpecialMode},
+-    Flag, FlagValue,
+ };
+ 
+ /// The result of parsing CLI arguments.
+diff --git a/crates/core/messages.rs b/crates/core/messages.rs
+index ba8b9adc578206efd512ce426c7e8bbcb61e0a1b..333e7076ce7d741277ec7e38996fd632e64f5062 100644
+--- a/crates/core/messages.rs
++++ b/crates/core/messages.rs
+@@ -99,19 +99,19 @@ macro_rules! ignore_message {
+ 
+ /// Returns true if and only if messages should be shown.
+ pub(crate) fn messages() -> bool {
+-    MESSAGES.load(Ordering::SeqCst)
++    MESSAGES.load(Ordering::Relaxed)
+ }
+ 
+ /// Set whether messages should be shown or not.
+ ///
+ /// By default, they are not shown.
+ pub(crate) fn set_messages(yes: bool) {
+-    MESSAGES.store(yes, Ordering::SeqCst)
++    MESSAGES.store(yes, Ordering::Relaxed)
+ }
+ 
+ /// Returns true if and only if "ignore" related messages should be shown.
+ pub(crate) fn ignore_messages() -> bool {
+-    IGNORE_MESSAGES.load(Ordering::SeqCst)
++    IGNORE_MESSAGES.load(Ordering::Relaxed)
+ }
+ 
+ /// Set whether "ignore" related messages should be shown or not.
+@@ -122,12 +122,12 @@ pub(crate) fn ignore_messages() -> bool {
+ /// `messages` is disabled, then "ignore" messages are never shown, regardless
+ /// of this setting.
+ pub(crate) fn set_ignore_messages(yes: bool) {
+-    IGNORE_MESSAGES.store(yes, Ordering::SeqCst)
++    IGNORE_MESSAGES.store(yes, Ordering::Relaxed)
+ }
+ 
+ /// Returns true if and only if ripgrep came across a non-fatal error.
+ pub(crate) fn errored() -> bool {
+-    ERRORED.load(Ordering::SeqCst)
++    ERRORED.load(Ordering::Relaxed)
+ }
+ 
+ /// Indicate that ripgrep has come across a non-fatal error.
+@@ -135,5 +135,5 @@ pub(crate) fn errored() -> bool {
+ /// Callers should not use this directly. Instead, it is called automatically
+ /// via the `err_message` macro.
+ pub(crate) fn set_errored() {
+-    ERRORED.store(true, Ordering::SeqCst);
++    ERRORED.store(true, Ordering::Relaxed);
+ }
+diff --git a/crates/core/search.rs b/crates/core/search.rs
+index 672734254dc4322cb001bfb11de358e5cd307ae4..d03433f6f85a67835a9f45d3ffb67f08793f1bf1 100644
+--- a/crates/core/search.rs
++++ b/crates/core/search.rs
+@@ -307,15 +307,14 @@ impl<W: WriteColor> SearchWorker<W> {
+             io::Error::new(
+                 io::ErrorKind::Other,
+                 format!(
+-                    "preprocessor command could not start: '{:?}': {}",
+-                    cmd, err,
++                    "preprocessor command could not start: '{cmd:?}': {err}",
+                 ),
+             )
+         })?;
+         let result = self.search_reader(path, &mut rdr).map_err(|err| {
+             io::Error::new(
+                 io::ErrorKind::Other,
+-                format!("preprocessor command failed: '{:?}': {}", cmd, err),
++                format!("preprocessor command failed: '{cmd:?}': {err}"),
+             )
+         });
+         let close_result = rdr.close();
+diff --git a/crates/globset/src/glob.rs b/crates/globset/src/glob.rs
+index c25e3f22227d855bc839523c471b30444c6d65f9..3339b719e9a6fe385d9e2477657d2c0239523f20 100644
+--- a/crates/globset/src/glob.rs
++++ b/crates/globset/src/glob.rs
+@@ -1,9 +1,9 @@
+ use std::fmt::Write;
+-use std::path::{is_separator, Path};
++use std::path::{Path, is_separator};
+ 
+ use regex_automata::meta::Regex;
+ 
+-use crate::{new_regex, Candidate, Error, ErrorKind};
++use crate::{Candidate, Error, ErrorKind, new_regex};
+ 
+ /// Describes a matching strategy for a particular pattern.
+ ///
+@@ -309,11 +309,7 @@ impl Glob {
+             let Token::Literal(c) = *t else { return None };
+             lit.push(c);
+         }
+-        if lit.is_empty() {
+-            None
+-        } else {
+-            Some(lit)
+-        }
++        if lit.is_empty() { None } else { Some(lit) }
+     }
+ 
+     /// Returns an extension if this pattern matches a file path if and only
+@@ -354,11 +350,7 @@ impl Glob {
+                 _ => return None,
+             }
+         }
+-        if lit.is_empty() {
+-            None
+-        } else {
+-            Some(lit)
+-        }
++        if lit.is_empty() { None } else { Some(lit) }
+     }
+ 
+     /// This is like `ext`, but returns an extension even if it isn't sufficient
+@@ -421,11 +413,7 @@ impl Glob {
+         if need_sep {
+             lit.push('/');
+         }
+-        if lit.is_empty() {
+-            None
+-        } else {
+-            Some(lit)
+-        }
++        if lit.is_empty() { None } else { Some(lit) }
+     }
+ 
+     /// Returns a literal suffix of this pattern if the entire pattern matches
+@@ -474,11 +462,7 @@ impl Glob {
+             let Token::Literal(c) = *t else { return None };
+             lit.push(c);
+         }
+-        if lit.is_empty() || lit == "/" {
+-            None
+-        } else {
+-            Some((lit, entire))
+-        }
++        if lit.is_empty() || lit == "/" { None } else { Some((lit, entire)) }
+     }
+ 
+     /// If this pattern only needs to inspect the basename of a file path,
+diff --git a/crates/globset/src/lib.rs b/crates/globset/src/lib.rs
+index 7dcea73dd68473a9d66cf436799ee83c33a90f14..7574224dad269d770902220ef2a95f1366d9d77e 100644
+--- a/crates/globset/src/lib.rs
++++ b/crates/globset/src/lib.rs
+@@ -107,11 +107,11 @@ use std::{
+ 
+ use {
+     aho_corasick::AhoCorasick,
+-    bstr::{ByteSlice, ByteVec, B},
++    bstr::{B, ByteSlice, ByteVec},
+     regex_automata::{
++        PatternSet,
+         meta::Regex,
+         util::pool::{Pool, PoolGuard},
+-        PatternSet,
+     },
+ };
+ 
+@@ -150,6 +150,7 @@ pub struct Error {
+ 
+ /// The kind of error that can occur when parsing a glob pattern.
+ #[derive(Clone, Debug, Eq, PartialEq)]
++#[non_exhaustive]
+ pub enum ErrorKind {
+     /// **DEPRECATED**.
+     ///
+@@ -176,13 +177,6 @@ pub enum ErrorKind {
+     DanglingEscape,
+     /// An error associated with parsing or compiling a regex.
+     Regex(String),
+-    /// Hints that destructuring should not be exhaustive.
+-    ///
+-    /// This enum may grow additional variants, so this makes sure clients
+-    /// don't count on exhaustive matching. (Otherwise, adding a new variant
+-    /// could break existing code.)
+-    #[doc(hidden)]
+-    __Nonexhaustive,
+ }
+ 
+ impl std::error::Error for Error {
+@@ -226,7 +220,6 @@ impl ErrorKind {
+             }
+             ErrorKind::DanglingEscape => "dangling '\\'",
+             ErrorKind::Regex(ref err) => err,
+-            ErrorKind::__Nonexhaustive => unreachable!(),
+         }
+     }
+ }
+@@ -255,7 +248,6 @@ impl std::fmt::Display for ErrorKind {
+             ErrorKind::InvalidRange(s, e) => {
+                 write!(f, "invalid range; '{}' > '{}'", s, e)
+             }
+-            ErrorKind::__Nonexhaustive => unreachable!(),
+         }
+     }
+ }
+@@ -547,11 +539,7 @@ impl<'a> Candidate<'a> {
+     }
+ 
+     fn path_prefix(&self, max: usize) -> &[u8] {
+-        if self.path.len() <= max {
+-            &*self.path
+-        } else {
+-            &self.path[..max]
+-        }
++        if self.path.len() <= max { &*self.path } else { &self.path[..max] }
+     }
+ 
+     fn path_suffix(&self, max: usize) -> &[u8] {
+diff --git a/crates/ignore/src/gitignore.rs b/crates/ignore/src/gitignore.rs
+index eeb51b821f5a970c1c3fe193168ac2432569cec6..5e3a5891d4489eaae669911f0ced66969de249f8 100644
+--- a/crates/ignore/src/gitignore.rs
++++ b/crates/ignore/src/gitignore.rs
+@@ -20,8 +20,8 @@ use {
+ };
+ 
+ use crate::{
+-    pathutil::{is_file_name, strip_prefix},
+     Error, Match, PartialErrorBuilder,
++    pathutil::{is_file_name, strip_prefix},
+ };
+ 
+ /// Glob represents a single glob in a gitignore file.
+diff --git a/crates/ignore/src/lib.rs b/crates/ignore/src/lib.rs
+index 74c96edd943e8831125d1b076dc2a7a780e38c6c..ae6d478cccbef1f371c8d2e7679054506c22991b 100644
+--- a/crates/ignore/src/lib.rs
++++ b/crates/ignore/src/lib.rs
+@@ -477,11 +477,7 @@ impl<T> Match<T> {
+ 
+     /// Return the match if it is not none. Otherwise, return other.
+     pub fn or(self, other: Self) -> Self {
+-        if self.is_none() {
+-            other
+-        } else {
+-            self
+-        }
++        if self.is_none() { other } else { self }
+     }
+ }
+ 
+diff --git a/crates/ignore/src/overrides.rs b/crates/ignore/src/overrides.rs
+index 1b02b4d4ee9a1ca3592a517d3d741fdf611292b0..bd9720acafb118838ebe2e16b0902469b6c1775b 100644
+--- a/crates/ignore/src/overrides.rs
++++ b/crates/ignore/src/overrides.rs
+@@ -7,8 +7,8 @@ line tools.
+ use std::path::Path;
+ 
+ use crate::{
+-    gitignore::{self, Gitignore, GitignoreBuilder},
+     Error, Match,
++    gitignore::{self, Gitignore, GitignoreBuilder},
+ };
+ 
+ /// Glob represents a single glob in an override matcher.
+diff --git a/crates/ignore/src/types.rs b/crates/ignore/src/types.rs
+index 308b784d4265bc80f658e6fedce9dbf6948ebe53..d4765bdabd7c5cb9524d1ade250cf419ec6b912e 100644
+--- a/crates/ignore/src/types.rs
++++ b/crates/ignore/src/types.rs
+@@ -91,7 +91,7 @@ use {
+     regex_automata::util::pool::Pool,
+ };
+ 
+-use crate::{default_types::DEFAULT_TYPES, pathutil::file_name, Error, Match};
++use crate::{Error, Match, default_types::DEFAULT_TYPES, pathutil::file_name};
+ 
+ /// Glob represents a single glob in a set of file type definitions.
+ ///
+diff --git a/crates/ignore/src/walk.rs b/crates/ignore/src/walk.rs
+index 2e1e85d8127a5f571b8cc2f04ad176190b42b828..d62afcfb0a37e6f3d5b7d52e058829695ebfbb7a 100644
+--- a/crates/ignore/src/walk.rs
++++ b/crates/ignore/src/walk.rs
+@@ -4,8 +4,8 @@ use std::{
+     fs::{self, FileType, Metadata},
+     io,
+     path::{Path, PathBuf},
+-    sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+     sync::Arc,
++    sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+ };
+ 
+ use {
+@@ -15,11 +15,11 @@ use {
+ };
+ 
+ use crate::{
++    Error, PartialErrorBuilder,
+     dir::{Ignore, IgnoreBuilder},
+     gitignore::GitignoreBuilder,
+     overrides::Override,
+     types::Types,
+-    Error, PartialErrorBuilder,
+ };
+ 
+ /// A directory entry with a possible error attached.
+@@ -1887,7 +1887,7 @@ fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
+ 
+ #[cfg(windows)]
+ fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
+-    use winapi_util::{file, Handle};
++    use winapi_util::{Handle, file};
+ 
+     let h = Handle::from_path_any(path)?;
+     file::information(h).map(|info| info.volume_serial_number())
+diff --git a/crates/printer/src/json.rs b/crates/printer/src/json.rs
+index 1f6585a1fe6f6a1b8940dfa8a1056e11211cf283..b1fff46f39a75359d05885e4a574866f59d194d3 100644
+--- a/crates/printer/src/json.rs
++++ b/crates/printer/src/json.rs
+@@ -14,8 +14,8 @@ use {
+ };
+ 
+ use crate::{
+-    counter::CounterWriter, jsont, stats::Stats,
+-    util::find_iter_at_in_context, util::Replacer,
++    counter::CounterWriter, jsont, stats::Stats, util::Replacer,
++    util::find_iter_at_in_context,
+ };
+ 
+ /// The configuration for the JSON printer.
+@@ -571,7 +571,7 @@ impl<W: io::Write> JSON<W> {
+         } else {
+             json::to_writer(&mut self.wtr, message)?;
+         }
+-        self.wtr.write(&[b'\n'])?;
++        let _ = self.wtr.write(b"\n")?; // This will always be Ok(1) when successful.
+         Ok(())
+     }
+ }
+diff --git a/crates/printer/src/jsont.rs b/crates/printer/src/jsont.rs
+index 1548c3a88c3515e3716fe4f6b7a3babea8096b3d..837692906be09a7c2111e2d3c594cbf5c9a6d9b7 100644
+--- a/crates/printer/src/jsont.rs
++++ b/crates/printer/src/jsont.rs
+@@ -190,7 +190,7 @@ impl<'a> Data<'a> {
+     }
+ 
+     #[cfg(not(unix))]
+-    fn from_path(path: &Path) -> Data {
++    fn from_path(path: &Path) -> Data<'_> {
+         // Using lossy conversion means some paths won't round trip precisely,
+         // but it's not clear what we should actually do. Serde rejects
+         // non-UTF-8 paths, and OsStr's are serialized as a sequence of UTF-16
+diff --git a/crates/printer/src/lib.rs b/crates/printer/src/lib.rs
+index 96748e2cc497c074245aa81ea7815d0351a3f08e..539dfb7f4a99cf066d3ea59bb151ed618a0842c4 100644
+--- a/crates/printer/src/lib.rs
++++ b/crates/printer/src/lib.rs
+@@ -61,10 +61,10 @@ assert_eq!(output, expected);
+ #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+ 
+ pub use crate::{
+-    color::{default_color_specs, ColorError, ColorSpecs, UserColorSpec},
++    color::{ColorError, ColorSpecs, UserColorSpec, default_color_specs},
+     hyperlink::{
+-        hyperlink_aliases, HyperlinkAlias, HyperlinkConfig,
+-        HyperlinkEnvironment, HyperlinkFormat, HyperlinkFormatError,
++        HyperlinkAlias, HyperlinkConfig, HyperlinkEnvironment,
++        HyperlinkFormat, HyperlinkFormatError, hyperlink_aliases,
+     },
+     path::{PathPrinter, PathPrinterBuilder},
+     standard::{Standard, StandardBuilder, StandardSink},
+@@ -73,7 +73,7 @@ pub use crate::{
+ };
+ 
+ #[cfg(feature = "serde")]
+-pub use crate::json::{JSONBuilder, JSONSink, JSON};
++pub use crate::json::{JSON, JSONBuilder, JSONSink};
+ 
+ // The maximum number of bytes to execute a search to account for look-ahead.
+ //
+diff --git a/crates/printer/src/standard.rs b/crates/printer/src/standard.rs
+index 95c517179eca9e87c636424062abd40809a38301..43372c99c424ef8fdda63e1f2fb64f66338379b3 100644
+--- a/crates/printer/src/standard.rs
++++ b/crates/printer/src/standard.rs
+@@ -23,8 +23,8 @@ use crate::{
+     hyperlink::{self, HyperlinkConfig},
+     stats::Stats,
+     util::{
+-        find_iter_at_in_context, trim_ascii_prefix, trim_line_terminator,
+         DecimalFormatter, PrinterPath, Replacer, Sunk,
++        find_iter_at_in_context, trim_ascii_prefix, trim_line_terminator,
+     },
+ };
+ 
+@@ -762,10 +762,8 @@ impl<'p, 's, M: Matcher, W: WriteColor> StandardSink<'p, 's, M, W> {
+     ) -> io::Result<()> {
+         self.replacer.clear();
+         if self.standard.config.replacement.is_some() {
+-            let replacement = (*self.standard.config.replacement)
+-                .as_ref()
+-                .map(|r| &*r)
+-                .unwrap();
++            let replacement =
++                (*self.standard.config.replacement).as_ref().unwrap();
+             self.replacer.replace_all(
+                 searcher,
+                 &self.matcher,
+diff --git a/crates/printer/src/summary.rs b/crates/printer/src/summary.rs
+index 30e7977fd810b6b2cf48247048a6ed77258b2cf8..99c17f46f065e0fe6be359551b6eb49bad6df072 100644
+--- a/crates/printer/src/summary.rs
++++ b/crates/printer/src/summary.rs
+@@ -17,7 +17,7 @@ use crate::{
+     counter::CounterWriter,
+     hyperlink::{self, HyperlinkConfig},
+     stats::Stats,
+-    util::{find_iter_at_in_context, PrinterPath},
++    util::{PrinterPath, find_iter_at_in_context},
+ };
+ 
+ /// The configuration for the summary printer.
+diff --git a/crates/printer/src/util.rs b/crates/printer/src/util.rs
+index faaa92b7361a7e138718ee1281b28ea2d8f30bec..491a0b7e3364ecdd89a9f75138d0719414b0ca2a 100644
+--- a/crates/printer/src/util.rs
++++ b/crates/printer/src/util.rs
+@@ -8,7 +8,7 @@ use {
+     },
+ };
+ 
+-use crate::{hyperlink::HyperlinkPath, MAX_LOOK_AHEAD};
++use crate::{MAX_LOOK_AHEAD, hyperlink::HyperlinkPath};
+ 
+ /// A type for handling replacements while amortizing allocation.
+ pub(crate) struct Replacer<M: Matcher> {
+diff --git a/crates/regex/src/config.rs b/crates/regex/src/config.rs
+index 24bca70e35f11ba4dd96dc18cc45251762b96d08..d2f71c2a49f534dd4a32aeb59055acd2025acbfb 100644
+--- a/crates/regex/src/config.rs
++++ b/crates/regex/src/config.rs
+@@ -341,11 +341,7 @@ impl ConfiguredHIR {
+ 
+     /// Returns the "end line" anchor for this configuration.
+     fn line_anchor_end(&self) -> hir::Look {
+-        if self.config.crlf {
+-            hir::Look::EndCRLF
+-        } else {
+-            hir::Look::EndLF
+-        }
++        if self.config.crlf { hir::Look::EndCRLF } else { hir::Look::EndLF }
+     }
+ }
+ 
+diff --git a/crates/regex/src/literal.rs b/crates/regex/src/literal.rs
+index a33da2a6c19bef7fe99e4d98926a3e54439f3b2d..3919b90c9720377e079c5a49803600eaaf753236 100644
+--- a/crates/regex/src/literal.rs
++++ b/crates/regex/src/literal.rs
+@@ -1,9 +1,8 @@
+ use {
+     regex_automata::meta::Regex,
+     regex_syntax::hir::{
+-        self,
++        self, Hir,
+         literal::{Literal, Seq},
+-        Hir,
+     },
+ };
+ 
+@@ -223,11 +222,7 @@ impl Extractor {
+             // extracting prefixes or suffixes.
+             seq = self.cross(seq, self.extract(hir));
+         }
+-        if let Some(prev) = prev {
+-            prev.choose(seq)
+-        } else {
+-            seq
+-        }
++        if let Some(prev) = prev { prev.choose(seq) } else { seq }
+     }
+ 
+     /// Extract a sequence from the given alternation.
+diff --git a/crates/regex/src/matcher.rs b/crates/regex/src/matcher.rs
+index a5851c697c9af2f2104bae7068087cb2f1b0e815..3bb70a8c0956190048bdbe6ecb925bb9bdc6f7e6 100644
+--- a/crates/regex/src/matcher.rs
++++ b/crates/regex/src/matcher.rs
+@@ -4,8 +4,8 @@ use {
+         NoError,
+     },
+     regex_automata::{
+-        meta::Regex, util::captures::Captures as AutomataCaptures, Input,
+-        PatternID,
++        Input, PatternID, meta::Regex,
++        util::captures::Captures as AutomataCaptures,
+     },
+ };
+ 
+diff --git a/crates/searcher/src/lib.rs b/crates/searcher/src/lib.rs
+index 4f5bd159644dd06657db575f1ce3288fca01327b..fb3bfe82e4ed15d9b2f3110a6b51b5cc2550c755 100644
+--- a/crates/searcher/src/lib.rs
++++ b/crates/searcher/src/lib.rs
+@@ -90,8 +90,8 @@ pub use crate::{
+         SearcherBuilder,
+     },
+     sink::{
+-        sinks, Sink, SinkContext, SinkContextKind, SinkError, SinkFinish,
+-        SinkMatch,
++        Sink, SinkContext, SinkContextKind, SinkError, SinkFinish, SinkMatch,
++        sinks,
+     },
+ };
+ 
+diff --git a/crates/searcher/src/searcher/glue.rs b/crates/searcher/src/searcher/glue.rs
+index 5db57019b5e17a848373f20fea320fe22b80a64c..98f0d068b7622c638f95adc8be974f9413832bc8 100644
+--- a/crates/searcher/src/searcher/glue.rs
++++ b/crates/searcher/src/searcher/glue.rs
+@@ -1,9 +1,9 @@
+ use grep_matcher::Matcher;
+ 
+ use crate::{
+-    line_buffer::{LineBufferReader, DEFAULT_BUFFER_CAPACITY},
++    line_buffer::{DEFAULT_BUFFER_CAPACITY, LineBufferReader},
+     lines::{self, LineStep},
+-    searcher::{core::Core, Config, Range, Searcher},
++    searcher::{Config, Range, Searcher, core::Core},
+     sink::{Sink, SinkError},
+ };
+ 
+diff --git a/crates/searcher/src/searcher/mod.rs b/crates/searcher/src/searcher/mod.rs
+index c7d3b1d1d16f9201fc29970aa0ae20ebb25f9d5e..45a4a153839bf580d45bf140759defd0ca23d484 100644
+--- a/crates/searcher/src/searcher/mod.rs
++++ b/crates/searcher/src/searcher/mod.rs
+@@ -13,8 +13,8 @@ use {
+ 
+ use crate::{
+     line_buffer::{
+-        self, alloc_error, BufferAllocation, LineBuffer, LineBufferBuilder,
+-        LineBufferReader, DEFAULT_BUFFER_CAPACITY,
++        self, BufferAllocation, DEFAULT_BUFFER_CAPACITY, LineBuffer,
++        LineBufferBuilder, LineBufferReader, alloc_error,
+     },
+     searcher::glue::{MultiLine, ReadByLine, SliceByLine},
+     sink::{Sink, SinkError},

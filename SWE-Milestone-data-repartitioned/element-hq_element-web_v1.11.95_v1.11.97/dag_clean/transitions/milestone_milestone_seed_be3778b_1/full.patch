@@ -1,0 +1,561 @@
+diff --git a/res/css/_components.pcss b/res/css/_components.pcss
+index 90129601958795ec20b1dfb2d131429feba9ca76..d3b5dfd69adcc8812c25a312ccaef3daf8f45af9 100644
+--- a/res/css/_components.pcss
++++ b/res/css/_components.pcss
+@@ -48,6 +48,7 @@
+ @import "./components/views/settings/devices/_FilteredDeviceListHeader.pcss";
+ @import "./components/views/settings/devices/_SecurityRecommendations.pcss";
+ @import "./components/views/settings/devices/_SelectableDeviceTile.pcss";
++@import "./components/views/settings/encryption/_KeyStoragePanel.pcss";
+ @import "./components/views/settings/shared/_SettingsSubsection.pcss";
+ @import "./components/views/settings/shared/_SettingsSubsectionHeading.pcss";
+ @import "./components/views/spaces/_QuickThemeSwitcher.pcss";
+diff --git a/res/css/components/views/settings/encryption/_KeyStoragePanel.pcss b/res/css/components/views/settings/encryption/_KeyStoragePanel.pcss
+new file mode 100644
+index 0000000000000000000000000000000000000000..34a79db9cdb7bc0ecf994be7a51083d060127fa6
+--- /dev/null
++++ b/res/css/components/views/settings/encryption/_KeyStoragePanel.pcss
+@@ -0,0 +1,10 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++.mx_KeyStoragePanel_toggleRow {
++    flex-direction: row;
++}
+diff --git a/src/DeviceListener.ts b/src/DeviceListener.ts
+index cf46be41fa32813518373d7e3198960831ed3603..751e71dd9f6438659201d9c80fef28b0efef615d 100644
+--- a/src/DeviceListener.ts
++++ b/src/DeviceListener.ts
+@@ -49,10 +49,13 @@ import { asyncSomeParallel } from "./utils/arrays.ts";
+ 
+ const KEY_BACKUP_POLL_INTERVAL = 5 * 60 * 1000;
+ 
+-// Unfortunately named account data key used by Element X to indicate that the user
+-// has chosen to disable server side key backups. We need to set and honour this
+-// to prevent Element X from automatically turning key backup back on.
+-const BACKUP_DISABLED_ACCOUNT_DATA_KEY = "m.org.matrix.custom.backup_disabled";
++/**
++ * Unfortunately-named account data key used by Element X to indicate that the user
++ * has chosen to disable server side key backups.
++ *
++ * We need to set and honour this to prevent Element X from automatically turning key backup back on.
++ */
++export const BACKUP_DISABLED_ACCOUNT_DATA_KEY = "m.org.matrix.custom.backup_disabled";
+ 
+ const logger = baseLogger.getChild("DeviceListener:");
+ 
+diff --git a/src/components/viewmodels/settings/encryption/KeyStoragePanelViewModel.ts b/src/components/viewmodels/settings/encryption/KeyStoragePanelViewModel.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee301bd27fce300b94db2e482e6f2ab909eed9be
+--- /dev/null
++++ b/src/components/viewmodels/settings/encryption/KeyStoragePanelViewModel.ts
+@@ -0,0 +1,116 @@
++/*
++Copyright 2025 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { useCallback, useEffect, useState } from "react";
++import { logger } from "matrix-js-sdk/src/logger";
++
++import { useMatrixClientContext } from "../../../../contexts/MatrixClientContext";
++import DeviceListener, { BACKUP_DISABLED_ACCOUNT_DATA_KEY } from "../../../../DeviceListener";
++
++interface KeyStoragePanelState {
++    /**
++     * Whether the app's "key storage" option should show as enabled to the user,
++     * or 'undefined' if the state is still loading.
++     */
++    isEnabled: boolean | undefined;
++
++    /**
++     * A function that can be called to enable or disable key storage.
++     * @param enable True to turn key storage on or false to turn it off
++     */
++    setEnabled: (enable: boolean) => void;
++
++    /**
++     * True if the state is still loading for the first time
++     */
++    loading: boolean;
++
++    /**
++     * True if the status is in the process of being changed
++     */
++    busy: boolean;
++}
++
++/** Returns a ViewModel for use in {@link KeyStoragePanel} and {@link DeleteKeyStoragePanel}. */
++export function useKeyStoragePanelViewModel(): KeyStoragePanelState {
++    const [isEnabled, setIsEnabled] = useState<boolean | undefined>(undefined);
++    const [loading, setLoading] = useState(true);
++    // Whilst the change is being made, the toggle will reflect the pending value rather than the actual state
++    const [pendingValue, setPendingValue] = useState<boolean | undefined>(undefined);
++
++    const matrixClient = useMatrixClientContext();
++
++    const checkStatus = useCallback(async () => {
++        const crypto = matrixClient.getCrypto();
++        if (!crypto) {
++            logger.error("Can't check key backup status: no crypto module available");
++            return;
++        }
++        // The toggle is enabled only if this device will upload megolm keys to the backup.
++        // This is consistent with EX.
++        const activeBackupVersion = await crypto.getActiveSessionBackupVersion();
++        setIsEnabled(activeBackupVersion !== null);
++    }, [matrixClient]);
++
++    useEffect(() => {
++        (async () => {
++            await checkStatus();
++            setLoading(false);
++        })();
++    }, [checkStatus]);
++
++    const setEnabled = useCallback(
++        async (enable: boolean) => {
++            setPendingValue(enable);
++            try {
++                // stop the device listener since enabling or (especially) disabling key storage must be
++                // done with a sequence of API calls that will put the account in a slightly different
++                // state each time, so suppress any warning toasts until the process is finished (when
++                // we'll turn it back on again.)
++                DeviceListener.sharedInstance().stop();
++
++                const crypto = matrixClient.getCrypto();
++                if (!crypto) {
++                    logger.error("Can't change key backup status: no crypto module available");
++                    return;
++                }
++                if (enable) {
++                    // If there is no existing key backup on the server, create one.
++                    // `resetKeyBackup` will delete any existing backup, so we only do this if there is no existing backup.
++                    const currentKeyBackup = await crypto.checkKeyBackupAndEnable();
++                    if (currentKeyBackup === null) {
++                        await crypto.resetKeyBackup();
++
++                        // resetKeyBackup fires this off in the background without waiting, so we need to do it
++                        // explicitly and wait for it, otherwise it won't be enabled yet when we check again.
++                        await crypto.checkKeyBackupAndEnable();
++                    }
++
++                    // Set the flag so that EX no longer thinks the user wants backup disabled
++                    await matrixClient.setAccountData(BACKUP_DISABLED_ACCOUNT_DATA_KEY, { disabled: false });
++                } else {
++                    // This method will delete the key backup as well as server side recovery keys and other
++                    // server-side crypto data.
++                    await crypto.disableKeyStorage();
++
++                    // Set a flag to say that the user doesn't want key backup.
++                    // Element X uses this to determine whether to set up automatically,
++                    // so this will stop EX turning it back on spontaneously.
++                    await matrixClient.setAccountData(BACKUP_DISABLED_ACCOUNT_DATA_KEY, { disabled: true });
++                }
++
++                await checkStatus();
++            } finally {
++                setPendingValue(undefined);
++                DeviceListener.sharedInstance().start(matrixClient);
++            }
++        },
++        [setPendingValue, checkStatus, matrixClient],
++    );
++
++    return { isEnabled: pendingValue ?? isEnabled, setEnabled, loading, busy: pendingValue !== undefined };
++}
+diff --git a/src/components/views/dialogs/UserSettingsDialog.tsx b/src/components/views/dialogs/UserSettingsDialog.tsx
+index a8e184f08398ad33300cd4cf7158887b800a72fc..4eb0a66f1aac200d67a8c442261bf679849a8ffa 100644
+--- a/src/components/views/dialogs/UserSettingsDialog.tsx
++++ b/src/components/views/dialogs/UserSettingsDialog.tsx
+@@ -50,6 +50,11 @@ import { EncryptionUserSettingsTab } from "../settings/tabs/user/EncryptionUserS
+ interface IProps {
+     initialTabId?: UserTab;
+     showMsc4108QrCode?: boolean;
++    /**
++     * If `true`, the flow for a user to reset their encryption will be shown. In this case, `initialTabId` must be `UserTab.Encryption`.
++     *
++     * If false or undefined, show the tab as normal.
++     */
+     showResetIdentity?: boolean;
+     sdkContext: SdkContextClass;
+     onFinished(): void;
+@@ -92,7 +97,7 @@ function titleForTabID(tabId: UserTab): React.ReactNode {
+ export default function UserSettingsDialog(props: IProps): JSX.Element {
+     const voipEnabled = useSettingValue(UIFeature.Voip);
+     const mjolnirEnabled = useSettingValue("feature_mjolnir");
+-    // store these props in state as changing tabs back and forth should clear it
++    // store these props in state as changing tabs back and forth should clear them
+     const [showMsc4108QrCode, setShowMsc4108QrCode] = useState(props.showMsc4108QrCode);
+     const [showResetIdentity, setShowResetIdentity] = useState(props.showResetIdentity);
+ 
+@@ -191,6 +196,7 @@ export default function UserSettingsDialog(props: IProps): JSX.Element {
+                 _td("settings|encryption|title"),
+                 <KeyIcon />,
+                 <EncryptionUserSettingsTab initialState={showResetIdentity ? "reset_identity_forgot" : undefined} />,
++                "UserSettingsEncryption",
+             ),
+         );
+ 
+diff --git a/src/components/views/settings/encryption/DeleteKeyStoragePanel.tsx b/src/components/views/settings/encryption/DeleteKeyStoragePanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..31fac19f0729784203e64c65466d86ea87a88ced
+--- /dev/null
++++ b/src/components/views/settings/encryption/DeleteKeyStoragePanel.tsx
+@@ -0,0 +1,79 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import { Breadcrumb, Button, VisualList, VisualListItem } from "@vector-im/compound-web";
++import CrossIcon from "@vector-im/compound-design-tokens/assets/web/icons/close";
++import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
++import React, { useCallback, useState } from "react";
++
++import { _t } from "../../../../languageHandler";
++import { EncryptionCard } from "./EncryptionCard";
++import { useKeyStoragePanelViewModel } from "../../../viewmodels/settings/encryption/KeyStoragePanelViewModel";
++import SdkConfig from "../../../../SdkConfig";
++import { EncryptionCardButtons } from "./EncryptionCardButtons";
++import { EncryptionCardEmphasisedContent } from "./EncryptionCardEmphasisedContent";
++
++interface Props {
++    /**
++     * Called when the user either cancels the operation or key storage has been disabled
++     */
++    onFinish: () => void;
++}
++
++/**
++ * Confirms that the user really wants to turn off and delete their key storage.  Part of the "Encryption" settings tab.
++ */
++export function DeleteKeyStoragePanel({ onFinish }: Props): JSX.Element {
++    const { setEnabled } = useKeyStoragePanelViewModel();
++    const [busy, setBusy] = useState(false);
++
++    const onDeleteClick = useCallback(async () => {
++        setBusy(true);
++        try {
++            await setEnabled(false);
++        } finally {
++            setBusy(false);
++        }
++        onFinish();
++    }, [setEnabled, onFinish]);
++
++    return (
++        <>
++            <Breadcrumb
++                backLabel={_t("action|back")}
++                onBackClick={onFinish}
++                pages={[_t("settings|encryption|title"), _t("settings|encryption|delete_key_storage|breadcrumb_page")]}
++                onPageClick={onFinish}
++            />
++            <EncryptionCard
++                Icon={ErrorIcon}
++                destructive={true}
++                title={_t("settings|encryption|delete_key_storage|title")}
++            >
++                <EncryptionCardEmphasisedContent>
++                    {_t("settings|encryption|delete_key_storage|description")}
++                    <VisualList>
++                        <VisualListItem Icon={CrossIcon} destructive={true}>
++                            {_t("settings|encryption|delete_key_storage|list_first")}
++                        </VisualListItem>
++                        <VisualListItem Icon={CrossIcon} destructive={true}>
++                            {_t("settings|encryption|delete_key_storage|list_second", { brand: SdkConfig.get().brand })}
++                        </VisualListItem>
++                    </VisualList>
++                </EncryptionCardEmphasisedContent>
++                <EncryptionCardButtons>
++                    <Button destructive={true} onClick={onDeleteClick} disabled={busy}>
++                        {_t("settings|encryption|delete_key_storage|confirm")}
++                    </Button>
++                    <Button kind="tertiary" onClick={onFinish}>
++                        {_t("action|cancel")}
++                    </Button>
++                </EncryptionCardButtons>
++            </EncryptionCard>
++        </>
++    );
++}
+diff --git a/src/components/views/settings/encryption/KeyStoragePanel.tsx b/src/components/views/settings/encryption/KeyStoragePanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..0de55942a7b85a2fc588154b16585086527ba7fe
+--- /dev/null
++++ b/src/components/views/settings/encryption/KeyStoragePanel.tsx
+@@ -0,0 +1,75 @@
++/*
++ * Copyright 2025 New Vector Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++import React, { useCallback } from "react";
++import { InlineField, InlineSpinner, Label, Root, ToggleControl } from "@vector-im/compound-web";
++
++import type { FormEvent } from "react";
++import { SettingsSection } from "../shared/SettingsSection";
++import { _t } from "../../../../languageHandler";
++import { SettingsHeader } from "../SettingsHeader";
++import { useKeyStoragePanelViewModel } from "../../../viewmodels/settings/encryption/KeyStoragePanelViewModel";
++
++interface Props {
++    /**
++     * Called when the user turns off the "allow key storage" toggle
++     */
++    onKeyStorageDisableClick: () => void;
++}
++
++/**
++ * This component allows the user to set up or change their recovery key.
++ *
++ * It is used within the "Encryption" settings tab.
++ */
++export const KeyStoragePanel: React.FC<Props> = ({ onKeyStorageDisableClick }) => {
++    const { isEnabled, setEnabled, loading, busy } = useKeyStoragePanelViewModel();
++
++    const onKeyBackupChange = useCallback(
++        (e: FormEvent<HTMLInputElement>) => {
++            if (e.currentTarget.checked) {
++                setEnabled(true);
++            } else {
++                onKeyStorageDisableClick();
++            }
++        },
++        [setEnabled, onKeyStorageDisableClick],
++    );
++
++    if (loading) {
++        return <InlineSpinner aria-label={_t("common|loading")} />;
++    }
++
++    return (
++        <SettingsSection
++            legacy={false}
++            heading={
++                <SettingsHeader
++                    hasRecommendedTag={isEnabled === false}
++                    label={_t("settings|encryption|key_storage|title")}
++                />
++            }
++            subHeading={_t("settings|encryption|key_storage|description", undefined, {
++                a: (sub) => (
++                    <a href="https://element.io/help#encryption5" target="_blank" rel="noreferrer noopener">
++                        {sub}
++                    </a>
++                ),
++            })}
++        >
++            <Root className="mx_KeyStoragePanel_toggleRow">
++                <InlineField
++                    name="keyStorage"
++                    control={<ToggleControl name="keyStorage" checked={isEnabled} onChange={onKeyBackupChange} />}
++                >
++                    <Label>{_t("settings|encryption|key_storage|allow_key_storage")}</Label>
++                </InlineField>
++                {busy && <InlineSpinner />}
++            </Root>
++        </SettingsSection>
++    );
++};
+diff --git a/src/components/views/settings/encryption/ResetIdentityPanel.tsx b/src/components/views/settings/encryption/ResetIdentityPanel.tsx
+index 747b22fd59dfff285219eaeb63d2148ebfce8d8e..b9d65be098bcddbe84e9840777db3ec690464c49 100644
+--- a/src/components/views/settings/encryption/ResetIdentityPanel.tsx
++++ b/src/components/views/settings/encryption/ResetIdentityPanel.tsx
+@@ -31,8 +31,10 @@ interface ResetIdentityPanelProps {
+     /**
+      * The variant of the panel to show. We show more warnings in the 'compromised' variant (no use in showing a user this
+      * warning if they have to reset because they no longer have their key)
++     *
+      * "compromised" is shown when the user chooses 'reset' explicitly in settings, usually because they believe their
+      * identity has been compromised.
++     *
+      * "forgot" is shown when the user has just forgotten their passphrase.
+      */
+     variant: "compromised" | "forgot";
+diff --git a/src/components/views/settings/tabs/user/EncryptionUserSettingsTab.tsx b/src/components/views/settings/tabs/user/EncryptionUserSettingsTab.tsx
+index 2a041a04c824593d95039b4cef4e7ff73f4953b4..987b1d95b6f5df14f4932b416fd450682772bdde 100644
+--- a/src/components/views/settings/tabs/user/EncryptionUserSettingsTab.tsx
++++ b/src/components/views/settings/tabs/user/EncryptionUserSettingsTab.tsx
+@@ -8,6 +8,7 @@
+ import React, { type JSX, useCallback, useEffect, useState } from "react";
+ import { Button, InlineSpinner, Separator } from "@vector-im/compound-web";
+ import ComputerIcon from "@vector-im/compound-design-tokens/assets/web/icons/computer";
++import { CryptoEvent } from "matrix-js-sdk/src/crypto-api";
+ 
+ import SettingsTab from "../SettingsTab";
+ import { RecoveryPanel } from "../../encryption/RecoveryPanel";
+@@ -21,35 +22,42 @@ import { SettingsSubheader } from "../../SettingsSubheader";
+ import { AdvancedPanel } from "../../encryption/AdvancedPanel";
+ import { ResetIdentityPanel } from "../../encryption/ResetIdentityPanel";
+ import { RecoveryPanelOutOfSync } from "../../encryption/RecoveryPanelOutOfSync";
++import { useTypedEventEmitter } from "../../../../../hooks/useEventEmitter";
++import { KeyStoragePanel } from "../../encryption/KeyStoragePanel";
++import { DeleteKeyStoragePanel } from "../../encryption/DeleteKeyStoragePanel";
+ 
+ /**
+  * The state in the encryption settings tab.
+  *  - "loading": We are checking if the device is verified.
+  *  - "main": The main panel with all the sections (Key storage, recovery, advanced).
++ *  - "key_storage_disabled": The user has chosen to disable key storage and options are unavailable as a result.
+  *  - "set_up_encryption": The panel to show when the user is setting up their encryption.
+  *                         This happens when the user doesn't have cross-signing enabled, or their current device is not verified.
+  *  - "change_recovery_key": The panel to show when the user is changing their recovery key.
+  *                           This happens when the user has a recovery key and the user clicks on "Change recovery key" button of the RecoveryPanel.
+  *  - "set_recovery_key": The panel to show when the user is setting up their recovery key.
+  *                        This happens when the user doesn't have a key a recovery key and the user clicks on "Set up recovery key" button of the RecoveryPanel.
+- *  - "reset_identity_compromised": The panel to show when the user is resetting their identity, in te case where their key is compromised.
+- * - "reset_identity_forgot": The panel to show when the user is resetting their identity, in the case where they forgot their recovery key.
+- * - `secrets_not_cached`: The secrets are not cached locally. This can happen if we verified another device and secret-gossiping failed, or the other device itself lacked the secrets.
++ *  - "reset_identity_compromised": The panel to show when the user is resetting their identity, in the case where their key is compromised.
++ *  - "reset_identity_forgot": The panel to show when the user is resetting their identity, in the case where they forgot their recovery key.
++ *  - "secrets_not_cached": The secrets are not cached locally. This can happen if we verified another device and secret-gossiping failed, or the other device itself lacked the secrets.
+  *                          If the "set_up_encryption" and "secrets_not_cached" conditions are both filled, "set_up_encryption" prevails.
++ *  - "key_storage_delete": The confirmation page asking if the user really wants to turn off key storage.
+  */
+ export type State =
+     | "loading"
+     | "main"
++    | "key_storage_disabled"
+     | "set_up_encryption"
+     | "change_recovery_key"
+     | "set_recovery_key"
+     | "reset_identity_compromised"
+     | "reset_identity_forgot"
+-    | "secrets_not_cached";
++    | "secrets_not_cached"
++    | "key_storage_delete";
+ 
+-interface EncryptionUserSettingsTabProps {
++interface Props {
+     /**
+-     * If the tab should start in a state other than the deasult
++     * If the tab should start in a state other than the default
+      */
+     initialState?: State;
+ }
+@@ -57,12 +65,13 @@ interface EncryptionUserSettingsTabProps {
+ /**
+  * The encryption settings tab.
+  */
+-export function EncryptionUserSettingsTab({ initialState = "loading" }: EncryptionUserSettingsTabProps): JSX.Element {
++export function EncryptionUserSettingsTab({ initialState = "loading" }: Props): JSX.Element {
+     const [state, setState] = useState<State>(initialState);
+ 
+     const checkEncryptionState = useCheckEncryptionState(state, setState);
+ 
+     let content: JSX.Element;
++
+     switch (state) {
+         case "loading":
+             content = <InlineSpinner aria-label={_t("common|loading")} />;
+@@ -78,15 +87,23 @@ export function EncryptionUserSettingsTab({ initialState = "loading" }: Encrypti
+                 />
+             );
+             break;
++        case "key_storage_disabled":
+         case "main":
+             content = (
+                 <>
+-                    <RecoveryPanel
+-                        onChangeRecoveryKeyClick={(setupNewKey) =>
+-                            setupNewKey ? setState("set_recovery_key") : setState("change_recovery_key")
+-                        }
+-                    />
++                    <KeyStoragePanel onKeyStorageDisableClick={() => setState("key_storage_delete")} />
+                     <Separator kind="section" />
++                    {/* We only show the "Recovery" panel if key storage is enabled.*/}
++                    {state === "main" && (
++                        <>
++                            <RecoveryPanel
++                                onChangeRecoveryKeyClick={(setupNewKey) =>
++                                    setupNewKey ? setState("set_recovery_key") : setState("change_recovery_key")
++                                }
++                            />
++                            <Separator kind="section" />
++                        </>
++                    )}
+                     <AdvancedPanel onResetIdentityClick={() => setState("reset_identity_compromised")} />
+                 </>
+             );
+@@ -111,6 +128,9 @@ export function EncryptionUserSettingsTab({ initialState = "loading" }: Encrypti
+                 />
+             );
+             break;
++        case "key_storage_delete":
++            content = <DeleteKeyStoragePanel onFinish={checkEncryptionState} />;
++            break;
+     }
+ 
+     return (
+@@ -124,10 +144,12 @@ export function EncryptionUserSettingsTab({ initialState = "loading" }: Encrypti
+  * Hook to check if the user needs:
+  * - to go through the SetupEncryption flow.
+  * - to enter their recovery key, if the secrets are not cached locally.
++ * ...and also whether megolm key backup is enabled on this device (which we use to set the state of the 'allow key storage' toggle)
+  *
+- * If the user needs to set up the encryption, the state will be set to "set_up_encryption".
+- * If the user secrets are not cached, the state will be set to "secrets_not_cached".
+- * Otherwise, the state will be set to "main".
++ * If cross signing is set up, key backup is enabled and the secrets are cached, the state will be set to "main".
++ * If cross signing is not set up, the state will be set to "set_up_encryption".
++ * If key backup is not enabled, the state will be set to "key_storage_disabled".
++ * If secrets are missing, the state will be set to "secrets_not_cached".
+  *
+  * The state is set once when the component is first mounted.
+  * Also returns a callback function which can be called to re-run the logic.
+@@ -146,8 +168,14 @@ function useCheckEncryptionState(state: State, setState: (state: State) => void)
+         const cachedSecrets = (await crypto.getCrossSigningStatus()).privateKeysCachedLocally;
+         const secretsOk = cachedSecrets.masterKey && cachedSecrets.selfSigningKey && cachedSecrets.userSigningKey;
+ 
+-        if (isCrossSigningReady && secretsOk) setState("main");
++        // Also check the key backup status
++        const activeBackupVersion = await crypto.getActiveSessionBackupVersion();
++
++        const keyStorageEnabled = activeBackupVersion !== null;
++
++        if (isCrossSigningReady && keyStorageEnabled && secretsOk) setState("main");
+         else if (!isCrossSigningReady) setState("set_up_encryption");
++        else if (!keyStorageEnabled) setState("key_storage_disabled");
+         else setState("secrets_not_cached");
+     }, [matrixClient, setState]);
+ 
+@@ -156,6 +184,15 @@ function useCheckEncryptionState(state: State, setState: (state: State) => void)
+         if (state === "loading") checkEncryptionState();
+     }, [checkEncryptionState, state]);
+ 
++    useTypedEventEmitter(matrixClient, CryptoEvent.KeyBackupStatus, (): void => {
++        // Recheck the status if the key backup status has changed so we can keep the page up to date.
++        // Note that this could potentially update the UI while the user is trying to do something, although
++        // if their key backup status is changing then they're changing encryption related things
++        // on another device. This code is written with the assumption that it's better for the UI to refresh
++        // and be up to date with whatever changes they've made.
++        checkEncryptionState();
++    });
++
+     // Also return the callback so that the component can re-run the logic.
+     return checkEncryptionState;
+ }
+diff --git a/src/toasts/SetupEncryptionToast.ts b/src/toasts/SetupEncryptionToast.ts
+index 8a743dfe8b4b78b9c236f73494523d1020fc1855..1613c5b9c933311014f334c7dbc2a8ce0dd85d79 100644
+--- a/src/toasts/SetupEncryptionToast.ts
++++ b/src/toasts/SetupEncryptionToast.ts
+@@ -161,6 +161,7 @@ export const showToast = (kind: Kind): void => {
+ 
+     const onSecondaryClick = (): void => {
+         if (kind === Kind.KEY_STORAGE_OUT_OF_SYNC) {
++            // Open the user settings dialog to the encryption tab and start the flow to reset encryption
+             const payload: OpenToTabPayload = {
+                 action: Action.ViewUserSettings,
+                 initialTabId: UserTab.Encryption,

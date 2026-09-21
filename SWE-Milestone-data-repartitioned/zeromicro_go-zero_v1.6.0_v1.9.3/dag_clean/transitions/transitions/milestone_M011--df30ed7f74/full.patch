@@ -1,0 +1,140 @@
+diff --git a/rest/server.go b/rest/server.go
+index df025ebfc12147f740ea82c41db521ccc5686cc3..6cb7914b785e64805b394a0ad151960f25eb10ac 100644
+--- a/rest/server.go
++++ b/rest/server.go
+@@ -119,6 +119,16 @@ func (s *Server) Use(middleware Middleware) {
+ 	s.ngin.use(middleware)
+ }
+ 
++// build builds the Server and binds the routes to the router.
++func (s *Server) build() error {
++	return s.ngin.bindRoutes(s.router)
++}
++
++// serve serves the HTTP requests using the Server's router.
++func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
++	s.router.ServeHTTP(w, r)
++}
++
+ // ToMiddleware converts the given handler to a Middleware.
+ func ToMiddleware(handler func(next http.Handler) http.Handler) Middleware {
+ 	return func(handle http.HandlerFunc) http.HandlerFunc {
+diff --git a/rest/server_test.go b/rest/server_test.go
+index 9676b3f876b7782afb42b76c5b4d22072f0a0bca..a0b0fbe1f765a917797bdb760de452a0c110deaa 100644
+--- a/rest/server_test.go
++++ b/rest/server_test.go
+@@ -819,6 +819,6 @@ func TestServerEmbedFileSystem(t *testing.T) {
+ //	serve(server, w, r)
+ //	// verify the response
+ func serve(s *Server, w http.ResponseWriter, r *http.Request) {
+-	s.ngin.bindRoutes(s.router)
+-	s.router.ServeHTTP(w, r)
++	_ = s.build()
++	s.serve(w, r)
+ }
+diff --git a/rest/serverless.go b/rest/serverless.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..84c25c949b4602a3ed497e70cdb0512bb314cef0
+--- /dev/null
++++ b/rest/serverless.go
+@@ -0,0 +1,27 @@
++package rest
++
++import "net/http"
++
++// Serverless is a wrapper around Server that allows it to be used in serverless environments.
++type Serverless struct {
++	server *Server
++}
++
++// NewServerless creates a new Serverless instance from the provided Server.
++func NewServerless(server *Server) (*Serverless, error) {
++	// Ensure the server is built before using it in a serverless context.
++	// Why not call server.build() when serving requests,
++	// is because we need to ensure fail fast behavior.
++	if err := server.build(); err != nil {
++		return nil, err
++	}
++
++	return &Serverless{
++		server: server,
++	}, nil
++}
++
++// Serve handles HTTP requests by delegating them to the underlying Server instance.
++func (s *Serverless) Serve(w http.ResponseWriter, r *http.Request) {
++	s.server.serve(w, r)
++}
+diff --git a/rest/serverless_test.go b/rest/serverless_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7e5a6904a02cbbd0757774fa6a40611cb1f86e0
+--- /dev/null
++++ b/rest/serverless_test.go
+@@ -0,0 +1,67 @@
++package rest
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/conf"
++	"github.com/zeromicro/go-zero/core/logx/logtest"
++)
++
++func TestNewServerless(t *testing.T) {
++	logtest.Discard(t)
++
++	const configYaml = `
++Name: foo
++Host: localhost
++Port: 0
++`
++	var cnf RestConf
++	assert.Nil(t, conf.LoadFromYamlBytes([]byte(configYaml), &cnf))
++
++	svr, err := NewServer(cnf)
++	assert.NoError(t, err)
++
++	svr.AddRoute(Route{
++		Method: http.MethodGet,
++		Path:   "/",
++		Handler: func(w http.ResponseWriter, r *http.Request) {
++			w.Write([]byte("Hello World"))
++		},
++	})
++
++	serverless, err := NewServerless(svr)
++	assert.NoError(t, err)
++
++	w := httptest.NewRecorder()
++	r := httptest.NewRequest(http.MethodGet, "/", nil)
++	serverless.Serve(w, r)
++	assert.Equal(t, http.StatusOK, w.Code)
++	assert.Equal(t, "Hello World", w.Body.String())
++}
++
++func TestNewServerlessWithError(t *testing.T) {
++	logtest.Discard(t)
++
++	const configYaml = `
++Name: foo
++Host: localhost
++Port: 0
++`
++	var cnf RestConf
++	assert.Nil(t, conf.LoadFromYamlBytes([]byte(configYaml), &cnf))
++
++	svr, err := NewServer(cnf)
++	assert.NoError(t, err)
++
++	svr.AddRoute(Route{
++		Method:  http.MethodGet,
++		Path:    "notstartwith/",
++		Handler: nil,
++	})
++
++	_, err = NewServerless(svr)
++	assert.Error(t, err)
++}

@@ -1,0 +1,396 @@
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b083a7f00aa285d9c1aebcdbad478d2d8ebec305
+--- /dev/null
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/README.md
+@@ -0,0 +1,24 @@
++## 1. startup
++
++1. run the maven plugin `dubbo:compile`, generate protobuf java file.
++2. run `ProviderApplication`
++
++## 2. http request
++
++### 2.1 sample request
++
++```shell
++curl -v -d '{"name":"dubbo"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHello
++```
++
++### 2.2 request async
++
++```shell
++curl -v -d '{"name":"dubbo async"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHelloAsync
++```
++
++### 2.3 server stream
++
++```shell
++curl -v -d '{"name":"dubbo"}' -H 'Content-Type: application/json' http://127.0.0.1:50051/org.apache.dubbo.demo.hello.GreeterService/sayHelloStream
++```
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
+index 495af515c44458d6f7ebd28535a973e190c44079..09356e22d20fac6a6d247991d37d1b6b04948003 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/java/org/apache/dubbo/springboot/idl/demo/provider/GreeterServiceImpl.java
+@@ -16,12 +16,14 @@
+  */
+ package org.apache.dubbo.springboot.idl.demo.provider;
+ 
++import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.config.annotation.DubboService;
+ import org.apache.dubbo.demo.hello.GreeterService;
+ import org.apache.dubbo.demo.hello.HelloReply;
+ import org.apache.dubbo.demo.hello.HelloRequest;
+ 
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.TimeUnit;
+ 
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -45,6 +47,22 @@ public class GreeterServiceImpl implements GreeterService {
+                 HelloReply.newBuilder().setMessage("Hello " + request.getName()).build());
+     }
+ 
++    @Override
++    public void sayHelloStream(HelloRequest request, StreamObserver<HelloReply> responseObserver) {
++        LOGGER.info("Received sayHelloStream request: {}", request.getName());
++        for (int i = 0; i < 5; i++) {
++            try {
++                TimeUnit.SECONDS.sleep(1);
++            } catch (InterruptedException e) {
++                responseObserver.onError(e);
++            }
++            responseObserver.onNext(HelloReply.newBuilder()
++                    .setMessage(i + "# Hello " + request.getName())
++                    .build());
++        }
++        responseObserver.onCompleted();
++    }
++
+     private static HelloReply toReply(String message) {
+         return HelloReply.newBuilder().setMessage(message).build();
+     }
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
+index 8debdd28961373161da06e7eed9ce2ef979d800f..249d72f53d726c4595a7bb2d479c9b282ee01360 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/dubbo-demo-spring-boot-idl-provider/src/main/proto/helloworld.proto
+@@ -32,4 +32,5 @@ message HelloReply {
+ service GreeterService {
+     // Sends a greeting.
+     rpc sayHello(HelloRequest) returns (HelloReply);
++    rpc sayHelloStream(HelloRequest) returns (stream HelloReply);
+ }
+diff --git a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+index 16c8c3d77cb0cdb6d9561e6cd4664e39af0f7794..b8f54eaf03b1299d3cb6e4b6d4b2ffc52784b779 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
++++ b/dubbo-demo/dubbo-demo-spring-boot-idl/pom.xml
+@@ -77,6 +77,10 @@
+       <groupId>com.google.protobuf</groupId>
+       <artifactId>protobuf-java</artifactId>
+     </dependency>
++    <dependency>
++      <groupId>com.google.protobuf</groupId>
++      <artifactId>protobuf-java-util</artifactId>
++    </dependency>
+     <dependency>
+       <groupId>org.apache.logging.log4j</groupId>
+       <artifactId>log4j-slf4j-impl</artifactId>
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
+index ee38269b5056fff18f8d612ef9de06f071b8d634..55afd7502eb72060d35dd87ef4ae540ba49a8967 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/DefaultRequestMappingRegistry.java
+@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.protocol.tri.rest.mapping;
+ 
+ import org.apache.dubbo.common.URL;
+ import org.apache.dubbo.common.logger.FluentLogger;
++import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.common.utils.ClassUtils;
+ import org.apache.dubbo.config.context.ConfigManager;
+ import org.apache.dubbo.config.nested.RestConfig;
+@@ -31,6 +32,7 @@ import org.apache.dubbo.rpc.model.MethodDescriptor;
+ import org.apache.dubbo.rpc.model.ReflectionMethodDescriptor;
+ import org.apache.dubbo.rpc.model.ReflectionServiceDescriptor;
+ import org.apache.dubbo.rpc.model.ServiceDescriptor;
++import org.apache.dubbo.rpc.model.StubServiceDescriptor;
+ import org.apache.dubbo.rpc.protocol.tri.DescriptorUtils;
+ import org.apache.dubbo.rpc.protocol.tri.TripleProtocol;
+ import org.apache.dubbo.rpc.protocol.tri.rest.Messages;
+@@ -48,6 +50,7 @@ import org.apache.dubbo.rpc.protocol.tri.rest.util.PathUtils;
+ 
+ import java.lang.reflect.Method;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.IdentityHashMap;
+ import java.util.LinkedList;
+@@ -129,7 +132,14 @@ public final class DefaultRequestMappingRegistry implements RequestMappingRegist
+                 RequestMapping classMapping = resolver.resolve(serviceMeta);
+                 consumer.accept((methods) -> {
+                     Method method = methods.get(0);
+-                    MethodDescriptor md = sd.getMethod(method.getName(), method.getParameterTypes());
++                    Class<?>[] paramTypes = method.getParameterTypes();
++                    MethodDescriptor md = sd.getMethod(method.getName(), paramTypes);
++                    if (md == null && sd instanceof StubServiceDescriptor) {
++                        int len = paramTypes.length;
++                        if (len > 0 && StreamObserver.class.isAssignableFrom(paramTypes[len - 1])) {
++                            md = sd.getMethod(method.getName(), Arrays.copyOf(paramTypes, len - 1));
++                        }
++                    }
+                     MethodMeta methodMeta = new MethodMeta(methods, md, serviceMeta);
+                     if (!resolver.accept(methodMeta)) {
+                         return;
+@@ -169,7 +179,7 @@ public final class DefaultRequestMappingRegistry implements RequestMappingRegist
+         try {
+             Registration registration = new Registration(mapping, handler);
+             for (PathExpression path : mapping.getPathCondition().getExpressions()) {
+-                Registration exists = tree.addPath(path, registration);
++                Registration exists = tree.addPath(path, registration, Registration::isMappingOverlap);
+                 if (exists == null) {
+                     counter.incrementAndGet();
+                     if (LOGGER.isDebugEnabled()) {
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
+index 786f29ded9119121db30dd1cf023ac7a296cf312..b95f22ff4ca1c480b8667e6c43564e8d460ad5e7 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTree.java
+@@ -31,7 +31,9 @@ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
++import java.util.Objects;
+ import java.util.function.BiConsumer;
++import java.util.function.BiFunction;
+ import java.util.function.Predicate;
+ 
+ /**
+@@ -63,13 +65,25 @@ public final class RadixTree<T> {
+         this(true, '/');
+     }
+ 
++    /**
++     * This is a default implementation that does not check for equality.
++     */
+     public T addPath(PathExpression path, T value) {
++        return addPath(path, value, (t, t2) -> Boolean.TRUE);
++    }
++
++    /**
++     * When the path is the same, the predicate is used to determine whether the values are considered equal.
++     * If the predicate returns true, the existing value is returned directly.
++     */
++    public T addPath(PathExpression path, T value, BiFunction<T, T, Boolean> predicate) {
++        Objects.requireNonNull(predicate);
+         if (path.isDirect()) {
+             KeyString key = new KeyString(path.getPath(), caseSensitive);
+             List<Match<T>> matches = directPathMap.computeIfAbsent(key, k -> new ArrayList<>());
+             for (int i = 0, size = matches.size(); i < size; i++) {
+                 Match<T> match = matches.get(i);
+-                if (match.getValue().equals(value)) {
++                if (predicate.apply(match.getValue(), value)) {
+                     return match.getValue();
+                 }
+             }
+@@ -85,7 +99,9 @@ public final class RadixTree<T> {
+                 List<Pair<PathExpression, T>> values = child.values;
+                 for (int j = 0, size = values.size(); j < size; j++) {
+                     if (values.get(j).getLeft().equals(path)) {
+-                        return values.get(j).getRight();
++                        if (predicate.apply(values.get(j).getRight(), value)) {
++                            return values.get(j).getRight();
++                        }
+                     }
+                 }
+                 values.add(Pair.of(path, value));
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
+index f5c993a45422c333cb96a0fab0cd4b0d1c62398f..ab2a381ddd787be97b7170dacae92b0c0d0df06a 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/Registration.java
+@@ -18,6 +18,9 @@ package org.apache.dubbo.rpc.protocol.tri.rest.mapping;
+ 
+ import org.apache.dubbo.rpc.protocol.tri.rest.mapping.meta.HandlerMeta;
+ 
++import java.util.Collections;
++import java.util.Objects;
++
+ public final class Registration {
+ 
+     private final RequestMapping mapping;
+@@ -47,6 +50,24 @@ public final class Registration {
+         return mapping.equals(((Registration) obj).mapping);
+     }
+ 
++    public boolean isMappingOverlap(Registration other) {
++        RequestMapping otherMapping = other.getMapping();
++        if (mapping == otherMapping) {
++            return true;
++        }
++        return (mapping.getMethodsCondition() == null
++                        || otherMapping.getMethodsCondition() == null
++                        || !Collections.disjoint(
++                                mapping.getMethodsCondition().getMethods(),
++                                otherMapping.getMethodsCondition().getMethods()))
++                && Objects.equals(mapping.getParamsCondition(), otherMapping.getParamsCondition())
++                && Objects.equals(mapping.getHeadersCondition(), otherMapping.getHeadersCondition())
++                && Objects.equals(mapping.getConsumesCondition(), otherMapping.getConsumesCondition())
++                && Objects.equals(mapping.getProducesCondition(), otherMapping.getProducesCondition())
++                && Objects.equals(mapping.getCustomCondition(), otherMapping.getCustomCondition())
++                && Objects.equals(mapping.getSig(), otherMapping.getSig());
++    }
++
+     @Override
+     public int hashCode() {
+         return mapping.hashCode();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
+index feef0738e8467a9d04533c97e68659e93623e189..c7c5577dcf3aaf054a91227b9f0cb8ca865c929e 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RequestMapping.java
+@@ -236,6 +236,10 @@ public final class RequestMapping implements Condition<RequestMapping, HttpReque
+         return producesCondition;
+     }
+ 
++    public ConditionWrapper getCustomCondition() {
++        return customCondition;
++    }
++
+     public CorsMeta getCors() {
+         return cors;
+     }
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
+index 37cbb35c9ce0f2f9f31a4e34df68f2b23826c88c..f8ac509db6942c80892fc6b147af1d132ca5a891 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RadixTreeTest.groovy
+@@ -17,6 +17,8 @@
+ 
+ package org.apache.dubbo.rpc.protocol.tri.rest.mapping
+ 
++import org.apache.dubbo.rpc.protocol.tri.rest.mapping.condition.PathExpression
++
+ import spock.lang.Specification
+ 
+ class RadixTreeTest extends Specification {
+@@ -59,6 +61,42 @@ class RadixTreeTest extends Specification {
+             '/a/b/c/d' | 0
+     }
+ 
++    def "test repeat add,no predicate function"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath('/a/*/*', false)
++            Boolean val2 = tree.addPath('/a/*/*', true)
++        expect:
++            val1 == null;
++            val2 == false;
++    }
++
++    def "test repeat add,use predicate function"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath(PathExpression.parse('/a/*/*'), false, { a, b -> a == b })
++            Boolean val2 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++            Boolean val3 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++
++        expect:
++            val1 == null;
++            val2 == null;
++        val3 == true;
++    }
++
++    def "test repeat add,use predicate function and Registration"() {
++        given:
++            def tree = new RadixTree<Boolean>()
++            Boolean val1 = tree.addPath(PathExpression.parse('/a/*/*'), false, { a, b -> a == b })
++            Boolean val2 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++            Boolean val3 = tree.addPath(PathExpression.parse('/a/*/*'), true, { a, b -> a == b })
++
++        expect:
++            val1 == null;
++            val2 == null;
++            val3 == true;
++    }
++
+     def "test sub path match"() {
+         given:
+             def tree = new RadixTree<String>();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy
+new file mode 100644
+index 0000000000000000000000000000000000000000..de5a1b388ceaee2854f8673c650952738d7e3801
+--- /dev/null
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/groovy/org/apache/dubbo/rpc/protocol/tri/rest/mapping/RegistrationSpec.groovy
+@@ -0,0 +1,78 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the 'License'); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an 'AS IS' BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.dubbo.rpc.protocol.tri.rest.mapping
++
++import org.apache.dubbo.remoting.http12.HttpMethods
++import org.apache.dubbo.rpc.protocol.tri.rest.mapping.meta.HandlerMeta
++
++import spock.lang.Specification
++
++class RegistrationSpec extends Specification {
++
++    def "isMethodOverlap should return true when methods overlap"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name(), HttpMethods.PUT.name()).build()
++            def mapping2 = new RequestMapping.Builder().method(HttpMethods.PUT.name(), HttpMethods.POST.name()).build()
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return false when methods do not overlap"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name()).build()
++            def mapping2 = new RequestMapping.Builder().method(HttpMethods.PUT.name()).build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            !reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return true if both MethodsCondition is null"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().build()
++            def mapping2 = new RequestMapping.Builder().build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++    def "isMethodOverlap should return false if only one MethodsCondition is null"() {
++        given:
++            def mapping1 = new RequestMapping.Builder().method(HttpMethods.GET.name()).build()
++            def mapping2 = new RequestMapping.Builder().method().build()
++
++            def meta = GroovyMock(HandlerMeta)
++            def reg1 = new Registration(mapping1, meta)
++            def reg2 = new Registration(mapping2, meta)
++
++        expect:
++            reg1.isMappingOverlap(reg2)
++    }
++
++}

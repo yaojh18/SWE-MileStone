@@ -1,0 +1,312 @@
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java b/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
+index b68e1ab5e14711f9588faa0f9af8ba52d369fd8a..0aaadc9a2f4a583a795e0b3365fe854b9a06611f 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/bytecode/Wrapper.java
+@@ -112,16 +112,17 @@ public abstract class Wrapper {
+      * @return Wrapper instance(not null).
+      */
+     public static Wrapper getWrapper(Class<?> c) {
+-        while (ClassGenerator.isDynamicClass(c)) // can not wrapper on dynamic class.
+-        {
+-            c = c.getSuperclass();
+-        }
+-
+-        if (c == Object.class) {
+-            return OBJECT_WRAPPER;
+-        }
++        return ConcurrentHashMapUtils.computeIfAbsent(WRAPPER_MAP, c, (clazz) -> {
++            while (ClassGenerator.isDynamicClass(clazz)) // can not wrapper on dynamic class.
++            {
++                clazz = clazz.getSuperclass();
++            }
+ 
+-        return ConcurrentHashMapUtils.computeIfAbsent(WRAPPER_MAP, c, Wrapper::makeWrapper);
++            if (clazz == Object.class) {
++                return OBJECT_WRAPPER;
++            }
++            return makeWrapper(clazz);
++        });
+     }
+ 
+     private static Wrapper makeWrapper(Class<?> c) {
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
+index ea80a698a6809db98157be3e98ebae1eb70f5632..bd11fd8d1218b8b0cc98648dedffef33d4065fab 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/SerializeSecurityConfigurator.java
+@@ -47,11 +47,13 @@ import static org.apache.dubbo.common.constants.CommonConstants.SERIALIZE_BLOCKE
+ import static org.apache.dubbo.common.constants.LoggerCodeConstants.COMMON_IO_EXCEPTION;
+ 
+ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<ModuleModel> {
+-    private final SerializeSecurityManager serializeSecurityManager;
+-
+-    private static final ErrorTypeAwareLogger logger =
++    private static final ErrorTypeAwareLogger LOGGER =
+             LoggerFactory.getErrorTypeAwareLogger(SerializeSecurityConfigurator.class);
+ 
++    private final Set<Type> markedTypeCache = new HashSet<>();
++
++    private final SerializeSecurityManager serializeSecurityManager;
++
+     private final ModuleModel moduleModel;
+ 
+     private final ClassHolder classHolder;
+@@ -137,7 +139,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         Set<URL> urls = ClassLoaderResourceLoader.loadResources(SERIALIZE_ALLOW_LIST_FILE_PATH, classLoader);
+         for (URL u : urls) {
+             try {
+-                logger.info("Read serialize allow list from " + u);
++                LOGGER.info("Read serialize allow list from " + u);
+                 String[] lines = IOUtils.readLines(u.openStream());
+                 for (String line : lines) {
+                     line = line.trim();
+@@ -147,7 +149,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                     serializeSecurityManager.addToAlwaysAllowed(line);
+                 }
+             } catch (IOException e) {
+-                logger.error(
++                LOGGER.error(
+                         COMMON_IO_EXCEPTION,
+                         "",
+                         "",
+@@ -161,7 +163,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         Set<URL> urls = ClassLoaderResourceLoader.loadResources(SERIALIZE_BLOCKED_LIST_FILE_PATH, classLoader);
+         for (URL u : urls) {
+             try {
+-                logger.info("Read serialize blocked list from " + u);
++                LOGGER.info("Read serialize blocked list from " + u);
+                 String[] lines = IOUtils.readLines(u.openStream());
+                 for (String line : lines) {
+                     line = line.trim();
+@@ -171,7 +173,7 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                     serializeSecurityManager.addToDisAllowed(line);
+                 }
+             } catch (IOException e) {
+-                logger.error(
++                LOGGER.error(
+                         COMMON_IO_EXCEPTION,
+                         "",
+                         "",
+@@ -213,8 +215,9 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+             return;
+         }
+ 
+-        Set<Type> markedClass = new HashSet<>();
+-        checkClass(markedClass, clazz);
++        if (!checkClass(clazz)) {
++            return;
++        }
+ 
+         addToAllow(clazz);
+ 
+@@ -223,84 +226,84 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+         for (Method method : methodsToExport) {
+             Class<?>[] parameterTypes = method.getParameterTypes();
+             for (Class<?> parameterType : parameterTypes) {
+-                checkClass(markedClass, parameterType);
++                checkClass(parameterType);
+             }
+ 
+             Type[] genericParameterTypes = method.getGenericParameterTypes();
+             for (Type genericParameterType : genericParameterTypes) {
+-                checkType(markedClass, genericParameterType);
++                checkType(genericParameterType);
+             }
+ 
+             Class<?> returnType = method.getReturnType();
+-            checkClass(markedClass, returnType);
++            checkClass(returnType);
+ 
+             Type genericReturnType = method.getGenericReturnType();
+-            checkType(markedClass, genericReturnType);
++            checkType(genericReturnType);
+ 
+             Class<?>[] exceptionTypes = method.getExceptionTypes();
+             for (Class<?> exceptionType : exceptionTypes) {
+-                checkClass(markedClass, exceptionType);
++                checkClass(exceptionType);
+             }
+ 
+             Type[] genericExceptionTypes = method.getGenericExceptionTypes();
+             for (Type genericExceptionType : genericExceptionTypes) {
+-                checkType(markedClass, genericExceptionType);
++                checkType(genericExceptionType);
+             }
+         }
+     }
+ 
+-    private void checkType(Set<Type> markedClass, Type type) {
++    private void checkType(Type type) {
+         if (type == null) {
+             return;
+         }
+ 
+         if (type instanceof Class) {
+-            checkClass(markedClass, (Class<?>) type);
++            checkClass((Class<?>) type);
+             return;
+         }
+ 
+-        if (!markedClass.add(type)) {
++        if (!markedTypeCache.add(type)) {
+             return;
+         }
+ 
+         if (type instanceof ParameterizedType) {
+             ParameterizedType parameterizedType = (ParameterizedType) type;
+-            checkClass(markedClass, (Class<?>) parameterizedType.getRawType());
++            checkClass((Class<?>) parameterizedType.getRawType());
+             for (Type actualTypeArgument : parameterizedType.getActualTypeArguments()) {
+-                checkType(markedClass, actualTypeArgument);
++                checkType(actualTypeArgument);
+             }
+         } else if (type instanceof GenericArrayType) {
+             GenericArrayType genericArrayType = (GenericArrayType) type;
+-            checkType(markedClass, genericArrayType.getGenericComponentType());
++            checkType(genericArrayType.getGenericComponentType());
+         } else if (type instanceof TypeVariable) {
+             TypeVariable typeVariable = (TypeVariable) type;
+             for (Type bound : typeVariable.getBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+         } else if (type instanceof WildcardType) {
+             WildcardType wildcardType = (WildcardType) type;
+             for (Type bound : wildcardType.getUpperBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+             for (Type bound : wildcardType.getLowerBounds()) {
+-                checkType(markedClass, bound);
++                checkType(bound);
+             }
+         }
+     }
+ 
+-    private void checkClass(Set<Type> markedClass, Class<?> clazz) {
++    private boolean checkClass(Class<?> clazz) {
+         if (clazz == null) {
+-            return;
++            return false;
+         }
+ 
+-        if (!markedClass.add(clazz)) {
+-            return;
++        if (!markedTypeCache.add(clazz)) {
++            return false;
+         }
+ 
+         addToAllow(clazz);
+ 
+         if (ClassUtils.isSimpleType(clazz) || clazz.isPrimitive() || clazz.isArray()) {
+-            return;
++            return true;
+         }
+         String className = clazz.getName();
+         if (className.startsWith("java.")
+@@ -308,26 +311,26 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+                 || className.startsWith("com.sun.")
+                 || className.startsWith("sun.")
+                 || className.startsWith("jdk.")) {
+-            return;
++            return true;
+         }
+ 
+         Class<?>[] interfaces = clazz.getInterfaces();
+         for (Class<?> interfaceClass : interfaces) {
+-            checkClass(markedClass, interfaceClass);
++            checkClass(interfaceClass);
+         }
+ 
+         for (Type genericInterface : clazz.getGenericInterfaces()) {
+-            checkType(markedClass, genericInterface);
++            checkType(genericInterface);
+         }
+ 
+         Class<?> superclass = clazz.getSuperclass();
+         if (superclass != null) {
+-            checkClass(markedClass, superclass);
++            checkClass(superclass);
+         }
+ 
+         Type genericSuperclass = clazz.getGenericSuperclass();
+         if (genericSuperclass != null) {
+-            checkType(markedClass, genericSuperclass);
++            checkType(genericSuperclass);
+         }
+ 
+         Field[] fields = clazz.getDeclaredFields();
+@@ -338,9 +341,11 @@ public class SerializeSecurityConfigurator implements ScopeClassLoaderListener<M
+             }
+ 
+             Class<?> fieldClass = field.getType();
+-            checkClass(markedClass, fieldClass);
+-            checkType(markedClass, field.getGenericType());
++            checkClass(fieldClass);
++            checkType(field.getGenericType());
+         }
++
++        return true;
+     }
+ 
+     private void addToAllow(Class<?> clazz) {
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
+index 0d7153fe119d7cd258097b15a0b7f25943dfc685..d193c5a3612afcc89fe80bf4ced3e4cdc39e3c50 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/HttpUtils.java
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.dubbo.remoting.http12;
+ 
++import org.apache.dubbo.common.constants.CommonConstants;
+ import org.apache.dubbo.common.io.StreamUtils;
+ import org.apache.dubbo.common.utils.StringUtils;
+ import org.apache.dubbo.remoting.http12.exception.DecodeException;
+@@ -81,7 +82,7 @@ public final class HttpUtils {
+         return cookies;
+     }
+ 
+-    public static String getCharsetFromContentType(String contentType) {
++    public static String parseCharset(String contentType) {
+         String charset = null;
+         if (contentType == null) {
+             charset = StringUtils.EMPTY_STRING;
+@@ -91,7 +92,12 @@ public final class HttpUtils {
+                 charset = StringUtils.EMPTY_STRING;
+             } else {
+                 charset = contentType.substring(index + CHARSET_PREFIX.length()).trim();
+-                charset = charset.split(";")[0];
++                int splits = charset.indexOf(CommonConstants.SEMICOLON_SEPARATOR);
++                if (splits == -1) {
++                    return charset;
++                } else {
++                    return charset.substring(0, splits).trim();
++                }
+             }
+         }
+         return charset;
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
+index 4c86f03272c244786d87af31cc306cc4d75e1a27..d09b9bd2a2ce7625f6b5933ca752c4ae06c51e30 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpRequest.java
+@@ -243,7 +243,7 @@ public class DefaultHttpRequest implements HttpRequest {
+         String charset = this.charset;
+         if (charset == null) {
+             String contentType = contentType();
+-            charset = HttpUtils.getCharsetFromContentType(contentType);
++            charset = HttpUtils.parseCharset(contentType);
+             this.charset = charset;
+         }
+         return charset.isEmpty() ? null : charset;
+diff --git a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
+index 78764f5697cfcc827e4da8642219ec8e4fd79ad1..7eaad2703897328ab1a7f3462bd0242dfa294b44 100644
+--- a/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
++++ b/dubbo-remoting/dubbo-remoting-http12/src/main/java/org/apache/dubbo/remoting/http12/message/DefaultHttpResponse.java
+@@ -166,7 +166,7 @@ public class DefaultHttpResponse implements HttpResponse {
+         String charset = this.charset;
+         if (charset == null) {
+             String contentType = contentType();
+-            charset = HttpUtils.getCharsetFromContentType(contentType);
++            charset = HttpUtils.parseCharset(contentType);
+             this.charset = charset;
+         }
+         return charset.isEmpty() ? null : charset;

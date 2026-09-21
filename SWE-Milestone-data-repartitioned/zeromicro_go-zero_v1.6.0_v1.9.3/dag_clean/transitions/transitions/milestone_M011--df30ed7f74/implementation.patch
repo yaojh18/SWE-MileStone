@@ -1,0 +1,54 @@
+diff --git a/rest/server.go b/rest/server.go
+index df025ebfc12147f740ea82c41db521ccc5686cc3..6cb7914b785e64805b394a0ad151960f25eb10ac 100644
+--- a/rest/server.go
++++ b/rest/server.go
+@@ -119,6 +119,16 @@ func (s *Server) Use(middleware Middleware) {
+ 	s.ngin.use(middleware)
+ }
+ 
++// build builds the Server and binds the routes to the router.
++func (s *Server) build() error {
++	return s.ngin.bindRoutes(s.router)
++}
++
++// serve serves the HTTP requests using the Server's router.
++func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
++	s.router.ServeHTTP(w, r)
++}
++
+ // ToMiddleware converts the given handler to a Middleware.
+ func ToMiddleware(handler func(next http.Handler) http.Handler) Middleware {
+ 	return func(handle http.HandlerFunc) http.HandlerFunc {
+diff --git a/rest/serverless.go b/rest/serverless.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..84c25c949b4602a3ed497e70cdb0512bb314cef0
+--- /dev/null
++++ b/rest/serverless.go
+@@ -0,0 +1,27 @@
++package rest
++
++import "net/http"
++
++// Serverless is a wrapper around Server that allows it to be used in serverless environments.
++type Serverless struct {
++	server *Server
++}
++
++// NewServerless creates a new Serverless instance from the provided Server.
++func NewServerless(server *Server) (*Serverless, error) {
++	// Ensure the server is built before using it in a serverless context.
++	// Why not call server.build() when serving requests,
++	// is because we need to ensure fail fast behavior.
++	if err := server.build(); err != nil {
++		return nil, err
++	}
++
++	return &Serverless{
++		server: server,
++	}, nil
++}
++
++// Serve handles HTTP requests by delegating them to the underlying Server instance.
++func (s *Serverless) Serve(w http.ResponseWriter, r *http.Request) {
++	s.server.serve(w, r)
++}

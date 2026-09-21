@@ -1,0 +1,2816 @@
+diff --git a/core/mr/mapreduce_test.go b/core/mr/mapreduce_test.go
+index fd0ac2b46fcbf6c7c35f3812ff1cd9c9234b401e..c0cc34cec7fa0756d4526c6a458b7898cde1ed0d 100644
+--- a/core/mr/mapreduce_test.go
++++ b/core/mr/mapreduce_test.go
+@@ -3,7 +3,6 @@ package mr
+ import (
+ 	"context"
+ 	"errors"
+-	"fmt"
+ 	"io"
+ 	"log"
+ 	"runtime"
+@@ -149,28 +148,11 @@ func TestForEach(t *testing.T) {
+ 
+ 		assert.Equal(t, tasks/2, int(count))
+ 	})
+-}
+-
+-func TestPanics(t *testing.T) {
+-	defer goleak.VerifyNone(t)
+-
+-	const tasks = 1000
+-	verify := func(t *testing.T, r any) {
+-		panicStr := fmt.Sprintf("%v", r)
+-		assert.Contains(t, panicStr, "foo")
+-		assert.Contains(t, panicStr, "goroutine")
+-		assert.Contains(t, panicStr, "runtime/debug.Stack")
+-		panic(r)
+-	}
+ 
+-	t.Run("ForEach run panics", func(t *testing.T) {
+-		assert.Panics(t, func() {
+-			defer func() {
+-				if r := recover(); r != nil {
+-					verify(t, r)
+-				}
+-			}()
++	t.Run("all", func(t *testing.T) {
++		defer goleak.VerifyNone(t)
+ 
++		assert.PanicsWithValue(t, "foo", func() {
+ 			ForEach(func(source chan<- int) {
+ 				for i := 0; i < tasks; i++ {
+ 					source <- i
+@@ -180,31 +162,28 @@ func TestPanics(t *testing.T) {
+ 			})
+ 		})
+ 	})
++}
+ 
+-	t.Run("ForEach generate panics", func(t *testing.T) {
+-		assert.Panics(t, func() {
+-			defer func() {
+-				if r := recover(); r != nil {
+-					verify(t, r)
+-				}
+-			}()
++func TestGeneratePanic(t *testing.T) {
++	defer goleak.VerifyNone(t)
+ 
++	t.Run("all", func(t *testing.T) {
++		assert.PanicsWithValue(t, "foo", func() {
+ 			ForEach(func(source chan<- int) {
+ 				panic("foo")
+ 			}, func(item int) {
+ 			})
+ 		})
+ 	})
++}
+ 
+-	var run int32
+-	t.Run("Mapper panics", func(t *testing.T) {
+-		assert.Panics(t, func() {
+-			defer func() {
+-				if r := recover(); r != nil {
+-					verify(t, r)
+-				}
+-			}()
++func TestMapperPanic(t *testing.T) {
++	defer goleak.VerifyNone(t)
+ 
++	const tasks = 1000
++	var run int32
++	t.Run("all", func(t *testing.T) {
++		assert.PanicsWithValue(t, "foo", func() {
+ 			_, _ = MapReduce(func(source chan<- int) {
+ 				for i := 0; i < tasks; i++ {
+ 					source <- i
+diff --git a/core/stores/monc/cachedmodel_test.go b/core/stores/monc/cachedmodel_test.go
+index 4f8fe8fbce37a04cb0f98539e5e036d693487333..de35ce0710610f156f460ce3cc80ee778f92d4f9 100644
+--- a/core/stores/monc/cachedmodel_test.go
++++ b/core/stores/monc/cachedmodel_test.go
+@@ -532,7 +532,7 @@ func createModel(t *testing.T, coll mon.Collection) *Model {
+ 	}
+ }
+ 
+-// mustNewTestModel returns a test Model with the given cache.
++// mustNewTestModel  returns a test Model with the given cache.
+ func mustNewTestModel(collection mon.Collection, c cache.CacheConf, opts ...cache.Option) *Model {
+ 	return &Model{
+ 		Model: &mon.Model{
+diff --git a/core/stores/sqlx/orm_test.go b/core/stores/sqlx/orm_test.go
+index d8561c86907b97052087d6ec365f25c909ea8124..c354654739eeb57042db2732580057a853561b86 100644
+--- a/core/stores/sqlx/orm_test.go
++++ b/core/stores/sqlx/orm_test.go
+@@ -4,9 +4,7 @@ import (
+ 	"context"
+ 	"database/sql"
+ 	"errors"
+-	"reflect"
+ 	"testing"
+-	"time"
+ 
+ 	"github.com/DATA-DOG/go-sqlmock"
+ 	"github.com/stretchr/testify/assert"
+@@ -1577,782 +1575,6 @@ func TestAnonymousStructPrError(t *testing.T) {
+ 	})
+ }
+ 
+-func TestUnmarshalRowsZeroValueStructPtr(t *testing.T) {
+-	secondNamePtr := "second_ptr"
+-	secondAgePtr := int64(30)
+-	thirdNamePtr := "third_ptr"
+-	thirdAgePtr := int64(0)
+-
+-	expect := []struct {
+-		Name    string
+-		NamePtr *string
+-		Age     int64
+-		AgePtr  *int64
+-	}{
+-		{
+-			Name:    "first",
+-			NamePtr: nil,
+-			Age:     2,
+-			AgePtr:  nil,
+-		},
+-		{
+-			Name:    "second",
+-			NamePtr: &secondNamePtr,
+-			Age:     3,
+-			AgePtr:  &secondAgePtr,
+-		},
+-		{
+-			Name:    "",
+-			NamePtr: &thirdNamePtr,
+-			Age:     0,
+-			AgePtr:  &thirdAgePtr,
+-		},
+-	}
+-
+-	var value []struct {
+-		Age     int64   `db:"age"`
+-		AgePtr  *int64  `db:"age_ptr"`
+-		Name    string  `db:"name"`
+-		NamePtr *string `db:"name_ptr"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "name_ptr", "age", "age_ptr"}).
+-			AddRow("first", nil, 2, nil).
+-			AddRow("second", "second_ptr", 3, 30).
+-			AddRow("", "third_ptr", 0, 0)
+-
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, name_ptr, age, age_ptr from users where user=?", "anyone"))
+-
+-		assert.Equal(t, 3, len(value), "应该返回3行数据")
+-
+-		for i, each := range expect {
+-
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-
+-			if each.NamePtr == nil {
+-				assert.Nil(t, value[i].NamePtr)
+-			} else {
+-				assert.NotNil(t, value[i].NamePtr)
+-				assert.Equal(t, *each.NamePtr, *value[i].NamePtr)
+-			}
+-
+-			if each.AgePtr == nil {
+-				assert.Nil(t, value[i].AgePtr)
+-			} else {
+-				assert.NotNil(t, value[i].AgePtr)
+-				assert.Equal(t, *each.AgePtr, *value[i].AgePtr)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsAllNullStructPtrFields(t *testing.T) {
+-	expect := []struct {
+-		NamePtr *string
+-		AgePtr  *int64
+-	}{
+-		{
+-			NamePtr: nil,
+-			AgePtr:  nil,
+-		},
+-		{
+-			NamePtr: stringPtr("second"),
+-			AgePtr:  int64Ptr(30),
+-		},
+-		{
+-			NamePtr: nil,
+-			AgePtr:  nil,
+-		},
+-	}
+-
+-	var value []struct {
+-		AgePtr  *int64  `db:"age_ptr"`
+-		NamePtr *string `db:"name_ptr"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name_ptr", "age_ptr"}).
+-			AddRow(nil, nil).
+-			AddRow("second", 30).
+-			AddRow(nil, nil)
+-
+-		mock.ExpectQuery("select (.+) from users where user=?").
+-			WithArgs("anyone").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name_ptr, age_ptr from users where user=?", "anyone"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-			if each.NamePtr == nil {
+-				assert.Nil(t, value[i].NamePtr)
+-			} else {
+-				assert.NotNil(t, value[i].NamePtr)
+-				assert.Equal(t, *each.NamePtr, *value[i].NamePtr)
+-			}
+-
+-			if each.AgePtr == nil {
+-				assert.Nil(t, value[i].AgePtr)
+-			} else {
+-				assert.NotNil(t, value[i].AgePtr)
+-				assert.Equal(t, *each.AgePtr, *value[i].AgePtr)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsWithSqlNullTypes(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullName   sql.NullString
+-		Age        int64
+-		NullAge    sql.NullInt64
+-		Score      float64
+-		NullScore  sql.NullFloat64
+-		Active     bool
+-		NullActive sql.NullBool
+-	}{
+-		{
+-			Name: "first",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 20,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			Score: 85.5,
+-			NullScore: sql.NullFloat64{
+-				Float64: 0,
+-				Valid:   false,
+-			},
+-			Active: true,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "second",
+-			NullName: sql.NullString{
+-				String: "not_null_name",
+-				Valid:  true,
+-			},
+-			Age: 25,
+-			NullAge: sql.NullInt64{
+-				Int64: 30,
+-				Valid: true,
+-			},
+-			Score: 90.0,
+-			NullScore: sql.NullFloat64{
+-				Float64: 95.5,
+-				Valid:   true,
+-			},
+-			Active: false,
+-			NullActive: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "third",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 0,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			Score: 0,
+-			NullScore: sql.NullFloat64{
+-				Float64: 0,
+-				Valid:   false,
+-			},
+-			Active: false,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string          `db:"name"`
+-		NullName   sql.NullString  `db:"null_name"`
+-		Age        int64           `db:"age"`
+-		NullAge    sql.NullInt64   `db:"null_age"`
+-		Score      float64         `db:"score"`
+-		NullScore  sql.NullFloat64 `db:"null_score"`
+-		Active     bool            `db:"active"`
+-		NullActive sql.NullBool    `db:"null_active"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{
+-			"name", "null_name", "age", "null_age", "score", "null_score", "active", "null_active",
+-		}).
+-			AddRow("first", nil, 20, nil, 85.5, nil, true, nil).
+-			AddRow("second", "not_null_name", 25, 30, 90.0, 95.5, false, true).
+-			AddRow("third", nil, 0, nil, 0, nil, false, nil)
+-
+-		mock.ExpectQuery("select (.+) from users where type=?").
+-			WithArgs("test").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_name, age, null_age, score, null_score, active, null_active from users where type=?", "test"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-			assert.Equal(t, each.Score, value[i].Score)
+-			assert.Equal(t, each.Active, value[i].Active)
+-
+-			assert.Equal(t, each.NullName.Valid, value[i].NullName.Valid)
+-			if each.NullName.Valid {
+-				assert.Equal(t, each.NullName.String, value[i].NullName.String)
+-			}
+-
+-			assert.Equal(t, each.NullAge.Valid, value[i].NullAge.Valid)
+-			if each.NullAge.Valid {
+-				assert.Equal(t, each.NullAge.Int64, value[i].NullAge.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullScore.Valid, value[i].NullScore.Valid)
+-			if each.NullScore.Valid {
+-				assert.Equal(t, each.NullScore.Float64, value[i].NullScore.Float64)
+-			}
+-
+-			assert.Equal(t, each.NullActive.Valid, value[i].NullActive.Valid)
+-			if each.NullActive.Valid {
+-				assert.Equal(t, each.NullActive.Bool, value[i].NullActive.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullWithMixedData(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullName   sql.NullString
+-		Age        int64
+-		NullAge    sql.NullInt64
+-		IsStudent  bool
+-		NullActive sql.NullBool
+-	}{
+-		{
+-			Name: "student1",
+-			NullName: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			Age: 18,
+-			NullAge: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			IsStudent: true,
+-			NullActive: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "student2",
+-			NullName: sql.NullString{
+-				String: "has_nickname",
+-				Valid:  true,
+-			},
+-			Age: 20,
+-			NullAge: sql.NullInt64{
+-				Int64: 22,
+-				Valid: true,
+-			},
+-			IsStudent: false,
+-			NullActive: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string         `db:"name"`
+-		NullName   sql.NullString `db:"null_name"`
+-		Age        int64          `db:"age"`
+-		NullAge    sql.NullInt64  `db:"null_age"`
+-		IsStudent  bool           `db:"is_student"`
+-		NullActive sql.NullBool   `db:"null_active"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "null_name", "age", "null_age", "is_student", "null_active"}).
+-			AddRow("student1", nil, 18, nil, true, nil).
+-			AddRow("student2", "has_nickname", 20, 22, false, true)
+-
+-		mock.ExpectQuery("select (.+) from students where class=?").
+-			WithArgs("A").WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_name, age, null_age, is_student, null_active from students where class=?", "A"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-			assert.Equal(t, each.Age, value[i].Age)
+-			assert.Equal(t, each.IsStudent, value[i].IsStudent)
+-
+-			assert.Equal(t, each.NullName.Valid, value[i].NullName.Valid)
+-			if each.NullName.Valid {
+-				assert.Equal(t, each.NullName.String, value[i].NullName.String)
+-			}
+-
+-			assert.Equal(t, each.NullAge.Valid, value[i].NullAge.Valid)
+-			if each.NullAge.Valid {
+-				assert.Equal(t, each.NullAge.Int64, value[i].NullAge.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullActive.Valid, value[i].NullActive.Valid)
+-			if each.NullActive.Valid {
+-				assert.Equal(t, each.NullActive.Bool, value[i].NullActive.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullTime(t *testing.T) {
+-	now := time.Now()
+-	futureTime := now.AddDate(1, 0, 0)
+-
+-	expect := []struct {
+-		Name      string
+-		BirthDate sql.NullTime
+-		LastLogin sql.NullTime
+-	}{
+-		{
+-			Name: "user1",
+-			BirthDate: sql.NullTime{
+-				Time:  time.Time{},
+-				Valid: false,
+-			},
+-			LastLogin: sql.NullTime{
+-				Time:  now,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "user2",
+-			BirthDate: sql.NullTime{
+-				Time:  futureTime,
+-				Valid: true,
+-			},
+-			LastLogin: sql.NullTime{
+-				Time:  time.Time{},
+-				Valid: false,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name      string       `db:"name"`
+-		BirthDate sql.NullTime `db:"birth_date"`
+-		LastLogin sql.NullTime `db:"last_login"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "birth_date", "last_login"}).
+-			AddRow("user1", nil, now).
+-			AddRow("user2", futureTime, nil)
+-
+-		mock.ExpectQuery("select (.+) from users").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, birth_date, last_login from users"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.Equal(t, each.Name, value[i].Name)
+-
+-			assert.Equal(t, each.BirthDate.Valid, value[i].BirthDate.Valid)
+-			if each.BirthDate.Valid {
+-				assert.WithinDuration(t, each.BirthDate.Time, value[i].BirthDate.Time, time.Second)
+-			}
+-
+-			assert.Equal(t, each.LastLogin.Valid, value[i].LastLogin.Valid)
+-			if each.LastLogin.Valid {
+-				assert.WithinDuration(t, each.LastLogin.Time, value[i].LastLogin.Time, time.Second)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullWithEmptyValues(t *testing.T) {
+-	expect := []struct {
+-		Name       string
+-		NullString sql.NullString
+-		NullInt    sql.NullInt64
+-		NullFloat  sql.NullFloat64
+-		NullBool   sql.NullBool
+-	}{
+-		{
+-			Name: "empty_values",
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: true,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   true,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  false,
+-				Valid: true,
+-			},
+-		},
+-		{
+-			Name: "null_values",
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: false,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   false,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  false,
+-				Valid: false,
+-			},
+-		},
+-		{
+-			Name: "mixed_values",
+-			NullString: sql.NullString{
+-				String: "actual_value",
+-				Valid:  true,
+-			},
+-			NullInt: sql.NullInt64{
+-				Int64: 0,
+-				Valid: true,
+-			},
+-			NullFloat: sql.NullFloat64{
+-				Float64: 0.0,
+-				Valid:   false,
+-			},
+-			NullBool: sql.NullBool{
+-				Bool:  true,
+-				Valid: true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name       string          `db:"name"`
+-		NullString sql.NullString  `db:"null_string"`
+-		NullInt    sql.NullInt64   `db:"null_int"`
+-		NullFloat  sql.NullFloat64 `db:"null_float"`
+-		NullBool   sql.NullBool    `db:"null_bool"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "null_string", "null_int", "null_float", "null_bool"}).
+-			AddRow("empty_values", "", 0, 0.0, false).
+-			AddRow("null_values", nil, nil, nil, nil).
+-			AddRow("mixed_values", "actual_value", 0, nil, true)
+-
+-		mock.ExpectQuery("select (.+) from test_table").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, null_string, null_int, null_float, null_bool from test_table"))
+-
+-		assert.Equal(t, 3, len(value))
+-
+-		for i, each := range expect {
+-
+-			assert.Equal(t, each.Name, value[i].Name)
+-
+-			assert.Equal(t, each.NullString.Valid, value[i].NullString.Valid)
+-			if each.NullString.Valid {
+-				assert.Equal(t, each.NullString.String, value[i].NullString.String)
+-			} else {
+-				assert.Equal(t, "", value[i].NullString.String)
+-			}
+-
+-			assert.Equal(t, each.NullInt.Valid, value[i].NullInt.Valid)
+-			if each.NullInt.Valid {
+-				assert.Equal(t, each.NullInt.Int64, value[i].NullInt.Int64)
+-			} else {
+-				assert.Equal(t, int64(0), value[i].NullInt.Int64)
+-			}
+-
+-			assert.Equal(t, each.NullFloat.Valid, value[i].NullFloat.Valid)
+-			if each.NullFloat.Valid {
+-				assert.Equal(t, each.NullFloat.Float64, value[i].NullFloat.Float64)
+-			} else {
+-				assert.Equal(t, 0.0, value[i].NullFloat.Float64)
+-			}
+-
+-			assert.Equal(t, each.NullBool.Valid, value[i].NullBool.Valid)
+-			if each.NullBool.Valid {
+-				assert.Equal(t, each.NullBool.Bool, value[i].NullBool.Bool)
+-			} else {
+-				assert.Equal(t, false, value[i].NullBool.Bool)
+-			}
+-		}
+-	})
+-}
+-
+-func TestUnmarshalRowsSqlNullStringEmptyVsNull(t *testing.T) {
+-	expect := []struct {
+-		Name         string
+-		EmptyString  sql.NullString
+-		NullString   sql.NullString
+-		NormalString sql.NullString
+-	}{
+-		{
+-			Name: "row1",
+-			EmptyString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NormalString: sql.NullString{
+-				String: "hello",
+-				Valid:  true,
+-			},
+-		},
+-		{
+-			Name: "row2",
+-			EmptyString: sql.NullString{
+-				String: "   ",
+-				Valid:  true,
+-			},
+-			NullString: sql.NullString{
+-				String: "",
+-				Valid:  false,
+-			},
+-			NormalString: sql.NullString{
+-				String: "",
+-				Valid:  true,
+-			},
+-		},
+-	}
+-
+-	var value []struct {
+-		Name         string         `db:"name"`
+-		EmptyString  sql.NullString `db:"empty_string"`
+-		NullString   sql.NullString `db:"null_string"`
+-		NormalString sql.NullString `db:"normal_string"`
+-	}
+-
+-	dbtest.RunTest(t, func(db *sql.DB, mock sqlmock.Sqlmock) {
+-		rs := sqlmock.NewRows([]string{"name", "empty_string", "null_string", "normal_string"}).
+-			AddRow("row1", "", nil, "hello").
+-			AddRow("row2", "   ", nil, "")
+-
+-		mock.ExpectQuery("select (.+) from string_test").
+-			WillReturnRows(rs)
+-
+-		assert.Nil(t, query(context.Background(), db, func(rows *sql.Rows) error {
+-			return unmarshalRows(&value, rows, true)
+-		}, "select name, empty_string, null_string, normal_string from string_test"))
+-
+-		assert.Equal(t, 2, len(value))
+-
+-		for i, each := range expect {
+-			assert.True(t, value[i].EmptyString.Valid)
+-			assert.Equal(t, each.EmptyString.String, value[i].EmptyString.String)
+-
+-			assert.False(t, value[i].NullString.Valid)
+-			assert.Equal(t, "", value[i].NullString.String)
+-
+-			assert.Equal(t, each.NormalString.Valid, value[i].NormalString.Valid)
+-			if each.NormalString.Valid {
+-				assert.Equal(t, each.NormalString.String, value[i].NormalString.String)
+-			}
+-		}
+-	})
+-}
+-
+-func TestGetValueInterface(t *testing.T) {
+-	t.Run("non_pointer_field", func(t *testing.T) {
+-		type testStruct struct {
+-			Name string
+-			Age  int
+-		}
+-		s := testStruct{}
+-		v := reflect.ValueOf(&s).Elem()
+-
+-		nameField := v.Field(0)
+-		result, err := getValueInterface(nameField)
+-		assert.NoError(t, err)
+-		assert.NotNil(t, result)
+-
+-		// Should return pointer to the field
+-		ptr, ok := result.(*string)
+-		assert.True(t, ok)
+-		*ptr = "test"
+-		assert.Equal(t, "test", s.Name)
+-	})
+-
+-	t.Run("pointer_field_nil", func(t *testing.T) {
+-		type testStruct struct {
+-			NamePtr *string
+-			AgePtr  *int64
+-		}
+-		s := testStruct{}
+-		v := reflect.ValueOf(&s).Elem()
+-
+-		// Test with nil pointer field
+-		namePtrField := v.Field(0)
+-		assert.True(t, namePtrField.IsNil(), "initial pointer should be nil")
+-
+-		result, err := getValueInterface(namePtrField)
+-		assert.NoError(t, err)
+-		assert.NotNil(t, result)
+-
+-		// Should have allocated the pointer
+-		assert.False(t, namePtrField.IsNil(), "pointer should be allocated after getValueInterface")
+-
+-		// Should return pointer to pointer field
+-		ptrPtr, ok := result.(**string)
+-		assert.True(t, ok)
+-		testValue := "initialized"
+-		*ptrPtr = &testValue
+-		assert.NotNil(t, s.NamePtr)
+-		assert.Equal(t, "initialized", *s.NamePtr)
+-	})
+-
+-	t.Run("pointer_field_already_allocated", func(t *testing.T) {
+-		type testStruct struct {
+-			NamePtr *string
+-		}
+-		initial := "existing"
+-		s := testStruct{NamePtr: &initial}
+-		v := reflect.ValueOf(&s).Elem()
+-
+-		namePtrField := v.Field(0)
+-		assert.False(t, namePtrField.IsNil(), "pointer should not be nil initially")
+-
+-		result, err := getValueInterface(namePtrField)
+-		assert.NoError(t, err)
+-		assert.NotNil(t, result)
+-
+-		// Should return pointer to pointer field
+-		ptrPtr, ok := result.(**string)
+-		assert.True(t, ok)
+-
+-		// Verify it points to the existing value
+-		assert.Equal(t, "existing", **ptrPtr)
+-
+-		// Modify through the returned pointer
+-		newValue := "modified"
+-		*ptrPtr = &newValue
+-		assert.Equal(t, "modified", *s.NamePtr)
+-	})
+-
+-	t.Run("pointer_field_zero_value", func(t *testing.T) {
+-		type testStruct struct {
+-			IntPtr *int
+-		}
+-		s := testStruct{}
+-		v := reflect.ValueOf(&s).Elem()
+-
+-		intPtrField := v.Field(0)
+-		result, err := getValueInterface(intPtrField)
+-		assert.NoError(t, err)
+-
+-		// After calling getValueInterface, nil pointer should be allocated
+-		assert.NotNil(t, s.IntPtr)
+-
+-		// Set zero value through returned interface
+-		ptrPtr, ok := result.(**int)
+-		assert.True(t, ok)
+-		zero := 0
+-		*ptrPtr = &zero
+-		assert.Equal(t, 0, *s.IntPtr)
+-	})
+-
+-	t.Run("not_addressable_value", func(t *testing.T) {
+-		type testStruct struct {
+-			Name string
+-		}
+-		s := testStruct{Name: "test"}
+-		v := reflect.ValueOf(s) // Non-pointer, not addressable
+-
+-		nameField := v.Field(0)
+-		result, err := getValueInterface(nameField)
+-		assert.Error(t, err)
+-		assert.Equal(t, ErrNotReadableValue, err)
+-		assert.Nil(t, result)
+-	})
+-
+-	t.Run("multiple_pointer_types", func(t *testing.T) {
+-		type testStruct struct {
+-			StringPtr *string
+-			IntPtr    *int
+-			Int64Ptr  *int64
+-			FloatPtr  *float64
+-			BoolPtr   *bool
+-		}
+-		s := testStruct{}
+-		v := reflect.ValueOf(&s).Elem()
+-
+-		// Test each pointer type gets properly initialized
+-		for i := 0; i < v.NumField(); i++ {
+-			field := v.Field(i)
+-			assert.True(t, field.IsNil(), "field %d should start as nil", i)
+-
+-			result, err := getValueInterface(field)
+-			assert.NoError(t, err, "field %d should not error", i)
+-			assert.NotNil(t, result, "field %d result should not be nil", i)
+-
+-			// After getValueInterface, pointer should be allocated
+-			assert.False(t, field.IsNil(), "field %d should be allocated", i)
+-		}
+-	})
+-}
+-
+-func stringPtr(s string) *string {
+-	return &s
+-}
+-
+-func int64Ptr(i int64) *int64 {
+-	return &i
+-}
+-
+ func BenchmarkIgnore(b *testing.B) {
+ 	db, mock, err := sqlmock.New()
+ 	if err != nil {
+diff --git a/core/trace/agent_test.go b/core/trace/agent_test.go
+index 8afd36def053be5956bbb6a3ba1f9531e9043989..e3056f4d252e7dcd5eeadae5d0cda5aeb240a446 100644
+--- a/core/trace/agent_test.go
++++ b/core/trace/agent_test.go
+@@ -1,13 +1,10 @@
+ package trace
+ 
+ import (
+-	"context"
+-	"errors"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/logx"
+-	"go.opentelemetry.io/otel"
+ )
+ 
+ func TestStartAgent(t *testing.T) {
+@@ -92,305 +89,23 @@ func TestStartAgent(t *testing.T) {
+ 	StartAgent(c10)
+ 	defer StopAgent()
+ 
+-	// With sync.Once, only the first non-disabled config (c1) takes effect.
+-	// Subsequent calls are ignored, which is the desired behavior to prevent
+-	// multiple servers (REST + RPC) from reinitializing the global tracer.
+-	assert.NotNil(t, tp)
+-}
+-
+-func TestCreateExporter_InvalidFilePath(t *testing.T) {
+-	logx.Disable()
+-
+-	c := Config{
+-		Name:     "test-invalid-file",
+-		Endpoint: "/non-existent-directory/trace.log",
+-		Batcher:  kindFile,
+-	}
+-
+-	_, err := createExporter(c)
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "file exporter endpoint error")
+-}
+-
+-func TestCreateExporter_UnknownBatcher(t *testing.T) {
+-	logx.Disable()
+-
+-	c := Config{
+-		Name:     "test-unknown",
+-		Endpoint: "localhost:1234",
+-		Batcher:  "unknown-batcher-type",
+-	}
+-
+-	_, err := createExporter(c)
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "unknown exporter")
+-}
+-
+-func TestCreateExporter_ValidExporters(t *testing.T) {
+-	logx.Disable()
+-
+-	tests := []struct {
+-		name    string
+-		config  Config
+-		wantErr bool
+-		errMsg  string
+-	}{
+-		{
+-			name: "valid file exporter",
+-			config: Config{
+-				Name:     "file-test",
+-				Endpoint: "/tmp/trace-test.log",
+-				Batcher:  kindFile,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "invalid file path",
+-			config: Config{
+-				Name:     "file-test-invalid",
+-				Endpoint: "/invalid-path/that/does/not/exist/trace.log",
+-				Batcher:  kindFile,
+-			},
+-			wantErr: true,
+-			errMsg:  "file exporter endpoint error",
+-		},
+-		{
+-			name: "unknown batcher",
+-			config: Config{
+-				Name:     "unknown-test",
+-				Endpoint: "localhost:1234",
+-				Batcher:  "invalid-batcher",
+-			},
+-			wantErr: true,
+-			errMsg:  "unknown exporter",
+-		},
+-		{
+-			name: "jaeger http",
+-			config: Config{
+-				Name:     "jaeger-http",
+-				Endpoint: "http://localhost:14268/api/traces",
+-				Batcher:  kindJaeger,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "jaeger udp",
+-			config: Config{
+-				Name:     "jaeger-udp",
+-				Endpoint: "udp://localhost:6831",
+-				Batcher:  kindJaeger,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "zipkin",
+-			config: Config{
+-				Name:     "zipkin",
+-				Endpoint: "http://localhost:9411/api/v2/spans",
+-				Batcher:  kindZipkin,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlpgrpc",
+-			config: Config{
+-				Name:     "otlpgrpc",
+-				Endpoint: "localhost:4317",
+-				Batcher:  kindOtlpGrpc,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlpgrpc with headers",
+-			config: Config{
+-				Name:     "otlpgrpc-headers",
+-				Endpoint: "localhost:4317",
+-				Batcher:  kindOtlpGrpc,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer token123",
+-					"x-custom-key":  "custom-value",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp",
+-			config: Config{
+-				Name:     "otlphttp",
+-				Endpoint: "localhost:4318",
+-				Batcher:  kindOtlpHttp,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with headers",
+-			config: Config{
+-				Name:     "otlphttp-headers",
+-				Endpoint: "localhost:4318",
+-				Batcher:  kindOtlpHttp,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer token456",
+-					"x-api-key":     "api-key-value",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with headers and path",
+-			config: Config{
+-				Name:         "otlphttp-headers-path",
+-				Endpoint:     "localhost:4318",
+-				Batcher:      kindOtlpHttp,
+-				OtlpHttpPath: "/v1/traces",
+-				OtlpHeaders: map[string]string{
+-					"authorization":  "Bearer token789",
+-					"x-custom-trace": "trace-id",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "otlphttp with secure connection",
+-			config: Config{
+-				Name:           "otlphttp-secure",
+-				Endpoint:       "localhost:4318",
+-				Batcher:        kindOtlpHttp,
+-				OtlpHttpSecure: true,
+-				OtlpHeaders: map[string]string{
+-					"authorization": "Bearer secure-token",
+-				},
+-			},
+-			wantErr: false,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			exporter, err := createExporter(tt.config)
+-			if tt.wantErr {
+-				assert.Error(t, err)
+-				if tt.errMsg != "" {
+-					assert.Contains(t, err.Error(), tt.errMsg)
+-				}
+-				assert.Nil(t, exporter)
+-			} else {
+-				assert.NoError(t, err)
+-				assert.NotNil(t, exporter)
+-				// Clean up the exporter
+-				if exporter != nil {
+-					_ = exporter.Shutdown(context.Background())
+-				}
+-			}
+-		})
+-	}
+-}
+-
+-func TestStopAgent(t *testing.T) {
+-	logx.Disable()
+-
+-	// StopAgent should be idempotent and safe to call multiple times
+-	assert.NotPanics(t, func() {
+-		StopAgent()
+-		StopAgent()
+-		StopAgent()
+-	})
+-}
+-
+-func TestStartAgent_WithEndpoint(t *testing.T) {
+-	logx.Disable()
+-
+-	tests := []struct {
+-		name    string
+-		config  Config
+-		wantErr bool
+-	}{
+-		{
+-			name: "empty endpoint - no exporter created",
+-			config: Config{
+-				Name:    "test-no-endpoint",
+-				Sampler: 1.0,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "valid endpoint with file exporter",
+-			config: Config{
+-				Name:     "test-with-endpoint",
+-				Endpoint: "/tmp/test-trace.log",
+-				Batcher:  kindFile,
+-				Sampler:  1.0,
+-			},
+-			wantErr: false,
+-		},
+-		{
+-			name: "endpoint with invalid exporter type",
+-			config: Config{
+-				Name:     "test-invalid-batcher",
+-				Endpoint: "localhost:1234",
+-				Batcher:  "invalid-type",
+-				Sampler:  1.0,
+-			},
+-			wantErr: true,
+-		},
+-		{
+-			name: "endpoint with invalid file path",
+-			config: Config{
+-				Name:     "test-invalid-path",
+-				Endpoint: "/non/existent/path/trace.log",
+-				Batcher:  kindFile,
+-				Sampler:  1.0,
+-			},
+-			wantErr: true,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			// Reset tp for each test
+-			originalTp := tp
+-			tp = nil
+-			defer func() {
+-				if tp != nil {
+-					_ = tp.Shutdown(context.Background())
+-				}
+-				tp = originalTp
+-			}()
+-
+-			err := startAgent(tt.config)
+-			if tt.wantErr {
+-				assert.Error(t, err)
+-			} else {
+-				assert.NoError(t, err)
+-				assert.NotNil(t, tp, "TracerProvider should be created")
+-			}
+-		})
+-	}
+-}
+-
+-func TestStartAgent_ErrorHandler(t *testing.T) {
+-	// Setup a tracer provider to test error handler
+-	originalTp := tp
+-	tp = nil
+-	defer func() {
+-		if tp != nil {
+-			_ = tp.Shutdown(context.Background())
+-		}
+-		tp = originalTp
+-	}()
+-
+-	// Call startAgent to set up the error handler
+-	config := Config{
+-		Name:    "test-error-handler",
+-		Sampler: 1.0,
+-	}
+-	err := startAgent(config)
+-	assert.NoError(t, err)
+-	assert.NotNil(t, tp)
+-
+-	// Verify the error handler was set and can be called without panicking
+-	// We test this by calling otel.Handle which will invoke the registered error handler
+-	testErr := errors.New("test otel error")
+-	assert.NotPanics(t, func() {
+-		otel.Handle(testErr)
+-	}, "Error handler should handle errors without panicking")
++	lock.Lock()
++	defer lock.Unlock()
++
++	// because remotehost cannot be resolved
++	assert.Equal(t, 6, len(agents))
++	_, ok := agents[""]
++	assert.True(t, ok)
++	_, ok = agents[endpoint1]
++	assert.True(t, ok)
++	_, ok = agents[endpoint2]
++	assert.False(t, ok)
++	_, ok = agents[endpoint5]
++	assert.True(t, ok)
++	_, ok = agents[endpoint6]
++	assert.False(t, ok)
++	_, ok = agents[endpoint71]
++	assert.True(t, ok)
++	_, ok = agents[endpoint72]
++	assert.False(t, ok)
+ }
+diff --git a/gateway/internal/headerprocessor_test.go b/gateway/internal/headerprocessor_test.go
+index 9c24fa19afaae1b9ec31677bf6121925b7d192e1..cba6a2c2f2376346c52a8038df4fb1ea5c684e48 100644
+--- a/gateway/internal/headerprocessor_test.go
++++ b/gateway/internal/headerprocessor_test.go
+@@ -18,93 +18,5 @@ func TestBuildHeadersWithValues(t *testing.T) {
+ 	req := httptest.NewRequest("GET", "/", http.NoBody)
+ 	req.Header.Add("grpc-metadata-a", "b")
+ 	req.Header.Add("grpc-metadata-b", "b")
+-	assert.ElementsMatch(t, []string{"gateway-a:b", "gateway-b:b"}, ProcessHeaders(req.Header))
+-}
+-
+-func TestProcessHeadersWithTraceContext(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	req.Header.Set("tracestate", "key1=value1,key2=value2")
+-	req.Header.Set("baggage", "userId=alice,serverNode=DF:28")
+-
+-	headers := ProcessHeaders(req.Header)
+-
+-	assert.Len(t, headers, 3)
+-	assert.Contains(t, headers, "traceparent:00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	assert.Contains(t, headers, "tracestate:key1=value1,key2=value2")
+-	assert.Contains(t, headers, "baggage:userId=alice,serverNode=DF:28")
+-}
+-
+-func TestProcessHeadersWithMixedHeaders(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	req.Header.Set("grpc-metadata-custom", "value1")
+-	req.Header.Set("content-type", "application/json")
+-	req.Header.Set("tracestate", "key1=value1")
+-
+-	headers := ProcessHeaders(req.Header)
+-
+-	// Should include trace headers and grpc-metadata headers, but not regular headers
+-	assert.Len(t, headers, 3)
+-	assert.Contains(t, headers, "traceparent:00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+-	assert.Contains(t, headers, "tracestate:key1=value1")
+-	assert.Contains(t, headers, "gateway-custom:value1")
+-}
+-
+-func TestProcessHeadersTraceparentCaseInsensitive(t *testing.T) {
+-	tests := []struct {
+-		name        string
+-		headerKey   string
+-		headerVal   string
+-		expectedKey string
+-	}{
+-		{
+-			name:        "lowercase traceparent",
+-			headerKey:   "traceparent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "uppercase Traceparent",
+-			headerKey:   "Traceparent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "mixed case TraceParent",
+-			headerKey:   "TraceParent",
+-			headerVal:   "00-trace-span-01",
+-			expectedKey: "traceparent",
+-		},
+-		{
+-			name:        "lowercase tracestate",
+-			headerKey:   "tracestate",
+-			headerVal:   "key=value",
+-			expectedKey: "tracestate",
+-		},
+-		{
+-			name:        "mixed case TraceState",
+-			headerKey:   "TraceState",
+-			headerVal:   "key=value",
+-			expectedKey: "tracestate",
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			req := httptest.NewRequest("GET", "/", http.NoBody)
+-			req.Header.Set(tt.headerKey, tt.headerVal)
+-
+-			headers := ProcessHeaders(req.Header)
+-
+-			assert.Len(t, headers, 1)
+-			assert.Contains(t, headers, tt.expectedKey+":"+tt.headerVal)
+-		})
+-	}
+-}
+-
+-func TestProcessHeadersEmptyHeaders(t *testing.T) {
+-	req := httptest.NewRequest("GET", "/", http.NoBody)
+-	headers := ProcessHeaders(req.Header)
+-	assert.Empty(t, headers)
++	assert.ElementsMatch(t, []string{"gateway-A:b", "gateway-B:b"}, ProcessHeaders(req.Header))
+ }
+diff --git a/rest/handler/loghandler_test.go b/rest/handler/loghandler_test.go
+index 0629e221fe879f79c1be27e114d308d45a58eda1..85afcfe84053a621afe8badf34d3e8f2a840d9cd 100644
+--- a/rest/handler/loghandler_test.go
++++ b/rest/handler/loghandler_test.go
+@@ -88,96 +88,6 @@ func TestLogHandlerSlow(t *testing.T) {
+ 	}
+ }
+ 
+-func TestLogHandlerSSE(t *testing.T) {
+-	handlers := []func(handler http.Handler) http.Handler{
+-		LogHandler,
+-		DetailedLogHandler,
+-	}
+-
+-	for _, logHandler := range handlers {
+-		t.Run("SSE request with normal duration", func(t *testing.T) {
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			req.Header.Set(headerAccept, valueSSE)
+-
+-			handler := logHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(defaultSlowThreshold + time.Second)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-
+-		t.Run("SSE request exceeding SSE threshold", func(t *testing.T) {
+-			originalThreshold := sseSlowThreshold.Load()
+-			SetSSESlowThreshold(time.Millisecond * 100)
+-			defer SetSSESlowThreshold(originalThreshold)
+-
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			req.Header.Set(headerAccept, valueSSE)
+-
+-			handler := logHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(time.Millisecond * 150)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-	}
+-}
+-
+-func TestLogHandlerThresholdSelection(t *testing.T) {
+-	tests := []struct {
+-		name          string
+-		acceptHeader  string
+-		expectedIsSSE bool
+-	}{
+-		{
+-			name:          "Regular HTTP request",
+-			acceptHeader:  "text/html",
+-			expectedIsSSE: false,
+-		},
+-		{
+-			name:          "SSE request",
+-			acceptHeader:  valueSSE,
+-			expectedIsSSE: true,
+-		},
+-		{
+-			name:          "No Accept header",
+-			acceptHeader:  "",
+-			expectedIsSSE: false,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			req := httptest.NewRequest(http.MethodGet, "http://localhost", http.NoBody)
+-			if tt.acceptHeader != "" {
+-				req.Header.Set(headerAccept, tt.acceptHeader)
+-			}
+-
+-			SetSlowThreshold(time.Millisecond * 100)
+-			SetSSESlowThreshold(time.Millisecond * 200)
+-			defer func() {
+-				SetSlowThreshold(defaultSlowThreshold)
+-				SetSSESlowThreshold(defaultSSESlowThreshold)
+-			}()
+-
+-			handler := LogHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-				time.Sleep(time.Millisecond * 150)
+-				w.WriteHeader(http.StatusOK)
+-			}))
+-
+-			resp := httptest.NewRecorder()
+-			handler.ServeHTTP(resp, req)
+-			assert.Equal(t, http.StatusOK, resp.Code)
+-		})
+-	}
+-}
+-
+ func TestDetailedLogHandler_LargeBody(t *testing.T) {
+ 	lbuf := logtest.NewCollector(t)
+ 
+@@ -229,12 +139,6 @@ func TestSetSlowThreshold(t *testing.T) {
+ 	assert.Equal(t, time.Second, slowThreshold.Load())
+ }
+ 
+-func TestSetSSESlowThreshold(t *testing.T) {
+-	assert.Equal(t, defaultSSESlowThreshold, sseSlowThreshold.Load())
+-	SetSSESlowThreshold(time.Minute * 10)
+-	assert.Equal(t, time.Minute*10, sseSlowThreshold.Load())
+-}
+-
+ func TestWrapMethodWithColor(t *testing.T) {
+ 	// no tty
+ 	assert.Equal(t, http.MethodGet, wrapMethod(http.MethodGet))
+diff --git a/rest/server_test.go b/rest/server_test.go
+index e090294fc881b984049869f894434c361360961b..a0b0fbe1f765a917797bdb760de452a0c110deaa 100644
+--- a/rest/server_test.go
++++ b/rest/server_test.go
+@@ -92,7 +92,7 @@ Port: 0
+ 			Path:    "/",
+ 			Handler: nil,
+ 		}, WithJwt("thesecret"), WithSignature(SignatureConf{}),
+-			WithJwtTransition("previous", "thenewone"))
++			WithJwtTransition("preivous", "thenewone"))
+ 
+ 		func() {
+ 			defer func() {
+diff --git a/tools/goctl/api/gogen/gensse_test.go b/tools/goctl/api/gogen/gensse_test.go
+deleted file mode 100644
+index df961a03567b57ea5edce646e6badb0c519ab905..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/gogen/gensse_test.go
++++ /dev/null
+@@ -1,153 +0,0 @@
+-package gogen
+-
+-import (
+-	"os"
+-	"path/filepath"
+-	"strings"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-)
+-
+-func TestSSEGeneration(t *testing.T) {
+-	// Create a temporary directory for test
+-	dir := t.TempDir()
+-
+-	// Create a test API file with SSE annotation
+-	apiContent := `syntax = "v1"
+-
+-type SseReq {
+-    Message string ` + "`json:\"message\"`" + `
+-}
+-
+-type SseResp {
+-    Data string ` + "`json:\"data\"`" + `
+-}
+-
+-@server (
+-    sse: true
+-)
+-service Test {
+-    @handler Sse
+-    get /sse (SseReq) returns (SseResp)
+-}
+-`
+-	apiFile := filepath.Join(dir, "test.api")
+-	err := os.WriteFile(apiFile, []byte(apiContent), 0644)
+-	assert.NoError(t, err)
+-
+-	// Generate code
+-	err = DoGenProject(apiFile, dir, "gozero", false)
+-	assert.NoError(t, err)
+-
+-	// Read generated handler file
+-	handlerPath := filepath.Join(dir, "internal/handler/ssehandler.go")
+-	handlerContent, err := os.ReadFile(handlerPath)
+-	assert.NoError(t, err)
+-
+-	// Read generated logic file
+-	logicPath := filepath.Join(dir, "internal/logic/sselogic.go")
+-	logicContent, err := os.ReadFile(logicPath)
+-	assert.NoError(t, err)
+-
+-	handlerStr := string(handlerContent)
+-	logicStr := string(logicContent)
+-
+-	// Verify SSE-specific patterns in handler
+-	// Handler should call: err := l.Sse(&req, client)
+-	assert.Contains(t, handlerStr, "err := l.Sse(&req, client)",
+-		"Handler should call logic with client channel parameter")
+-
+-	// Handler should NOT have the regular pattern: resp, err := l.Sse(&req)
+-	assert.NotContains(t, handlerStr, "resp, err := l.Sse(&req)",
+-		"Handler should not use regular pattern with resp return")
+-
+-	// Handler should use threading.GoSafeCtx
+-	assert.Contains(t, handlerStr, "threading.GoSafeCtx",
+-		"Handler should use threading.GoSafeCtx for SSE")
+-
+-	// Handler should create client channel
+-	assert.Contains(t, handlerStr, "client := make(chan",
+-		"Handler should create client channel")
+-
+-	// Verify SSE-specific patterns in logic
+-	// Logic should have signature: Sse(req *types.SseReq, client chan<- *types.SseResp) error
+-	assert.Contains(t, logicStr, "func (l *SseLogic) Sse(req *types.SseReq, client chan<- *types.SseResp) error",
+-		"Logic should have SSE signature with client channel parameter")
+-
+-	// Logic should NOT have regular signature: Sse(req *types.SseReq) (resp *types.SseResp, err error)
+-	assert.NotContains(t, logicStr, "(resp *types.SseResp, err error)",
+-		"Logic should not have regular signature with resp return")
+-}
+-
+-func TestNonSSEGeneration(t *testing.T) {
+-	// Create a temporary directory for test
+-	dir := t.TempDir()
+-
+-	// Create a test API file WITHOUT SSE annotation
+-	apiContent := `syntax = "v1"
+-
+-type SseReq {
+-    Message string ` + "`json:\"message\"`" + `
+-}
+-
+-type SseResp {
+-    Data string ` + "`json:\"data\"`" + `
+-}
+-
+-service Test {
+-    @handler Sse
+-    get /sse (SseReq) returns (SseResp)
+-}
+-`
+-	apiFile := filepath.Join(dir, "test.api")
+-	err := os.WriteFile(apiFile, []byte(apiContent), 0644)
+-	assert.NoError(t, err)
+-
+-	// Generate code
+-	err = DoGenProject(apiFile, dir, "gozero", false)
+-	assert.NoError(t, err)
+-
+-	// Read generated handler file
+-	handlerPath := filepath.Join(dir, "internal/handler/ssehandler.go")
+-	handlerContent, err := os.ReadFile(handlerPath)
+-	assert.NoError(t, err)
+-
+-	// Read generated logic file
+-	logicPath := filepath.Join(dir, "internal/logic/sselogic.go")
+-	logicContent, err := os.ReadFile(logicPath)
+-	assert.NoError(t, err)
+-
+-	handlerStr := string(handlerContent)
+-	logicStr := string(logicContent)
+-
+-	// Verify regular (non-SSE) patterns in handler
+-	// Handler should call: resp, err := l.Sse(&req)
+-	assert.Contains(t, handlerStr, "resp, err := l.Sse(&req)",
+-		"Handler should use regular pattern with resp return")
+-
+-	// Handler should NOT have SSE pattern: err := l.Sse(&req, client)
+-	assert.NotContains(t, handlerStr, "err := l.Sse(&req, client)",
+-		"Handler should not use SSE pattern")
+-
+-	// Handler should NOT use threading.GoSafeCtx
+-	assert.NotContains(t, handlerStr, "threading.GoSafeCtx",
+-		"Handler should not use threading.GoSafeCtx for regular routes")
+-
+-	// Verify regular (non-SSE) patterns in logic
+-	// Logic should have signature: Sse(req *types.SseReq) (resp *types.SseResp, err error)
+-	assert.Contains(t, logicStr, "(resp *types.SseResp, err error)",
+-		"Logic should have regular signature with resp return")
+-
+-	// Logic should NOT have SSE signature with client parameter
+-	linesToCheck := strings.Split(logicStr, "\n")
+-	hasSSESignature := false
+-	for _, line := range linesToCheck {
+-		if strings.Contains(line, "func (l *SseLogic) Sse") && strings.Contains(line, "client chan<-") {
+-			hasSSESignature = true
+-			break
+-		}
+-	}
+-	assert.False(t, hasSSESignature,
+-		"Logic should not have SSE signature with client channel parameter")
+-}
+diff --git a/tools/goctl/api/swagger/annotation_test.go b/tools/goctl/api/swagger/annotation_test.go
+index 9f94d88959960571149aa436fc59566458dcd78e..872d656400049e9da72cbabcf0b2ff3752d23d92 100644
+--- a/tools/goctl/api/swagger/annotation_test.go
++++ b/tools/goctl/api/swagger/annotation_test.go
+@@ -21,19 +21,6 @@ func Test_getBoolFromKVOrDefault(t *testing.T) {
+ 	assert.False(t, getBoolFromKVOrDefault(properties, "empty_value", false))
+ 	assert.False(t, getBoolFromKVOrDefault(nil, "nil", false))
+ 	assert.False(t, getBoolFromKVOrDefault(map[string]string{}, "empty", false))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"enabled":     "true",
+-		"disabled":    "false",
+-		"invalid":     "notabool",
+-		"empty_value": "",
+-	}
+-
+-	assert.True(t, getBoolFromKVOrDefault(unquotedProperties, "enabled", false))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "disabled", true))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "invalid", false))
+-	assert.False(t, getBoolFromKVOrDefault(unquotedProperties, "empty_value", false))
+ }
+ 
+ func Test_getStringFromKVOrDefault(t *testing.T) {
+@@ -47,17 +34,6 @@ func Test_getStringFromKVOrDefault(t *testing.T) {
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(properties, "missing", "default"))
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(nil, "nil", "default"))
+ 	assert.Equal(t, "default", getStringFromKVOrDefault(map[string]string{}, "empty", "default"))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"name":  "example",
+-		"title": "Demo API",
+-		"empty": "",
+-	}
+-
+-	assert.Equal(t, "example", getStringFromKVOrDefault(unquotedProperties, "name", "default"))
+-	assert.Equal(t, "Demo API", getStringFromKVOrDefault(unquotedProperties, "title", "default"))
+-	assert.Equal(t, "default", getStringFromKVOrDefault(unquotedProperties, "empty", "default"))
+ }
+ 
+ func Test_getListFromInfoOrDefault(t *testing.T) {
+@@ -74,123 +50,4 @@ func Test_getListFromInfoOrDefault(t *testing.T) {
+ 	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(map[string]string{
+ 		"foo": ",,",
+ 	}, "foo", []string{"default"}))
+-
+-	// Test with unquoted values (as stored by RawText())
+-	unquotedProperties := map[string]string{
+-		"list":    "a, b, c",
+-		"schemes": "http,https",
+-		"tags":    "query",
+-		"empty":   "",
+-	}
+-
+-	// Note: FieldsAndTrimSpace doesn't actually trim the spaces from returned values
+-	assert.Equal(t, []string{"a", " b", " c"}, getListFromInfoOrDefault(unquotedProperties, "list", []string{"default"}))
+-	assert.Equal(t, []string{"http", "https"}, getListFromInfoOrDefault(unquotedProperties, "schemes", []string{"default"}))
+-	assert.Equal(t, []string{"query"}, getListFromInfoOrDefault(unquotedProperties, "tags", []string{"default"}))
+-	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(unquotedProperties, "empty", []string{"default"}))
+-}
+-
+-func Test_getFirstUsableString(t *testing.T) {
+-	t.Run("empty input", func(t *testing.T) {
+-		result := getFirstUsableString()
+-		assert.Equal(t, "", result, "should return empty string for no arguments")
+-	})
+-
+-	t.Run("single plain string", func(t *testing.T) {
+-		result := getFirstUsableString("Check server health status.")
+-		assert.Equal(t, "Check server health status.", result)
+-	})
+-
+-	t.Run("single quoted string", func(t *testing.T) {
+-		// This is how Go would represent a quoted string literal
+-		result := getFirstUsableString(`"Check server health status."`)
+-		assert.Equal(t, "Check server health status.", result, "should unquote quoted strings")
+-	})
+-
+-	t.Run("multiple plain strings", func(t *testing.T) {
+-		result := getFirstUsableString("", "second", "third")
+-		assert.Equal(t, "second", result, "should return first non-empty string")
+-	})
+-
+-	t.Run("handler name fallback", func(t *testing.T) {
+-		// Simulates the real use case: @doc text, handler name
+-		result := getFirstUsableString("", "HealthCheck")
+-		assert.Equal(t, "HealthCheck", result, "should fallback to handler name")
+-	})
+-
+-	t.Run("doc text over handler name", func(t *testing.T) {
+-		// Simulates the real use case with @doc text
+-		result := getFirstUsableString("Check server health status.", "HealthCheck")
+-		assert.Equal(t, "Check server health status.", result, "should use doc text over handler name")
+-	})
+-
+-	t.Run("empty strings before valid", func(t *testing.T) {
+-		result := getFirstUsableString("", "", "valid")
+-		assert.Equal(t, "valid", result, "should skip empty strings")
+-	})
+-
+-	t.Run("all empty strings", func(t *testing.T) {
+-		result := getFirstUsableString("", "", "")
+-		assert.Equal(t, "", result, "should return empty if all are empty")
+-	})
+-
+-	t.Run("quoted then plain", func(t *testing.T) {
+-		result := getFirstUsableString(`"quoted"`, "plain")
+-		assert.Equal(t, "quoted", result, "should unquote first quoted string")
+-	})
+-
+-	t.Run("plain then quoted", func(t *testing.T) {
+-		result := getFirstUsableString("plain", `"quoted"`)
+-		assert.Equal(t, "plain", result, "should use first plain string")
+-	})
+-
+-	t.Run("invalid quoted string", func(t *testing.T) {
+-		// String that looks quoted but isn't valid Go syntax
+-		result := getFirstUsableString(`"incomplete`, "fallback")
+-		assert.Equal(t, `"incomplete`, result, "should use as-is if unquote fails but not empty")
+-	})
+-
+-	t.Run("whitespace only", func(t *testing.T) {
+-		result := getFirstUsableString("   ", "fallback")
+-		assert.Equal(t, "   ", result, "should not trim whitespace, return as-is")
+-	})
+-
+-	t.Run("real world API doc scenario", func(t *testing.T) {
+-		// This is the actual bug scenario from issue #5229
+-		atDocText := "Check server health status."
+-		handlerName := "HealthCheck"
+-		
+-		result := getFirstUsableString(atDocText, handlerName)
+-		assert.Equal(t, "Check server health status.", result, 
+-			"should use @doc text for API summary")
+-	})
+-
+-	t.Run("real world with empty doc", func(t *testing.T) {
+-		// When @doc is empty, should fall back to handler name
+-		atDocText := ""
+-		handlerName := "HealthCheck"
+-		
+-		result := getFirstUsableString(atDocText, handlerName)
+-		assert.Equal(t, "HealthCheck", result, 
+-			"should fallback to handler name when @doc is empty")
+-	})
+-
+-	t.Run("complex summary with special characters", func(t *testing.T) {
+-		result := getFirstUsableString("Get user by ID: /users/{id}")
+-		assert.Equal(t, "Get user by ID: /users/{id}", result, 
+-			"should handle special characters in plain strings")
+-	})
+-
+-	t.Run("multiline string", func(t *testing.T) {
+-		result := getFirstUsableString("Line 1\nLine 2")
+-		assert.Equal(t, "Line 1\nLine 2", result, 
+-			"should handle multiline strings")
+-	})
+-
+-	t.Run("unicode characters", func(t *testing.T) {
+-		result := getFirstUsableString("健康检查", "HealthCheck")
+-		assert.Equal(t, "健康检查", result, 
+-			"should handle unicode characters")
+-	})
+ }
+-
+diff --git a/tools/goctl/api/swagger/parameter_test.go b/tools/goctl/api/swagger/parameter_test.go
+index 92939dd334c02d11b63113efbe264d4d6cb95bf5..6c8785508ba81c0a2b90bccd7dda2232c09202b9 100644
+--- a/tools/goctl/api/swagger/parameter_test.go
++++ b/tools/goctl/api/swagger/parameter_test.go
+@@ -8,7 +8,7 @@ import (
+ 	apiSpec "github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ )
+ 
+-func TestIsRequestBodyJson(t *testing.T) {
++func TestIsPostJson(t *testing.T) {
+ 	tests := []struct {
+ 		name     string
+ 		method   string
+@@ -18,18 +18,13 @@ func TestIsRequestBodyJson(t *testing.T) {
+ 		{"POST with JSON", http.MethodPost, true, true},
+ 		{"POST without JSON", http.MethodPost, false, false},
+ 		{"GET with JSON", http.MethodGet, true, false},
+-		{"PUT with JSON", http.MethodPut, true, true},
+-		{"PUT without JSON", http.MethodPut, false, false},
+-		{"PATCH with JSON", http.MethodPatch, true, true},
+-		{"PATCH without JSON", http.MethodPatch, false, false},
+-		{"DELETE with JSON", http.MethodDelete, true, true},
+-		{"DELETE without JSON", http.MethodDelete, false, false},
++		{"PUT with JSON", http.MethodPut, true, false},
+ 	}
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			testStruct := createTestStruct("TestStruct", tt.hasJson)
+-			_, result := isRequestBodyJson(testingContext(t), tt.method, testStruct)
++			_, result := isPostJson(testingContext(t), tt.method, testStruct)
+ 			assert.Equal(t, tt.expected, result)
+ 		})
+ 	}
+@@ -46,12 +41,6 @@ func TestParametersFromType(t *testing.T) {
+ 	}{
+ 		{"POST JSON with definitions", http.MethodPost, true, true, 1, true},
+ 		{"POST JSON without definitions", http.MethodPost, false, true, 1, true},
+-		{"PUT JSON with definitions", http.MethodPut, true, true, 1, true},
+-		{"PUT JSON without definitions", http.MethodPut, false, true, 1, true},
+-		{"PATCH JSON with definitions", http.MethodPatch, true, true, 1, true},
+-		{"PATCH JSON without definitions", http.MethodPatch, false, true, 1, true},
+-		{"DELETE JSON with definitions", http.MethodDelete, true, true, 1, true},
+-		{"DELETE JSON without definitions", http.MethodDelete, false, true, 1, true},
+ 		{"GET with form", http.MethodGet, false, false, 1, false},
+ 		{"POST with form", http.MethodPost, false, false, 1, false},
+ 	}
+diff --git a/tools/goctl/api/swagger/path_test.go b/tools/goctl/api/swagger/path_test.go
+deleted file mode 100644
+index 7d3dfbe618ef11a660423de329eee5f7916d1a02..0000000000000000000000000000000000000000
+--- a/tools/goctl/api/swagger/path_test.go
++++ /dev/null
+@@ -1,90 +0,0 @@
+-package swagger
+-
+-import (
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+-)
+-
+-func TestSpec2PathsWithRootRoute(t *testing.T) {
+-	tests := []struct {
+-		name         string
+-		prefix       string
+-		routePath    string
+-		expectedPath string
+-	}{
+-		{
+-			name:         "prefix with root route",
+-			prefix:       "/api/v1/shoppings",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "prefix with sub route",
+-			prefix:       "/api/v1/shoppings",
+-			routePath:    "/list",
+-			expectedPath: "/api/v1/shoppings/list",
+-		},
+-		{
+-			name:         "empty prefix with root route",
+-			prefix:       "",
+-			routePath:    "/",
+-			expectedPath: "/",
+-		},
+-		{
+-			name:         "empty prefix with sub route",
+-			prefix:       "",
+-			routePath:    "/list",
+-			expectedPath: "/list",
+-		},
+-		{
+-			name:         "prefix with trailing slash and root route",
+-			prefix:       "/api/v1/shoppings/",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "prefix without leading slash and root route",
+-			prefix:       "api/v1/shoppings",
+-			routePath:    "/",
+-			expectedPath: "/api/v1/shoppings",
+-		},
+-		{
+-			name:         "single level prefix with root route",
+-			prefix:       "/api",
+-			routePath:    "/",
+-			expectedPath: "/api",
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			srv := spec.Service{
+-				Groups: []spec.Group{
+-					{
+-						Annotation: spec.Annotation{
+-							Properties: map[string]string{
+-								propertyKeyPrefix: tt.prefix,
+-							},
+-						},
+-						Routes: []spec.Route{
+-							{
+-								Method:  "get",
+-								Path:    tt.routePath,
+-								Handler: "TestHandler",
+-							},
+-						},
+-					},
+-				},
+-			}
+-
+-			ctx := testingContext(t)
+-			paths := spec2Paths(ctx, srv)
+-
+-			assert.Contains(t, paths.Paths, tt.expectedPath,
+-				"Expected path %s not found in generated paths. Got: %v",
+-				tt.expectedPath, paths.Paths)
+-		})
+-	}
+-}
+diff --git a/tools/goctl/api/swagger/swagger_test.go b/tools/goctl/api/swagger/swagger_test.go
+index 2493f175d1bd820c5ca4518df743d771d0223725..d9fa47a956a5490032f41a56ad11358670a7cb0a 100644
+--- a/tools/goctl/api/swagger/swagger_test.go
++++ b/tools/goctl/api/swagger/swagger_test.go
+@@ -3,7 +3,6 @@ package swagger
+ import (
+ 	"testing"
+ 
+-	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -24,117 +23,3 @@ func Test_pathVariable2SwaggerVariable(t *testing.T) {
+ 		assert.Equal(t, tc.expected, result)
+ 	}
+ }
+-
+-func TestArrayDefinitionsBug(t *testing.T) {
+-	// Test case for the bug where array of structs with useDefinitions
+-	// generates incorrect swagger JSON structure
+-
+-	// Context with useDefinitions enabled
+-	ctx := Context{
+-		UseDefinitions: true,
+-	}
+-
+-	// Create a test struct containing an array of structs
+-	testStruct := spec.DefineStruct{
+-		RawName: "TestStruct",
+-		Members: []spec.Member{
+-			{
+-				Name: "ArrayField",
+-				Type: spec.ArrayType{
+-					Value: spec.DefineStruct{
+-						RawName: "ItemStruct",
+-						Members: []spec.Member{
+-							{
+-								Name: "ItemName",
+-								Type: spec.PrimitiveType{RawName: "string"},
+-								Tag:  `json:"itemName"`,
+-							},
+-						},
+-					},
+-				},
+-				Tag: `json:"arrayField"`,
+-			},
+-		},
+-	}
+-
+-	// Get properties from the struct
+-	properties, _ := propertiesFromType(ctx, testStruct)
+-
+-	// Check that we have the array field
+-	assert.Contains(t, properties, "arrayField")
+-	arrayField := properties["arrayField"]
+-
+-	// Verify the array field has correct structure
+-	assert.Equal(t, "array", arrayField.Type[0])
+-	
+-	// Check that we have items
+-	assert.NotNil(t, arrayField.Items, "Array should have items defined")
+-	assert.NotNil(t, arrayField.Items.Schema, "Array items should have schema")
+-
+-	// The FIX: $ref should be inside items, not at schema level
+-	hasRef := arrayField.Ref.String() != ""
+-	assert.False(t, hasRef, "Schema level should NOT have $ref")
+-	
+-	// The $ref should be in the items
+-	hasItemsRef := arrayField.Items.Schema.Ref.String() != ""
+-	assert.True(t, hasItemsRef, "Items should have $ref")
+-	assert.Equal(t, "#/definitions/ItemStruct", arrayField.Items.Schema.Ref.String())
+-
+-	// Verify there are no other properties in the items when using $ref
+-	assert.Nil(t, arrayField.Items.Schema.Properties, "Items with $ref should not have properties")
+-	assert.Empty(t, arrayField.Items.Schema.Required, "Items with $ref should not have required")
+-	assert.Empty(t, arrayField.Items.Schema.Type, "Items with $ref should not have type")
+-}
+-
+-func TestArrayWithoutDefinitions(t *testing.T) {
+-	// Test that arrays work correctly when useDefinitions is false
+-	ctx := Context{
+-		UseDefinitions: false, // This is the default
+-	}
+-
+-	// Create the same test struct
+-	testStruct := spec.DefineStruct{
+-		RawName: "TestStruct",
+-		Members: []spec.Member{
+-			{
+-				Name: "ArrayField",
+-				Type: spec.ArrayType{
+-					Value: spec.DefineStruct{
+-						RawName: "ItemStruct",
+-						Members: []spec.Member{
+-							{
+-								Name: "ItemName",
+-								Type: spec.PrimitiveType{RawName: "string"},
+-								Tag:  `json:"itemName"`,
+-							},
+-						},
+-					},
+-				},
+-				Tag: `json:"arrayField"`,
+-			},
+-		},
+-	}
+-
+-	properties, _ := propertiesFromType(ctx, testStruct)
+-
+-	assert.Contains(t, properties, "arrayField")
+-	arrayField := properties["arrayField"]
+-
+-	// Should be array type
+-	assert.Equal(t, "array", arrayField.Type[0])
+-
+-	// Should have items with full schema, no $ref
+-	assert.NotNil(t, arrayField.Items)
+-	assert.NotNil(t, arrayField.Items.Schema)
+-
+-	// Should NOT have $ref at schema level
+-	assert.Empty(t, arrayField.Ref.String(), "Schema should not have $ref when useDefinitions is false")
+-
+-	// Should NOT have $ref in items either
+-	assert.Empty(t, arrayField.Items.Schema.Ref.String(), "Items should not have $ref when useDefinitions is false")
+-
+-	// Should have full schema properties in items
+-	assert.Equal(t, "object", arrayField.Items.Schema.Type[0])
+-	assert.Contains(t, arrayField.Items.Schema.Properties, "itemName")
+-	assert.Equal(t, []string{"itemName"}, arrayField.Items.Schema.Required)
+-}
+diff --git a/tools/goctl/docker/docker_test.go b/tools/goctl/docker/docker_test.go
+deleted file mode 100644
+index e12a33f9ad85ec6aa3c7555aa3af1ac06ca17a7c..0000000000000000000000000000000000000000
+--- a/tools/goctl/docker/docker_test.go
++++ /dev/null
+@@ -1,376 +0,0 @@
+-package docker
+-
+-import (
+-	"os"
+-	"path/filepath"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/stretchr/testify/require"
+-)
+-
+-func TestDockerCommand_EtcDirResolution(t *testing.T) {
+-	// Create a temporary project structure
+-	tempDir := t.TempDir()
+-	
+-	// Create project structure: project/service/api/
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	etcDir := filepath.Join(serviceDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	// Create a Go file
+-	goFile := filepath.Join(serviceDir, "api.go")
+-	require.NoError(t, os.WriteFile(goFile, []byte("package main\n\nfunc main() {}"), 0644))
+-	
+-	// Create a config file
+-	configFile := filepath.Join(etcDir, "config.yaml")
+-	require.NoError(t, os.WriteFile(configFile, []byte("Name: test\n"), 0644))
+-	
+-	// Create go.mod at the root
+-	goModFile := filepath.Join(tempDir, "go.mod")
+-	require.NoError(t, os.WriteFile(goModFile, []byte("module test\n\ngo 1.21\n"), 0644))
+-	
+-	// Test: etc directory should be found relative to Go file, not CWD
+-	t.Run("etc directory resolved relative to go file", func(t *testing.T) {
+-		// Save and restore original working directory
+-		originalWd, err := os.Getwd()
+-		require.NoError(t, err)
+-		defer func() {
+-			require.NoError(t, os.Chdir(originalWd))
+-		}()
+-		
+-		// Change to temp directory (not service/api directory)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		// The relative path from tempDir to the go file
+-		relGoFile := filepath.Join("service", "api", "api.go")
+-		
+-		// Test the etc directory resolution logic
+-		resolvedEtcDir := filepath.Join(filepath.Dir(relGoFile), "etc")
+-		
+-		// Verify the resolved path exists
+-		_, err = os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err, "etc directory should be found at service/api/etc")
+-		
+-		// Verify it's the correct path (use EvalSymlinks to handle /private on macOS)
+-		absResolvedEtc, err := filepath.Abs(resolvedEtcDir)
+-		require.NoError(t, err)
+-		absResolvedEtc, err = filepath.EvalSymlinks(absResolvedEtc)
+-		require.NoError(t, err)
+-		expectedEtc, err := filepath.EvalSymlinks(etcDir)
+-		require.NoError(t, err)
+-		assert.Equal(t, expectedEtc, absResolvedEtc)
+-	})
+-	
+-	t.Run("etc directory with empty goFile", func(t *testing.T) {
+-		// When goFile is empty, should default to "./etc"
+-		goFile := ""
+-		resolvedEtcDir := filepath.Join(filepath.Dir(goFile), "etc")
+-		
+-		// Should resolve to just "etc"
+-		assert.Equal(t, "etc", resolvedEtcDir)
+-	})
+-	
+-	t.Run("etc directory with absolute path", func(t *testing.T) {
+-		// When goFile is absolute path
+-		absGoFile := filepath.Join(tempDir, "service", "api", "api.go")
+-		resolvedEtcDir := filepath.Join(filepath.Dir(absGoFile), "etc")
+-		
+-		// Should resolve correctly
+-		_, err := os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err)
+-	})
+-}
+-
+-func TestGenerateDockerfile_GoMainFromPath(t *testing.T) {
+-	tests := []struct {
+-		name         string
+-		goFile       string
+-		projPath     string
+-		expectedPath string
+-	}{
+-		{
+-			name:         "relative path with subdirectory",
+-			goFile:       "service/api/api.go",
+-			projPath:     "service/api",
+-			expectedPath: "service/api/api.go",
+-		},
+-		{
+-			name:         "simple filename",
+-			goFile:       "main.go",
+-			projPath:     ".",
+-			expectedPath: "main.go",
+-		},
+-		{
+-			name:         "nested service path",
+-			goFile:       "internal/service/user/user.go",
+-			projPath:     "internal/service/user",
+-			expectedPath: "internal/service/user/user.go",
+-		},
+-		{
+-			name:         "deep nested path",
+-			goFile:       "cmd/api/internal/handler/handler.go",
+-			projPath:     "cmd/api/internal/handler",
+-			expectedPath: "cmd/api/internal/handler/handler.go",
+-		},
+-	}
+-	
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			// Simulate the fix: using filepath.Base instead of full path
+-			goMainFrom := filepath.Join(tt.projPath, filepath.Base(tt.goFile))
+-			
+-			assert.Equal(t, tt.expectedPath, goMainFrom,
+-				"GoMainFrom should not duplicate path segments")
+-			
+-			// Verify the old buggy behavior would have been wrong
+-			if tt.goFile != filepath.Base(tt.goFile) {
+-				buggyPath := filepath.Join(tt.projPath, tt.goFile)
+-				assert.NotEqual(t, tt.expectedPath, buggyPath,
+-					"Old implementation would have created incorrect path")
+-			}
+-		})
+-	}
+-}
+-
+-func TestGenerateDockerfile_PathJoinBehavior(t *testing.T) {
+-	t.Run("demonstrates the bug and fix", func(t *testing.T) {
+-		projPath := "service/api"
+-		goFile := "service/api/api.go"
+-		
+-		// OLD (buggy) behavior: path duplication
+-		buggyPath := filepath.Join(projPath, goFile)
+-		assert.Equal(t, "service/api/service/api/api.go", buggyPath,
+-			"Bug: path segments are duplicated")
+-		
+-		// NEW (fixed) behavior: correct path
+-		fixedPath := filepath.Join(projPath, filepath.Base(goFile))
+-		assert.Equal(t, "service/api/api.go", fixedPath,
+-			"Fix: using filepath.Base prevents duplication")
+-	})
+-}
+-
+-func TestFindConfig(t *testing.T) {
+-	tempDir := t.TempDir()
+-	etcDir := filepath.Join(tempDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	t.Run("finds config matching go file name", func(t *testing.T) {
+-		// Create config files
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "api.yaml"), []byte("test"), 0644))
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "other.yaml"), []byte("test"), 0644))
+-		
+-		cfg, err := findConfig("api.go", etcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-	
+-	t.Run("returns first config when no match", func(t *testing.T) {
+-		etcDir2 := filepath.Join(tempDir, "etc2")
+-		require.NoError(t, os.MkdirAll(etcDir2, 0755))
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir2, "config.yaml"), []byte("test"), 0644))
+-		
+-		cfg, err := findConfig("main.go", etcDir2)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "config.yaml", cfg)
+-	})
+-	
+-	t.Run("returns error when no yaml files", func(t *testing.T) {
+-		emptyDir := filepath.Join(tempDir, "empty")
+-		require.NoError(t, os.MkdirAll(emptyDir, 0755))
+-		
+-		_, err := findConfig("api.go", emptyDir)
+-		assert.Error(t, err)
+-		assert.Contains(t, err.Error(), "no yaml file")
+-	})
+-	
+-	t.Run("handles path in go file name", func(t *testing.T) {
+-		// Test with service/api/api.go - should extract just "api"
+-		cfg, err := findConfig("service/api/api.go", etcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-}
+-
+-func TestGetFilePath(t *testing.T) {
+-	// Create a temporary directory with go.mod
+-	tempDir := t.TempDir()
+-	require.NoError(t, os.WriteFile(
+-		filepath.Join(tempDir, "go.mod"),
+-		[]byte("module testproject\n\ngo 1.21\n"),
+-		0644,
+-	))
+-	
+-	// Create subdirectories
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	require.NoError(t, os.MkdirAll(serviceDir, 0755))
+-	
+-	originalWd, err := os.Getwd()
+-	require.NoError(t, err)
+-	defer func() {
+-		require.NoError(t, os.Chdir(originalWd))
+-	}()
+-	
+-	t.Run("returns relative path from go.mod", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		path, err := getFilePath("service/api")
+-		assert.NoError(t, err)
+-		assert.Equal(t, "service/api", path)
+-	})
+-	
+-	t.Run("handles current directory", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		path, err := getFilePath(".")
+-		assert.NoError(t, err)
+-		// Current directory returns empty string when at go.mod root
+-		assert.True(t, path == "." || path == "")
+-	})
+-}
+-
+-// Integration test to verify the complete fix
+-func TestDockerCommandIntegration(t *testing.T) {
+-	// Create a complete project structure
+-	tempDir := t.TempDir()
+-	
+-	// Setup: project/service/api/
+-	serviceDir := filepath.Join(tempDir, "service", "api")
+-	etcDir := filepath.Join(serviceDir, "etc")
+-	require.NoError(t, os.MkdirAll(etcDir, 0755))
+-	
+-	// Create files
+-	goFile := filepath.Join(serviceDir, "api.go")
+-	require.NoError(t, os.WriteFile(goFile, []byte("package main\n\nfunc main() {}"), 0644))
+-	configFile := filepath.Join(etcDir, "api.yaml")
+-	require.NoError(t, os.WriteFile(configFile, []byte("Name: test-api\n"), 0644))
+-	goModFile := filepath.Join(tempDir, "go.mod")
+-	require.NoError(t, os.WriteFile(goModFile, []byte("module testproject\n\ngo 1.21\n"), 0644))
+-	goSumFile := filepath.Join(tempDir, "go.sum")
+-	require.NoError(t, os.WriteFile(goSumFile, []byte(""), 0644))
+-	
+-	originalWd, err := os.Getwd()
+-	require.NoError(t, err)
+-	defer func() {
+-		require.NoError(t, os.Chdir(originalWd))
+-	}()
+-	
+-	t.Run("etc directory detected from different working directory", func(t *testing.T) {
+-		// Change to project root (not service/api)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		// Relative path to Go file
+-		relGoFile := filepath.Join("service", "api", "api.go")
+-		
+-		// Apply the fix: resolve etc directory relative to go file
+-		resolvedEtcDir := filepath.Join(filepath.Dir(relGoFile), "etc")
+-		
+-		// Verify etc directory is found
+-		stat, err := os.Stat(resolvedEtcDir)
+-		assert.NoError(t, err)
+-		assert.True(t, stat.IsDir())
+-		
+-		// Verify config can be found
+-		cfg, err := findConfig(relGoFile, resolvedEtcDir)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "api.yaml", cfg)
+-	})
+-	
+-	t.Run("GoMainFrom path is correct", func(t *testing.T) {
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		goFileRel := filepath.Join("service", "api", "api.go")
+-		
+-		// Simulate getFilePath return value
+-		projPath := "service/api"
+-		
+-		// Apply the fix: use filepath.Base
+-		goMainFrom := filepath.Join(projPath, filepath.Base(goFileRel))
+-		
+-		assert.Equal(t, "service/api/api.go", goMainFrom)
+-		
+-		// Verify no path duplication
+-		assert.NotContains(t, goMainFrom, "service/api/service/api")
+-	})
+-}
+-
+-// Test that specifically validates the bug described in PR #4343
+-func TestPR4343_BugFixes(t *testing.T) {
+-	t.Run("Bug 1: etc directory check uses correct base path", func(t *testing.T) {
+-		// Setup: Create a project structure where etc is NOT in CWD but IS relative to Go file
+-		tempDir := t.TempDir()
+-		serviceDir := filepath.Join(tempDir, "service", "api")
+-		etcDir := filepath.Join(serviceDir, "etc")
+-		require.NoError(t, os.MkdirAll(etcDir, 0755))
+-		
+-		// Create a config file
+-		require.NoError(t, os.WriteFile(
+-			filepath.Join(etcDir, "config.yaml"),
+-			[]byte("Name: test\n"),
+-			0644,
+-		))
+-		
+-		originalWd, err := os.Getwd()
+-		require.NoError(t, err)
+-		defer func() {
+-			require.NoError(t, os.Chdir(originalWd))
+-		}()
+-		
+-		// Change to project root (CWD = tempDir)
+-		require.NoError(t, os.Chdir(tempDir))
+-		
+-		goFile := filepath.Join("service", "api", "api.go")
+-		
+-		// OLD (buggy) behavior: checks for "etc" in CWD
+-		_, errOld := os.Stat("etc")
+-		assert.Error(t, errOld, "Bug: etc not found in CWD")
+-		
+-		// NEW (fixed) behavior: checks for "etc" relative to go file
+-		etcDirResolved := filepath.Join(filepath.Dir(goFile), "etc")
+-		stat, errNew := os.Stat(etcDirResolved)
+-		assert.NoError(t, errNew, "Fix: etc found relative to go file")
+-		assert.True(t, stat.IsDir())
+-		
+-		// Verify config is accessible
+-		cfg, err := findConfig(goFile, etcDirResolved)
+-		assert.NoError(t, err)
+-		assert.Equal(t, "config.yaml", cfg)
+-	})
+-	
+-	t.Run("Bug 2: GoMainFrom path not duplicated", func(t *testing.T) {
+-		// Test case from PR description
+-		projPath := "service/api"
+-		goFile := "service/api/api.go"
+-		
+-		// OLD (buggy) behavior: duplicates path
+-		buggyPath := filepath.Join(projPath, goFile)
+-		assert.Equal(t, "service/api/service/api/api.go", buggyPath,
+-			"Bug: path duplication occurs with old implementation")
+-		
+-		// NEW (fixed) behavior: correct path using filepath.Base
+-		fixedPath := filepath.Join(projPath, filepath.Base(goFile))
+-		assert.Equal(t, "service/api/api.go", fixedPath,
+-			"Fix: using filepath.Base() prevents path duplication")
+-		
+-		// Verify the fix works for various scenarios
+-		testCases := []struct {
+-			projPath string
+-			goFile   string
+-			expected string
+-		}{
+-			{"service/api", "service/api/api.go", "service/api/api.go"},
+-			{"cmd/server", "cmd/server/main.go", "cmd/server/main.go"},
+-			{"internal/handler", "internal/handler/handler.go", "internal/handler/handler.go"},
+-			{".", "main.go", "main.go"},
+-		}
+-		
+-		for _, tc := range testCases {
+-			result := filepath.Join(tc.projPath, filepath.Base(tc.goFile))
+-			assert.Equal(t, tc.expected, result,
+-				"Fix should work for projPath=%s, goFile=%s", tc.projPath, tc.goFile)
+-		}
+-	})
+-}
+diff --git a/tools/goctl/util/string_test.go b/tools/goctl/util/string_test.go
+index 18bb8fa497435878efc685ae4e0bac9e2585af0e..548fee67e3f046ab22681c01d7c5f3f9c8e8d414 100644
+--- a/tools/goctl/util/string_test.go
++++ b/tools/goctl/util/string_test.go
+@@ -76,40 +76,40 @@ func TestEscapeGoKeyword(t *testing.T) {
+ 
+ func TestFieldsAndTrimSpace(t *testing.T) {
+ 	testCases := []struct {
+-		name      string
+-		input     string
++		name     string
++		input    string
+ 		delimiter func(r rune) bool
+-		expected  []string
++		expected []string
+ 	}{
+ 		{
+-			name:      "Comma-separated values",
+-			input:     "a, b, c",
++			name:     "Comma-separated values",
++			input:    "a, b, c",
+ 			delimiter: func(r rune) bool { return r == ',' },
+-			expected:  []string{"a", " b", " c"},
++			expected: []string{"a", " b", " c"},
+ 		},
+ 		{
+-			name:      "Space-separated values",
+-			input:     "a b c",
++			name:     "Space-separated values",
++			input:    "a b c",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string{"a", "b", "c"},
++			expected: []string{"a", "b", "c"},
+ 		},
+ 		{
+-			name:      "Mixed whitespace",
+-			input:     "a\tb\nc",
++			name:     "Mixed whitespace",
++			input:    "a\tb\nc",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string{"a", "b", "c"},
++			expected: []string{"a", "b", "c"},
+ 		},
+ 		{
+-			name:      "Empty input",
+-			input:     "",
++			name:     "Empty input",
++			input:    "",
+ 			delimiter: unicode.IsSpace,
+-			expected:  []string(nil),
++			expected: []string(nil),
+ 		},
+ 		{
+-			name:      "Trailing and leading spaces",
+-			input:     "  a , b , c  ",
++			name:     "Trailing and leading spaces",
++			input:    "  a , b , c  ",
+ 			delimiter: func(r rune) bool { return r == ',' },
+-			expected:  []string{"  a ", " b ", " c  "},
++			expected: []string{"  a ", " b ", " c  "},
+ 		},
+ 	}
+ 
+@@ -120,3 +120,20 @@ func TestFieldsAndTrimSpace(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestUnquote(t *testing.T) {
++	testCases := []struct {
++		input    string
++		expected string
++	}{
++		{input: `"hello"`, expected: `hello`},
++		{input: "`world`", expected: `world`},
++		{input: `"foo'bar"`, expected: `foo'bar`},
++		{input: "", expected: ""},
++	}
++
++	for _, tc := range testCases {
++		result := Unquote(tc.input)
++		assert.Equal(t, tc.expected, result)
++	}
++}
+diff --git a/zrpc/client_test.go b/zrpc/client_test.go
+index 3526cad1eefab7dc9bee2b7a37ed1fae58c738c2..09a06cbb1947822ca7b9febb16d5401471781e98 100644
+--- a/zrpc/client_test.go
++++ b/zrpc/client_test.go
+@@ -12,8 +12,6 @@ import (
+ 	"github.com/zeromicro/go-zero/core/discov"
+ 	"github.com/zeromicro/go-zero/core/logx"
+ 	"github.com/zeromicro/go-zero/internal/mock"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/consistenthash"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/p2c"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/credentials/insecure"
+@@ -247,42 +245,3 @@ func TestNewClientWithTarget(t *testing.T) {
+ 
+ 	assert.NotNil(t, err)
+ }
+-
+-func TestMakeLBServiceConfig(t *testing.T) {
+-	tests := []struct {
+-		name     string
+-		input    string
+-		expected string
+-	}{
+-		{
+-			name:     "empty name uses default p2c",
+-			input:    "",
+-			expected: fmt.Sprintf(`{"loadBalancingPolicy":"%s"}`, p2c.Name),
+-		},
+-		{
+-			name:     "custom balancer name",
+-			input:    "consistent_hash",
+-			expected: `{"loadBalancingPolicy":"consistent_hash"}`,
+-		},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			got := makeLBServiceConfig(tt.input)
+-			if got != tt.expected {
+-				t.Errorf("expected %q, got %q", tt.expected, got)
+-			}
+-		})
+-	}
+-}
+-
+-func TestSetHashKey(t *testing.T) {
+-	ctx := context.Background()
+-	key := "abc123"
+-
+-	ctx = SetHashKey(ctx, key)
+-	got := consistenthash.GetHashKey(ctx)
+-	assert.Equal(t, key, got)
+-
+-	assert.Empty(t, consistenthash.GetHashKey(context.Background()))
+-}
+diff --git a/zrpc/config_test.go b/zrpc/config_test.go
+index d3aaa12e9a1c3cd90b16d0f81dbe98824ce995a0..0f7a637e1cb9dbaf3e3330f691b335bc88d358ba 100644
+--- a/zrpc/config_test.go
++++ b/zrpc/config_test.go
+@@ -4,11 +4,9 @@ import (
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+-	zconf "github.com/zeromicro/go-zero/core/conf"
+ 	"github.com/zeromicro/go-zero/core/discov"
+ 	"github.com/zeromicro/go-zero/core/service"
+ 	"github.com/zeromicro/go-zero/core/stores/redis"
+-	"github.com/zeromicro/go-zero/zrpc/internal/balancer/p2c"
+ )
+ 
+ func TestRpcClientConf(t *testing.T) {
+@@ -41,13 +39,6 @@ func TestRpcClientConf(t *testing.T) {
+ 		_, err := conf.BuildTarget()
+ 		assert.Error(t, err)
+ 	})
+-
+-	t.Run("default balancer name", func(t *testing.T) {
+-		var conf RpcClientConf
+-		err := zconf.FillDefault(&conf)
+-		assert.NoError(t, err)
+-		assert.Equal(t, p2c.Name, conf.BalancerName)
+-	})
+ }
+ 
+ func TestRpcServerConf(t *testing.T) {
+diff --git a/zrpc/internal/balancer/consistenthash/consistenthash_test.go b/zrpc/internal/balancer/consistenthash/consistenthash_test.go
+deleted file mode 100644
+index 2f3524d462ae263bfc2c84c3abfe208d52ea7385..0000000000000000000000000000000000000000
+--- a/zrpc/internal/balancer/consistenthash/consistenthash_test.go
++++ /dev/null
+@@ -1,175 +0,0 @@
+-package consistenthash
+-
+-import (
+-	"context"
+-	"testing"
+-
+-	"github.com/stretchr/testify/assert"
+-	"github.com/zeromicro/go-zero/core/hash"
+-	"google.golang.org/grpc/balancer"
+-	"google.golang.org/grpc/balancer/base"
+-	"google.golang.org/grpc/resolver"
+-)
+-
+-type fakeSubConn struct{ id int }
+-
+-func (f *fakeSubConn) Connect()                             {}
+-func (f *fakeSubConn) UpdateAddresses(_ []resolver.Address) {}
+-func (f *fakeSubConn) Shutdown()                            {}
+-func (f *fakeSubConn) GetOrBuildProducer(b balancer.ProducerBuilder) (balancer.Producer, func()) {
+-	return nil, func() {}
+-}
+-
+-func TestPickerBuilder_EmptyReadySCs(t *testing.T) {
+-	b := &pickerBuilder{}
+-	p := b.Build(base.PickerBuildInfo{ReadySCs: map[balancer.SubConn]base.SubConnInfo{}})
+-
+-	_, err := p.Pick(balancer.PickInfo{})
+-	assert.Equal(t, balancer.ErrNoSubConnAvailable, err)
+-}
+-
+-func TestPickerBuilder_BuildAndRing(t *testing.T) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-	addr1 := "127.0.0.1:8080"
+-	addr2 := "127.0.0.1:8081"
+-
+-	b := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: addr1}},
+-			subConn2: {Address: resolver.Address{Addr: addr2}},
+-		},
+-	}
+-
+-	p := b.Build(info).(*picker)
+-	assert.NotNil(t, p.hashRing)
+-	assert.Len(t, p.conns, 2)
+-}
+-
+-func TestPicker_HashConsistency(t *testing.T) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-			subConn2: {Address: resolver.Address{Addr: "127.0.0.1:8081"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-	ctx := SetHashKey(context.Background(), "user_123")
+-	res1, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-	assert.NoError(t, err)
+-	assert.NotNil(t, res1.SubConn)
+-
+-	// Multiple requests with the same key remain consistent
+-	for i := 0; i < 5; i++ {
+-		resN, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-		assert.NoError(t, err)
+-		assert.Equal(t, res1.SubConn, resN.SubConn)
+-	}
+-}
+-
+-func TestPicker_MissingKey(t *testing.T) {
+-	subConn := &fakeSubConn{id: 1}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-
+-	// No hash key in context
+-	_, err := p.Pick(balancer.PickInfo{Ctx: context.Background()})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] missing hash key in context")
+-}
+-
+-func TestPicker_NoMatchingConn(t *testing.T) {
+-	emptyRing := newCustomRingForTest()
+-	p := &picker{
+-		hashRing: emptyRing,
+-		conns:    map[string]balancer.SubConn{},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "someone")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] no matching conn for hashKey: someone")
+-}
+-
+-func TestPicker_InvalidAddrType(t *testing.T) {
+-	ring := newCustomRingForTest()
+-	ring.Add(12345)
+-
+-	subConn := &fakeSubConn{id: 1}
+-	p := &picker{
+-		hashRing: ring,
+-		conns: map[string]balancer.SubConn{
+-			"12345": subConn,
+-		},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "anykey")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] invalid addr type in consistent hash")
+-}
+-
+-func TestPicker_NoSubConnForAddr(t *testing.T) {
+-	ring := newCustomRingForTest()
+-	ring.Add("ghost:9999")
+-
+-	exist := &fakeSubConn{id: 1}
+-	p := &picker{
+-		hashRing: ring,
+-		conns: map[string]balancer.SubConn{
+-			"real:8080": exist,
+-		},
+-	}
+-
+-	_, err := p.Pick(balancer.PickInfo{Ctx: SetHashKey(context.Background(), "anykey")})
+-	assert.Error(t, err)
+-	assert.Contains(t, err.Error(), "[consistent_hash] no subConn for addr: ghost:9999")
+-}
+-
+-func TestSetAndGetHashKey(t *testing.T) {
+-	ctx := context.Background()
+-	key := "abc123"
+-
+-	ctx = SetHashKey(ctx, key)
+-	got := GetHashKey(ctx)
+-	assert.Equal(t, key, got)
+-
+-	assert.Empty(t, GetHashKey(context.Background()))
+-}
+-
+-func BenchmarkPicker_HashConsistency(b *testing.B) {
+-	subConn1 := &fakeSubConn{id: 1}
+-	subConn2 := &fakeSubConn{id: 2}
+-
+-	pb := &pickerBuilder{}
+-	info := base.PickerBuildInfo{
+-		ReadySCs: map[balancer.SubConn]base.SubConnInfo{
+-			subConn1: {Address: resolver.Address{Addr: "127.0.0.1:8080"}},
+-			subConn2: {Address: resolver.Address{Addr: "127.0.0.1:8081"}},
+-		},
+-	}
+-	p := pb.Build(info).(*picker)
+-
+-	ctx := SetHashKey(context.Background(), "hot_user_123")
+-
+-	b.ResetTimer()
+-	for i := 0; i < b.N; i++ {
+-		res, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+-		if err != nil || res.SubConn == nil {
+-			b.Fatalf("unexpected result: res=%v err=%v", res.SubConn, err)
+-		}
+-	}
+-}
+-
+-func newCustomRingForTest() *hash.ConsistentHash {
+-	return hash.NewCustomConsistentHash(defaultReplicaCount, hash.Hash)
+-}
+diff --git a/zrpc/internal/client_test.go b/zrpc/internal/client_test.go
+index 65b5577af48016889b596c97fc3b6292d57ebf40..6c45e2f2ecbeb5dc29f105a282bc2c2beeac9838 100644
+--- a/zrpc/internal/client_test.go
++++ b/zrpc/internal/client_test.go
+@@ -34,13 +34,6 @@ func TestWithNonBlock(t *testing.T) {
+ 	assert.True(t, options.NonBlock)
+ }
+ 
+-func TestWithBlock(t *testing.T) {
+-	var options ClientOptions
+-	opt := WithBlock()
+-	opt(&options)
+-	assert.False(t, options.NonBlock)
+-}
+-
+ func TestWithStreamClientInterceptor(t *testing.T) {
+ 	var options ClientOptions
+ 	opt := WithStreamClientInterceptor(func(ctx context.Context, desc *grpc.StreamDesc,

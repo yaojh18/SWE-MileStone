@@ -1,0 +1,761 @@
+diff --git a/plugins/adapter_media_agent_test.go b/plugins/adapter_media_agent_test.go
+index e730507f3b8f4a69cd1560b782d5b1483b0c8df6..f8b61ea5ff6d1d4b3987b546c32509bcfbe8cf4e 100644
+--- a/plugins/adapter_media_agent_test.go
++++ b/plugins/adapter_media_agent_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/conf/configtest"
+ 	"github.com/navidrome/navidrome/core/agents"
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/api"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -23,7 +24,7 @@ var _ = Describe("Adapter Media Agent", func() {
+ 		DeferCleanup(configtest.SetupConfig())
+ 		conf.Server.Plugins.Folder = testDataDir
+ 
+-		mgr = createManager(nil, nil)
++		mgr = createManager(nil, metrics.NewNoopInstance())
+ 		mgr.ScanPlugins()
+ 	})
+ 
+diff --git a/plugins/base_capability_test.go b/plugins/base_capability_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..3bece8dcd6ca870e368b9087fa12815b1c0e7f00
+--- /dev/null
++++ b/plugins/base_capability_test.go
+@@ -0,0 +1,285 @@
++package plugins
++
++import (
++	"context"
++	"errors"
++
++	"github.com/navidrome/navidrome/plugins/api"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++type nilInstance struct{}
++
++var _ = Describe("baseCapability", func() {
++	var ctx = context.Background()
++
++	It("should load instance using loadFunc", func() {
++		called := false
++		plugin := &baseCapability[*nilInstance, any]{
++			wasmPath:   "",
++			id:         "test",
++			capability: "test",
++			loadFunc: func(ctx context.Context, _ any, path string) (*nilInstance, error) {
++				called = true
++				return &nilInstance{}, nil
++			},
++		}
++		inst, done, err := plugin.getInstance(ctx, "test")
++		defer done()
++		Expect(err).To(BeNil())
++		Expect(inst).ToNot(BeNil())
++		Expect(called).To(BeTrue())
++	})
++})
++
++var _ = Describe("checkErr", func() {
++	Context("when resp is nil", func() {
++		It("should return nil error when both resp and err are nil", func() {
++			var resp *testErrorResponse
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(BeNil())
++			Expect(err).To(BeNil())
++		})
++
++		It("should return original error unchanged for non-API errors", func() {
++			var resp *testErrorResponse
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(BeNil())
++			Expect(err).To(Equal(originalErr))
++		})
++
++		It("should return mapped API error for ErrNotImplemented", func() {
++			var resp *testErrorResponse
++			err := errors.New("plugin:not_implemented")
++
++			result, mappedErr := checkErr(resp, err)
++
++			Expect(result).To(BeNil())
++			Expect(mappedErr).To(Equal(api.ErrNotImplemented))
++		})
++
++		It("should return mapped API error for ErrNotFound", func() {
++			var resp *testErrorResponse
++			err := errors.New("plugin:not_found")
++
++			result, mappedErr := checkErr(resp, err)
++
++			Expect(result).To(BeNil())
++			Expect(mappedErr).To(Equal(api.ErrNotFound))
++		})
++	})
++
++	Context("when resp is a typed nil that implements errorResponse", func() {
++		It("should not panic and return original error", func() {
++			var resp *testErrorResponse // typed nil
++			originalErr := errors.New("original error")
++
++			// This should not panic
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(BeNil())
++			Expect(err).To(Equal(originalErr))
++		})
++
++		It("should handle typed nil with nil error gracefully", func() {
++			var resp *testErrorResponse // typed nil
++
++			// This should not panic
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(BeNil())
++			Expect(err).To(BeNil())
++		})
++	})
++
++	Context("when resp implements errorResponse with non-empty error", func() {
++		It("should create new error when original error is nil", func() {
++			resp := &testErrorResponse{errorMsg: "plugin error"}
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError("plugin error"))
++		})
++
++		It("should wrap original error when both exist", func() {
++			resp := &testErrorResponse{errorMsg: "plugin error"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(HaveOccurred())
++			// Check that both error messages are present in the joined error
++			errStr := err.Error()
++			Expect(errStr).To(ContainSubstring("plugin error"))
++			Expect(errStr).To(ContainSubstring("original error"))
++		})
++
++		It("should return mapped API error for ErrNotImplemented when no original error", func() {
++			resp := &testErrorResponse{errorMsg: "plugin:not_implemented"}
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotImplemented))
++		})
++
++		It("should return mapped API error for ErrNotFound when no original error", func() {
++			resp := &testErrorResponse{errorMsg: "plugin:not_found"}
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotFound))
++		})
++
++		It("should return mapped API error for ErrNotImplemented even with original error", func() {
++			resp := &testErrorResponse{errorMsg: "plugin:not_implemented"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotImplemented))
++		})
++
++		It("should return mapped API error for ErrNotFound even with original error", func() {
++			resp := &testErrorResponse{errorMsg: "plugin:not_found"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotFound))
++		})
++	})
++
++	Context("when resp implements errorResponse with empty error", func() {
++		It("should return original error unchanged", func() {
++			resp := &testErrorResponse{errorMsg: ""}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(originalErr))
++		})
++
++		It("should return nil error when both are empty/nil", func() {
++			resp := &testErrorResponse{errorMsg: ""}
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(BeNil())
++		})
++
++		It("should map original API error when response error is empty", func() {
++			resp := &testErrorResponse{errorMsg: ""}
++			originalErr := errors.New("plugin:not_implemented")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotImplemented))
++		})
++	})
++
++	Context("when resp does not implement errorResponse", func() {
++		It("should return original error unchanged", func() {
++			resp := &testNonErrorResponse{data: "some data"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(Equal(originalErr))
++		})
++
++		It("should return nil error when original error is nil", func() {
++			resp := &testNonErrorResponse{data: "some data"}
++
++			result, err := checkErr(resp, nil)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(BeNil())
++		})
++
++		It("should map original API error when response doesn't implement errorResponse", func() {
++			resp := &testNonErrorResponse{data: "some data"}
++			originalErr := errors.New("plugin:not_found")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotFound))
++		})
++	})
++
++	Context("when resp is a value type (not pointer)", func() {
++		It("should handle value types that implement errorResponse", func() {
++			resp := testValueErrorResponse{errorMsg: "value error"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(HaveOccurred())
++			// Check that both error messages are present in the joined error
++			errStr := err.Error()
++			Expect(errStr).To(ContainSubstring("value error"))
++			Expect(errStr).To(ContainSubstring("original error"))
++		})
++
++		It("should handle value types with empty error", func() {
++			resp := testValueErrorResponse{errorMsg: ""}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(originalErr))
++		})
++
++		It("should handle value types with API error", func() {
++			resp := testValueErrorResponse{errorMsg: "plugin:not_implemented"}
++			originalErr := errors.New("original error")
++
++			result, err := checkErr(resp, originalErr)
++
++			Expect(result).To(Equal(resp))
++			Expect(err).To(MatchError(api.ErrNotImplemented))
++		})
++	})
++})
++
++// Test helper types
++type testErrorResponse struct {
++	errorMsg string
++}
++
++func (t *testErrorResponse) GetError() string {
++	if t == nil {
++		return "" // This is what would typically happen with a typed nil
++	}
++	return t.errorMsg
++}
++
++type testNonErrorResponse struct {
++	data string
++}
++
++type testValueErrorResponse struct {
++	errorMsg string
++}
++
++func (t testValueErrorResponse) GetError() string {
++	return t.errorMsg
++}
+diff --git a/plugins/host_scheduler_test.go b/plugins/host_scheduler_test.go
+index 1a3efaae91caf055feacc941ed78fbb94079588d..a905313b7ffb7d5fb480dcd41d6b62f19b064a2d 100644
+--- a/plugins/host_scheduler_test.go
++++ b/plugins/host_scheduler_test.go
+@@ -2,7 +2,6 @@ package plugins
+ 
+ import (
+ 	"context"
+-	"time"
+ 
+ 	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/host/scheduler"
+@@ -165,28 +164,4 @@ var _ = Describe("SchedulerService", func() {
+ 			Expect(ss.scheduleCount()).To(Equal(beforeCount), "Job count should remain the same after replacement")
+ 		})
+ 	})
+-
+-	Describe("TimeNow", func() {
+-		It("returns current time in RFC3339Nano, Unix milliseconds, and local timezone", func() {
+-			now := time.Now()
+-			req := &scheduler.TimeNowRequest{}
+-			resp, err := ss.timeNow(context.Background(), req)
+-
+-			Expect(err).ToNot(HaveOccurred())
+-			Expect(resp.UnixMilli).To(BeNumerically(">=", now.UnixMilli()))
+-			Expect(resp.LocalTimeZone).ToNot(BeEmpty())
+-
+-			// Validate RFC3339Nano format can be parsed
+-			parsedTime, parseErr := time.Parse(time.RFC3339Nano, resp.Rfc3339Nano)
+-			Expect(parseErr).ToNot(HaveOccurred())
+-
+-			// Validate that Unix milliseconds is reasonably close to the RFC3339Nano time
+-			expectedMillis := parsedTime.UnixMilli()
+-			Expect(resp.UnixMilli).To(Equal(expectedMillis))
+-
+-			// Validate local timezone matches the current system timezone
+-			expectedTimezone := now.Location().String()
+-			Expect(resp.LocalTimeZone).To(Equal(expectedTimezone))
+-		})
+-	})
+ })
+diff --git a/plugins/host_websocket_test.go b/plugins/host_websocket_test.go
+index 00b20b452989e9766fc2302d53ba6d274c44112d..ecadc64637d302c4626ee8c8a290136d291b1037 100644
+--- a/plugins/host_websocket_test.go
++++ b/plugins/host_websocket_test.go
+@@ -6,9 +6,11 @@ import (
+ 	"net/http/httptest"
+ 	"strings"
+ 	"sync"
++	"testing"
+ 	"time"
+ 
+ 	gorillaws "github.com/gorilla/websocket"
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/host/websocket"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -84,7 +86,7 @@ var _ = Describe("WebSocket Host Service", func() {
+ 		DeferCleanup(server.Close)
+ 
+ 		// Create a new manager and websocket service
+-		manager = createManager(nil, nil)
++		manager = createManager(nil, metrics.NewNoopInstance())
+ 		wsService = newWebsocketService(manager)
+ 	})
+ 
+@@ -188,6 +190,10 @@ var _ = Describe("WebSocket Host Service", func() {
+ 		})
+ 
+ 		It("handles connection errors gracefully", func() {
++			if testing.Short() {
++				GinkgoT().Skip("skipping test in short mode.")
++			}
++
+ 			// Try to connect to an invalid URL
+ 			req := &websocket.ConnectRequest{
+ 				Url:          "ws://invalid-url-that-does-not-exist",
+diff --git a/plugins/manager_test.go b/plugins/manager_test.go
+index a6bb8ff0f3ec42f10b6f8d418621fd11f0821fc9..9445979c2ac165dbdd0b49565e049df68bf4ddff 100644
+--- a/plugins/manager_test.go
++++ b/plugins/manager_test.go
+@@ -7,6 +7,8 @@ import (
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/core/agents"
++	"github.com/navidrome/navidrome/core/metrics"
++	"github.com/navidrome/navidrome/plugins/schema"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+ )
+@@ -27,7 +29,7 @@ var _ = Describe("Plugin Manager", func() {
+ 		conf.Server.Plugins.Folder = testDataDir
+ 
+ 		ctx = GinkgoT().Context()
+-		mgr = createManager(nil, nil)
++		mgr = createManager(nil, metrics.NewNoopInstance())
+ 		mgr.ScanPlugins()
+ 	})
+ 
+@@ -36,17 +38,21 @@ var _ = Describe("Plugin Manager", func() {
+ 
+ 		mediaAgentNames := mgr.PluginNames("MetadataAgent")
+ 		Expect(mediaAgentNames).To(HaveLen(4))
+-		Expect(mediaAgentNames).To(ContainElement("fake_artist_agent"))
+-		Expect(mediaAgentNames).To(ContainElement("fake_album_agent"))
+-		Expect(mediaAgentNames).To(ContainElement("multi_plugin"))
+-		Expect(mediaAgentNames).To(ContainElement("unauthorized_plugin"))
++		Expect(mediaAgentNames).To(ContainElements(
++			"fake_artist_agent",
++			"fake_album_agent",
++			"multi_plugin",
++			"unauthorized_plugin",
++		))
+ 
+ 		scrobblerNames := mgr.PluginNames("Scrobbler")
+ 		Expect(scrobblerNames).To(ContainElement("fake_scrobbler"))
+ 
+ 		initServiceNames := mgr.PluginNames("LifecycleManagement")
+-		Expect(initServiceNames).To(ContainElement("multi_plugin"))
+-		Expect(initServiceNames).To(ContainElement("fake_init_service"))
++		Expect(initServiceNames).To(ContainElements("multi_plugin", "fake_init_service"))
++
++		schedulerCallbackNames := mgr.PluginNames("SchedulerCallback")
++		Expect(schedulerCallbackNames).To(ContainElement("multi_plugin"))
+ 	})
+ 
+ 	It("should load a MetadataAgent plugin and invoke artist-related methods", func() {
+@@ -65,13 +71,18 @@ var _ = Describe("Plugin Manager", func() {
+ 	})
+ 
+ 	It("should load all MetadataAgent plugins", func() {
+-		agents := mgr.LoadAllMediaAgents()
+-		Expect(agents).To(HaveLen(4))
+-		var names []string
+-		for _, a := range agents {
+-			names = append(names, a.AgentName())
++		mediaAgentNames := mgr.PluginNames("MetadataAgent")
++		Expect(mediaAgentNames).To(HaveLen(4))
++
++		var agentNames []string
++		for _, name := range mediaAgentNames {
++			agent, ok := mgr.LoadMediaAgent(name)
++			if ok {
++				agentNames = append(agentNames, agent.AgentName())
++			}
+ 		}
+-		Expect(names).To(ContainElements("fake_artist_agent", "fake_album_agent", "multi_plugin", "unauthorized_plugin"))
++
++		Expect(agentNames).To(ContainElements("fake_artist_agent", "fake_album_agent", "multi_plugin", "unauthorized_plugin"))
+ 	})
+ 
+ 	Describe("ScanPlugins", func() {
+@@ -85,7 +96,7 @@ var _ = Describe("Plugin Manager", func() {
+ 			})
+ 
+ 			conf.Server.Plugins.Folder = tempPluginsDir
+-			m = createManager(nil, nil)
++			m = createManager(nil, metrics.NewNoopInstance())
+ 		})
+ 
+ 		// Helper to create a complete valid plugin for manager testing
+@@ -193,21 +204,8 @@ var _ = Describe("Plugin Manager", func() {
+ 
+ 	Describe("Invoke Methods", func() {
+ 		It("should load all MetadataAgent plugins and invoke methods", func() {
+-			mediaAgentNames := mgr.PluginNames("MetadataAgent")
+-			Expect(mediaAgentNames).NotTo(BeEmpty())
+-
+-			plugins := mgr.LoadAllPlugins("MetadataAgent")
+-			Expect(plugins).To(HaveLen(len(mediaAgentNames)))
+-
+-			var fakeAlbumPlugin agents.Interface
+-			for _, p := range plugins {
+-				if agent, ok := p.(agents.Interface); ok {
+-					if agent.AgentName() == "fake_album_agent" {
+-						fakeAlbumPlugin = agent
+-						break
+-					}
+-				}
+-			}
++			fakeAlbumPlugin, isMediaAgent := mgr.LoadMediaAgent("fake_album_agent")
++			Expect(isMediaAgent).To(BeTrue())
+ 
+ 			Expect(fakeAlbumPlugin).NotTo(BeNil(), "fake_album_agent should be loaded")
+ 
+@@ -254,4 +252,95 @@ var _ = Describe("Plugin Manager", func() {
+ 			}
+ 		})
+ 	})
++
++	Describe("Plugin Initialization Lifecycle", func() {
++		BeforeEach(func() {
++			conf.Server.Plugins.Enabled = true
++			conf.Server.Plugins.Folder = testDataDir
++		})
++
++		Context("when OnInit is successful", func() {
++			It("should register and initialize the plugin", func() {
++				conf.Server.PluginConfig = nil
++				mgr = createManager(nil, metrics.NewNoopInstance()) // Create manager after setting config
++				mgr.ScanPlugins()
++
++				plugin := mgr.plugins["fake_init_service"]
++				Expect(plugin).NotTo(BeNil())
++
++				Eventually(func() bool {
++					return mgr.lifecycle.isInitialized(plugin)
++				}).Should(BeTrue())
++
++				// Check that the plugin is still registered
++				names := mgr.PluginNames(CapabilityLifecycleManagement)
++				Expect(names).To(ContainElement("fake_init_service"))
++			})
++		})
++
++		Context("when OnInit fails", func() {
++			It("should unregister the plugin if OnInit returns an error string", func() {
++				conf.Server.PluginConfig = map[string]map[string]string{
++					"fake_init_service": {
++						"returnError": "response_error",
++					},
++				}
++				mgr = createManager(nil, metrics.NewNoopInstance()) // Create manager after setting config
++				mgr.ScanPlugins()
++
++				Eventually(func() []string {
++					return mgr.PluginNames(CapabilityLifecycleManagement)
++				}).ShouldNot(ContainElement("fake_init_service"))
++			})
++
++			It("should unregister the plugin if OnInit returns a Go error", func() {
++				conf.Server.PluginConfig = map[string]map[string]string{
++					"fake_init_service": {
++						"returnError": "go_error",
++					},
++				}
++				mgr = createManager(nil, metrics.NewNoopInstance()) // Create manager after setting config
++				mgr.ScanPlugins()
++
++				Eventually(func() []string {
++					return mgr.PluginNames(CapabilityLifecycleManagement)
++				}).ShouldNot(ContainElement("fake_init_service"))
++			})
++		})
++
++		It("should clear lifecycle state when unregistering a plugin", func() {
++			// Create a manager and register a plugin
++			mgr := createManager(nil, metrics.NewNoopInstance())
++
++			// Create a mock plugin with LifecycleManagement capability
++			plugin := &plugin{
++				ID:           "test-plugin",
++				Capabilities: []string{CapabilityLifecycleManagement},
++				Manifest: &schema.PluginManifest{
++					Version: "1.0.0",
++				},
++			}
++
++			// Register the plugin in the manager
++			mgr.mu.Lock()
++			mgr.plugins[plugin.ID] = plugin
++			mgr.mu.Unlock()
++
++			// Mark the plugin as initialized in the lifecycle manager
++			mgr.lifecycle.markInitialized(plugin)
++			Expect(mgr.lifecycle.isInitialized(plugin)).To(BeTrue())
++
++			// Unregister the plugin
++			mgr.unregisterPlugin(plugin.ID)
++
++			// Verify that the plugin is no longer in the manager
++			mgr.mu.RLock()
++			_, exists := mgr.plugins[plugin.ID]
++			mgr.mu.RUnlock()
++			Expect(exists).To(BeFalse())
++
++			// Verify that the lifecycle state has been cleared
++			Expect(mgr.lifecycle.isInitialized(plugin)).To(BeFalse())
++		})
++	})
+ })
+diff --git a/plugins/manifest_permissions_test.go b/plugins/manifest_permissions_test.go
+index 188e1774600d19f6d4a7005d200d511bdb40cd02..7a3df5f2d7874a67d8333b3d34fdbf9d3801d20a 100644
+--- a/plugins/manifest_permissions_test.go
++++ b/plugins/manifest_permissions_test.go
+@@ -8,6 +8,7 @@ import (
+ 
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/conf/configtest"
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/schema"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -55,7 +56,7 @@ var _ = Describe("Plugin Permissions", func() {
+ 	BeforeEach(func() {
+ 		DeferCleanup(configtest.SetupConfig())
+ 		ctx = context.Background()
+-		mgr = createManager(nil, nil)
++		mgr = createManager(nil, metrics.NewNoopInstance())
+ 		tempDir = GinkgoT().TempDir()
+ 	})
+ 
+diff --git a/plugins/plugin_lifecycle_manager_test.go b/plugins/plugin_lifecycle_manager_test.go
+index e46f29b7658980fb0006df0738e5902861290b9a..800630ce9b85a985f55acd67683f209d7b580ad4 100644
+--- a/plugins/plugin_lifecycle_manager_test.go
++++ b/plugins/plugin_lifecycle_manager_test.go
+@@ -2,6 +2,7 @@ package plugins
+ 
+ import (
+ 	"github.com/navidrome/navidrome/consts"
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/schema"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -18,11 +19,11 @@ func hasInitService(info *plugin) bool {
+ }
+ 
+ var _ = Describe("LifecycleManagement", func() {
+-	Describe("Plugin Lifecycle managerImpl", func() {
++	Describe("Plugin Lifecycle Manager", func() {
+ 		var lifecycleManager *pluginLifecycleManager
+ 
+ 		BeforeEach(func() {
+-			lifecycleManager = newPluginLifecycleManager()
++			lifecycleManager = newPluginLifecycleManager(metrics.NewNoopInstance())
+ 		})
+ 
+ 		It("should track initialization state of plugins", func() {
+@@ -140,5 +141,26 @@ var _ = Describe("LifecycleManagement", func() {
+ 
+ 			Expect(actualKey).To(Equal(expectedKey))
+ 		})
++
++		It("should clear initialization state when requested", func() {
++			plugin := &plugin{
++				ID:           "test-plugin",
++				Capabilities: []string{CapabilityLifecycleManagement},
++				Manifest: &schema.PluginManifest{
++					Version: "1.0.0",
++				},
++			}
++
++			// Initially not initialized
++			Expect(lifecycleManager.isInitialized(plugin)).To(BeFalse())
++
++			// Mark as initialized
++			lifecycleManager.markInitialized(plugin)
++			Expect(lifecycleManager.isInitialized(plugin)).To(BeTrue())
++
++			// Clear initialization state
++			lifecycleManager.clearInitialized(plugin)
++			Expect(lifecycleManager.isInitialized(plugin)).To(BeFalse())
++		})
+ 	})
+ })
+diff --git a/plugins/runtime_test.go b/plugins/runtime_test.go
+index 507f68b20abf53c3cc6af0ebf44f626dafefdda1..05efe1d1ddb4618259afbf25ad92ee97a5b66756 100644
+--- a/plugins/runtime_test.go
++++ b/plugins/runtime_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
++	"github.com/navidrome/navidrome/core/metrics"
+ 	"github.com/navidrome/navidrome/plugins/schema"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+@@ -40,7 +41,7 @@ var _ = Describe("CachingRuntime", func() {
+ 
+ 	BeforeEach(func() {
+ 		ctx = GinkgoT().Context()
+-		mgr = createManager(nil, nil)
++		mgr = createManager(nil, metrics.NewNoopInstance())
+ 		// Add permissions for the test plugin using typed struct
+ 		permissions := schema.PluginManifestPermissions{
+ 			Http: &schema.PluginManifestPermissionsHttp{
+diff --git a/plugins/testdata/fake_init_service/plugin.go b/plugins/testdata/fake_init_service/plugin.go
+index 5b279b09cc37f136fc615a0191d84c81d33b16ff..9e617162376a143afa44d1ad6007322aa37e295a 100644
+--- a/plugins/testdata/fake_init_service/plugin.go
++++ b/plugins/testdata/fake_init_service/plugin.go
+@@ -4,6 +4,7 @@ package main
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"log"
+ 
+ 	"github.com/navidrome/navidrome/plugins/api"
+@@ -13,6 +14,22 @@ type initServicePlugin struct{}
+ 
+ func (p *initServicePlugin) OnInit(ctx context.Context, req *api.InitRequest) (*api.InitResponse, error) {
+ 	log.Printf("OnInit called with %v", req)
++
++	// Check for specific error conditions in the config
++	if req.Config != nil {
++		if errorType, exists := req.Config["returnError"]; exists {
++			switch errorType {
++			case "go_error":
++				return nil, errors.New("initialization failed with Go error")
++			case "response_error":
++				return &api.InitResponse{
++					Error: "initialization failed with response error",
++				}, nil
++			}
++		}
++	}
++
++	// Default: successful initialization
+ 	return &api.InitResponse{}, nil
+ }
+ 
+diff --git a/plugins/wasm_base_plugin_test.go b/plugins/wasm_base_plugin_test.go
+deleted file mode 100644
+index 6d642159888d0037a6618db7f1b73413c77cdb32..0000000000000000000000000000000000000000
+--- a/plugins/wasm_base_plugin_test.go
++++ /dev/null
+@@ -1,32 +0,0 @@
+-package plugins
+-
+-import (
+-	"context"
+-
+-	. "github.com/onsi/ginkgo/v2"
+-	. "github.com/onsi/gomega"
+-)
+-
+-type nilInstance struct{}
+-
+-var _ = Describe("wasmBasePlugin", func() {
+-	var ctx = context.Background()
+-
+-	It("should load instance using loadFunc", func() {
+-		called := false
+-		plugin := &wasmBasePlugin[*nilInstance, any]{
+-			wasmPath:   "",
+-			id:         "test",
+-			capability: "test",
+-			loadFunc: func(ctx context.Context, _ any, path string) (*nilInstance, error) {
+-				called = true
+-				return &nilInstance{}, nil
+-			},
+-		}
+-		inst, done, err := plugin.getInstance(ctx, "test")
+-		defer done()
+-		Expect(err).To(BeNil())
+-		Expect(inst).ToNot(BeNil())
+-		Expect(called).To(BeTrue())
+-	})
+-})

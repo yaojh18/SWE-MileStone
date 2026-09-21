@@ -1,0 +1,93 @@
+diff --git a/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterService.java b/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterService.java
+index 96248f07c238724c0af860588a5160a8a60a8c2c..1c3345ee0bdbba5351bbf8a72c28635aa16aa08d 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterService.java
++++ b/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterService.java
+@@ -17,7 +17,6 @@
+ package org.apache.dubbo.springboot.demo.servlet;
+ 
+ import org.apache.dubbo.common.stream.StreamObserver;
+-import org.apache.dubbo.remoting.http12.message.ServerSentEvent;
+ 
+ import java.util.concurrent.CompletableFuture;
+ 
+@@ -40,8 +39,6 @@ public interface GreeterService {
+ 
+     void sayHelloServerStreamNoParameter(StreamObserver<HelloReply> responseObserver);
+ 
+-    void sayHelloServerStreamSSE(StreamObserver<ServerSentEvent<HelloReply>> responseObserver);
+-
+     /**
+      * Sends greetings with bi streaming
+      */
+diff --git a/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterServiceImpl.java b/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterServiceImpl.java
+index 264d6fd6da48622c9119c6e4d8c7c5a4640b3dfa..8626e9aa836750f5154396a089ca7ecb3633060c 100644
+--- a/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterServiceImpl.java
++++ b/dubbo-demo/dubbo-demo-spring-boot/dubbo-demo-spring-boot-servlet/src/main/java/org/apache/dubbo/springboot/demo/servlet/GreeterServiceImpl.java
+@@ -18,9 +18,7 @@ package org.apache.dubbo.springboot.demo.servlet;
+ 
+ import org.apache.dubbo.common.stream.StreamObserver;
+ import org.apache.dubbo.config.annotation.DubboService;
+-import org.apache.dubbo.remoting.http12.message.ServerSentEvent;
+ 
+-import java.time.Duration;
+ import java.util.concurrent.CompletableFuture;
+ 
+ import org.slf4j.Logger;
+@@ -65,26 +63,6 @@ public class GreeterServiceImpl implements GreeterService {
+         responseObserver.onCompleted();
+     }
+ 
+-    @Override
+-    public void sayHelloServerStreamSSE(StreamObserver<ServerSentEvent<HelloReply>> responseObserver) {
+-        LOGGER.info("Received sayHelloServerStreamSSE request");
+-        responseObserver.onNext(ServerSentEvent.<HelloReply>builder()
+-                .retry(Duration.ofSeconds(20))
+-                .build());
+-        responseObserver.onNext(ServerSentEvent.<HelloReply>builder()
+-                .event("say")
+-                .comment("hello world")
+-                .build());
+-        for (int i = 1; i < 6; i++) {
+-            LOGGER.info("sayHelloServerStreamSSE onNext:  {} times", i);
+-            responseObserver.onNext(ServerSentEvent.<HelloReply>builder()
+-                    .data(toReply("Hello " + ' ' + i + " times"))
+-                    .build());
+-        }
+-        LOGGER.info("sayHelloServerStreamSSE onCompleted");
+-        responseObserver.onCompleted();
+-    }
+-
+     @Override
+     public StreamObserver<HelloRequest> sayHelloBiStream(StreamObserver<HelloReply> responseObserver) {
+         LOGGER.info("Received sayHelloBiStream request");
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/test/TestResponse.java b/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/test/TestResponse.java
+index 3e22f5125fe6a67436d07f6d878e9933cb02cf82..44470d9e41848be723bbc6056c2c96dd5ac2a659 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/test/TestResponse.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/test/java/org/apache/dubbo/rpc/protocol/tri/test/TestResponse.java
+@@ -30,8 +30,6 @@ import java.util.List;
+ 
+ import io.netty.handler.codec.http2.Http2Headers.PseudoHeaderName;
+ 
+-import static java.nio.charset.StandardCharsets.UTF_8;
+-
+ @SuppressWarnings("unchecked")
+ public class TestResponse {
+ 
+@@ -86,15 +84,10 @@ public class TestResponse {
+             bodies = new ArrayList<>(oss.size());
+             boolean isTextEvent = MediaType.TEXT_EVENT_STREAM.getName().equals(getContentType());
+             for (int i = 0, size = oss.size(); i < size; i++) {
+-                ByteArrayOutputStream bos = (ByteArrayOutputStream) oss.get(i);
+-                if (isTextEvent) {
+-                    String data = new String(bos.toByteArray(), UTF_8);
+-                    if (data.startsWith("data:")) {
+-                        String body = data.substring(5, data.length() - 2);
+-                        bodies.add((T) decoder.decode(new ByteArrayInputStream(body.getBytes(UTF_8)), type));
+-                    }
++                if (isTextEvent && i % 3 != 1) {
+                     continue;
+                 }
++                ByteArrayOutputStream bos = (ByteArrayOutputStream) oss.get(i);
+                 if (bos.size() == 0) {
+                     bodies.add(null);
+                 } else {

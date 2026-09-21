@@ -1,0 +1,37 @@
+# v0.91-rc1 incremental patch — milestone_002
+#
+# Pathology (GT-END census, in-image): cmd/wire_gen.go is FUTURE-vintage vs the
+# milestone's core/scanner/nativeapi. cmd (non-test) breaks -> `go build .`
+# gate fails -> the evaluator SILENTLY falls back to the START tag, so the END
+# tree (whose plugins suite carries the entire graded N2P surface, ~155 tests)
+# was never graded. plugins itself compiles fine at END.
+#
+# Fix: stitch cmd back to the milestone vintage (see patch_v091_wire_gen.py).
+# No test file is touched; the classification oracle is unchanged.
+#
+# Build:  docker build -f Dockerfile.v0.91-rc1 \
+#           -t navidrome_navidrome_v0.57.0_v0.58.0/milestone_002:v0.91-rc1 .
+FROM navidrome_navidrome_v0.57.0_v0.58.0/milestone_002:v0.9
+
+RUN git config --global user.email "env-patch@localhost" && \
+    git config --global user.name "ENV-PATCH-v0.91"
+
+COPY patch_v091_wire_gen.py /tmp/patch_v091_wire_gen.py
+
+# ---- Stitch END state ----
+RUN cd /testbed && git checkout --force milestone-milestone_002-end && git clean -fd && \
+    python3 /tmp/patch_v091_wire_gen.py && \
+    git add -A && \
+    git commit -m "[ENV-PATCH-v0.91] stitch cmd/wire_gen to milestone vintage (NewWatcher, 4-arg nativeapi.New, drop core.Library wiring)" && \
+    git tag -f milestone-milestone_002-end HEAD
+
+# ---- Verify WITH TEETH: gate parity + graded-package test-binary compile ----
+# (the original images' verify step piped through grep|head and swallowed the
+#  exit code — this one fails the build on any compile error)
+RUN cd /testbed && git checkout --force milestone-milestone_002-end && git clean -fd && \
+    go build -tags=netgo . && \
+    go test -count=1 -run '^$' -tags netgo ./plugins/ ./cmd/ && \
+    echo "VERIFY OK: END gate green + plugins/cmd test binaries compile"
+
+# ---- Restore default state (START), matching the original image convention ----
+RUN cd /testbed && git checkout --force milestone-milestone_002-start && git clean -fd

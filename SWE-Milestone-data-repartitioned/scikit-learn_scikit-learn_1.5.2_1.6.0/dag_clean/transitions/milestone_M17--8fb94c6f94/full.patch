@@ -1,0 +1,470 @@
+diff --git a/sklearn/covariance/_robust_covariance.py b/sklearn/covariance/_robust_covariance.py
+index 614a0aaaa0a7e1c34bc433da667b12605a5692b3..e4b1f98126147a3f281fc16a601e49e34a2d4b0b 100644
+--- a/sklearn/covariance/_robust_covariance.py
++++ b/sklearn/covariance/_robust_covariance.py
+@@ -120,22 +120,21 @@ def _c_step(
+     dist = np.inf
+ 
+     # Initialisation
+-    support = np.zeros(n_samples, dtype=bool)
+     if initial_estimates is None:
+         # compute initial robust estimates from a random subset
+-        support[random_state.permutation(n_samples)[:n_support]] = True
++        support_indices = random_state.permutation(n_samples)[:n_support]
+     else:
+         # get initial robust estimates from the function parameters
+         location = initial_estimates[0]
+         covariance = initial_estimates[1]
+-        # run a special iteration for that case (to get an initial support)
++        # run a special iteration for that case (to get an initial support_indices)
+         precision = linalg.pinvh(covariance)
+         X_centered = X - location
+         dist = (np.dot(X_centered, precision) * X_centered).sum(1)
+         # compute new estimates
+-        support[np.argsort(dist)[:n_support]] = True
++        support_indices = np.argpartition(dist, n_support - 1)[:n_support]
+ 
+-    X_support = X[support]
++    X_support = X[support_indices]
+     location = X_support.mean(0)
+     covariance = cov_computation_method(X_support)
+ 
+@@ -152,15 +151,14 @@ def _c_step(
+         previous_location = location
+         previous_covariance = covariance
+         previous_det = det
+-        previous_support = support
+-        # compute a new support from the full data set mahalanobis distances
++        previous_support_indices = support_indices
++        # compute a new support_indices from the full data set mahalanobis distances
+         precision = linalg.pinvh(covariance)
+         X_centered = X - location
+         dist = (np.dot(X_centered, precision) * X_centered).sum(axis=1)
+         # compute new estimates
+-        support = np.zeros(n_samples, dtype=bool)
+-        support[np.argsort(dist)[:n_support]] = True
+-        X_support = X[support]
++        support_indices = np.argpartition(dist, n_support - 1)[:n_support]
++        X_support = X[support_indices]
+         location = X_support.mean(axis=0)
+         covariance = cov_computation_method(X_support)
+         det = fast_logdet(covariance)
+@@ -171,7 +169,7 @@ def _c_step(
+     dist = (np.dot(X - location, precision) * (X - location)).sum(axis=1)
+     # Check if best fit already found (det => 0, logdet => -inf)
+     if np.isinf(det):
+-        results = location, covariance, det, support, dist
++        results = location, covariance, det, support_indices, dist
+     # Check convergence
+     if np.allclose(det, previous_det):
+         # c_step procedure converged
+@@ -180,7 +178,7 @@ def _c_step(
+                 "Optimal couple (location, covariance) found before"
+                 " ending iterations (%d left)" % (remaining_iterations)
+             )
+-        results = location, covariance, det, support, dist
++        results = location, covariance, det, support_indices, dist
+     elif det > previous_det:
+         # determinant has increased (should not happen)
+         warnings.warn(
+@@ -195,7 +193,7 @@ def _c_step(
+             previous_location,
+             previous_covariance,
+             previous_det,
+-            previous_support,
++            previous_support_indices,
+             previous_dist,
+         )
+ 
+@@ -203,9 +201,12 @@ def _c_step(
+     if remaining_iterations == 0:
+         if verbose:
+             print("Maximum number of iterations reached")
+-        results = location, covariance, det, support, dist
++        results = location, covariance, det, support_indices, dist
+ 
+-    return results
++    location, covariance, det, support_indices, dist = results
++    # Convert from list of indices to boolean mask.
++    support = np.bincount(support_indices, minlength=n_samples).astype(bool)
++    return location, covariance, det, support, dist
+ 
+ 
+ def select_candidates(
+diff --git a/sklearn/manifold/_locally_linear.py b/sklearn/manifold/_locally_linear.py
+index 29f08233887f5c29cbc45fc13104db4bd15d0d9e..803d5b657547a07d95c4bbbd065b528fa6dcf3b0 100644
+--- a/sklearn/manifold/_locally_linear.py
++++ b/sklearn/manifold/_locally_linear.py
+@@ -7,7 +7,7 @@ from numbers import Integral, Real
+ 
+ import numpy as np
+ from scipy.linalg import eigh, qr, solve, svd
+-from scipy.sparse import csr_matrix, eye
++from scipy.sparse import csr_matrix, eye, lil_matrix
+ from scipy.sparse.linalg import eigsh
+ 
+ from ..base import (
+@@ -229,6 +229,7 @@ def _locally_linear_embedding(
+         )
+ 
+     M_sparse = eigen_solver != "dense"
++    M_container_constructor = lil_matrix if M_sparse else np.zeros
+ 
+     if method == "standard":
+         W = barycenter_kneighbors_graph(
+@@ -239,7 +240,7 @@ def _locally_linear_embedding(
+         # depending on the solver, we'll do this differently
+         if M_sparse:
+             M = eye(*W.shape, format=W.format) - W
+-            M = (M.T * M).tocsr()
++            M = M.T * M
+         else:
+             M = (W.T * W - W.T - W).toarray()
+             M.flat[:: M.shape[0] + 1] += 1  # W = W - I = W - I
+@@ -262,7 +263,7 @@ def _locally_linear_embedding(
+         Yi = np.empty((n_neighbors, 1 + n_components + dp), dtype=np.float64)
+         Yi[:, 0] = 1
+ 
+-        M = np.zeros((N, N), dtype=np.float64)
++        M = M_container_constructor((N, N), dtype=np.float64)
+ 
+         use_svd = n_neighbors > d_in
+ 
+@@ -295,9 +296,6 @@ def _locally_linear_embedding(
+             nbrs_x, nbrs_y = np.meshgrid(neighbors[i], neighbors[i])
+             M[nbrs_x, nbrs_y] += np.dot(w, w.T)
+ 
+-        if M_sparse:
+-            M = csr_matrix(M)
+-
+     elif method == "modified":
+         if n_neighbors < n_components:
+             raise ValueError("modified LLE requires n_neighbors >= n_components")
+@@ -361,7 +359,8 @@ def _locally_linear_embedding(
+ 
+         # Now calculate M.
+         # This is the [N x N] matrix whose null space is the desired embedding
+-        M = np.zeros((N, N), dtype=np.float64)
++        M = M_container_constructor((N, N), dtype=np.float64)
++
+         for i in range(N):
+             s_i = s_range[i]
+ 
+@@ -397,19 +396,16 @@ def _locally_linear_embedding(
+             M[nbrs_x, nbrs_y] += np.dot(Wi, Wi.T)
+             Wi_sum1 = Wi.sum(1)
+             M[i, neighbors[i]] -= Wi_sum1
+-            M[neighbors[i], i] -= Wi_sum1
++            M[neighbors[i], [i]] -= Wi_sum1
+             M[i, i] += s_i
+ 
+-        if M_sparse:
+-            M = csr_matrix(M)
+-
+     elif method == "ltsa":
+         neighbors = nbrs.kneighbors(
+             X, n_neighbors=n_neighbors + 1, return_distance=False
+         )
+         neighbors = neighbors[:, 1:]
+ 
+-        M = np.zeros((N, N))
++        M = M_container_constructor((N, N), dtype=np.float64)
+ 
+         use_svd = n_neighbors > d_in
+ 
+@@ -432,7 +428,11 @@ def _locally_linear_embedding(
+ 
+             nbrs_x, nbrs_y = np.meshgrid(neighbors[i], neighbors[i])
+             M[nbrs_x, nbrs_y] -= GiGiT
+-            M[neighbors[i], neighbors[i]] += 1
++
++            M[neighbors[i], neighbors[i]] += np.ones(shape=n_neighbors)
++
++    if M_sparse:
++        M = M.tocsr()
+ 
+     return null_space(
+         M,
+diff --git a/sklearn/metrics/_classification.py b/sklearn/metrics/_classification.py
+index 0cc90b98625690312b505b8b65acdc700c3effe3..deb0713de66de3c3be04d799ff3ea09ff0e856d1 100644
+--- a/sklearn/metrics/_classification.py
++++ b/sklearn/metrics/_classification.py
+@@ -38,6 +38,7 @@ from ..utils._param_validation import (
+     StrOptions,
+     validate_params,
+ )
++from ..utils._unique import attach_unique
+ from ..utils.extmath import _nanaverage
+ from ..utils.multiclass import type_of_target, unique_labels
+ from ..utils.sparsefuncs import count_nonzero
+@@ -220,6 +221,7 @@ def accuracy_score(
+     """
+ 
+     # Compute accuracy for each possible representation
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     check_consistent_length(y_true, y_pred, sample_weight)
+ 
+@@ -336,6 +338,7 @@ def confusion_matrix(
+     >>> (tn, fp, fn, tp)
+     (np.int64(0), np.int64(2), np.int64(1), np.int64(1))
+     """
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     if y_type not in ("binary", "multiclass"):
+         raise ValueError("%s is not supported" % y_type)
+@@ -525,6 +528,7 @@ def multilabel_confusion_matrix(
+            [[2, 1],
+             [1, 2]]])
+     """
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     if sample_weight is not None:
+         sample_weight = column_or_1d(sample_weight)
+@@ -1075,6 +1079,7 @@ def matthews_corrcoef(y_true, y_pred, *, sample_weight=None, zero_division="warn
+     >>> matthews_corrcoef(y_true, y_pred)
+     np.float64(-0.33...)
+     """
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     check_consistent_length(y_true, y_pred, sample_weight)
+     if y_type not in {"binary", "multiclass"}:
+@@ -1639,6 +1644,7 @@ def _check_set_wise_labels(y_true, y_pred, average, labels, pos_label):
+     if average not in average_options and average != "binary":
+         raise ValueError("average has to be one of " + str(average_options))
+ 
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     # Convert to Python primitive type to avoid NumPy type / Python str
+     # comparison. See https://github.com/numpy/numpy/issues/6784
+@@ -2054,7 +2060,7 @@ def class_likelihood_ratios(
+     >>> class_likelihood_ratios(y_true, y_pred, labels=["non-cat", "cat"])
+     (np.float64(1.5), np.float64(0.75))
+     """
+-
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     if y_type != "binary":
+         raise ValueError(
+@@ -2704,6 +2710,7 @@ def classification_report(
+     <BLANKLINE>
+     """
+ 
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+ 
+     if labels is None:
+@@ -2892,7 +2899,7 @@ def hamming_loss(y_true, y_pred, *, sample_weight=None):
+     >>> hamming_loss(np.array([[0, 1], [1, 1]]), np.zeros((2, 2)))
+     0.75
+     """
+-
++    y_true, y_pred = attach_unique(y_true, y_pred)
+     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+     check_consistent_length(y_true, y_pred, sample_weight)
+ 
+diff --git a/sklearn/utils/_array_api.py b/sklearn/utils/_array_api.py
+index d92012ec63fdd5926c55c7f864f8c0c7a8e5e060..251d79a364c726e8f049ce3d480a3ef3edf6cc0d 100644
+--- a/sklearn/utils/_array_api.py
++++ b/sklearn/utils/_array_api.py
+@@ -181,7 +181,11 @@ def _is_numpy_namespace(xp):
+ 
+ def _union1d(a, b, xp):
+     if _is_numpy_namespace(xp):
+-        return xp.asarray(numpy.union1d(a, b))
++        # avoid circular import
++        from ._unique import cached_unique
++
++        a_unique, b_unique = cached_unique(a, b, xp=xp)
++        return xp.asarray(numpy.union1d(a_unique, b_unique))
+     assert a.ndim == b.ndim == 1
+     return xp.unique_values(xp.concat([xp.unique_values(a), xp.unique_values(b)]))
+ 
+diff --git a/sklearn/utils/_unique.py b/sklearn/utils/_unique.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0234058a92df49ca84772f567863c0e5203372b8
+--- /dev/null
++++ b/sklearn/utils/_unique.py
+@@ -0,0 +1,108 @@
++# Authors: The scikit-learn developers
++# SPDX-License-Identifier: BSD-3-Clause
++
++import numpy as np
++
++from sklearn.utils._array_api import get_namespace
++
++
++def _attach_unique(y):
++    """Attach unique values of y to y and return the result.
++
++    The result is a view of y, and the metadata (unique) is not attached to y.
++    """
++    if not isinstance(y, np.ndarray):
++        return y
++    try:
++        # avoid recalculating unique in nested calls.
++        if "unique" in y.dtype.metadata:
++            return y
++    except (AttributeError, TypeError):
++        pass
++
++    unique = np.unique(y)
++    unique_dtype = np.dtype(y.dtype, metadata={"unique": unique})
++    return y.view(dtype=unique_dtype)
++
++
++def attach_unique(*ys, return_tuple=False):
++    """Attach unique values of ys to ys and return the results.
++
++    The result is a view of y, and the metadata (unique) is not attached to y.
++
++    IMPORTANT: The output of this function should NEVER be returned in functions.
++    This is to avoid this pattern:
++
++    .. code:: python
++
++        y = np.array([1, 2, 3])
++        y = attach_unique(y)
++        y[1] = -1
++        # now np.unique(y) will be different from cached_unique(y)
++
++    Parameters
++    ----------
++    *ys : sequence of array-like
++        Input data arrays.
++
++    return_tuple : bool, default=False
++        If True, always return a tuple even if there is only one array.
++
++    Returns
++    -------
++    ys : tuple of array-like or array-like
++        Input data with unique values attached.
++    """
++    res = tuple(_attach_unique(y) for y in ys)
++    if len(res) == 1 and not return_tuple:
++        return res[0]
++    return res
++
++
++def _cached_unique(y, xp=None):
++    """Return the unique values of y.
++
++    Use the cached values from dtype.metadata if present.
++
++    This function does NOT cache the values in y, i.e. it doesn't change y.
++
++    Call `attach_unique` to attach the unique values to y.
++    """
++    try:
++        if y.dtype.metadata is not None and "unique" in y.dtype.metadata:
++            return y.dtype.metadata["unique"]
++    except AttributeError:
++        # in case y is not a numpy array
++        pass
++    xp, _ = get_namespace(y, xp=xp)
++    return xp.unique_values(y)
++
++
++def cached_unique(*ys, xp=None):
++    """Return the unique values of ys.
++
++    Use the cached values from dtype.metadata if present.
++
++    This function does NOT cache the values in y, i.e. it doesn't change y.
++
++    Call `attach_unique` to attach the unique values to y.
++
++    Parameters
++    ----------
++    *ys : sequence of array-like
++        Input data arrays.
++
++    xp : module, default=None
++        Precomputed array namespace module. When passed, typically from a caller
++        that has already performed inspection of its own inputs, skips array
++        namespace inspection.
++
++    Returns
++    -------
++    res : tuple of array-like or array-like
++        Unique values of ys.
++    """
++    res = tuple(_cached_unique(y, xp=xp) for y in ys)
++    if len(res) == 1:
++        return res[0]
++    return res
+diff --git a/sklearn/utils/multiclass.py b/sklearn/utils/multiclass.py
+index ead7f416368e3ab52b31a9c5ccadedb9b079145f..e8ea8184b1b4be620ab038a2adaccba22366391a 100644
+--- a/sklearn/utils/multiclass.py
++++ b/sklearn/utils/multiclass.py
+@@ -12,19 +12,20 @@ from scipy.sparse import issparse
+ 
+ from ..utils._array_api import get_namespace
+ from ..utils.fixes import VisibleDeprecationWarning
++from ._unique import attach_unique, cached_unique
+ from .validation import _assert_all_finite, check_array
+ 
+ 
+-def _unique_multiclass(y):
+-    xp, is_array_api_compliant = get_namespace(y)
++def _unique_multiclass(y, xp=None):
++    xp, is_array_api_compliant = get_namespace(y, xp=xp)
+     if hasattr(y, "__array__") or is_array_api_compliant:
+-        return xp.unique_values(xp.asarray(y))
++        return cached_unique(xp.asarray(y), xp=xp)
+     else:
+         return set(y)
+ 
+ 
+-def _unique_indicator(y):
+-    xp, _ = get_namespace(y)
++def _unique_indicator(y, xp=None):
++    xp, _ = get_namespace(y, xp=xp)
+     return xp.arange(
+         check_array(y, input_name="y", accept_sparse=["csr", "csc", "coo"]).shape[1]
+     )
+@@ -69,8 +70,9 @@ def unique_labels(*ys):
+     >>> unique_labels([1, 2, 10], [5, 11])
+     array([ 1,  2,  5, 10, 11])
+     """
++    ys = attach_unique(*ys, return_tuple=True)
+     xp, is_array_api_compliant = get_namespace(*ys)
+-    if not ys:
++    if len(ys) == 0:
+         raise ValueError("No argument has been passed.")
+     # Check that we don't mix label format
+ 
+@@ -104,10 +106,12 @@ def unique_labels(*ys):
+ 
+     if is_array_api_compliant:
+         # array_api does not allow for mixed dtypes
+-        unique_ys = xp.concat([_unique_labels(y) for y in ys])
++        unique_ys = xp.concat([_unique_labels(y, xp=xp) for y in ys])
+         return xp.unique_values(unique_ys)
+ 
+-    ys_labels = set(chain.from_iterable((i for i in _unique_labels(y)) for y in ys))
++    ys_labels = set(
++        chain.from_iterable((i for i in _unique_labels(y, xp=xp)) for y in ys)
++    )
+     # Check that we don't mix string type with number type
+     if len(set(isinstance(label, str) for label in ys_labels)) > 1:
+         raise ValueError("Mix of label input types (string and number)")
+@@ -187,7 +191,7 @@ def is_multilabel(y):
+             and (y.dtype.kind in "biu" or _is_integral_float(labels))  # bool, int, uint
+         )
+     else:
+-        labels = xp.unique_values(y)
++        labels = cached_unique(y, xp=xp)
+ 
+         return labels.shape[0] < 3 and (
+             xp.isdtype(y.dtype, ("bool", "signed integer", "unsigned integer"))
+@@ -400,7 +404,7 @@ def type_of_target(y, input_name=""):
+     # Check multiclass
+     if issparse(first_row_or_val):
+         first_row_or_val = first_row_or_val.data
+-    if xp.unique_values(y).shape[0] > 2 or (y.ndim == 2 and len(first_row_or_val) > 1):
++    if cached_unique(y).shape[0] > 2 or (y.ndim == 2 and len(first_row_or_val) > 1):
+         # [1, 2, 3] or [[1., 2., 3]] or [[1, 2]]
+         return "multiclass" + suffix
+     else:

@@ -1,0 +1,190 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5aff37e7780c23e5621e4b068581db9a52636ba6..5341c07be91f28ff7fd62f170b1f38cb418c6f04 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -21,6 +21,10 @@ Bug fixes:
+   Make `rg -vf file` where `file` is empty match everything.
+ * [BUG #2177](https://github.com/BurntSushi/ripgrep/issues/2177):
+   Ignore a UTF-8 BOM marker at the start of `.gitignore` (and similar files).
++* [BUG #3131](https://github.com/BurntSushi/ripgrep/issues/3131):
++  Document inconsistency between `-c/--count` and `--files-with-matches`.
++* [BUG #3140](https://github.com/BurntSushi/ripgrep/issues/3140):
++  Ensure hyphens in flag names are escaped in the roff text for the man page.
+ 
+ Feature enhancements:
+ 
+diff --git a/crates/cli/src/decompress.rs b/crates/cli/src/decompress.rs
+index 9e93c98257bbdf226db1a87e5db5d6bdc6498e58..85a96b9a7fef9e1e9447cc183467ff341a86dd01 100644
+--- a/crates/cli/src/decompress.rs
++++ b/crates/cli/src/decompress.rs
+@@ -414,6 +414,8 @@ impl io::Read for DecompressionReader {
+ /// relative path. We permit this since it is assumed that the user has set
+ /// this explicitly, and thus, desires this behavior.
+ ///
++/// # Platform behavior
++///
+ /// On non-Windows, this is a no-op.
+ pub fn resolve_binary<P: AsRef<Path>>(
+     prog: P,
+diff --git a/crates/core/flags/defs.rs b/crates/core/flags/defs.rs
+index eb59e33f11d169ff4637d0902820513c93dd187f..fb36d73de8a1afa063ee073d11d7ca5932f2b19a 100644
+--- a/crates/core/flags/defs.rs
++++ b/crates/core/flags/defs.rs
+@@ -1234,18 +1234,27 @@ impl Flag for Count {
+     }
+     fn doc_long(&self) -> &'static str {
+         r"
+-This flag suppresses normal output and shows the number of lines that match the
+-given patterns for each file searched. Each file containing a match has its
+-path and count printed on each line. Note that unless \flag{multiline}
+-is enabled, this reports the number of lines that match and not the total
+-number of matches. In multiline mode, \flag{count} is equivalent to
+-\flag{count-matches}.
++This flag suppresses normal output and shows the number of lines that match
++the given patterns for each file searched. Each file containing a match has
++its path and count printed on each line. Note that unless \flag{multiline} is
++enabled and the pattern(s) given can match over multiple lines, this reports
++the number of lines that match and not the total number of matches. When
++multiline mode is enabled and the pattern(s) given can match over multiple
++lines, \flag{count} is equivalent to \flag{count-matches}.
+ .sp
+ If only one file is given to ripgrep, then only the count is printed if there
+ is a match. The \flag{with-filename} flag can be used to force printing the
+ file path in this case. If you need a count to be printed regardless of whether
+ there is a match, then use \flag{include-zero}.
+ .sp
++Note that it is possible for this flag to have results inconsistent with
++the output of \flag{files-with-matches}. Notably, by default, ripgrep tries
++to avoid searching files with binary data. With this flag, ripgrep needs to
++search the entire content of files, which may include binary data. But with
++\flag{files-with-matches}, ripgrep can stop as soon as a match is observed,
++which may come well before any binary data. To avoid this inconsistency without
++disabling binary detection, use the \flag{binary} flag.
++.sp
+ This overrides the \flag{count-matches} flag. Note that when \flag{count}
+ is combined with \flag{only-matching}, then ripgrep behaves as if
+ \flag{count-matches} was given.
+@@ -2154,6 +2163,14 @@ impl Flag for FilesWithMatches {
+         r"
+ Print only the paths with at least one match and suppress match contents.
+ .sp
++Note that it is possible for this flag to have results inconsistent with the
++output of \flag{count}. Notably, by default, ripgrep tries to avoid searching
++files with binary data. With this flag, ripgrep might stop searching before
++the binary data is observed. But with \flag{count}, ripgrep has to search the
++entire contents to determine the match count, which means it might see binary
++data that causes it to skip searching that file. To avoid this inconsistency
++without disabling binary detection, use the \flag{binary} flag.
++.sp
+ This overrides \flag{files-without-match}.
+ "
+     }
+@@ -2752,6 +2769,11 @@ ripgrep.
+ A file or directory is considered hidden if its base name starts with a dot
+ character (\fB.\fP). On operating systems which support a "hidden" file
+ attribute, like Windows, files with this attribute are also considered hidden.
++.sp
++Note that \flag{hidden} will include files and folders like \fB.git\fP
++regardless of \flag{no-ignore-vcs}. To exclude such paths when using
++\flag{hidden}, you must explicitly ignore them using another flag or ignore
++file.
+ "#
+     }
+ 
+@@ -3144,9 +3166,11 @@ impl Flag for IgnoreFile {
+ Specifies a path to one or more \fBgitignore\fP formatted rules files.
+ These patterns are applied after the patterns found in \fB.gitignore\fP,
+ \fB.rgignore\fP and \fB.ignore\fP are applied and are matched relative to the
+-current working directory. Multiple additional ignore files can be specified
+-by using this flag repeatedly. When specifying multiple ignore files, earlier
+-files have lower precedence than later files.
++current working directory. That is, files specified via this flag have lower
++precedence than files automatically found in the directory tree. Multiple
++additional ignore files can be specified by using this flag repeatedly. When
++specifying multiple ignore files, earlier files have lower precedence than
++later files.
+ .sp
+ If you are looking for a way to include or exclude files and directories
+ directly on the command line, then use \flag{glob} instead.
+@@ -4603,11 +4627,15 @@ impl Flag for NoIgnoreVcs {
+     }
+     fn doc_long(&self) -> &'static str {
+         r"
+-When given, filter rules from source control ignore files (e.g., \fB.gitignore\fP)
+-are not respected. By default, ripgrep respects \fBgit\fP's ignore rules for
+-automatic filtering. In some cases, it may not be desirable to respect the
+-source control's ignore rules and instead only respect rules in \fB.ignore\fP
+-or \fB.rgignore\fP.
++When given, filter rules from source control ignore files (e.g.,
++\fB.gitignore\fP) are not respected. By default, ripgrep respects \fBgit\fP's
++ignore rules for automatic filtering. In some cases, it may not be desirable
++to respect the source control's ignore rules and instead only respect rules in
++\fB.ignore\fP or \fB.rgignore\fP.
++.sp
++Note that this flag does not directly affect the filtering of source control
++files or folders that start with a dot (\fB.\fP), like \fB.git\fP. These are
++affected by \flag{hidden} and its related flags instead.
+ .sp
+ This flag implies \flag{no-ignore-parent} for source control ignore files as
+ well.
+@@ -5504,9 +5532,9 @@ don't need preprocessing. For example, given the following shell script,
+     pdftotext "$1" -
+ .EE
+ .sp
+-then it is possible to use \fB\-\-pre\fP \fIpre-pdftotext\fP \fB--pre-glob
+-'\fP\fI*.pdf\fP\fB'\fP to make it so ripgrep only executes the
+-\fIpre-pdftotext\fP command on files with a \fI.pdf\fP extension.
++then it is possible to use \fB\-\-pre\fP \fIpre-pdftotext\fP
++\fB\-\-pre\-glob\fP '\fI*.pdf\fP' to make it so ripgrep only executes
++the \fIpre-pdftotext\fP command on files with a \fI.pdf\fP extension.
+ .sp
+ Multiple \flag{pre-glob} flags may be used. Globbing rules match
+ \fBgitignore\fP globs. Precede a glob with a \fB!\fP to exclude it.
+diff --git a/crates/core/flags/doc/man.rs b/crates/core/flags/doc/man.rs
+index e0ed13bae6a071b687456c628399ef14f00ef286..9fa35e116534ba25590a440c599af88e65c9d9c6 100644
+--- a/crates/core/flags/doc/man.rs
++++ b/crates/core/flags/doc/man.rs
+@@ -53,7 +53,7 @@ fn generate_flag(flag: &'static dyn Flag, out: &mut String) {
+         write!(out, r", ");
+     }
+ 
+-    let name = flag.name_long();
++    let name = flag.name_long().replace("-", r"\-");
+     write!(out, r"\fB\-\-{name}\fP");
+     if let Some(var) = flag.doc_variable() {
+         write!(out, r"=\fI{var}\fP");
+@@ -71,7 +71,7 @@ fn generate_flag(flag: &'static dyn Flag, out: &mut String) {
+         if let Some(name) = flag.name_short() {
+             write!(out, r"\-{}/", char::from(name));
+         }
+-        write!(out, r"\-\-{}", flag.name_long());
++        write!(out, r"\-\-{}", flag.name_long().replace("-", r"\-"));
+         out.push_str(r"\fP");
+     });
+     // Convert \flag-negate{foo} into something nicer.
+diff --git a/crates/ignore/src/walk.rs b/crates/ignore/src/walk.rs
+index 448e599e43d2d730380a80b07149e4b6f56afd35..f0d7d85c6676c99359012ba176eeca0b17908dc4 100644
+--- a/crates/ignore/src/walk.rs
++++ b/crates/ignore/src/walk.rs
+@@ -798,6 +798,10 @@ impl WalkBuilder {
+     ///
+     /// When disabled, git-related ignore rules are applied even when searching
+     /// outside a git repository.
++    ///
++    /// In particular, if this is `false` then `.gitignore` files will be read
++    /// from parent directories above the git root directory containing `.git`,
++    /// which is different from the git behavior.
+     pub fn require_git(&mut self, yes: bool) -> &mut WalkBuilder {
+         self.ig_builder.require_git(yes);
+         self
+@@ -894,6 +898,10 @@ impl WalkBuilder {
+     ///
+     /// Note that the errors for reading entries that may not satisfy the
+     /// predicate will still be yielded.
++    ///
++    /// Note also that only one filter predicate can be applied to a
++    /// `WalkBuilder`. Calling this subsequent times overrides previous filter
++    /// predicates.
+     pub fn filter_entry<P>(&mut self, filter: P) -> &mut WalkBuilder
+     where
+         P: Fn(&DirEntry) -> bool + Send + Sync + 'static,

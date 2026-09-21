@@ -1,0 +1,177 @@
+diff --git a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+index d53c36a73cdae9670ab46179cf6703a8ad01d504..9751c8851cde521316dabb25f2e32f12efc24d2c 100644
+--- a/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
++++ b/dubbo-common/src/main/java/org/apache/dubbo/common/utils/NetUtils.java
+@@ -105,6 +105,21 @@ public final class NetUtils {
+      */
+     private static BitSet USED_PORT = new BitSet(65536);
+ 
++    private static boolean reuseAddressSupported;
++
++    static {
++        try (ServerSocket serverSocket = new ServerSocket()) {
++            serverSocket.setReuseAddress(true);
++            reuseAddressSupported = true;
++        } catch (Throwable ignored) {
++            // ignore.
++        }
++    }
++
++    public static boolean isReuseAddressSupported() {
++        return reuseAddressSupported;
++    }
++
+     public static int getRandomPort() {
+         return RND_PORT_START + ThreadLocalRandom.current().nextInt(RND_PORT_RANGE);
+     }
+@@ -123,7 +138,12 @@ public final class NetUtils {
+             if (USED_PORT.get(i)) {
+                 continue;
+             }
+-            try (ServerSocket ignored = new ServerSocket(i)) {
++            try (ServerSocket serverSocket = new ServerSocket()) {
++                if (reuseAddressSupported) {
++                    // SO_REUSEADDR should be enabled before bind.
++                    serverSocket.setReuseAddress(true);
++                }
++                serverSocket.bind(new InetSocketAddress(i));
+                 USED_PORT.set(i);
+                 port = i;
+                 break;
+@@ -141,7 +161,12 @@ public final class NetUtils {
+      * @return true if it's occupied
+      */
+     public static boolean isPortInUsed(int port) {
+-        try (ServerSocket ignored = new ServerSocket(port)) {
++        try (ServerSocket serverSocket = new ServerSocket()) {
++            if (reuseAddressSupported) {
++                // SO_REUSEADDR should be enabled before bind.
++                serverSocket.setReuseAddress(true);
++            }
++            serverSocket.bind(new InetSocketAddress(port));
+             return false;
+         } catch (IOException e) {
+             // continue
+diff --git a/dubbo-common/src/test/java/org/apache/dubbo/common/utils/NetUtilsTest.java b/dubbo-common/src/test/java/org/apache/dubbo/common/utils/NetUtilsTest.java
+index 7df52218576ee4854b3c91c93e90a6e1804cf7d5..d5818d90a160b4a93af779e2f8cf7a76078b8740 100644
+--- a/dubbo-common/src/test/java/org/apache/dubbo/common/utils/NetUtilsTest.java
++++ b/dubbo-common/src/test/java/org/apache/dubbo/common/utils/NetUtilsTest.java
+@@ -387,6 +387,14 @@ class NetUtilsTest {
+         }
+     }
+ 
++    @Test
++    void testRepeatedStatusChecking() {
++        int port = NetUtils.getAvailablePort();
++        for (int i = 0; i < 10000; i++) {
++            assertFalse(NetUtils.isPortInUsed(port));
++        }
++    }
++
+     private String getIgnoredInterfaces() {
+         return SystemPropertyConfigUtils.getSystemProperty(
+                 CommonConstants.DubboProperty.DUBBO_NETWORK_IGNORED_INTERFACE);
+diff --git a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SimpleRegistryExporter.java b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SimpleRegistryExporter.java
+index 3c367df508fae6ad66a0c0abf678e316c6646adb..b05115f9b52112666aaa12a77400511d0187fd04 100644
+--- a/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SimpleRegistryExporter.java
++++ b/dubbo-config/dubbo-config-spring/src/test/java/org/apache/dubbo/config/spring/SimpleRegistryExporter.java
+@@ -25,6 +25,7 @@ import org.apache.dubbo.rpc.Protocol;
+ import org.apache.dubbo.rpc.ProxyFactory;
+ 
+ import java.io.IOException;
++import java.net.InetSocketAddress;
+ import java.net.ServerSocket;
+ 
+ import static org.apache.dubbo.common.constants.CommonConstants.CALLBACK_INSTANCES_LIMIT_KEY;
+@@ -42,7 +43,13 @@ public class SimpleRegistryExporter {
+ 
+     public static synchronized Exporter<RegistryService> exportIfAbsent(int port) {
+         try {
+-            new ServerSocket(port).close();
++            ServerSocket serverSocket = new ServerSocket();
++            if (NetUtils.isReuseAddressSupported()) {
++                // SO_REUSEADDR should be enabled before bind.
++                serverSocket.setReuseAddress(true);
++            }
++            serverSocket.bind(new InetSocketAddress(port));
++            serverSocket.close();
+             return export(port);
+         } catch (IOException e) {
+             return null;
+diff --git a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
+index dedf9cb85672a47b345cb3f3fcdfa70ebc611dd0..477056278107e5c89b1fbd2371e5f30e9ef9307a 100644
+--- a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyPortUnificationServer.java
+@@ -101,6 +101,7 @@ public class NettyPortUnificationServer extends AbstractPortUnificationServer {
+         // final Timer timer = new HashedWheelTimer(new NamedThreadFactory("NettyIdleTimer", true));
+         bootstrap.setOption("child.tcpNoDelay", true);
+         bootstrap.setOption("backlog", getUrl().getPositiveParameter(BACKLOG_KEY, Constants.DEFAULT_BACKLOG));
++        bootstrap.setOption("reuseAddress", true);
+         bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+             @Override
+             public ChannelPipeline getPipeline() {
+diff --git a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
+index 42a23464819ae87b181a704356d8c14f4c06a1f2..95a6dadfadf9b3cdeefb537d88bb4d6c24fc9ebf 100644
+--- a/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
++++ b/dubbo-remoting/dubbo-remoting-netty/src/main/java/org/apache/dubbo/remoting/transport/netty/NettyServer.java
+@@ -84,6 +84,7 @@ public class NettyServer extends AbstractServer implements RemotingServer {
+         // final Timer timer = new HashedWheelTimer(new NamedThreadFactory("NettyIdleTimer", true));
+         bootstrap.setOption("child.tcpNoDelay", true);
+         bootstrap.setOption("backlog", getUrl().getPositiveParameter(BACKLOG_KEY, Constants.DEFAULT_BACKLOG));
++        bootstrap.setOption("reuseAddress", true);
+         bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+             @Override
+             public ChannelPipeline getPipeline() {
+diff --git a/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/NettyTransporterTest.java b/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/NettyTransporterTest.java
+index 3267f90834466ab206d08124806d652c28825d10..b36649613df8799aefa9c90bdb1b3e71c9a8c0cf 100644
+--- a/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/NettyTransporterTest.java
++++ b/dubbo-remoting/dubbo-remoting-netty4/src/test/java/org/apache/dubbo/remoting/transport/netty4/NettyTransporterTest.java
+@@ -32,6 +32,7 @@ import org.apache.dubbo.rpc.model.ModuleModel;
+ 
+ import java.util.concurrent.CountDownLatch;
+ 
++import org.junit.jupiter.api.Assertions;
+ import org.junit.jupiter.api.Test;
+ 
+ import static org.apache.dubbo.common.constants.CommonConstants.EXECUTOR_MANAGEMENT_MODE_DEFAULT;
+@@ -59,6 +60,7 @@ class NettyTransporterTest {
+         RemotingServer server = new NettyTransporter().bind(url, new ChannelHandlerAdapter());
+ 
+         assertThat(server.isBound(), is(true));
++        Assertions.assertNotEquals(port, NetUtils.getAvailablePort(port));
+     }
+ 
+     @Test
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriplePathResolver.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriplePathResolver.java
+index d1f20d77fab35dac9e9c4eeb0246fdd8955080f4..da41ff0ee4ac9c1e402cdf9a621efd04c48892e3 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriplePathResolver.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/TriplePathResolver.java
+@@ -28,7 +28,7 @@ import java.util.Map;
+ 
+ public class TriplePathResolver implements PathResolver {
+ 
+-    private static final Logger LOGGER = LoggerFactory.getLogger(TripleProtocol.class);
++    private static final Logger LOGGER = LoggerFactory.getLogger(TriplePathResolver.class);
+ 
+     private final Map<String, Invoker<?>> mapping = CollectionUtils.newConcurrentHashMap();
+     private final Map<String, Boolean> nativeStubs = CollectionUtils.newConcurrentHashMap();
+diff --git a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
+index da4e9cd9e9950f57ad2719777fd3885378220fcf..d9cdf3dea1427ca6cf0ef9bf28a310bda856668a 100644
+--- a/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
++++ b/dubbo-rpc/dubbo-rpc-triple/src/main/java/org/apache/dubbo/rpc/protocol/tri/h3/Http3ClientFrameCodec.java
+@@ -134,8 +134,13 @@ public class Http3ClientFrameCodec extends ChannelDuplexHandler {
+                         header.set(PseudoHeaderName.SCHEME.value(), HttpConstants.HTTPS);
+                         header.set(Constants.TRI_PING, "0");
+ 
+-                        streamChannel.write(new DefaultHttp3HeadersFrame(header));
+-                        streamChannel.shutdownOutput();
++                        ChannelFuture pingSentFuture =
++                                streamChannel.write(new DefaultHttp3HeadersFrame(header), streamChannel.newPromise());
++                        if (pingSentFuture.isDone()) {
++                            streamChannel.shutdownOutput();
++                        } else {
++                            pingSentFuture.addListener((ChannelFutureListener) f -> streamChannel.shutdownOutput());
++                        }
+                     } else {
+                         LOGGER.warn(TRANSPORT_FAILED_RECONNECT, "Failed to send ping frame", future.cause());
+                     }

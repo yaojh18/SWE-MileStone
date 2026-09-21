@@ -1,0 +1,5751 @@
+diff --git a/core/hash/consistenthash_test.go b/core/hash/consistenthash_test.go
+index 329f2c45af4c0f40310bec4231a6d689c3620c09..4519e7db030c93f5c47415458aea843de1edf535 100644
+--- a/core/hash/consistenthash_test.go
++++ b/core/hash/consistenthash_test.go
+@@ -86,21 +86,16 @@ func TestConsistentHashIncrementalTransfer(t *testing.T) {
+ 
+ func TestConsistentHashTransferOnFailure(t *testing.T) {
+ 	index := 41
+-	keys, newKeys := getKeysBeforeAndAfterFailure(t, "localhost:", index)
+-	var transferred int
+-	for k, v := range newKeys {
+-		if v != keys[k] {
+-			transferred++
+-		}
+-	}
+-
+-	ratio := float32(transferred) / float32(requestSize)
+-	assert.True(t, ratio < 2.5/float32(keySize), fmt.Sprintf("%d: %f", index, ratio))
++	ratioNotExists := getTransferRatioOnFailure(t, index)
++	assert.True(t, ratioNotExists == 0, fmt.Sprintf("%d: %f", index, ratioNotExists))
++	index = 13
++	ratio := getTransferRatioOnFailure(t, index)
++	assert.True(t, ratio < 2.5/keySize, fmt.Sprintf("%d: %f", index, ratio))
+ }
+ 
+ func TestConsistentHashLeastTransferOnFailure(t *testing.T) {
+ 	prefix := "localhost:"
+-	index := 41
++	index := 13
+ 	keys, newKeys := getKeysBeforeAndAfterFailure(t, prefix, index)
+ 	for k, v := range keys {
+ 		newV := newKeys[k]
+@@ -164,6 +159,17 @@ func getKeysBeforeAndAfterFailure(t *testing.T, prefix string, index int) (map[i
+ 	return keys, newKeys
+ }
+ 
++func getTransferRatioOnFailure(t *testing.T, index int) float32 {
++	keys, newKeys := getKeysBeforeAndAfterFailure(t, "localhost:", index)
++	var transferred int
++	for k, v := range newKeys {
++		if v != keys[k] {
++			transferred++
++		}
++	}
++	return float32(transferred) / float32(requestSize)
++}
++
+ type mockNode struct {
+ 	addr string
+ 	id   int
+diff --git a/core/logx/rotatelogger_test.go b/core/logx/rotatelogger_test.go
+index f370aa8cd38463029d4f3f372c476548c404ca06..a82e89c3837fd3228656fff897b54006ffa2e9cd 100644
+--- a/core/logx/rotatelogger_test.go
++++ b/core/logx/rotatelogger_test.go
+@@ -52,7 +52,7 @@ func TestDailyRotateRuleOutdatedFiles(t *testing.T) {
+ 	})
+ 
+ 	t.Run("temp files", func(t *testing.T) {
+-		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(dateFormat)
++		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(time.DateOnly)
+ 		f1, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary)
+ 		assert.NoError(t, err)
+ 		_ = f1.Close()
+@@ -73,7 +73,7 @@ func TestDailyRotateRuleOutdatedFiles(t *testing.T) {
+ 
+ func TestDailyRotateRuleShallRotate(t *testing.T) {
+ 	var rule DailyRotateRule
+-	rule.rotatedTime = time.Now().Add(time.Hour * 24).Format(dateFormat)
++	rule.rotatedTime = time.Now().Add(time.Hour * 24).Format(time.DateOnly)
+ 	assert.True(t, rule.ShallRotate(0))
+ }
+ 
+@@ -117,12 +117,12 @@ func TestSizeLimitRotateRuleOutdatedFiles(t *testing.T) {
+ 	})
+ 
+ 	t.Run("temp files", func(t *testing.T) {
+-		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(dateFormat)
++		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(time.DateOnly)
+ 		f1, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary)
+ 		assert.NoError(t, err)
+ 		f2, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary)
+ 		assert.NoError(t, err)
+-		boundary1 := time.Now().Add(time.Hour * time.Duration(hoursPerDay) * 2).Format(dateFormat)
++		boundary1 := time.Now().Add(time.Hour * time.Duration(hoursPerDay) * 2).Format(time.DateOnly)
+ 		f3, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary1)
+ 		assert.NoError(t, err)
+ 		t.Cleanup(func() {
+@@ -144,12 +144,12 @@ func TestSizeLimitRotateRuleOutdatedFiles(t *testing.T) {
+ 	})
+ 
+ 	t.Run("no backups", func(t *testing.T) {
+-		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(dateFormat)
++		boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay) * 2).Format(time.DateOnly)
+ 		f1, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary)
+ 		assert.NoError(t, err)
+ 		f2, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary)
+ 		assert.NoError(t, err)
+-		boundary1 := time.Now().Add(time.Hour * time.Duration(hoursPerDay) * 2).Format(dateFormat)
++		boundary1 := time.Now().Add(time.Hour * time.Duration(hoursPerDay) * 2).Format(time.DateOnly)
+ 		f3, err := os.CreateTemp(os.TempDir(), "go-zero-test-"+boundary1)
+ 		assert.NoError(t, err)
+ 		t.Cleanup(func() {
+@@ -319,7 +319,7 @@ func TestRotateLoggerWrite(t *testing.T) {
+ 	}
+ 	// the following write calls cannot be changed to Write, because of DATA RACE.
+ 	logger.write([]byte(`foo`))
+-	rule.rotatedTime = time.Now().Add(-time.Hour * 24).Format(dateFormat)
++	rule.rotatedTime = time.Now().Add(-time.Hour * 24).Format(time.DateOnly)
+ 	logger.write([]byte(`bar`))
+ 	logger.Close()
+ 	logger.write([]byte(`baz`))
+@@ -447,7 +447,7 @@ func TestRotateLoggerWithSizeLimitRotateRuleWrite(t *testing.T) {
+ 	}
+ 	// the following write calls cannot be changed to Write, because of DATA RACE.
+ 	logger.write([]byte(`foo`))
+-	rule.rotatedTime = time.Now().Add(-time.Hour * 24).Format(dateFormat)
++	rule.rotatedTime = time.Now().Add(-time.Hour * 24).Format(time.DateOnly)
+ 	logger.write([]byte(`bar`))
+ 	logger.Close()
+ 	logger.write([]byte(`baz`))
+diff --git a/core/mapping/marshaler_test.go b/core/mapping/marshaler_test.go
+index b094112487ac01a7351529e2155b2c1b962a29f9..565b146f30e738b860f2e0b10a401296bbd3de4a 100644
+--- a/core/mapping/marshaler_test.go
++++ b/core/mapping/marshaler_test.go
+@@ -462,3 +462,15 @@ func TestMarshal_FromString(t *testing.T) {
+ 	assert.Nil(t, err)
+ 	assert.Equal(t, "10", m["json"]["age"].(string))
+ }
++
++func TestMarshal_Array(t *testing.T) {
++	v := struct {
++		H [1]int `json:"h,string"`
++	}{
++		H: [1]int{1},
++	}
++
++	m, err := Marshal(v)
++	assert.Nil(t, err)
++	assert.Equal(t, "[1]", m["json"]["h"].(string))
++}
+diff --git a/core/prof/profilecenter_test.go b/core/prof/profilecenter_test.go
+index 77e4b96d2e5c623c0c3c278f0381719af447ac10..f0a16b7c72672b5bd3ae02a15f0176ca4f1de7fd 100644
+--- a/core/prof/profilecenter_test.go
++++ b/core/prof/profilecenter_test.go
+@@ -8,7 +8,6 @@ import (
+ )
+ 
+ func TestReport(t *testing.T) {
+-	once.Do(func() {})
+ 	assert.NotContains(t, generateReport(), "foo")
+ 	report("foo", time.Second)
+ 	assert.Contains(t, generateReport(), "foo")
+diff --git a/core/stringx/strings_test.go b/core/stringx/strings_test.go
+index 2caffd3e08a4017c18b6cc09536a8269d9da04f9..3fb3e7bcec1ef42845bae6df4daf4ca770a63a59 100644
+--- a/core/stringx/strings_test.go
++++ b/core/stringx/strings_test.go
+@@ -7,6 +7,28 @@ import (
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
++func TestContainsString(t *testing.T) {
++	cases := []struct {
++		slice  []string
++		value  string
++		expect bool
++	}{
++		{[]string{"1"}, "1", true},
++		{[]string{"1"}, "2", false},
++		{[]string{"1", "2"}, "1", true},
++		{[]string{"1", "2"}, "3", false},
++		{nil, "3", false},
++		{nil, "", false},
++	}
++
++	for _, each := range cases {
++		t.Run(path.Join(each.slice...), func(t *testing.T) {
++			actual := Contains(each.slice, each.value)
++			assert.Equal(t, each.expect, actual)
++		})
++	}
++}
++
+ func TestNotEmpty(t *testing.T) {
+ 	cases := []struct {
+ 		args   []string
+@@ -41,28 +63,6 @@ func TestNotEmpty(t *testing.T) {
+ 	}
+ }
+ 
+-func TestContainsString(t *testing.T) {
+-	cases := []struct {
+-		slice  []string
+-		value  string
+-		expect bool
+-	}{
+-		{[]string{"1"}, "1", true},
+-		{[]string{"1"}, "2", false},
+-		{[]string{"1", "2"}, "1", true},
+-		{[]string{"1", "2"}, "3", false},
+-		{nil, "3", false},
+-		{nil, "", false},
+-	}
+-
+-	for _, each := range cases {
+-		t.Run(path.Join(each.slice...), func(t *testing.T) {
+-			actual := Contains(each.slice, each.value)
+-			assert.Equal(t, each.expect, actual)
+-		})
+-	}
+-}
+-
+ func TestFilter(t *testing.T) {
+ 	cases := []struct {
+ 		input   string
+diff --git a/gateway/server_test.go b/gateway/server_test.go
+index 3655fab317649d929aa0cdf531fa4bc2c742aec4..80c7693c098db09b7eb79a6f7f630d6e4db9b04e 100644
+--- a/gateway/server_test.go
++++ b/gateway/server_test.go
+@@ -201,6 +201,13 @@ func TestHttpToHttp(t *testing.T) {
+ 		assert.NoError(t, err)
+ 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+ 	})
++
++	t.Run("method not allowed", func(t *testing.T) {
++		resp, err := httpc.Do(context.Background(), http.MethodPost,
++			"http://localhost:18882/api/ping", nil)
++		assert.NoError(t, err)
++		assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
++	})
+ }
+ 
+ func TestHttpToHttpBadUpstream(t *testing.T) {
+diff --git a/mcp/config_test.go b/mcp/config_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b9d13da3cef2dabfe7c081da3eccffb5411d872
+--- /dev/null
++++ b/mcp/config_test.go
+@@ -0,0 +1,63 @@
++package mcp
++
++import (
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/zeromicro/go-zero/core/conf"
++)
++
++func TestMcpConfDefaults(t *testing.T) {
++	// Test default values are set correctly when unmarshalled from JSON
++	jsonConfig := `name: test-service
++port: 8080
++mcp:
++  name: test-mcp-server
++  version: 1.0.0
++`
++
++	var c McpConf
++	err := conf.LoadFromYamlBytes([]byte(jsonConfig), &c)
++	assert.NoError(t, err)
++
++	// Check default values
++	assert.Equal(t, "test-mcp-server", c.Mcp.Name)
++	assert.Equal(t, "1.0.0", c.Mcp.Version, "Default version should be 1.0.0")
++	assert.Equal(t, "2024-11-05", c.Mcp.ProtocolVersion, "Default protocol version should be 2024-11-05")
++	assert.Equal(t, "/sse", c.Mcp.SseEndpoint, "Default SSE endpoint should be /sse")
++	assert.Equal(t, "/message", c.Mcp.MessageEndpoint, "Default message endpoint should be /message")
++	assert.Equal(t, 30*time.Second, c.Mcp.MessageTimeout, "Default message timeout should be 30s")
++}
++
++func TestMcpConfCustomValues(t *testing.T) {
++	// Test custom values can be set
++	jsonConfig := `{
++		"Name": "test-service",
++		"Port": 8080,
++		"Mcp": {
++			"Name": "test-mcp-server",
++			"Version": "2.0.0",
++			"ProtocolVersion": "2025-01-01",
++			"BaseUrl": "http://example.com",
++			"SseEndpoint": "/custom-sse",
++			"MessageEndpoint": "/custom-message",
++			"Cors": ["http://localhost:3000", "http://example.com"],
++			"MessageTimeout": "60s"
++		}
++	}`
++
++	var c McpConf
++	err := conf.LoadFromJsonBytes([]byte(jsonConfig), &c)
++	assert.NoError(t, err)
++
++	// Check custom values
++	assert.Equal(t, "test-mcp-server", c.Mcp.Name, "Name should be inherited from RestConf")
++	assert.Equal(t, "2.0.0", c.Mcp.Version, "Version should be customizable")
++	assert.Equal(t, "2025-01-01", c.Mcp.ProtocolVersion, "Protocol version should be customizable")
++	assert.Equal(t, "http://example.com", c.Mcp.BaseUrl, "BaseUrl should be customizable")
++	assert.Equal(t, "/custom-sse", c.Mcp.SseEndpoint, "SSE endpoint should be customizable")
++	assert.Equal(t, "/custom-message", c.Mcp.MessageEndpoint, "Message endpoint should be customizable")
++	assert.Equal(t, []string{"http://localhost:3000", "http://example.com"}, c.Mcp.Cors, "CORS settings should be customizable")
++	assert.Equal(t, 60*time.Second, c.Mcp.MessageTimeout, "Tool timeout should be customizable")
++}
+diff --git a/mcp/integration_test.go b/mcp/integration_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed28b72a33863f1e624cd13a2df2ea85e1a95e6c
+--- /dev/null
++++ b/mcp/integration_test.go
+@@ -0,0 +1,443 @@
++package mcp
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++// syncResponseRecorder is a thread-safe wrapper around httptest.ResponseRecorder
++type syncResponseRecorder struct {
++	*httptest.ResponseRecorder
++	mu sync.Mutex
++}
++
++// Create a new synchronized response recorder
++func newSyncResponseRecorder() *syncResponseRecorder {
++	return &syncResponseRecorder{
++		ResponseRecorder: httptest.NewRecorder(),
++	}
++}
++
++// Override Write method to synchronize access
++func (srr *syncResponseRecorder) Write(p []byte) (int, error) {
++	srr.mu.Lock()
++	defer srr.mu.Unlock()
++	return srr.ResponseRecorder.Write(p)
++}
++
++// Override WriteHeader method to synchronize access
++func (srr *syncResponseRecorder) WriteHeader(statusCode int) {
++	srr.mu.Lock()
++	defer srr.mu.Unlock()
++	srr.ResponseRecorder.WriteHeader(statusCode)
++}
++
++// Override Result method to synchronize access
++func (srr *syncResponseRecorder) Result() *http.Response {
++	srr.mu.Lock()
++	defer srr.mu.Unlock()
++	return srr.ResponseRecorder.Result()
++}
++
++// TestHTTPHandlerIntegration tests the HTTP handlers with a real server instance
++func TestHTTPHandlerIntegration(t *testing.T) {
++	// Skip in short test mode
++	if testing.Short() {
++		t.Skip("Skipping integration test in short mode")
++	}
++
++	// Create a test configuration
++	conf := McpConf{}
++	conf.Mcp.Name = "test-integration"
++	conf.Mcp.Version = "1.0.0-test"
++	conf.Mcp.MessageTimeout = 1 * time.Second
++
++	// Create a mock server directly
++	server := &sseMcpServer{
++		conf:      conf,
++		clients:   make(map[string]*mcpClient),
++		tools:     make(map[string]Tool),
++		prompts:   make(map[string]Prompt),
++		resources: make(map[string]Resource),
++	}
++
++	// Register a test tool
++	err := server.RegisterTool(Tool{
++		Name:        "echo",
++		Description: "Echo tool for testing",
++		InputSchema: InputSchema{
++			Properties: map[string]any{
++				"message": map[string]any{
++					"type":        "string",
++					"description": "Message to echo",
++				},
++			},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			if msg, ok := params["message"].(string); ok {
++				return fmt.Sprintf("Echo: %s", msg), nil
++			}
++			return "Echo: no message provided", nil
++		},
++	})
++	require.NoError(t, err)
++
++	// Create a test HTTP request to the SSE endpoint
++	req := httptest.NewRequest("GET", "/sse", nil)
++	w := newSyncResponseRecorder()
++
++	// Create a done channel to signal completion of test
++	done := make(chan bool)
++
++	// Start the SSE handler in a goroutine
++	go func() {
++		// lock.Lock()
++		server.handleSSE(w, req)
++		// lock.Unlock()
++		done <- true
++	}()
++
++	// Allow time for the handler to process
++	select {
++	case <-time.After(100 * time.Millisecond):
++		// Expected - handler would normally block indefinitely
++	case <-done:
++		// This shouldn't happen immediately - the handler should block
++		t.Error("SSE handler returned unexpectedly")
++	}
++
++	// Check the initial headers
++	resp := w.Result()
++	assert.Equal(t, "chunked", resp.Header.Get("Transfer-Encoding"))
++	resp.Body.Close()
++
++	// The handler creates a client and sends the endpoint message
++	var sessionId string
++
++	// Give the handler time to set up the client
++	time.Sleep(50 * time.Millisecond)
++
++	// Check that a client was created
++	server.clientsLock.Lock()
++	assert.Equal(t, 1, len(server.clients))
++	for id := range server.clients {
++		sessionId = id
++	}
++	server.clientsLock.Unlock()
++
++	require.NotEmpty(t, sessionId, "Expected a session ID to be created")
++
++	// Now that we have a session ID, we can test the message endpoint
++	messageBody, _ := json.Marshal(Request{
++		JsonRpc: "2.0",
++		ID:      1,
++		Method:  methodInitialize,
++		Params:  json.RawMessage(`{}`),
++	})
++
++	// Create a message request
++	reqURL := fmt.Sprintf("/message?%s=%s", sessionIdKey, sessionId)
++	msgReq := httptest.NewRequest("POST", reqURL, bytes.NewReader(messageBody))
++	msgW := newSyncResponseRecorder()
++
++	// Process the message
++	server.handleRequest(msgW, msgReq)
++
++	// Check the response
++	msgResp := msgW.Result()
++	assert.Equal(t, http.StatusAccepted, msgResp.StatusCode)
++	msgResp.Body.Close() // Ensure response body is closed
++}
++
++// TestHandlerResponseFlow tests the flow of a full request/response cycle
++func TestHandlerResponseFlow(t *testing.T) {
++	// Create a mock server for testing
++	server := &sseMcpServer{
++		conf: McpConf{},
++		clients: map[string]*mcpClient{
++			"test-session": {
++				id:          "test-session",
++				channel:     make(chan string, 10),
++				initialized: true,
++			},
++		},
++		tools:     make(map[string]Tool),
++		prompts:   make(map[string]Prompt),
++		resources: make(map[string]Resource),
++	}
++
++	// Register test resources
++	server.RegisterTool(Tool{
++		Name:        "test.tool",
++		Description: "Test tool",
++		InputSchema: InputSchema{Type: "object"},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return "tool result", nil
++		},
++	})
++
++	server.RegisterPrompt(Prompt{
++		Name:        "test.prompt",
++		Description: "Test prompt",
++	})
++
++	server.RegisterResource(Resource{
++		Name:        "test.resource",
++		URI:         "http://example.com",
++		Description: "Test resource",
++	})
++
++	// Create a request with session ID parameter
++	reqURL := fmt.Sprintf("/message?%s=%s", sessionIdKey, "test-session")
++
++	// Test tools/list request
++	toolsListBody, _ := json.Marshal(Request{
++		JsonRpc: "2.0",
++		ID:      1,
++		Method:  methodToolsList,
++		Params:  json.RawMessage(`{}`),
++	})
++
++	toolsReq := httptest.NewRequest("POST", reqURL, bytes.NewReader(toolsListBody))
++	toolsW := newSyncResponseRecorder()
++
++	// Process the request
++	server.handleRequest(toolsW, toolsReq)
++
++	// Check the response code
++	toolsResp := toolsW.Result()
++	assert.Equal(t, http.StatusAccepted, toolsResp.StatusCode)
++	toolsResp.Body.Close()
++
++	// Check the channel message
++	client := server.clients["test-session"]
++	select {
++	case message := <-client.channel:
++		assert.Contains(t, message, `"tools":[{"name":"test.tool"`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tools/list response")
++	}
++
++	// Test prompts/list request
++	promptsListBody, _ := json.Marshal(Request{
++		JsonRpc: "2.0",
++		ID:      2,
++		Method:  methodPromptsList,
++		Params:  json.RawMessage(`{}`),
++	})
++
++	promptsReq := httptest.NewRequest("POST", reqURL, bytes.NewReader(promptsListBody))
++	promptsW := newSyncResponseRecorder()
++
++	// Process the request
++	server.handleRequest(promptsW, promptsReq)
++
++	// Check the response code
++	promptsResp := promptsW.Result()
++	assert.Equal(t, http.StatusAccepted, promptsResp.StatusCode)
++	promptsResp.Body.Close()
++
++	// Check the channel message
++	select {
++	case message := <-client.channel:
++		assert.Contains(t, message, `"prompts":[{"name":"test.prompt"`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for prompts/list response")
++	}
++
++	// Test resources/list request
++	resourcesListBody, _ := json.Marshal(Request{
++		JsonRpc: "2.0",
++		ID:      3,
++		Method:  methodResourcesList,
++		Params:  json.RawMessage(`{}`),
++	})
++
++	resourcesReq := httptest.NewRequest("POST", reqURL, bytes.NewReader(resourcesListBody))
++	resourcesW := newSyncResponseRecorder()
++
++	// Process the request
++	server.handleRequest(resourcesW, resourcesReq)
++
++	// Check the response code
++	resourcesResp := resourcesW.Result()
++	assert.Equal(t, http.StatusAccepted, resourcesResp.StatusCode)
++	resourcesResp.Body.Close()
++
++	// Check the channel message
++	select {
++	case message := <-client.channel:
++		assert.Contains(t, message, `"name":"test.resource"`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for resources/list response")
++	}
++}
++
++// TestProcessListMethods tests the list processing methods with pagination
++func TestProcessListMethods(t *testing.T) {
++	server := &sseMcpServer{
++		tools:     make(map[string]Tool),
++		prompts:   make(map[string]Prompt),
++		resources: make(map[string]Resource),
++	}
++
++	// Add some test data
++	for i := 1; i <= 5; i++ {
++		tool := Tool{
++			Name:        fmt.Sprintf("tool%d", i),
++			Description: fmt.Sprintf("Tool %d", i),
++			InputSchema: InputSchema{Type: "object"},
++		}
++		server.tools[tool.Name] = tool
++
++		prompt := Prompt{
++			Name:        fmt.Sprintf("prompt%d", i),
++			Description: fmt.Sprintf("Prompt %d", i),
++		}
++		server.prompts[prompt.Name] = prompt
++
++		resource := Resource{
++			Name:        fmt.Sprintf("resource%d", i),
++			URI:         fmt.Sprintf("http://example.com/%d", i),
++			Description: fmt.Sprintf("Resource %d", i),
++		}
++		server.resources[resource.Name] = resource
++	}
++
++	// Create a test client
++	client := &mcpClient{
++		id:          "test-client",
++		channel:     make(chan string, 10),
++		initialized: true,
++	}
++
++	// Test processListTools
++	req := Request{
++		JsonRpc: "2.0",
++		ID:      1,
++		Method:  methodToolsList,
++		Params:  json.RawMessage(`{"cursor": "", "_meta": {"progressToken": "token1"}}`),
++	}
++
++	server.processListTools(context.Background(), client, req)
++
++	// Read response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"tools":`)
++		assert.Contains(t, response, `"progressToken":"token1"`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tools/list response")
++	}
++
++	// Test processListPrompts
++	req.ID = 2
++	req.Method = methodPromptsList
++	req.Params = json.RawMessage(`{"cursor": "next"}`)
++	server.processListPrompts(context.Background(), client, req)
++
++	// Read response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"prompts":`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for prompts/list response")
++	}
++
++	// Test processListResources
++	req.ID = 3
++	req.Method = methodResourcesList
++	req.Params = json.RawMessage(`{"cursor": "next"}`)
++	server.processListResources(context.Background(), client, req)
++
++	// Read response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"resources":`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for resources/list response")
++	}
++}
++
++// TestErrorResponseHandling tests error handling in the server
++func TestErrorResponseHandling(t *testing.T) {
++	server := &sseMcpServer{
++		tools:     make(map[string]Tool),
++		prompts:   make(map[string]Prompt),
++		resources: make(map[string]Resource),
++	}
++
++	// Create a test client
++	client := &mcpClient{
++		id:          "test-client",
++		channel:     make(chan string, 10),
++		initialized: true,
++	}
++
++	// Test invalid method
++	req := Request{
++		JsonRpc: "2.0",
++		ID:      1,
++		Method:  "invalid_method",
++		Params:  json.RawMessage(`{}`),
++	}
++
++	// Mock handleRequest by directly calling error handler
++	server.sendErrorResponse(context.Background(), client, req.ID, "Method not found", errCodeMethodNotFound)
++
++	// Check response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"error":{"code":-32601,"message":"Method not found"}`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for error response")
++	}
++
++	// Test invalid tool
++	toolReq := Request{
++		JsonRpc: "2.0",
++		ID:      2,
++		Method:  methodToolsCall,
++		Params:  json.RawMessage(`{"name":"non_existent_tool"}`),
++	}
++
++	// Call process method directly
++	server.processToolCall(context.Background(), client, toolReq)
++
++	// Check response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"error":{"code":-32602,"message":"Tool 'non_existent_tool' not found"}`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for error response")
++	}
++
++	// Test invalid prompt
++	promptReq := Request{
++		JsonRpc: "2.0",
++		ID:      3,
++		Method:  methodPromptsGet,
++		Params:  json.RawMessage(`{"name":"non_existent_prompt"}`),
++	}
++
++	// Call process method directly
++	server.processGetPrompt(context.Background(), client, promptReq)
++
++	// Check response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"error":{"code":-32602,"message":"Prompt 'non_existent_prompt' not found"}`)
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for error response")
++	}
++}
+diff --git a/mcp/parser_test.go b/mcp/parser_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..43071a5797a567a2062c0fdeb3a3286eb231508a
+--- /dev/null
++++ b/mcp/parser_test.go
+@@ -0,0 +1,139 @@
++package mcp
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++// TestParseArguments_MapStringString tests parsing map[string]string arguments
++func TestParseArguments_MapStringString(t *testing.T) {
++	// Sample request struct to populate
++	type requestStruct struct {
++		Name    string `json:"name"`
++		Message string `json:"message"`
++		Count   int    `json:"count"`
++		Enabled bool   `json:"enabled"`
++	}
++
++	// Create test arguments
++	args := map[string]string{
++		"name":    "test-name",
++		"message": "hello world",
++		"count":   "42",
++		"enabled": "true",
++	}
++
++	// Create a target object to populate
++	var req requestStruct
++
++	// Parse the arguments
++	err := ParseArguments(args, &req)
++
++	// Verify results
++	assert.NoError(t, err, "Should parse map[string]string without error")
++	assert.Equal(t, "test-name", req.Name, "Name should be correctly parsed")
++	assert.Equal(t, "hello world", req.Message, "Message should be correctly parsed")
++	assert.Equal(t, 42, req.Count, "Count should be correctly parsed to int")
++	assert.True(t, req.Enabled, "Enabled should be correctly parsed to bool")
++}
++
++// TestParseArguments_MapStringAny tests parsing map[string]any arguments
++func TestParseArguments_MapStringAny(t *testing.T) {
++	// Sample request struct to populate
++	type requestStruct struct {
++		Name     string            `json:"name"`
++		Message  string            `json:"message"`
++		Count    int               `json:"count"`
++		Enabled  bool              `json:"enabled"`
++		Tags     []string          `json:"tags"`
++		Metadata map[string]string `json:"metadata"`
++	}
++
++	// Create test arguments with mixed types
++	args := map[string]any{
++		"name":    "test-name",
++		"message": "hello world",
++		"count":   42,   // note: this is already an int
++		"enabled": true, // note: this is already a bool
++		"tags":    []string{"tag1", "tag2"},
++		"metadata": map[string]string{
++			"key1": "value1",
++			"key2": "value2",
++		},
++	}
++
++	// Create a target object to populate
++	var req requestStruct
++
++	// Parse the arguments
++	err := ParseArguments(args, &req)
++
++	// Verify results
++	assert.NoError(t, err, "Should parse map[string]any without error")
++	assert.Equal(t, "test-name", req.Name, "Name should be correctly parsed")
++	assert.Equal(t, "hello world", req.Message, "Message should be correctly parsed")
++	assert.Equal(t, 42, req.Count, "Count should be correctly parsed")
++	assert.True(t, req.Enabled, "Enabled should be correctly parsed")
++	assert.Equal(t, []string{"tag1", "tag2"}, req.Tags, "Tags should be correctly parsed")
++	assert.Equal(t, map[string]string{
++		"key1": "value1",
++		"key2": "value2",
++	}, req.Metadata, "Metadata should be correctly parsed")
++}
++
++// TestParseArguments_UnsupportedType tests parsing with an unsupported type
++func TestParseArguments_UnsupportedType(t *testing.T) {
++	// Sample request struct to populate
++	type requestStruct struct {
++		Name    string `json:"name"`
++		Message string `json:"message"`
++	}
++
++	// Use an unsupported argument type (slice)
++	args := []string{"not", "a", "map"}
++
++	// Create a target object to populate
++	var req requestStruct
++
++	// Parse the arguments
++	err := ParseArguments(args, &req)
++
++	// Verify error is returned with correct message
++	assert.Error(t, err, "Should return error for unsupported type")
++	assert.Contains(t, err.Error(), "unsupported argument type", "Error should mention unsupported type")
++	assert.Contains(t, err.Error(), "[]string", "Error should include the actual type")
++}
++
++// TestParseArguments_EmptyMap tests parsing with empty maps
++func TestParseArguments_EmptyMap(t *testing.T) {
++	// Sample request struct to populate
++	type requestStruct struct {
++		Name    string `json:"name,optional"`
++		Message string `json:"message,optional"`
++	}
++
++	// Test empty map[string]string
++	t.Run("EmptyMapStringString", func(t *testing.T) {
++		args := map[string]string{}
++		var req requestStruct
++
++		err := ParseArguments(args, &req)
++
++		assert.NoError(t, err, "Should parse empty map[string]string without error")
++		assert.Empty(t, req.Name, "Name should be empty string")
++		assert.Empty(t, req.Message, "Message should be empty string")
++	})
++
++	// Test empty map[string]any
++	t.Run("EmptyMapStringAny", func(t *testing.T) {
++		args := map[string]any{}
++		var req requestStruct
++
++		err := ParseArguments(args, &req)
++
++		assert.NoError(t, err, "Should parse empty map[string]any without error")
++		assert.Empty(t, req.Name, "Name should be empty string")
++		assert.Empty(t, req.Message, "Message should be empty string")
++	})
++}
+diff --git a/mcp/server_test.go b/mcp/server_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..db718da26254e34843e2974a5fca8ae73732bd96
+--- /dev/null
++++ b/mcp/server_test.go
+@@ -0,0 +1,3451 @@
++package mcp
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"github.com/zeromicro/go-zero/core/conf"
++	"github.com/zeromicro/go-zero/core/logx/logtest"
++)
++
++// mockMcpServer is a helper for testing the MCP server
++// It encapsulates the server and test server setup and teardown logic
++type mockMcpServer struct {
++	server     *sseMcpServer
++	testServer *httptest.Server
++	requestId  int64
++}
++
++// newMockMcpServer initializes a mock MCP server for testing
++func newMockMcpServer(t *testing.T) *mockMcpServer {
++	const yamlConf = `name: test-server
++host: localhost
++port: 8080
++mcp:
++  name: mcp-test-server
++  messageTimeout: 5s
++`
++
++	var c McpConf
++	assert.NoError(t, conf.LoadFromYamlBytes([]byte(yamlConf), &c))
++
++	server := NewMcpServer(c).(*sseMcpServer)
++	mux := http.NewServeMux()
++	mux.HandleFunc(c.Mcp.SseEndpoint, server.handleSSE)
++	mux.HandleFunc(c.Mcp.MessageEndpoint, server.handleRequest)
++	testServer := httptest.NewServer(mux)
++	server.conf.Mcp.BaseUrl = testServer.URL
++
++	return &mockMcpServer{
++		server:     server,
++		testServer: testServer,
++		requestId:  1,
++	}
++}
++
++// shutdown closes the test server
++func (m *mockMcpServer) shutdown() {
++	m.testServer.Close()
++}
++
++// registerExamplePrompt registers a test prompt
++func (m *mockMcpServer) registerExamplePrompt() {
++	m.server.RegisterPrompt(Prompt{
++		Name:        "test.prompt",
++		Description: "A test prompt",
++	})
++}
++
++// registerExampleResource registers a test resource
++func (m *mockMcpServer) registerExampleResource() {
++	m.server.RegisterResource(Resource{
++		Name:        "test.resource",
++		URI:         "file:///test.file",
++		Description: "A test resource",
++	})
++}
++
++// registerExampleTool registers a test tool
++func (m *mockMcpServer) registerExampleTool() {
++	_ = m.server.RegisterTool(Tool{
++		Name:        "test.tool",
++		Description: "A test tool",
++		InputSchema: InputSchema{
++			Properties: map[string]any{
++				"input": map[string]any{
++					"type":        "string",
++					"description": "Input parameter",
++				},
++			},
++			Required: []string{"input"},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			input, ok := params["input"].(string)
++			if !ok {
++				return nil, fmt.Errorf("invalid input parameter")
++			}
++			return fmt.Sprintf("Processed: %s", input), nil
++		},
++	})
++}
++
++// Helper function to create and add a test client
++func addTestClient(server *sseMcpServer, clientID string, initialized bool) *mcpClient {
++	client := &mcpClient{
++		id:          clientID,
++		channel:     make(chan string, eventChanSize),
++		initialized: initialized,
++	}
++	server.clientsLock.Lock()
++	server.clients[clientID] = client
++	server.clientsLock.Unlock()
++	return client
++}
++
++func TestNewMcpServer(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	mock.registerExamplePrompt()
++	mock.registerExampleResource()
++	mock.registerExampleTool()
++
++	require.NotNil(t, mock.server, "Server should be created")
++	assert.NotEmpty(t, mock.server.tools, "Tools map should be initialized")
++	assert.NotEmpty(t, mock.server.prompts, "Prompts map should be initialized")
++	assert.NotEmpty(t, mock.server.resources, "Resources map should be initialized")
++}
++
++func TestNewMcpServer_WithCors(t *testing.T) {
++	const yamlConf = `name: test-server
++host: localhost
++port: 8080
++mcp:
++  cors:
++    - http://localhost:3000
++  messageTimeout: 5s
++`
++
++	var c McpConf
++	assert.NoError(t, conf.LoadFromYamlBytes([]byte(yamlConf), &c))
++
++	server := NewMcpServer(c).(*sseMcpServer)
++	assert.Equal(t, "test-server", server.conf.Name, "Server name should be set")
++}
++
++func TestHandleRequest_badRequest(t *testing.T) {
++	t.Run("empty session ID", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a request with an invalid session ID
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  methodToolsCall,
++			Params:  []byte(`{"sessionId": "invalid-session"}`),
++		}
++
++		jsonBody, _ := json.Marshal(req)
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code)
++	})
++
++	t.Run("bad body", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		addTestClient(mock.server, "test-session", true)
++
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-session", bytes.NewReader([]byte(`{`)))
++		w := httptest.NewRecorder()
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code)
++	})
++
++	t.Run("bad id", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		addTestClient(mock.server, "test-session", true)
++
++		body := `{"jsonrpc": "2.0", "id": {}, "method": "tools.call", "params": {}}`
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-session", bytes.NewReader([]byte(body)))
++		w := httptest.NewRecorder()
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code)
++		assert.Contains(t, w.Body.String(), "Invalid request.ID")
++	})
++}
++
++func TestRegisterTool(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	tool := Tool{
++		Name:        "example.tool",
++		Description: "An example tool",
++		InputSchema: InputSchema{
++			Properties: map[string]any{
++				"input": map[string]any{
++					"type":        "string",
++					"description": "Input parameter",
++				},
++			},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return "result", nil
++		},
++	}
++
++	// Test with valid tool
++	err := mock.server.RegisterTool(tool)
++	assert.NoError(t, err, "Should not error with valid tool")
++
++	// Check tool was registered
++	_, exists := mock.server.tools["example.tool"]
++	assert.True(t, exists, "Tool should be registered")
++
++	// Test with missing handler
++	invalidTool := tool
++	invalidTool.Name = "invalid.tool"
++	invalidTool.Handler = nil
++	err = mock.server.RegisterTool(invalidTool)
++	assert.Error(t, err, "Should error with missing handler")
++}
++
++func TestRegisterPrompt(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	prompt := Prompt{
++		Name:        "example.prompt",
++		Description: "An example prompt",
++	}
++
++	// Test registering prompt
++	mock.server.RegisterPrompt(prompt)
++
++	// Check prompt was registered
++	_, exists := mock.server.prompts["example.prompt"]
++	assert.True(t, exists, "Prompt should be registered")
++}
++
++func TestRegisterResource(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	resource := Resource{
++		Name:        "example.resource",
++		URI:         "http://example.com/resource",
++		Description: "An example resource",
++	}
++
++	// Test registering resource
++	mock.server.RegisterResource(resource)
++
++	// Check resource was registered
++	_, exists := mock.server.resources["http://example.com/resource"]
++	assert.True(t, exists, "Resource should be registered")
++}
++
++// TestToolCallBasic tests the basic functionality of a tool call
++func TestToolsList(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a test tool
++	mock.registerExampleTool()
++
++	// Simulate a client to test tool call
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Cursor string `json:"cursor"`
++		Meta   struct {
++			ProgressToken any `json:"progressToken"`
++		} `json:"_meta"`
++	}{
++		Cursor: "my-cursor",
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsList,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processListTools(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		evt, err := parseEvent(response)
++		assert.NoError(t, err)
++
++		assert.Equal(t, eventMessage, evt.Type, "Event type should be message")
++		result, ok := evt.Data["result"].(map[string]any)
++		assert.True(t, ok)
++		assert.Equal(t, "my-cursor", result["nextCursor"], "Cursor should match")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallBasic tests the basic functionality of a tool call
++func TestToolCallBasic(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a test tool
++	mock.registerExampleTool()
++
++	// Simulate a client to test tool call
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name: "test.tool",
++		Arguments: map[string]any{
++			"input": "test-input",
++		},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		// Check response format
++		assert.Contains(t, response, "event: message", "Response should have message event")
++		assert.Contains(t, response, "data:", "Response should have data")
++
++		// Extract JSON from the SSE response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		jsonStr := response[jsonStart : jsonEnd+1]
++
++		// Parse the JSON
++		var parsed struct {
++			Result struct {
++				Content []map[string]any `json:"content"`
++				IsError bool             `json:"isError"`
++			} `json:"result"`
++		}
++
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Response should be valid JSON")
++
++		// Verify the response content
++		assert.Len(t, parsed.Result.Content, 1, "Response should contain one content item")
++		assert.Equal(t, "Processed: test-input", parsed.Result.Content[0][ContentTypeText], "Tool result incorrect")
++		assert.False(t, parsed.Result.IsError, "Response should not be an error")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallMapResult tests a tool that returns a map[string]any result
++func TestToolCallMapResult(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that returns a map
++	mapTool := Tool{
++		Name:        "map.tool",
++		Description: "A tool that returns a map result",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			// Return a complex nested map structure
++			return map[string]any{
++				"string":  "value",
++				"number":  42,
++				"boolean": true,
++				"nested": map[string]any{
++					"array": []string{"item1", "item2"},
++					"obj": map[string]any{
++						"key": "value",
++					},
++				},
++				"nullValue": nil,
++			}, nil
++		},
++	}
++
++	err := mock.server.RegisterTool(mapTool)
++	require.NoError(t, err)
++
++	// Create a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "map.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		// Parse the response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++		jsonStr := response[jsonStart : jsonEnd+1]
++		var parsed map[string]any
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Response should be valid JSON")
++
++		// Get the result
++		result, ok := parsed["result"].(map[string]any)
++		require.True(t, ok, "Response should have a result object")
++
++		// Get the content array
++		content, ok := result["content"].([]any)
++		require.True(t, ok, "Result should have a content array")
++		require.NotEmpty(t, content, "Content should not be empty")
++
++		// The first content item should be our map result converted to JSON text
++		firstItem, ok := content[0].(map[string]any)
++		require.True(t, ok, "First content item should be an object")
++
++		// Get the text content which should be our JSON
++		text, ok := firstItem[ContentTypeText].(string)
++		require.True(t, ok, "Content should have text")
++
++		// Verify the text is valid JSON and contains our data
++		var mapResult map[string]any
++		err = json.Unmarshal([]byte(text), &mapResult)
++		require.NoError(t, err, "Text should be valid JSON")
++
++		// Verify the content of our map
++		assert.Equal(t, "value", mapResult["string"], "String value should match")
++		assert.Equal(t, float64(42), mapResult["number"], "Number value should match")
++		assert.Equal(t, true, mapResult["boolean"], "Boolean value should match")
++
++		// Check nested structure
++		nested, ok := mapResult["nested"].(map[string]any)
++		require.True(t, ok, "Should have nested map")
++
++		array, ok := nested["array"].([]any)
++		require.True(t, ok, "Should have array in nested map")
++		assert.Len(t, array, 2, "Array should have 2 items")
++		assert.Equal(t, "item1", array[0], "First array item should match")
++
++		obj, ok := nested["obj"].(map[string]any)
++		require.True(t, ok, "Should have obj in nested map")
++		assert.Equal(t, "value", obj["key"], "Nested object key should match")
++
++		// Check null value
++		_, exists := mapResult["nullValue"]
++		assert.True(t, exists, "Null value key should exist")
++
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallArrayResult tests a tool that returns an array result
++func TestToolCallArrayResult(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that returns an array
++	arrayTool := Tool{
++		Name:        "array.tool",
++		Description: "A tool that returns an array result",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			// Return an array of mixed content types
++			return []any{
++				"string item",
++				42,
++				true,
++				map[string]any{"key": "value"},
++				[]string{"nested", "array"},
++				nil,
++			}, nil
++		},
++	}
++
++	err := mock.server.RegisterTool(arrayTool)
++	require.NoError(t, err)
++
++	// Create a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "array.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		// Parse the response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++		jsonStr := response[jsonStart : jsonEnd+1]
++		var parsed map[string]any
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Response should be valid JSON")
++
++		// Get the result
++		result, ok := parsed["result"].(map[string]any)
++		require.True(t, ok, "Response should have a result object")
++
++		// Get the content array
++		content, ok := result["content"].([]any)
++		require.True(t, ok, "Result should have a content array")
++		require.Equal(t, 6, len(content), "Content should have 6 items, one for each array item")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallTextContentResult tests a tool that returns a TextContent result
++func TestToolCallTextContentResult(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that returns a TextContent
++	textContentTool := Tool{
++		Name:        "text.content.tool",
++		Description: "A tool that returns a TextContent result",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			// Return a TextContent object directly
++			return TextContent{
++				Text: "This is a direct TextContent result",
++				Annotations: &Annotations{
++					Audience: []RoleType{RoleUser, RoleAssistant},
++					Priority: func() *float64 { p := 0.9; return &p }(),
++				},
++			}, nil
++		},
++	}
++
++	err := mock.server.RegisterTool(textContentTool)
++	require.NoError(t, err)
++
++	// Create a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "text.content.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		// Parse the response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++		jsonStr := response[jsonStart : jsonEnd+1]
++		var parsed map[string]any
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Response should be valid JSON")
++
++		// Get the result
++		result, ok := parsed["result"].(map[string]any)
++		require.True(t, ok, "Response should have a result object")
++
++		// Get the content array
++		content, ok := result["content"].([]any)
++		require.True(t, ok, "Result should have a content array")
++		require.NotEmpty(t, content, "Content should not be empty")
++
++		// The first content item should be our TextContent
++		firstItem, ok := content[0].(map[string]any)
++		require.True(t, ok, "First content item should be an object")
++
++		// Check annotations
++		annotations, ok := firstItem["annotations"].(map[string]any)
++		require.True(t, ok, "Should have annotations")
++
++		audience, ok := annotations["audience"].([]any)
++		require.True(t, ok, "Should have audience in annotations")
++		assert.Len(t, audience, 2, "Audience should have 2 items")
++
++		priority, ok := annotations["priority"].(float64)
++		require.True(t, ok, "Should have priority in annotations")
++		assert.Equal(t, 0.9, priority, "Priority should match")
++
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallImageContentResult tests a tool that returns an ImageContent result
++func TestToolCallImageContentResult(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that returns an ImageContent
++	imageContentTool := Tool{
++		Name:        "image.content.tool",
++		Description: "A tool that returns an ImageContent result",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			// Return an ImageContent object directly
++			return ImageContent{
++				Data:     "dGVzdCBpbWFnZSBkYXRhIChiYXNlNjQgZW5jb2RlZCk=", // "test image data (base64 encoded)" in base64
++				MimeType: "image/png",
++			}, nil
++		},
++	}
++
++	err := mock.server.RegisterTool(imageContentTool)
++	require.NoError(t, err)
++
++	// Create a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "image.content.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Get the response from the client's channel
++	select {
++	case response := <-client.channel:
++		// Parse the response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++		jsonStr := response[jsonStart : jsonEnd+1]
++		var parsed map[string]any
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Response should be valid JSON")
++
++		// Get the result
++		result, ok := parsed["result"].(map[string]any)
++		require.True(t, ok, "Response should have a result object")
++
++		// Get the content array
++		content, ok := result["content"].([]any)
++		require.True(t, ok, "Result should have a content array")
++		require.NotEmpty(t, content, "Content should not be empty")
++
++		// The first content item should be our ImageContent
++		firstItem, ok := content[0].(map[string]any)
++		require.True(t, ok, "First content item should be an object")
++
++		// Check image data
++		data, ok := firstItem["data"].(string)
++		require.True(t, ok, "Content should have data")
++		assert.Equal(t, "dGVzdCBpbWFnZSBkYXRhIChiYXNlNjQgZW5jb2RlZCk=", data, "Image data should match")
++
++		// Check mime type
++		mimeType, ok := firstItem["mimeType"].(string)
++		require.True(t, ok, "Content should have mimeType")
++		assert.Equal(t, "image/png", mimeType, "MimeType should match")
++
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallToolResultType tests a tool that returns a ToolResult type
++func TestToolCallToolResultType(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	toolResultTool := Tool{
++		Name:        "toolresult.tool",
++		Description: "A tool that returns a ToolResult object",
++		InputSchema: InputSchema{
++			Type:       ContentTypeObject,
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return ToolResult{
++				Type:    ContentTypeText,
++				Content: "This is a ToolResult with text content type",
++			}, nil
++		},
++	}
++	err := mock.server.RegisterTool(toolResultTool)
++	require.NoError(t, err)
++
++	toolResultImageTool := Tool{
++		Name:        "toolresult.image.tool",
++		Description: "A tool that returns a ToolResult with image content",
++		InputSchema: InputSchema{
++			Type:       ContentTypeObject,
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return ToolResult{
++				Type: "image",
++				Content: map[string]any{
++					"data":     "dGVzdCBpbWFnZSBkYXRhIGZvciB0b29sIHJlc3VsdA==", // "test image data for tool result" in base64
++					"mimeType": "image/jpeg",
++				},
++			}, nil
++		},
++	}
++	err = mock.server.RegisterTool(toolResultImageTool)
++	require.NoError(t, err)
++
++	toolResultAudioTool := Tool{
++		Name:        "toolresult.audio.tool",
++		Description: "A tool that returns a ToolResult with audio content",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			// Test with image type
++			return ToolResult{
++				Type: "audio",
++				Content: map[string]any{
++					"data":     "dGVzdCBpbWFnZSBkYXRhIGZvciB0b29sIHJlc3VsdA==", // "test image data for tool result" in base64
++					"mimeType": "audio",
++				},
++			}, nil
++		},
++	}
++	err = mock.server.RegisterTool(toolResultAudioTool)
++	require.NoError(t, err)
++
++	toolResultIntType := Tool{
++		Name:        "toolresult.int.tool",
++		Description: "A tool that returns a ToolResult with int content",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return 2, nil
++		},
++	}
++	err = mock.server.RegisterTool(toolResultIntType)
++	require.NoError(t, err)
++
++	toolResultBadType := Tool{
++		Name:        "toolresult.bad.tool",
++		Description: "A tool that returns a ToolResult with bad content",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return map[string]any{
++				"type": "custom",
++				"data": make(chan int),
++			}, nil
++		},
++	}
++	err = mock.server.RegisterTool(toolResultBadType)
++	require.NoError(t, err)
++
++	// Test text ToolResult
++	t.Run("textToolResult", func(t *testing.T) {
++		// Create a client
++		client := addTestClient(mock.server, "test-client-text", true)
++
++		// Create a tool call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "toolresult.tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++
++		// Process the tool call
++		mock.server.processToolCall(context.Background(), client, req)
++
++		// Get the response from the client's channel
++		select {
++		case response := <-client.channel:
++			// Parse the response
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++			jsonStr := response[jsonStart : jsonEnd+1]
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Response should be valid JSON")
++
++			// Get the result
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Get the content array
++			content, ok := result["content"].([]any)
++			require.True(t, ok, "Result should have a content array")
++			require.NotEmpty(t, content, "Content should not be empty")
++
++			// The first content item should be converted from ToolResult to TextContent
++			firstItem, ok := content[0].(map[string]any)
++			require.True(t, ok, "First content item should be an object")
++
++			// Check text content
++			text, ok := firstItem[ContentTypeText].(string)
++			require.True(t, ok, "Content should have text")
++			assert.Equal(t, "This is a ToolResult with text content type", text, "Text content should match")
++
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++
++	// Test image ToolResult
++	t.Run("imageToolResult", func(t *testing.T) {
++		// Create a client
++		client := addTestClient(mock.server, "test-client-image", true)
++
++		// Create a tool call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "toolresult.image.tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      2,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++
++		// Process the tool call
++		mock.server.processToolCall(context.Background(), client, req)
++
++		// Get the response from the client's channel
++		select {
++		case response := <-client.channel:
++			// Parse the response
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++			jsonStr := response[jsonStart : jsonEnd+1]
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Response should be valid JSON")
++
++			// Get the result
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Get the content array
++			content, ok := result["content"].([]any)
++			require.True(t, ok, "Result should have a content array")
++			require.NotEmpty(t, content, "Content should not be empty")
++
++			// The first content item should be converted from ToolResult to ImageContent
++			firstItem, ok := content[0].(map[string]any)
++			require.True(t, ok, "First content item should be an object")
++
++			// Check image data and mime type
++			data, ok := firstItem["data"].(string)
++			require.True(t, ok, "Content should have data")
++			assert.Equal(t, "dGVzdCBpbWFnZSBkYXRhIGZvciB0b29sIHJlc3VsdA==", data, "Image data should match")
++
++			mimeType, ok := firstItem["mimeType"].(string)
++			require.True(t, ok, "Content should have mimeType")
++			assert.Equal(t, "image/jpeg", mimeType, "MimeType should match")
++
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++
++	// Test image ToolResult
++	t.Run("audioToolResult", func(t *testing.T) {
++		// Create a client
++		client := addTestClient(mock.server, "test-client-image", true)
++
++		// Create a tool call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "toolresult.audio.tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      2,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++
++		// Process the tool call
++		mock.server.processToolCall(context.Background(), client, req)
++
++		// Get the response from the client's channel
++		select {
++		case response := <-client.channel:
++			// Parse the response
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++			jsonStr := response[jsonStart : jsonEnd+1]
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Response should be valid JSON")
++
++			// Get the result
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Get the content array
++			content, ok := result["content"].([]any)
++			require.True(t, ok, "Result should have a content array")
++			require.NotEmpty(t, content, "Content should not be empty")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++
++	// Test text ToolResult
++	t.Run("ToolResult with int type", func(t *testing.T) {
++		// Create a client
++		client := addTestClient(mock.server, "test-client-text", true)
++
++		// Create a tool call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "toolresult.int.tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++
++		// Process the tool call
++		mock.server.processToolCall(context.Background(), client, req)
++
++		// Get the response from the client's channel
++		select {
++		case response := <-client.channel:
++			// Parse the response
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++
++			jsonStr := response[jsonStart : jsonEnd+1]
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Response should be valid JSON")
++
++			// Get the result
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Get the content array
++			content, ok := result["content"].([]any)
++			require.True(t, ok, "Result should have a content array")
++			require.NotEmpty(t, content, "Content should not be empty")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++
++	// Test text ToolResult
++	t.Run("ToolResult with bad type", func(t *testing.T) {
++		// Create a client
++		client := addTestClient(mock.server, "test-client-text", true)
++
++		// Create a tool call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "toolresult.bad.tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++
++		// Process the tool call
++		mock.server.processToolCall(context.Background(), client, req)
++
++		// Get the response from the client's channel
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "json: unsupported type")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++}
++
++// TestToolCallError tests that tool errors are properly handled
++func TestToolCallError(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that returns an error
++	err := mock.server.RegisterTool(Tool{
++		Name:        "error.tool",
++		Description: "A tool that returns an error",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return nil, fmt.Errorf("tool execution failed")
++		},
++	})
++	require.NoError(t, err)
++
++	// Simulate a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "error.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++
++	// Process the tool call
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Check the response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, "event: message", "Response should have message event")
++		assert.Contains(t, response, "Error:", "Response should contain the error message")
++		assert.Contains(t, response, "isError", "Response should indicate it's an error")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestToolCallTimeout tests that tool timeouts are properly handled
++func TestToolCallTimeout(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool that times out
++	err := mock.server.RegisterTool(Tool{
++		Name:        "timeout.tool",
++		Description: "A tool that times out",
++		InputSchema: InputSchema{
++			Properties: map[string]any{},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			<-ctx.Done()
++			return nil, fmt.Errorf("tool execution timed out")
++		},
++	})
++	require.NoError(t, err)
++
++	// Simulate a client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a tool call request
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "timeout.tool",
++		Arguments: map[string]any{},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++	jsonBody, _ := json.Marshal(req)
++
++	// Create HTTP request
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", bytes.NewReader(jsonBody))
++	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Millisecond)
++	defer cancel()
++	r = r.WithContext(ctx)
++	w := httptest.NewRecorder()
++
++	// Process through handleRequest
++	go mock.server.handleRequest(w, r)
++
++	// Check the response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, "event: message", "Response should have message event")
++		assert.Contains(t, response, `-32001`, "Response should contain a timeout error code")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for tool call response")
++	}
++}
++
++// TestInitializeAndNotifications tests the client initialization flow
++func TestInitializeAndNotifications(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create a test client
++	client := addTestClient(mock.server, "test-client", false)
++
++	// Test initialize request
++	initReq := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  "initialize",
++		Params:  json.RawMessage(`{}`),
++	}
++
++	mock.server.processInitialize(context.Background(), client, initReq)
++
++	// Check that client is initialized after initialize request
++	assert.True(t, client.initialized, "Client should be marked as initialized after initialize request")
++
++	// Check the response format
++	select {
++	case response := <-client.channel:
++		// Check response contains required initialization fields
++		assert.Contains(t, response, "protocolVersion", "Response should include protocol version")
++		assert.Contains(t, response, "capabilities", "Response should include capabilities")
++		assert.Contains(t, response, "serverInfo", "Response should include server info")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for initialize response")
++	}
++
++	// Test notification initialized
++	mock.server.processNotificationInitialized(client)
++	assert.True(t, client.initialized, "Client should remain initialized after notification")
++}
++
++// TestRequestHandlingWithoutInitialization tests that requests are properly rejected when client is not initialized
++func TestRequestHandlingWithoutInitialization(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	mock.registerExampleTool()
++
++	// Create an uninitialized test client
++	client := addTestClient(mock.server, "test-client", false)
++
++	// Attempt a tool call before initialization
++	params := struct {
++		Name      string         `json:"name"`
++		Arguments map[string]any `json:"arguments"`
++	}{
++		Name:      "test.tool",
++		Arguments: map[string]any{"input": "foo"},
++	}
++
++	paramBytes, _ := json.Marshal(params)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  methodToolsCall,
++		Params:  paramBytes,
++	}
++	jsonBody, _ := json.Marshal(req)
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", bytes.NewReader(jsonBody))
++	mock.server.handleRequest(httptest.NewRecorder(), r)
++
++	// Check error response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, strings.ToLower(response), "error", "Response should contain an error")
++		assert.Contains(t, strings.ToLower(response), "not fully initialized",
++			"Response should mention client not being initialized")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for error response")
++	}
++}
++
++// TestPing tests the ping request handling
++func TestPing(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create a test client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a ping request
++	pingReq := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  "ping",
++		Params:  json.RawMessage(`{}`),
++	}
++
++	jsonBody, _ := json.Marshal(pingReq)
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", bytes.NewReader(jsonBody))
++	mock.server.handleRequest(httptest.NewRecorder(), r)
++
++	// Check response
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, `"result":`, "Response should contain a result field")
++		assert.Contains(t, response, `"id":1`, "Response should have the same ID as the request")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for ping response")
++	}
++}
++
++// TestNotificationCancelled tests the notification cancelled handling
++func TestNotificationCancelled(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create a test client
++	client := addTestClient(mock.server, "test-client", true)
++
++	// Create a cancellation request
++	paramBytes, _ := json.Marshal(map[string]any{
++		"requestId": 123,
++		"reason":    "user_cancelled",
++	})
++
++	cancelReq := Request{
++		JsonRpc: jsonRpcVersion,
++		Method:  "notifications/cancelled",
++		Params:  paramBytes,
++	}
++
++	jsonBody, _ := json.Marshal(cancelReq)
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", bytes.NewReader(jsonBody))
++	mock.server.handleRequest(httptest.NewRecorder(), r)
++
++	// No response expected for notifications
++	select {
++	case <-client.channel:
++		t.Fatal("No response expected for notifications")
++	case <-time.After(50 * time.Millisecond):
++		// This is the expected outcome - no response
++	}
++}
++
++func TestNotificationCancelled_badParams(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	client := addTestClient(mock.server, "test-client", true)
++
++	cancelReq := Request{
++		JsonRpc: jsonRpcVersion,
++		Method:  "notifications/cancelled",
++		Params:  []byte(`invalid json`),
++	}
++
++	buf := logtest.NewCollector(t)
++	mock.server.processNotificationCancelled(context.Background(), client, cancelReq)
++
++	select {
++	case <-client.channel:
++		t.Fatal("No response expected for notifications")
++	case <-time.After(50 * time.Millisecond):
++		assert.Contains(t, buf.String(), "Failed to parse cancellation params")
++	}
++}
++
++func TestUnknownRequest(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create a test client
++	client := addTestClient(mock.server, "test-client", true)
++	req := Request{
++		JsonRpc: jsonRpcVersion,
++		Method:  "unknown",
++	}
++
++	jsonBody, _ := json.Marshal(req)
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", bytes.NewReader(jsonBody))
++	mock.server.handleRequest(httptest.NewRecorder(), r)
++
++	// No response expected for notifications
++	select {
++	case message := <-client.channel:
++		evt, err := parseEvent(message)
++		require.NoError(t, err, "Should parse event without error")
++		errCode := evt.Data["error"].(map[string]any)["code"]
++		// because error code will be converted into float64
++		assert.Equal(t, float64(errCodeMethodNotFound), errCode)
++	case <-time.After(50 * time.Millisecond):
++		// This is the expected outcome - no response
++	}
++}
++
++func TestResponseWriter_notFlusher(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", http.NoBody)
++	var w notFlusherResponseWriter
++	mock.server.handleSSE(&w, r)
++	assert.Equal(t, http.StatusInternalServerError, w.code)
++}
++
++func TestResponseWriter_cantWrite(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", http.NoBody)
++	var w cantWriteResponseWriter
++	mock.server.handleSSE(&w, r)
++	assert.Equal(t, 0, w.code)
++}
++
++func TestHandleSSE_channelClosed(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client", http.NoBody)
++	w := httptest.NewRecorder()
++	var wg sync.WaitGroup
++	wg.Add(1)
++	go func() {
++		mock.server.handleSSE(w, r)
++		wg.Done()
++	}()
++
++	buf := logtest.NewCollector(t)
++	for {
++		time.Sleep(time.Millisecond)
++		mock.server.clientsLock.Lock()
++		if len(mock.server.clients) > 0 {
++			for _, client := range mock.server.clients {
++				close(client.channel)
++				delete(mock.server.clients, client.id)
++			}
++			mock.server.clientsLock.Unlock()
++			break
++		}
++		mock.server.clientsLock.Unlock()
++	}
++	wg.Wait()
++	assert.Contains(t, "channel was closed", buf.Content(), "Should log channel closed error")
++}
++
++func TestHandleSSE_badResponseWriter(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Handle the request - this should fail because client is not initialized
++	r := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
++	var wg sync.WaitGroup
++	wg.Add(1)
++	go func() {
++		var w writeOnceResponseWriter
++		mock.server.handleSSE(&w, r)
++		wg.Done()
++	}()
++
++	var session string
++	for {
++		time.Sleep(time.Millisecond)
++		mock.server.clientsLock.Lock()
++		if len(mock.server.clients) > 0 {
++			for _, client := range mock.server.clients {
++				session = client.id
++			}
++			mock.server.clientsLock.Unlock()
++			break
++		}
++		mock.server.clientsLock.Unlock()
++	}
++
++	time.Sleep(100 * time.Millisecond)
++	// Create a ping request
++	pingReq := Request{
++		JsonRpc: jsonRpcVersion,
++		ID:      1,
++		Method:  "ping",
++		Params:  json.RawMessage(`{}`),
++	}
++
++	jsonBody, _ := json.Marshal(pingReq)
++	buf := logtest.NewCollector(t)
++
++	// Handle the request - this should fail because client is not initialized
++	r = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/?session_id=%s", session),
++		bytes.NewReader(jsonBody))
++	mock.server.handleRequest(httptest.NewRecorder(), r)
++
++	wg.Wait()
++	assert.Contains(t, "Failed to write", buf.Content())
++}
++
++// TestGetPrompt tests the prompts/get endpoint
++func TestGetPrompt(t *testing.T) {
++	t.Run("test prompt", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++
++		// Register a test prompt
++		testPrompt := Prompt{
++			Name:        "test.prompt",
++			Description: "A test prompt",
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create a get prompt request
++		paramBytes, _ := json.Marshal(map[string]any{
++			"name": "test.prompt",
++			"arguments": map[string]string{
++				"topic": "test topic",
++			},
++		})
++
++		promptReq := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  "prompts/get",
++			Params:  paramBytes,
++		}
++
++		// Process the request
++		mock.server.processGetPrompt(context.Background(), client, promptReq)
++
++		// Check response
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "description", "Response should include prompt description")
++			assert.Contains(t, response, "prompts", "Response should include prompts array")
++			assert.Contains(t, response, "A test prompt", "Response should include the topic argument")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for prompt response")
++		}
++	})
++
++	t.Run("test prompt with invalid params", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++
++		paramBytes := []byte("invalid json")
++		promptReq := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  "prompts/get",
++			Params:  paramBytes,
++		}
++
++		// Process the request
++		mock.server.processGetPrompt(context.Background(), client, promptReq)
++
++		// Check response
++		select {
++		case response := <-client.channel:
++			evt, err := parseEvent(response)
++			assert.NoError(t, err, "Should be able to parse event")
++			errMsg, ok := evt.Data["error"].(map[string]any)
++			assert.True(t, ok, "Should have error in response")
++			assert.Equal(t, "Invalid parameters", errMsg["message"], "Error message should match")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for prompt response")
++		}
++	})
++
++	t.Run("test prompt with nil params", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++
++		// Register a test prompt
++		testPrompt := Prompt{
++			Name:        "test.prompt",
++			Description: "A test prompt",
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create a get prompt request
++		paramBytes, _ := json.Marshal(map[string]any{
++			"name": "test.prompt",
++		})
++		promptReq := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Method:  "prompts/get",
++			Params:  paramBytes,
++		}
++
++		// Process the request
++		mock.server.processGetPrompt(context.Background(), client, promptReq)
++
++		// Check response
++		select {
++		case response := <-client.channel:
++			_, err := parseEvent(response)
++			assert.NoError(t, err, "Should be able to parse event")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for prompt response")
++		}
++	})
++}
++
++// TestBroadcast tests the broadcast functionality
++func TestBroadcast(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create two test clients
++	client1 := addTestClient(mock.server, "client-1", true)
++	client2 := addTestClient(mock.server, "client-2", true)
++
++	// Broadcast a test message
++	testData := map[string]string{"key": "value"}
++	mock.server.broadcast("test_event", testData)
++
++	// Check both clients received the broadcast
++	for i, client := range []*mcpClient{client1, client2} {
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, `event: test_event`, "Response should have the correct event")
++			assert.Contains(t, response, `"key":"value"`, "Response should contain the broadcast data")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatalf("Timed out waiting for broadcast on client %d", i+1)
++		}
++	}
++
++	buf := logtest.NewCollector(t)
++	mock.server.broadcast("test_event", make(chan string))
++	// Check that the broadcast was logged
++	content := buf.Content()
++	assert.Contains(t, content, "Failed", "Broadcast should be logged")
++
++	for i := 0; i < eventChanSize; i++ {
++		mock.server.broadcast("test_event", "test")
++	}
++
++	done := make(chan struct{})
++	go func() {
++		mock.server.broadcast("test_event", "ignored")
++		close(done)
++	}()
++
++	select {
++	case <-time.After(100 * time.Millisecond):
++		assert.Fail(t, "broadcast should not block")
++	case <-done:
++	}
++}
++
++// TestHandleSSEPing tests the automatic ping functionality in the SSE handler
++func TestHandleSSEPing(t *testing.T) {
++	originalInterval := pingInterval.Load()
++	pingInterval.Set(50 * time.Millisecond)
++	defer func() {
++		pingInterval.Set(originalInterval)
++	}()
++
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create a request context that can be cancelled
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++
++	// Create a test ResponseRecorder and Request
++	w := httptest.NewRecorder()
++	r := httptest.NewRequest("GET", mock.server.conf.Mcp.SseEndpoint, nil).WithContext(ctx)
++
++	// Create a channel to coordinate the test
++	done := make(chan struct{})
++
++	// Set up a custom ResponseRecorder that captures writes and signals the test
++	customResponseWriter := &testResponseWriter{
++		ResponseRecorder: w,
++		writes:           make([]string, 0),
++		done:             done,
++		pingDetected:     false,
++	}
++
++	// Start the SSE handler in a goroutine
++	go func() {
++		mock.server.handleSSE(customResponseWriter, r)
++	}()
++
++	// Wait for ping or timeout
++	select {
++	case <-done:
++		// A ping was detected
++		assert.True(t, customResponseWriter.pingDetected, "Ping message should have been sent")
++	case <-time.After(pingInterval.Load() + 100*time.Millisecond):
++		t.Fatal("Timed out waiting for ping message")
++	}
++
++	// Verify that the client was added and cleaned up
++	mock.server.clientsLock.Lock()
++	clientCount := len(mock.server.clients)
++	mock.server.clientsLock.Unlock()
++
++	// Clean up by cancelling the context
++	cancel()
++
++	// Wait for cleanup to complete
++	time.Sleep(50 * time.Millisecond)
++
++	// Verify client was removed
++	mock.server.clientsLock.Lock()
++	finalClientCount := len(mock.server.clients)
++	mock.server.clientsLock.Unlock()
++
++	assert.Equal(t, 1, clientCount, "One client should be added during the test")
++	assert.Equal(t, 0, finalClientCount, "Client should be cleaned up after context cancelation")
++}
++
++// TestHandleSSEPing tests the automatic ping functionality in the SSE handler
++func TestHandleSSEPing_writeOnce(t *testing.T) {
++	originalInterval := pingInterval.Load()
++	pingInterval.Set(50 * time.Millisecond)
++	defer func() {
++		pingInterval.Set(originalInterval)
++	}()
++
++	buf := logtest.NewCollector(t)
++	var bufLock sync.Mutex
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Start the SSE handler in a goroutine
++	go func() {
++		var w writeOnceResponseWriter
++		r := httptest.NewRequest(http.MethodGet, mock.server.conf.Mcp.SseEndpoint, http.NoBody)
++		bufLock.Lock()
++		defer bufLock.Unlock()
++		mock.server.handleSSE(&w, r)
++	}()
++
++	// Wait for ping or timeout
++	time.Sleep(100 * time.Millisecond)
++	bufLock.Lock()
++	assert.Contains(t, "Failed to send ping", buf.Content())
++	bufLock.Unlock()
++}
++
++func TestServerStartStop(t *testing.T) {
++	// Create a simple configuration for testing
++	const yamlConf = `name: test-server
++host: localhost
++port: 0
++timeout: 1000
++mcp:
++  name: mcp-test-server
++`
++	var c McpConf
++	assert.NoError(t, conf.LoadFromYamlBytes([]byte(yamlConf), &c))
++
++	// Create the server
++	s := NewMcpServer(c)
++
++	// Start and stop in goroutine to avoid blocking
++	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++	defer cancel()
++
++	go func() {
++		s.Start()
++	}()
++
++	// Allow a brief moment for startup
++	time.Sleep(50 * time.Millisecond)
++
++	// Stop the server
++	s.Stop()
++
++	// Wait for context to ensure we properly stopped or timed out
++	<-ctx.Done()
++}
++
++// TestNotificationInitialized tests the notifications/initialized handling in detail
++func TestNotificationInitialized(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("uninitializedClient", func(t *testing.T) {
++		// Create an uninitialized test client
++		client := addTestClient(mock.server, "test-client-uninitialized", false)
++		assert.False(t, client.initialized, "Client should start as uninitialized")
++
++		// Create a notification request
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			Method:  methodNotificationsInitialized,
++			// No ID for notifications
++			Params: json.RawMessage(`{}`), // Empty params acceptable for this notification
++		}
++
++		// Process through the request handler
++		jsonBody, _ := json.Marshal(req)
++		r := httptest.NewRequest(http.MethodPost, "/?session_id="+client.id, bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++		mock.server.handleRequest(w, r)
++
++		// Verify client is now initialized
++		assert.True(t, client.initialized, "Client should be marked as initialized after notifications/initialized")
++
++		// Verify the response code is 202 Accepted
++		assert.Equal(t, http.StatusAccepted, w.Code, "Response status should be 202 Accepted")
++
++		// No actual response body should be sent for notifications
++		select {
++		case <-client.channel:
++			t.Fatal("No response expected for notifications")
++		case <-time.After(50 * time.Millisecond):
++			// This is the expected outcome - no response
++		}
++	})
++
++	t.Run("initializedClient", func(t *testing.T) {
++		// Create an already initialized client
++		client := addTestClient(mock.server, "test-client-initialized", true)
++		assert.True(t, client.initialized, "Client should start as initialized")
++
++		// Directly call processNotificationInitialized
++		mock.server.processNotificationInitialized(client)
++
++		// Verify client remains initialized
++		assert.True(t, client.initialized, "Client should remain initialized after notifications/initialized")
++
++		// No response expected
++		select {
++		case <-client.channel:
++			t.Fatal("No response expected for notifications")
++		case <-time.After(50 * time.Millisecond):
++			// This is the expected outcome - no response
++		}
++	})
++
++	t.Run("errorOnIncorrectUsage", func(t *testing.T) {
++		// Create a test client
++		client := addTestClient(mock.server, "test-client-error", false)
++
++		// Create a request with ID (incorrect usage - should be a notification)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      123, // Adding ID makes this an incorrect usage - should be notification
++			Method:  methodNotificationsInitialized,
++			Params:  json.RawMessage(`{}`),
++		}
++
++		// Process through the request handler
++		jsonBody, _ := json.Marshal(req)
++		r := httptest.NewRequest(http.MethodPost, "/?session_id="+client.id, bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++		mock.server.handleRequest(w, r)
++
++		// Should get an error response
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain an error")
++			assert.Contains(t, response, "Method should be used as a notification", "Response should explain notification usage")
++			assert.Contains(t, response, `"id":123`, "Response should include the original ID")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++
++		// Client should not be initialized due to error
++		assert.False(t, client.initialized, "Client should not be initialized after error")
++	})
++}
++
++func TestSendResponse(t *testing.T) {
++	t.Run("bad response", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++
++		// Create a response
++		response := Response{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Result:  make(chan int),
++		}
++
++		// Send the response
++		mock.server.sendResponse(context.Background(), client, 1, response)
++
++		// Check the response in the client's channel
++		select {
++		case res := <-client.channel:
++			evt, err := parseEvent(res)
++			require.NoError(t, err, "Should parse event without error")
++			errMsg, ok := evt.Data["error"].(map[string]any)
++			require.True(t, ok, "Should have error in response")
++			assert.Equal(t, float64(errCodeInternalError), errMsg["code"], "Error code should match")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for response")
++		}
++	})
++
++	t.Run("channel full", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++		for i := 0; i < eventChanSize; i++ {
++			client.channel <- "test"
++		}
++
++		// Create a response
++		response := Response{
++			JsonRpc: jsonRpcVersion,
++			ID:      1,
++			Result:  "foo",
++		}
++
++		buf := logtest.NewCollector(t)
++		// Send the response
++		mock.server.sendResponse(context.Background(), client, 1, response)
++		// Check the response in the client's channel
++		assert.Contains(t, buf.String(), "channel is full")
++	})
++}
++
++func TestSendErrorResponse(t *testing.T) {
++	t.Run("channel full", func(t *testing.T) {
++		mock := newMockMcpServer(t)
++		defer mock.shutdown()
++
++		// Create a test client
++		client := addTestClient(mock.server, "test-client", true)
++		for i := 0; i < eventChanSize; i++ {
++			client.channel <- "test"
++		}
++
++		buf := logtest.NewCollector(t)
++		// Send the response
++		mock.server.sendErrorResponse(context.Background(), client, 1, "foo", errCodeInternalError)
++		// Check the response in the client's channel
++		assert.Contains(t, buf.String(), "channel is full")
++	})
++}
++
++// TestMethodToolsCall tests the handling of tools/call method through handleRequest
++func TestMethodToolsCall(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("validToolCall", func(t *testing.T) {
++		// Register a test tool
++		mock.registerExampleTool()
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-valid", true)
++
++		// Create a tools call request with progress token metadata
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++			Meta      struct {
++				ProgressToken string `json:"progressToken"`
++			} `json:"_meta"`
++		}{
++			Name: "test.tool",
++			Arguments: map[string]any{
++				"input": "test-input",
++			},
++			Meta: struct {
++				ProgressToken string `json:"progressToken"`
++			}{
++				ProgressToken: "token123",
++			},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal tool call parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      42, // Specific ID to verify in response
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-valid", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest (full path)
++		mock.server.handleRequest(w, r)
++
++		// Verify the HTTP response
++		assert.Equal(t, http.StatusAccepted, w.Code, "HTTP status should be 202 Accepted")
++
++		// Check the response in client's channel
++		select {
++		case response := <-client.channel:
++			// Verify it's a message event with the expected format
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Parse the JSON part of the SSE message
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			// Validate the structure
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Verify ID matches our request
++			id, ok := parsed["id"].(float64)
++			assert.True(t, ok, "Response should have an ID")
++			assert.Equal(t, float64(42), id, "Response ID should match request ID")
++
++			// Verify content
++			content, ok := result["content"].([]any)
++			require.True(t, ok, "Result should have content array")
++			assert.NotEmpty(t, content, "Content should not be empty")
++
++			// Check for progress token in metadata
++			meta, hasMeta := result["_meta"].(map[string]any)
++			assert.True(t, hasMeta, "Response should include _meta with progress token")
++			if hasMeta {
++				token, hasToken := meta["progressToken"].(string)
++				assert.True(t, hasToken, "Meta should include progress token")
++				assert.Equal(t, "token123", token, "Progress token should match")
++			}
++
++			// Check actual result content
++			if len(content) > 0 {
++				firstItem, ok := content[0].(map[string]any)
++				if ok {
++					assert.Contains(t, firstItem[ContentTypeText], "Processed: test-input", "Content should include processed input")
++				}
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for tool call response")
++		}
++	})
++
++	t.Run("invalidToolName", func(t *testing.T) {
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-invalid", true)
++
++		// Create a tools call request with invalid tool name
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name:      "non-existent-tool",
++			Arguments: map[string]any{},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal tool call parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      43,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-invalid", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Verify response contains error about non-existent tool
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "not found", "Error should mention tool not found")
++			assert.Contains(t, response, "non-existent-tool", "Error should mention the invalid tool name")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("clientNotInitialized", func(t *testing.T) {
++		// Register a tool
++		mock.registerExampleTool()
++
++		// Create an uninitialized client
++		client := addTestClient(mock.server, "test-client-uninitialized", false)
++
++		// Create a valid tools call request
++		params := struct {
++			Name      string         `json:"name"`
++			Arguments map[string]any `json:"arguments"`
++		}{
++			Name: "test.tool",
++			Arguments: map[string]any{
++				"input": "test-input",
++			},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal tool call parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      44,
++			Method:  methodToolsCall,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-uninitialized", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Verify response contains error about client not being initialized
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "not fully initialized", "Error should mention client not initialized")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++}
++
++// TestMethodPromptsGet tests the handling of prompts/get method through handleRequest
++func TestMethodPromptsGet(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("staticPrompt", func(t *testing.T) {
++		// Register a test prompt with static content
++		testPrompt := Prompt{
++			Name:        "static-prompt",
++			Description: "A static test prompt with placeholders",
++			Arguments: []PromptArgument{
++				{
++					Name:        "name",
++					Description: "Name to use in greeting",
++					Required:    true,
++				},
++				{
++					Name:        "topic",
++					Description: "Topic to discuss",
++				},
++			},
++			Content: "Hello {{name}}! Let's talk about {{topic}}.",
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-static", true)
++
++		// Create a prompts/get request
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name: "static-prompt",
++			Arguments: map[string]string{
++				"name": "Test User",
++				// Intentionally not providing "topic" to test default values
++			},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal prompt get parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      70,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-static", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest (full path)
++		mock.server.handleRequest(w, r)
++
++		// Verify the HTTP response
++		assert.Equal(t, http.StatusAccepted, w.Code, "HTTP status should be 202 Accepted")
++
++		// Check the response in client's channel
++		select {
++		case response := <-client.channel:
++			// Verify it's a message event with the expected format
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Parse the JSON part of the SSE message
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			// Validate the structure
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Verify ID matches our request
++			id, ok := parsed["id"].(float64)
++			assert.True(t, ok, "Response should have an ID")
++			assert.Equal(t, float64(70), id, "Response ID should match request ID")
++
++			// Verify description
++			description, ok := result["description"].(string)
++			assert.True(t, ok, "Response should include prompt description")
++			assert.Equal(t, "A static test prompt with placeholders", description, "Description should match")
++
++			// Verify messages
++			messages, ok := result["messages"].([]any)
++			require.True(t, ok, "Result should have messages array")
++			assert.Len(t, messages, 1, "Should have 1 message")
++
++			// Check message content - should have placeholder substitutions
++			if len(messages) > 0 {
++				message, ok := messages[0].(map[string]any)
++				require.True(t, ok, "Message should be an object")
++				assert.Equal(t, string(RoleUser), message["role"], "Role should be 'user'")
++
++				content, ok := message["content"].(map[string]any)
++				require.True(t, ok, "Should have content object")
++				assert.Equal(t, ContentTypeText, content["type"], "Content type should be text")
++				assert.Contains(t, content[ContentTypeText], "Hello Test User", "Content should include the name argument")
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for prompt get response")
++		}
++	})
++
++	t.Run("dynamicPrompt", func(t *testing.T) {
++		// Register a test prompt with a handler function
++		testPrompt := Prompt{
++			Name:        "dynamic-prompt",
++			Description: "A dynamic test prompt with a handler",
++			Arguments: []PromptArgument{
++				{
++					Name:        "username",
++					Description: "User's name",
++					Required:    true,
++				},
++				{
++					Name:        "question",
++					Description: "User's question",
++				},
++			},
++			Handler: func(ctx context.Context, args map[string]string) ([]PromptMessage, error) {
++				username := args["username"]
++				question := args["question"]
++
++				// Create a system message
++				systemMessage := PromptMessage{
++					Role: RoleAssistant,
++					Content: TextContent{
++						Text: "You are a helpful assistant.",
++					},
++				}
++
++				// Create a user message
++				userMessage := PromptMessage{
++					Role: RoleUser,
++					Content: TextContent{
++						Text: fmt.Sprintf("Hi, I'm %s and I'm wondering: %s", username, question),
++					},
++				}
++
++				return []PromptMessage{systemMessage, userMessage}, nil
++			},
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-dynamic", true)
++
++		// Create a prompts/get request
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name: "dynamic-prompt",
++			Arguments: map[string]string{
++				"username": "Dynamic User",
++				"question": "How to test this?",
++			},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal prompt get parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      71,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-dynamic", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check the response
++		select {
++		case response := <-client.channel:
++			// Extract and parse JSON
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Verify messages - should have 2 messages from handler
++			messages, ok := result["messages"].([]any)
++			require.True(t, ok, "Result should have messages array")
++			assert.Len(t, messages, 2, "Should have 2 messages")
++
++			// Check message content
++			if len(messages) >= 2 {
++				// First message should be assistant
++				message1, _ := messages[0].(map[string]any)
++				assert.Equal(t, string(RoleAssistant), message1["role"], "First role should be 'system'")
++
++				content1, _ := message1["content"].(map[string]any)
++				assert.Contains(t, content1[ContentTypeText], "helpful assistant", "System message should be correct")
++
++				// Second message should be user
++				message2, _ := messages[1].(map[string]any)
++				assert.Equal(t, string(RoleUser), message2["role"], "Second role should be 'user'")
++
++				content2, _ := message2["content"].(map[string]any)
++				assert.Contains(t, content2[ContentTypeText], "Dynamic User", "User message should contain username")
++				assert.Contains(t, content2[ContentTypeText], "How to test this?", "User message should contain question")
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for prompt get response")
++		}
++	})
++
++	t.Run("missingRequiredArgument", func(t *testing.T) {
++		// Register a test prompt with a required argument
++		testPrompt := Prompt{
++			Name:        "required-arg-prompt",
++			Description: "A prompt with required arguments",
++			Arguments: []PromptArgument{
++				{
++					Name:        "required_arg",
++					Description: "This argument is required",
++					Required:    true,
++				},
++			},
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-missing-arg", true)
++
++		// Create a prompts/get request with missing required argument
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name:      "required-arg-prompt",
++			Arguments: map[string]string{}, // Empty arguments
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      72,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-missing-arg", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about missing required argument
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Missing required arguments", "Error should mention missing arguments")
++			assert.Contains(t, response, "required_arg", "Error should name the missing argument")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("promptNotFound", func(t *testing.T) {
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-prompt-not-found", true)
++
++		// Create a prompts/get request with non-existent prompt
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name:      "non-existent-prompt",
++			Arguments: map[string]string{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      73,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-prompt-not-found", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about non-existent prompt
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Prompt 'non-existent-prompt' not found", "Error should mention prompt not found")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("handlerError", func(t *testing.T) {
++		// Register a test prompt with a handler that returns an error
++		testPrompt := Prompt{
++			Name:        "error-handler-prompt",
++			Description: "A prompt with a handler that returns an error",
++			Arguments:   []PromptArgument{},
++			Handler: func(ctx context.Context, args map[string]string) ([]PromptMessage, error) {
++				return nil, fmt.Errorf("test handler error")
++			},
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-handler-error", true)
++
++		// Create a prompts/get request
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name:      "error-handler-prompt",
++			Arguments: map[string]string{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      74,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-handler-error", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about handler error
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Error generating prompt content", "Error should mention generating content")
++			assert.Contains(t, response, "test handler error", "Error should include the handler error message")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("invalidParameters", func(t *testing.T) {
++		// Create an invalid JSON request
++		invalidJson := []byte(`{"not valid json`)
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      75,
++			Method:  methodPromptsGet,
++			Params:  invalidJson,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-invalid-params", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code)
++	})
++
++	t.Run("clientNotInitialized", func(t *testing.T) {
++		// Register a basic prompt
++		testPrompt := Prompt{
++			Name:        "basic-prompt",
++			Description: "A basic test prompt",
++		}
++		mock.server.RegisterPrompt(testPrompt)
++
++		// Create an uninitialized client
++		client := addTestClient(mock.server, "test-client-uninit", false)
++
++		// Create a valid prompts/get request
++		params := struct {
++			Name      string            `json:"name"`
++			Arguments map[string]string `json:"arguments"`
++		}{
++			Name:      "basic-prompt",
++			Arguments: map[string]string{},
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      76,
++			Method:  methodPromptsGet,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-uninit", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Verify response contains error about client not being initialized
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "not fully initialized", "Error should mention client not initialized")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++}
++
++func TestMethodResourcesList(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("validResourceWithHandler", func(t *testing.T) {
++		// Register a test resource with handler
++		testResource := Resource{
++			Name:        "test-resource",
++			URI:         "file:///test/resource.txt",
++			Description: "A test resource with handler",
++			MimeType:    "text/plain",
++			Handler: func(ctx context.Context) (ResourceContent, error) {
++				return ResourceContent{
++					URI:      "file:///test/resource.txt",
++					MimeType: "text/plain",
++					Text:     "This is test resource content",
++				}, nil
++			},
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-resources", true)
++
++		// Create a resources/read request
++		params := PaginatedParams{
++			Cursor: "next-cursor",
++			Meta: struct {
++				ProgressToken any `json:"progressToken"`
++			}{
++				ProgressToken: "token",
++			},
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal resource read parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      50,
++			Method:  methodResourcesList,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-resources", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest (full path)
++		mock.server.handleRequest(w, r)
++
++		// Verify the HTTP response
++		assert.Equal(t, http.StatusAccepted, w.Code, "HTTP status should be 202 Accepted")
++
++		// Check the response in client's channel
++		select {
++		case response := <-client.channel:
++			evt, err := parseEvent(response)
++			assert.NoError(t, err)
++			result, ok := evt.Data["result"].(map[string]any)
++			assert.True(t, ok)
++			assert.Equal(t, "next-cursor", result["nextCursor"])
++			assert.Equal(t, "token", result["_meta"].(map[string]any)["progressToken"])
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for resource read response")
++		}
++	})
++}
++
++// TestMethodResourcesRead tests the handling of resources/read method
++func TestMethodResourcesRead(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("validResourceWithHandler", func(t *testing.T) {
++		// Register a test resource with handler
++		testResource := Resource{
++			Name:        "test-resource",
++			URI:         "file:///test/resource.txt",
++			Description: "A test resource with handler",
++			MimeType:    "text/plain",
++			Handler: func(ctx context.Context) (ResourceContent, error) {
++				return ResourceContent{
++					URI:      "file:///test/resource.txt",
++					MimeType: "text/plain",
++					Text:     "This is test resource content",
++				}, nil
++			},
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-resources", true)
++
++		// Create a resources/read request
++		params := ResourceReadParams{
++			URI: "file:///test/resource.txt",
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal resource read parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      50,
++			Method:  methodResourcesRead,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-resources", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest (full path)
++		mock.server.handleRequest(w, r)
++
++		// Verify the HTTP response
++		assert.Equal(t, http.StatusAccepted, w.Code, "HTTP status should be 202 Accepted")
++
++		// Check the response in client's channel
++		select {
++		case response := <-client.channel:
++			// Verify it's a message event with the expected format
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Parse the JSON part of the SSE message
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			// Validate the structure
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			// Verify ID matches our request
++			id, ok := parsed["id"].(float64)
++			assert.True(t, ok, "Response should have an ID")
++			assert.Equal(t, float64(50), id, "Response ID should match request ID")
++
++			// Verify contents
++			contents, ok := result["contents"].([]any)
++			require.True(t, ok, "Result should have contents array")
++			assert.Len(t, contents, 1, "Contents array should have 1 item")
++
++			// Check content details
++			if len(contents) > 0 {
++				content, ok := contents[0].(map[string]any)
++				require.True(t, ok, "Content should be an object")
++				assert.Equal(t, "file:///test/resource.txt", content["uri"], "URI should match")
++				assert.Equal(t, "text/plain", content["mimeType"], "MimeType should match")
++				assert.Equal(t, "This is test resource content", content[ContentTypeText], "Text content should match")
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for resource read response")
++		}
++	})
++
++	t.Run("resourceWithoutHandler", func(t *testing.T) {
++		// Register a test resource without handler
++		testResource := Resource{
++			Name:        "no-handler-resource",
++			URI:         "file:///test/no-handler.txt",
++			Description: "A test resource without handler",
++			MimeType:    "text/plain",
++			// No handler provided
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-no-handler", true)
++
++		// Create a resources/read request
++		params := ResourceReadParams{
++			URI: "file:///test/no-handler.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      51,
++			Method:  methodResourcesRead,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-no-handler", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for response with empty content
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Extract and parse JSON
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			// Check contents exists but has empty text
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			contents, ok := result["contents"].([]any)
++			require.True(t, ok, "Result should have contents array")
++			assert.Len(t, contents, 1, "Contents array should have 1 item")
++
++			// Check content details - should have URI and MimeType but empty text
++			if len(contents) > 0 {
++				content, ok := contents[0].(map[string]any)
++				require.True(t, ok, "Content should be an object")
++				assert.Equal(t, "file:///test/no-handler.txt", content["uri"], "URI should match")
++				assert.Equal(t, "text/plain", content["mimeType"], "MimeType should match")
++				_, ok = content[ContentTypeText]
++				assert.False(t, ok, "Text content should be empty string")
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for resource read response")
++		}
++	})
++
++	t.Run("resourceNotFound", func(t *testing.T) {
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-not-found", true)
++
++		// Create a resources/read request with non-existent URI
++		params := ResourceReadParams{
++			URI: "file:///test/non-existent.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      52,
++			Method:  methodResourcesRead,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-not-found", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about resource not found
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Resource with URI", "Error should mention resource URI")
++			assert.Contains(t, response, "not found", "Error should indicate resource not found")
++			assert.Contains(t, response, "file:///test/non-existent.txt", "Error should mention the requested URI")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("invalidParameters", func(t *testing.T) {
++		// Create an invalid JSON request
++		invalidJson := []byte(`{"not valid json`)
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      53,
++			Method:  methodResourcesRead,
++			Params:  invalidJson,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-invalid-params", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code)
++	})
++
++	t.Run("invalidParameters direct", func(t *testing.T) {
++		// Create an invalid JSON request
++		invalidJson := []byte(`{"not valid json`)
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      53,
++			Method:  methodResourcesRead,
++			Params:  invalidJson,
++		}
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-resources", true)
++
++		// Process through handleRequest
++		mock.server.processResourcesRead(context.Background(), client, req)
++
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Invalid parameters", "Error should mention invalid parameters")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("handlerError", func(t *testing.T) {
++		// Register a test resource with handler that returns an error
++		testResource := Resource{
++			Name:        "error-resource",
++			URI:         "file:///test/error.txt",
++			Description: "A test resource with handler that returns error",
++			MimeType:    "text/plain",
++			Handler: func(ctx context.Context) (ResourceContent, error) {
++				return ResourceContent{}, fmt.Errorf("test handler error")
++			},
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-handler-error", true)
++
++		// Create a resources/read request
++		params := ResourceReadParams{
++			URI: "file:///test/error.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      54,
++			Method:  methodResourcesRead,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-handler-error", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about handler error
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Error reading resource", "Error should mention reading resource")
++			assert.Contains(t, response, "test handler error", "Error should include handler error message")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("handlerMissingURIAndMimeType", func(t *testing.T) {
++		// Register a test resource with handler that returns content without URI and MimeType
++		testResource := Resource{
++			Name:        "missing-fields-resource",
++			URI:         "file:///test/missing-fields.txt",
++			Description: "A test resource with handler that returns content missing fields",
++			MimeType:    "text/plain",
++			Handler: func(ctx context.Context) (ResourceContent, error) {
++				// Return ResourceContent without URI and MimeType
++				return ResourceContent{
++					Text: "Content with missing fields",
++				}, nil
++			},
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-missing-fields", true)
++
++		// Create a resources/read request
++		params := ResourceReadParams{
++			URI: "file:///test/missing-fields.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      55,
++			Method:  methodResourcesRead,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-missing-fields", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check response - server should fill in the missing fields
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Extract and parse JSON
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++
++			contents, ok := result["contents"].([]any)
++			require.True(t, ok, "Result should have contents array")
++			assert.Len(t, contents, 1, "Contents array should have 1 item")
++
++			// Check content details - server should fill in missing URI and MimeType
++			if len(contents) > 0 {
++				content, ok := contents[0].(map[string]any)
++				require.True(t, ok, "Content should be an object")
++				assert.Equal(t, "file:///test/missing-fields.txt", content["uri"], "URI should be filled from request")
++				assert.Equal(t, "text/plain", content["mimeType"], "MimeType should be filled from resource")
++				assert.Equal(t, "Content with missing fields", content[ContentTypeText], "Text content should match")
++			}
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for resource read response")
++		}
++	})
++}
++
++// TestMethodResourcesSubscribe tests the handling of resources/subscribe method
++func TestMethodResourcesSubscribe(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	t.Run("validSubscription", func(t *testing.T) {
++		// Register a test resource
++		testResource := Resource{
++			Name:        "subscribe-resource",
++			URI:         "file:///test/subscribe.txt",
++			Description: "A test resource for subscription",
++			MimeType:    "text/plain",
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-subscribe", true)
++
++		// Create a resources/subscribe request
++		params := ResourceSubscribeParams{
++			URI: "file:///test/subscribe.txt",
++		}
++
++		paramBytes, err := json.Marshal(params)
++		require.NoError(t, err, "Failed to marshal resource subscribe parameters")
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      60,
++			Method:  methodResourcesSubscribe,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-subscribe", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest (full path)
++		mock.server.handleRequest(w, r)
++
++		// Verify the HTTP response
++		assert.Equal(t, http.StatusAccepted, w.Code, "HTTP status should be 202 Accepted")
++
++		// Check the response in client's channel - should be an empty success response
++		select {
++		case response := <-client.channel:
++			// Verify it's a message event with the expected format
++			assert.Contains(t, response, "event: message", "Response should be a message event")
++
++			// Parse the JSON part of the SSE message
++			jsonStart := strings.Index(response, "{")
++			jsonEnd := strings.LastIndex(response, "}")
++			require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++			jsonStr := response[jsonStart : jsonEnd+1]
++
++			var parsed map[string]any
++			err := json.Unmarshal([]byte(jsonStr), &parsed)
++			require.NoError(t, err, "Should be able to parse response JSON")
++
++			// Verify ID matches our request
++			id, ok := parsed["id"].(float64)
++			assert.True(t, ok, "Response should have an ID")
++			assert.Equal(t, float64(60), id, "Response ID should match request ID")
++
++			// Verify the result exists and is an empty object
++			result, ok := parsed["result"].(map[string]any)
++			require.True(t, ok, "Response should have a result object")
++			assert.Empty(t, result, "Result should be an empty object for successful subscription")
++
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for subscription response")
++		}
++	})
++
++	t.Run("resourceNotFound", func(t *testing.T) {
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-sub-not-found", true)
++
++		// Create a resources/subscribe request with non-existent URI
++		params := ResourceSubscribeParams{
++			URI: "file:///test/non-existent-subscription.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      61,
++			Method:  methodResourcesSubscribe,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-sub-not-found", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about resource not found
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Resource with URI", "Error should mention resource URI")
++			assert.Contains(t, response, "not found", "Error should indicate resource not found")
++			assert.Contains(t, response, "file:///test/non-existent-subscription.txt", "Error should mention the requested URI")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("invalidParameters", func(t *testing.T) {
++		// Create an invalid JSON request
++		invalidJson := []byte(`{"not valid json`)
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      62,
++			Method:  methodResourcesSubscribe,
++			Params:  invalidJson,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-sub-invalid-params", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++		assert.Equal(t, http.StatusBadRequest, w.Code, "HTTP status should be 400 Bad Request")
++	})
++
++	t.Run("invalidParameters direct", func(t *testing.T) {
++		// Create an invalid JSON request
++		invalidJson := []byte(`{"not valid json`)
++
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      62,
++			Method:  methodResourcesSubscribe,
++			Params:  invalidJson,
++		}
++
++		client := addTestClient(mock.server, "test-client-sub-not-found", true)
++		mock.server.processResourceSubscribe(context.Background(), client, req)
++
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Invalid parameters", "Error should mention invalid parameters")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("clientNotInitialized", func(t *testing.T) {
++		// Register a test resource
++		testResource := Resource{
++			Name:        "subscribe-resource-uninit",
++			URI:         "file:///test/subscribe-uninit.txt",
++			Description: "A test resource for subscription with uninitialized client",
++		}
++		mock.server.RegisterResource(testResource)
++
++		// Create an uninitialized client
++		client := addTestClient(mock.server, "test-client-sub-uninitialized", false)
++
++		// Create a valid resources/subscribe request
++		params := ResourceSubscribeParams{
++			URI: "file:///test/subscribe-uninit.txt",
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      63,
++			Method:  methodResourcesSubscribe,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-sub-uninitialized", bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Verify response contains error about client not being initialized
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "not fully initialized", "Error should mention client not initialized")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++
++	t.Run("missingURIParameter", func(t *testing.T) {
++		// Create an initialized client
++		client := addTestClient(mock.server, "test-client-sub-missing-uri", true)
++
++		// Create a subscription request with empty URI
++		params := ResourceSubscribeParams{
++			URI: "", // Empty URI
++		}
++
++		paramBytes, _ := json.Marshal(params)
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      64,
++			Method:  methodResourcesSubscribe,
++			Params:  paramBytes,
++		}
++		jsonBody, _ := json.Marshal(req)
++
++		// Create HTTP request
++		r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-sub-missing-uri",
++			bytes.NewReader(jsonBody))
++		w := httptest.NewRecorder()
++
++		// Process through handleRequest
++		mock.server.handleRequest(w, r)
++
++		// Check for error response about resource not found (empty URI)
++		select {
++		case response := <-client.channel:
++			assert.Contains(t, response, "error", "Response should contain error")
++			assert.Contains(t, response, "Resource with URI", "Error should mention resource URI")
++			assert.Contains(t, response, "not found", "Error should indicate resource not found")
++		case <-time.After(100 * time.Millisecond):
++			t.Fatal("Timed out waiting for error response")
++		}
++	})
++}
++
++// TestToolCallUnmarshalError tests the error handling when unmarshaling invalid JSON in processToolCall
++func TestToolCallUnmarshalError(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Create an initialized client
++	client := addTestClient(mock.server, "test-client-unmarshal-error", true)
++
++	// Create a request with invalid JSON in Params
++	req := Request{
++		JsonRpc: "2.0",
++		ID:      100,
++		Method:  methodToolsCall,
++		Params:  []byte(`{"name": "test.tool", "arguments": {"input": invalid_json}}`), // This is invalid JSON
++	}
++
++	// Process the tool call directly
++	mock.server.processToolCall(context.Background(), client, req)
++
++	// Check for error response about invalid JSON
++	select {
++	case response := <-client.channel:
++		assert.Contains(t, response, "error", "Response should contain an error")
++		assert.Contains(t, response, "Invalid tool call parameters", "Error should mention invalid parameters")
++
++		// Extract error code from response
++		jsonStart := strings.Index(response, "{")
++		jsonEnd := strings.LastIndex(response, "}")
++		require.True(t, jsonStart >= 0 && jsonEnd > jsonStart, "Response should contain valid JSON")
++		jsonStr := response[jsonStart : jsonEnd+1]
++
++		var parsed struct {
++			Error struct {
++				Code int `json:"code"`
++			} `json:"error"`
++		}
++		err := json.Unmarshal([]byte(jsonStr), &parsed)
++		require.NoError(t, err, "Should be able to parse response JSON")
++
++		// Verify correct error code was returned
++		assert.Equal(t, errCodeInvalidParams, parsed.Error.Code, "Error code should be errCodeInvalidParams")
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("Timed out waiting for error response")
++	}
++}
++
++// TestToolCallWithInvalidParams tests the handling when calling handleRequest with invalid JSON params
++func TestToolCallWithInvalidParams(t *testing.T) {
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Register a tool to make sure it exists
++	mock.registerExampleTool()
++
++	// Create a request with invalid JSON
++	req := Request{
++		JsonRpc: "2.0",
++		ID:      101,
++		Method:  methodToolsCall,
++		Params:  []byte(`{"name": "test.tool", "arguments": {this_is_invalid_json}}`),
++	}
++
++	jsonBody, _ := json.Marshal(req)
++
++	// Create HTTP request
++	r := httptest.NewRequest(http.MethodPost, "/?session_id=test-client-invalid-json", bytes.NewReader(jsonBody))
++	w := httptest.NewRecorder()
++
++	// Process through handleRequest
++	mock.server.handleRequest(w, r)
++
++	// Verify HTTP status is Accepted (even for errors, we accept the request)
++	assert.Equal(t, http.StatusBadRequest, w.Code)
++}
++
++type mockResponseWriter struct {
++}
++
++func (m *mockResponseWriter) Header() http.Header {
++	return http.Header{}
++}
++
++func (m *mockResponseWriter) Write(i []byte) (int, error) {
++	return len(i), nil
++}
++
++func (m *mockResponseWriter) WriteHeader(_ int) {
++}
++
++type notFlusherResponseWriter struct {
++	mockResponseWriter
++	code int
++}
++
++func (m *notFlusherResponseWriter) WriteHeader(code int) {
++	m.code = code
++}
++
++type cantWriteResponseWriter struct {
++	mockResponseWriter
++	code int
++}
++
++func (m *cantWriteResponseWriter) Flush() {
++}
++
++func (m *cantWriteResponseWriter) Write(_ []byte) (int, error) {
++	return 0, fmt.Errorf("can't write")
++}
++
++type writeOnceResponseWriter struct {
++	mockResponseWriter
++	times int32
++}
++
++func (m *writeOnceResponseWriter) Flush() {
++}
++
++func (m *writeOnceResponseWriter) Write(i []byte) (int, error) {
++	if atomic.AddInt32(&m.times, 1) > 1 {
++		return 0, fmt.Errorf("write once")
++	}
++	return len(i), nil
++}
++
++// testResponseWriter is a custom http.ResponseWriter that captures writes and detects ping messages
++type testResponseWriter struct {
++	*httptest.ResponseRecorder
++	writes       []string
++	mu           sync.Mutex
++	pingDetected bool
++	done         chan struct{}
++}
++
++// Write overrides the ResponseRecorder's Write method to detect ping messages
++func (w *testResponseWriter) Write(b []byte) (int, error) {
++	w.mu.Lock()
++	defer w.mu.Unlock()
++
++	written, err := w.ResponseRecorder.Write(b)
++	if err != nil {
++		return written, err
++	}
++
++	content := string(b)
++	w.writes = append(w.writes, content)
++
++	// Check if this is a ping message
++	if strings.Contains(content, "event: ping") {
++		w.pingDetected = true
++		// Signal that we've detected a ping
++		select {
++		case w.done <- struct{}{}:
++		default:
++			// Channel might be closed or already signaled
++		}
++	}
++
++	return written, nil
++}
++
++// Flush implements the http.Flusher interface
++func (w *testResponseWriter) Flush() {
++	w.ResponseRecorder.Flush()
++}
+diff --git a/mcp/types_test.go b/mcp/types_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba27100c9a26c265c5de662f0e4c17dc4bfeb88b
+--- /dev/null
++++ b/mcp/types_test.go
+@@ -0,0 +1,271 @@
++package mcp
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestResponseMarshaling(t *testing.T) {
++	// Test that the Response struct marshals correctly
++	resp := Response{
++		JsonRpc: "2.0",
++		ID:      123,
++		Result: map[string]string{
++			"key": "value",
++		},
++	}
++
++	data, err := json.Marshal(resp)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"jsonrpc":"2.0"`)
++	assert.Contains(t, string(data), `"id":123`)
++	assert.Contains(t, string(data), `"result":{"key":"value"}`)
++
++	// Test response with error
++	respWithError := Response{
++		JsonRpc: "2.0",
++		ID:      456,
++		Error: &errorObj{
++			Code:    errCodeInvalidRequest,
++			Message: "Invalid Request",
++		},
++	}
++
++	data, err = json.Marshal(respWithError)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"jsonrpc":"2.0"`)
++	assert.Contains(t, string(data), `"id":456`)
++	assert.Contains(t, string(data), `"error":{"code":-32600,"message":"Invalid Request"}`)
++}
++
++func TestRequestUnmarshaling(t *testing.T) {
++	// Test that the Request struct unmarshals correctly
++	jsonStr := `{
++		"jsonrpc": "2.0",
++		"id": 789,
++		"method": "test_method",
++		"params": {"key": "value"}
++	}`
++
++	var req Request
++	err := json.Unmarshal([]byte(jsonStr), &req)
++
++	assert.NoError(t, err)
++	assert.Equal(t, "2.0", req.JsonRpc)
++	assert.Equal(t, float64(789), req.ID)
++	assert.Equal(t, "test_method", req.Method)
++
++	// Check params unmarshaled correctly
++	var params map[string]string
++	err = json.Unmarshal(req.Params, &params)
++	assert.NoError(t, err)
++	assert.Equal(t, "value", params["key"])
++}
++
++func TestToolStructs(t *testing.T) {
++	// Test Tool struct
++	tool := Tool{
++		Name:        "test.tool",
++		Description: "A test tool",
++		InputSchema: InputSchema{
++			Type: "object",
++			Properties: map[string]any{
++				"input": map[string]any{
++					"type":        "string",
++					"description": "Input parameter",
++				},
++			},
++			Required: []string{"input"},
++		},
++		Handler: func(ctx context.Context, params map[string]any) (any, error) {
++			return "result", nil
++		},
++	}
++
++	// Verify fields are correct
++	assert.Equal(t, "test.tool", tool.Name)
++	assert.Equal(t, "A test tool", tool.Description)
++	assert.Equal(t, "object", tool.InputSchema.Type)
++	assert.Contains(t, tool.InputSchema.Properties, "input")
++	propMap, ok := tool.InputSchema.Properties["input"].(map[string]any)
++	assert.True(t, ok, "Property should be a map")
++	assert.Equal(t, "string", propMap["type"])
++	assert.NotNil(t, tool.Handler)
++
++	// Verify JSON marshalling (which should exclude Handler function)
++	data, err := json.Marshal(tool)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"name":"test.tool"`)
++	assert.Contains(t, string(data), `"description":"A test tool"`)
++	assert.Contains(t, string(data), `"inputSchema":`)
++	assert.NotContains(t, string(data), `"Handler":`)
++}
++
++func TestPromptStructs(t *testing.T) {
++	// Test Prompt struct
++	prompt := Prompt{
++		Name:        "test.prompt",
++		Description: "A test prompt description",
++	}
++
++	// Verify fields are correct
++	assert.Equal(t, "test.prompt", prompt.Name)
++	assert.Equal(t, "A test prompt description", prompt.Description)
++
++	// Verify JSON marshalling
++	data, err := json.Marshal(prompt)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"name":"test.prompt"`)
++	assert.Contains(t, string(data), `"description":"A test prompt description"`)
++}
++
++func TestResourceStructs(t *testing.T) {
++	// Test Resource struct
++	resource := Resource{
++		Name:        "test.resource",
++		URI:         "http://example.com/resource",
++		Description: "A test resource",
++	}
++
++	// Verify fields are correct
++	assert.Equal(t, "test.resource", resource.Name)
++	assert.Equal(t, "http://example.com/resource", resource.URI)
++	assert.Equal(t, "A test resource", resource.Description)
++
++	// Verify JSON marshalling
++	data, err := json.Marshal(resource)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"name":"test.resource"`)
++	assert.Contains(t, string(data), `"uri":"http://example.com/resource"`)
++	assert.Contains(t, string(data), `"description":"A test resource"`)
++}
++
++func TestContentTypes(t *testing.T) {
++	// Test TextContent
++	textContent := TextContent{
++		Text: "Sample text",
++		Annotations: &Annotations{
++			Audience: []RoleType{RoleUser, RoleAssistant},
++			Priority: ptr(1.0),
++		},
++	}
++
++	data, err := json.Marshal(textContent)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"text":"Sample text"`)
++	assert.Contains(t, string(data), `"audience":["user","assistant"]`)
++	assert.Contains(t, string(data), `"priority":1`)
++
++	// Test ImageContent
++	imageContent := ImageContent{
++		Data:     "base64data",
++		MimeType: "image/png",
++	}
++
++	data, err = json.Marshal(imageContent)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"data":"base64data"`)
++	assert.Contains(t, string(data), `"mimeType":"image/png"`)
++
++	// Test AudioContent
++	audioContent := AudioContent{
++		Data:     "base64audio",
++		MimeType: "audio/mp3",
++	}
++
++	data, err = json.Marshal(audioContent)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"data":"base64audio"`)
++	assert.Contains(t, string(data), `"mimeType":"audio/mp3"`)
++}
++
++func TestCallToolResult(t *testing.T) {
++	// Test CallToolResult
++	result := CallToolResult{
++		Result: Result{
++			Meta: map[string]any{
++				"progressToken": "token123",
++			},
++		},
++		Content: []interface{}{
++			TextContent{
++				Text: "Sample result",
++			},
++		},
++		IsError: false,
++	}
++
++	data, err := json.Marshal(result)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"_meta":{"progressToken":"token123"}`)
++	assert.Contains(t, string(data), `"content":[{"text":"Sample result"}]`)
++	assert.NotContains(t, string(data), `"isError":`)
++}
++
++func TestRequest_isNotification(t *testing.T) {
++	tests := []struct {
++		name    string
++		id      any
++		want    bool
++		wantErr error
++	}{
++		// integer test cases
++		{name: "int zero", id: 0, want: true, wantErr: nil},
++		{name: "int non-zero", id: 1, want: false, wantErr: nil},
++		{name: "int64 zero", id: int64(0), want: true, wantErr: nil},
++		{name: "int64 max", id: int64(9223372036854775807), want: false, wantErr: nil},
++
++		// floating point number test cases
++		{name: "float64 zero", id: float64(0.0), want: true, wantErr: nil},
++		{name: "float64 positive", id: float64(0.000001), want: false, wantErr: nil},
++		{name: "float64 negative", id: float64(-0.000001), want: false, wantErr: nil},
++		{name: "float64 epsilon", id: float64(1e-300), want: false, wantErr: nil},
++
++		// string test cases
++		{name: "empty string", id: "", want: true, wantErr: nil},
++		{name: "non-empty string", id: "abc", want: false, wantErr: nil},
++		{name: "space string", id: " ", want: false, wantErr: nil},
++		{name: "unicode string", id: "こんにちは", want: false, wantErr: nil},
++
++		// special cases
++		{name: "nil", id: nil, want: true, wantErr: nil},
++
++		// logical type test cases
++		{name: "bool true", id: true, want: false, wantErr: errors.New("invalid type bool")},
++		{name: "bool false", id: false, want: false, wantErr: errors.New("invalid type bool")},
++		{name: "struct type", id: struct{}{}, want: false, wantErr: errors.New("invalid type struct {}")},
++		{name: "slice type", id: []int{1, 2, 3}, want: false, wantErr: errors.New("invalid type []int")},
++		{name: "map type", id: map[string]int{"a": 1}, want: false, wantErr: errors.New("invalid type map[string]int")},
++		{name: "pointer type", id: new(int), want: false, wantErr: errors.New("invalid type *int")},
++		{name: "func type", id: func() {}, want: false, wantErr: errors.New("invalid type func()")},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			req := Request{
++				SessionId: "test-session",
++				JsonRpc:   "2.0",
++				ID:        tt.id,
++				Method:    "testMethod",
++				Params:    json.RawMessage(`{}`),
++			}
++
++			got, err := req.isNotification()
++
++			if (err != nil) != (tt.wantErr != nil) {
++				t.Fatalf("error presence mismatch: got error = %v, wantErr %v", err, tt.wantErr)
++			}
++			if err != nil && tt.wantErr != nil && err.Error() != tt.wantErr.Error() {
++				t.Fatalf("error message mismatch:\ngot  %q\nwant %q", err.Error(), tt.wantErr.Error())
++			}
++
++			if got != tt.want {
++				t.Errorf("isNotification() = %v, want %v for ID %v (%T)", got, tt.want, tt.id, tt.id)
++			}
++		})
++	}
++}
+diff --git a/mcp/util_test.go b/mcp/util_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..0014378b6bc401325a79f293501acd7899f282d0
+--- /dev/null
++++ b/mcp/util_test.go
+@@ -0,0 +1,274 @@
++package mcp
++
++import (
++	"bufio"
++	"encoding/json"
++	"fmt"
++	"strings"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++type Event struct {
++	Type string
++	Data map[string]any
++}
++
++func parseEvent(input string) (*Event, error) {
++	var evt Event
++	var dataStr string
++
++	scanner := bufio.NewScanner(strings.NewReader(input))
++	for scanner.Scan() {
++		line := scanner.Text()
++		if strings.HasPrefix(line, "event:") {
++			evt.Type = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
++		} else if strings.HasPrefix(line, "data:") {
++			dataStr = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
++		}
++	}
++	if err := scanner.Err(); err != nil {
++		return nil, err
++	}
++
++	if len(dataStr) > 0 {
++		if err := json.Unmarshal([]byte(dataStr), &evt.Data); err != nil {
++			return nil, fmt.Errorf("failed to parse data: %w", err)
++		}
++	}
++
++	return &evt, nil
++}
++
++// TestToTypedPromptMessages tests the toTypedPromptMessages function
++func TestToTypedPromptMessages(t *testing.T) {
++	// Test with multiple message types in one test
++	t.Run("MixedContentTypes", func(t *testing.T) {
++		// Create test data with different content types
++		messages := []PromptMessage{
++			{
++				Role: RoleUser,
++				Content: TextContent{
++					Text: "Hello, this is a text message",
++					Annotations: &Annotations{
++						Audience: []RoleType{RoleUser, RoleAssistant},
++						Priority: ptr(0.8),
++					},
++				},
++			},
++			{
++				Role: RoleAssistant,
++				Content: ImageContent{
++					Data:     "base64ImageData",
++					MimeType: "image/jpeg",
++				},
++			},
++			{
++				Role: RoleUser,
++				Content: AudioContent{
++					Data:     "base64AudioData",
++					MimeType: "audio/mp3",
++				},
++			},
++			{
++				Role:    "system",
++				Content: "This is a simple string that should be handled as unknown type",
++			},
++		}
++
++		// Call the function
++		result := toTypedPromptMessages(messages)
++
++		// Validate results
++		require.Len(t, result, 4, "Should return the same number of messages")
++
++		// Validate first message (TextContent)
++		msg := result[0]
++		assert.Equal(t, RoleUser, msg.Role, "Role should be preserved")
++
++		// Type assertion using reflection since Content is an interface
++		typed, ok := msg.Content.(typedTextContent)
++		require.True(t, ok, "Should be typedTextContent")
++		assert.Equal(t, ContentTypeText, typed.Type, "Type should be text")
++		assert.Equal(t, "Hello, this is a text message", typed.Text, "Text content should be preserved")
++		require.NotNil(t, typed.Annotations, "Annotations should be preserved")
++		assert.Equal(t, []RoleType{RoleUser, RoleAssistant}, typed.Annotations.Audience, "Audience should be preserved")
++		require.NotNil(t, typed.Annotations.Priority, "Priority should be preserved")
++		assert.Equal(t, 0.8, *typed.Annotations.Priority, "Priority value should be preserved")
++
++		// Validate second message (ImageContent)
++		msg = result[1]
++		assert.Equal(t, RoleAssistant, msg.Role, "Role should be preserved")
++
++		// Type assertion for image content
++		typedImg, ok := msg.Content.(typedImageContent)
++		require.True(t, ok, "Should be typedImageContent")
++		assert.Equal(t, ContentTypeImage, typedImg.Type, "Type should be image")
++		assert.Equal(t, "base64ImageData", typedImg.Data, "Image data should be preserved")
++		assert.Equal(t, "image/jpeg", typedImg.MimeType, "MimeType should be preserved")
++
++		// Validate third message (AudioContent)
++		msg = result[2]
++		assert.Equal(t, RoleUser, msg.Role, "Role should be preserved")
++
++		// Type assertion for audio content
++		typedAudio, ok := msg.Content.(typedAudioContent)
++		require.True(t, ok, "Should be typedAudioContent")
++		assert.Equal(t, ContentTypeAudio, typedAudio.Type, "Type should be audio")
++		assert.Equal(t, "base64AudioData", typedAudio.Data, "Audio data should be preserved")
++		assert.Equal(t, "audio/mp3", typedAudio.MimeType, "MimeType should be preserved")
++
++		// Validate fourth message (unknown type converted to TextContent)
++		msg = result[3]
++		assert.Equal(t, RoleType("system"), msg.Role, "Role should be preserved")
++
++		// Should be converted to a typedTextContent with error message
++		typedUnknown, ok := msg.Content.(typedTextContent)
++		require.True(t, ok, "Unknown content should be converted to typedTextContent")
++		assert.Equal(t, ContentTypeText, typedUnknown.Type, "Type should be text")
++		assert.Contains(t, typedUnknown.Text, "Unknown content type:", "Should contain error about unknown type")
++		assert.Contains(t, typedUnknown.Text, "string", "Should mention the actual type")
++	})
++
++	// Test empty input
++	t.Run("EmptyInput", func(t *testing.T) {
++		messages := []PromptMessage{}
++		result := toTypedPromptMessages(messages)
++		assert.Empty(t, result, "Should return empty slice for empty input")
++	})
++
++	// Test with nil annotations
++	t.Run("NilAnnotations", func(t *testing.T) {
++		messages := []PromptMessage{
++			{
++				Role: RoleUser,
++				Content: TextContent{
++					Text:        "Text with nil annotations",
++					Annotations: nil,
++				},
++			},
++		}
++
++		result := toTypedPromptMessages(messages)
++		require.Len(t, result, 1, "Should return one message")
++
++		typed, ok := result[0].Content.(typedTextContent)
++		require.True(t, ok, "Should be typedTextContent")
++		assert.Equal(t, ContentTypeText, typed.Type, "Type should be text")
++		assert.Equal(t, "Text with nil annotations", typed.Text, "Text content should be preserved")
++		assert.Nil(t, typed.Annotations, "Nil annotations should be preserved as nil")
++	})
++}
++
++// TestToTypedContents tests the toTypedContents function
++func TestToTypedContents(t *testing.T) {
++	// Test with multiple content types in one test
++	t.Run("MixedContentTypes", func(t *testing.T) {
++		// Create test data with different content types
++		contents := []any{
++			TextContent{
++				Text: "Hello, this is a text content",
++				Annotations: &Annotations{
++					Audience: []RoleType{RoleUser, RoleAssistant},
++					Priority: ptr(0.7),
++				},
++			},
++			ImageContent{
++				Data:     "base64ImageData",
++				MimeType: "image/png",
++			},
++			AudioContent{
++				Data:     "base64AudioData",
++				MimeType: "audio/wav",
++			},
++			"This is a simple string that should be handled as unknown type",
++		}
++
++		// Call the function
++		result := toTypedContents(contents)
++
++		// Validate results
++		require.Len(t, result, 4, "Should return the same number of contents")
++
++		// Validate first content (TextContent)
++		typed, ok := result[0].(typedTextContent)
++		require.True(t, ok, "Should be typedTextContent")
++		assert.Equal(t, ContentTypeText, typed.Type, "Type should be text")
++		assert.Equal(t, "Hello, this is a text content", typed.Text, "Text content should be preserved")
++		require.NotNil(t, typed.Annotations, "Annotations should be preserved")
++		assert.Equal(t, []RoleType{RoleUser, RoleAssistant}, typed.Annotations.Audience, "Audience should be preserved")
++		require.NotNil(t, typed.Annotations.Priority, "Priority should be preserved")
++		assert.Equal(t, 0.7, *typed.Annotations.Priority, "Priority value should be preserved")
++
++		// Validate second content (ImageContent)
++		typedImg, ok := result[1].(typedImageContent)
++		require.True(t, ok, "Should be typedImageContent")
++		assert.Equal(t, ContentTypeImage, typedImg.Type, "Type should be image")
++		assert.Equal(t, "base64ImageData", typedImg.Data, "Image data should be preserved")
++		assert.Equal(t, "image/png", typedImg.MimeType, "MimeType should be preserved")
++
++		// Validate third content (AudioContent)
++		typedAudio, ok := result[2].(typedAudioContent)
++		require.True(t, ok, "Should be typedAudioContent")
++		assert.Equal(t, ContentTypeAudio, typedAudio.Type, "Type should be audio")
++		assert.Equal(t, "base64AudioData", typedAudio.Data, "Audio data should be preserved")
++		assert.Equal(t, "audio/wav", typedAudio.MimeType, "MimeType should be preserved")
++
++		// Validate fourth content (unknown type converted to TextContent)
++		typedUnknown, ok := result[3].(typedTextContent)
++		require.True(t, ok, "Unknown content should be converted to typedTextContent")
++		assert.Equal(t, ContentTypeText, typedUnknown.Type, "Type should be text")
++		assert.Contains(t, typedUnknown.Text, "Unknown content type:", "Should contain error about unknown type")
++		assert.Contains(t, typedUnknown.Text, "string", "Should mention the actual type")
++	})
++
++	// Test empty input
++	t.Run("EmptyInput", func(t *testing.T) {
++		contents := []any{}
++		result := toTypedContents(contents)
++		assert.Empty(t, result, "Should return empty slice for empty input")
++	})
++
++	// Test with nil annotations
++	t.Run("NilAnnotations", func(t *testing.T) {
++		contents := []any{
++			TextContent{
++				Text:        "Text with nil annotations",
++				Annotations: nil,
++			},
++		}
++
++		result := toTypedContents(contents)
++		require.Len(t, result, 1, "Should return one content")
++
++		typed, ok := result[0].(typedTextContent)
++		require.True(t, ok, "Should be typedTextContent")
++		assert.Equal(t, ContentTypeText, typed.Type, "Type should be text")
++		assert.Equal(t, "Text with nil annotations", typed.Text, "Text content should be preserved")
++		assert.Nil(t, typed.Annotations, "Nil annotations should be preserved as nil")
++	})
++
++	// Test with custom struct (should be handled as unknown type)
++	t.Run("CustomStruct", func(t *testing.T) {
++		type CustomContent struct {
++			Data string
++		}
++
++		contents := []any{
++			CustomContent{
++				Data: "custom data",
++			},
++		}
++
++		result := toTypedContents(contents)
++		require.Len(t, result, 1, "Should return one content")
++
++		typed, ok := result[0].(typedTextContent)
++		require.True(t, ok, "Custom struct should be converted to typedTextContent")
++		assert.Equal(t, ContentTypeText, typed.Type, "Type should be text")
++		assert.Contains(t, typed.Text, "Unknown content type:", "Should contain error about unknown type")
++		assert.Contains(t, typed.Text, "CustomContent", "Should mention the actual type")
++	})
++}
+diff --git a/mcp/vars_test.go b/mcp/vars_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a894a16fd25d6f23f3df6d807536bef6f341833
+--- /dev/null
++++ b/mcp/vars_test.go
+@@ -0,0 +1,210 @@
++// filepath: /Users/kevin/Develop/go/opensource/go-zero/mcp/vars_test.go
++package mcp
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++// TestErrorCodes ensures error codes are applied correctly in error responses
++func TestErrorCodes(t *testing.T) {
++	testCases := []struct {
++		name     string
++		code     int
++		message  string
++		expected string
++	}{
++		{
++			name:     "invalid request error",
++			code:     errCodeInvalidRequest,
++			message:  "Invalid request",
++			expected: `"code":-32600`,
++		},
++		{
++			name:     "method not found error",
++			code:     errCodeMethodNotFound,
++			message:  "Method not found",
++			expected: `"code":-32601`,
++		},
++		{
++			name:     "invalid params error",
++			code:     errCodeInvalidParams,
++			message:  "Invalid parameters",
++			expected: `"code":-32602`,
++		},
++		{
++			name:     "internal error",
++			code:     errCodeInternalError,
++			message:  "Internal server error",
++			expected: `"code":-32603`,
++		},
++		{
++			name:     "timeout error",
++			code:     errCodeTimeout,
++			message:  "Operation timed out",
++			expected: `"code":-32001`,
++		},
++		{
++			name:     "resource not found error",
++			code:     errCodeResourceNotFound,
++			message:  "Resource not found",
++			expected: `"code":-32002`,
++		},
++		{
++			name:     "client not initialized error",
++			code:     errCodeClientNotInitialized,
++			message:  "Client not initialized",
++			expected: `"code":-32800`,
++		},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			resp := Response{
++				JsonRpc: jsonRpcVersion,
++				ID:      int64(1),
++				Error: &errorObj{
++					Code:    tc.code,
++					Message: tc.message,
++				},
++			}
++			data, err := json.Marshal(resp)
++			assert.NoError(t, err)
++			assert.Contains(t, string(data), tc.expected, "Error code should match expected value")
++			assert.Contains(t, string(data), tc.message, "Error message should be included")
++			assert.Contains(t, string(data), jsonRpcVersion, "JSON-RPC version should be included")
++		})
++	}
++}
++
++// TestJsonRpcVersion ensures the correct JSON-RPC version is used
++func TestJsonRpcVersion(t *testing.T) {
++	assert.Equal(t, "2.0", jsonRpcVersion, "JSON-RPC version should be 2.0")
++
++	// Test that it's used in responses
++	resp := Response{
++		JsonRpc: jsonRpcVersion,
++		ID:      int64(1),
++		Result:  "test",
++	}
++	data, err := json.Marshal(resp)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"jsonrpc":"2.0"`, "Response should use correct JSON-RPC version")
++
++	// Test that it's expected in requests
++	reqStr := `{"jsonrpc":"2.0","id":1,"method":"test"}`
++	var req Request
++	err = json.Unmarshal([]byte(reqStr), &req)
++	assert.NoError(t, err)
++	assert.Equal(t, jsonRpcVersion, req.JsonRpc, "Request should parse correct JSON-RPC version")
++}
++
++// TestSessionIdKey ensures session ID extraction works correctly
++func TestSessionIdKey(t *testing.T) {
++	// Create a mock server implementation
++	mock := newMockMcpServer(t)
++	defer mock.shutdown()
++
++	// Verify the key constant
++	assert.Equal(t, "session_id", sessionIdKey, "Session ID key should be 'session_id'")
++
++	// Test that session ID is extracted correctly
++	mockR := httptest.NewRequest("GET", "/?"+sessionIdKey+"=test-session", nil)
++
++	// Since the mock server is using the same session key logic,
++	// we can test this by accessing the request query parameters directly
++	sessionID := mockR.URL.Query().Get(sessionIdKey)
++	assert.Equal(t, "test-session", sessionID, "Session ID should be extracted correctly")
++}
++
++// TestEventTypes ensures event types are set correctly in SSE responses
++func TestEventTypes(t *testing.T) {
++	// Test message event
++	assert.Equal(t, "message", eventMessage, "Message event should be 'message'")
++
++	// Test endpoint event
++	assert.Equal(t, "endpoint", eventEndpoint, "Endpoint event should be 'endpoint'")
++
++	// Verify them in an actual SSE format string
++	messageEvent := "event: " + eventMessage + "\ndata: test\n\n"
++	assert.Contains(t, messageEvent, "event: message", "Message event should format correctly")
++
++	endpointEvent := "event: " + eventEndpoint + "\ndata: test\n\n"
++	assert.Contains(t, endpointEvent, "event: endpoint", "Endpoint event should format correctly")
++}
++
++// TestCollectionKeys checks that collection keys are used correctly
++func TestCollectionKeys(t *testing.T) {
++	// Verify collection key constants
++	assert.Equal(t, "prompts", keyPrompts, "Prompts key should be 'prompts'")
++	assert.Equal(t, "resources", keyResources, "Resources key should be 'resources'")
++	assert.Equal(t, "tools", keyTools, "Tools key should be 'tools'")
++}
++
++// TestRoleTypes checks that role types are used correctly
++func TestRoleTypes(t *testing.T) {
++	// Test in annotations
++	annotations := Annotations{
++		Audience: []RoleType{RoleUser, RoleAssistant},
++	}
++	data, err := json.Marshal(annotations)
++	assert.NoError(t, err)
++	assert.Contains(t, string(data), `"audience":["user","assistant"]`, "Role types should marshal correctly")
++}
++
++// TestMethodNames checks that method names are used correctly
++func TestMethodNames(t *testing.T) {
++	// Verify method name constants
++	methods := map[string]string{
++		"initialize":                methodInitialize,
++		"tools/list":                methodToolsList,
++		"tools/call":                methodToolsCall,
++		"prompts/list":              methodPromptsList,
++		"prompts/get":               methodPromptsGet,
++		"resources/list":            methodResourcesList,
++		"resources/read":            methodResourcesRead,
++		"resources/subscribe":       methodResourcesSubscribe,
++		"ping":                      methodPing,
++		"notifications/initialized": methodNotificationsInitialized,
++		"notifications/cancelled":   methodNotificationsCancelled,
++	}
++
++	for expected, actual := range methods {
++		assert.Equal(t, expected, actual, "Method name should be "+expected)
++	}
++
++	// Test in a request
++	for methodName := range methods {
++		req := Request{
++			JsonRpc: jsonRpcVersion,
++			ID:      int64(1),
++			Method:  methodName,
++		}
++		data, err := json.Marshal(req)
++		assert.NoError(t, err)
++		assert.Contains(t, string(data), `"method":"`+methodName+`"`, "Method name should be used in requests")
++	}
++}
++
++// TestEventNames checks that event names are used correctly
++func TestEventNames(t *testing.T) {
++	// Verify event name constants
++	events := map[string]string{
++		"tools/list_changed":     eventToolsListChanged,
++		"prompts/list_changed":   eventPromptsListChanged,
++		"resources/list_changed": eventResourcesListChanged,
++	}
++
++	for expected, actual := range events {
++		assert.Equal(t, expected, actual, "Event name should be "+expected)
++	}
++
++	// Test event names in SSE format
++	for _, eventName := range events {
++		sseEvent := "event: " + eventName + "\ndata: test\n\n"
++		assert.Contains(t, sseEvent, "event: "+eventName, "Event name should format correctly in SSE")
++	}
++}
+diff --git a/rest/engine_test.go b/rest/engine_test.go
+index 4f86d2173efdd421c87b8ba5e772832c56d1390c..e7a08eb4379a5206634773d0aa1f4c4a201a247e 100644
+--- a/rest/engine_test.go
++++ b/rest/engine_test.go
+@@ -394,7 +394,12 @@ func TestEngine_withTimeout(t *testing.T) {
+ 	for _, test := range tests {
+ 		test := test
+ 		t.Run(test.name, func(t *testing.T) {
+-			ng := newEngine(RestConf{Timeout: test.timeout})
++			ng := newEngine(RestConf{
++				Timeout: test.timeout,
++				Middlewares: MiddlewaresConf{
++					Timeout: true,
++				},
++			})
+ 			svr := &http.Server{}
+ 			ng.withTimeout()(svr)
+ 
+@@ -406,6 +411,62 @@ func TestEngine_withTimeout(t *testing.T) {
+ 	}
+ }
+ 
++func TestEngine_ReadWriteTimeout(t *testing.T) {
++	logx.Disable()
++
++	tests := []struct {
++		name       string
++		timeout    int64
++		middleware bool
++	}{
++		{
++			name:       "0/false",
++			timeout:    0,
++			middleware: false,
++		},
++		{
++			name:       "0/true",
++			timeout:    0,
++			middleware: true,
++		},
++		{
++			name:       "set/false",
++			timeout:    1000,
++			middleware: false,
++		},
++		{
++			name:       "both set",
++			timeout:    1000,
++			middleware: true,
++		},
++	}
++
++	for _, test := range tests {
++		test := test
++		t.Run(test.name, func(t *testing.T) {
++			ng := newEngine(RestConf{
++				Timeout: test.timeout,
++				Middlewares: MiddlewaresConf{
++					Timeout: test.middleware,
++				},
++			})
++			svr := &http.Server{}
++			ng.withTimeout()(svr)
++
++			assert.Equal(t, time.Duration(0), svr.ReadHeaderTimeout)
++			assert.Equal(t, time.Duration(0), svr.IdleTimeout)
++
++			if test.timeout > 0 && test.middleware {
++				assert.Equal(t, time.Duration(test.timeout)*time.Millisecond*4/5, svr.ReadTimeout)
++				assert.Equal(t, time.Duration(test.timeout)*time.Millisecond*11/10, svr.WriteTimeout)
++			} else {
++				assert.Equal(t, time.Duration(0), svr.ReadTimeout)
++				assert.Equal(t, time.Duration(0), svr.WriteTimeout)
++			}
++		})
++	}
++}
++
+ func TestEngine_start(t *testing.T) {
+ 	logx.Disable()
+ 
+diff --git a/rest/internal/fileserver/filehandler_test.go b/rest/internal/fileserver/filehandler_test.go
+index 37308f727ab058298ed1f8e3705b2cf30f950aa8..2b784e0431b446b238ba7325a0c666da3a037975 100644
+--- a/rest/internal/fileserver/filehandler_test.go
++++ b/rest/internal/fileserver/filehandler_test.go
+@@ -1,6 +1,8 @@
+ package fileserver
+ 
+ import (
++	"embed"
++	"io/fs"
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"testing"
+@@ -61,6 +63,46 @@ func TestMiddleware(t *testing.T) {
+ 			requestPath:    "/ws",
+ 			expectedStatus: http.StatusAlreadyReported,
+ 		},
++
++		// http.FileServer redirects any request ending in "/index.html"
++		// to the same path, without the final "index.html".
++		{
++			name:           "Serve index.html",
++			path:           "/static",
++			dir:            "testdata",
++			requestPath:    "/static/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:           "Serve index.html with path with trailing slash",
++			path:           "/static/",
++			dir:            "testdata",
++			requestPath:    "/static/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:           "Serve index.html in a nested directory",
++			path:           "/static",
++			dir:            "testdata",
++			requestPath:    "/static/nested/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:            "Request index.html indirectly",
++			path:            "/static",
++			dir:             "testdata",
++			requestPath:     "/static/",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "hello",
++		},
++		{
++			name:            "Request index.html in a nested directory indirectly",
++			path:            "/static",
++			dir:             "testdata",
++			requestPath:     "/static/nested/",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "hello",
++		},
+ 	}
+ 
+ 	for _, tt := range tests {
+@@ -87,6 +129,128 @@ func TestMiddleware(t *testing.T) {
+ 	}
+ }
+ 
++var (
++	//go:embed testdata
++	testdataFS embed.FS
++)
++
++func TestMiddleware_embedFS(t *testing.T) {
++	tests := []struct {
++		name            string
++		path            string
++		requestPath     string
++		expectedStatus  int
++		expectedContent string
++	}{
++		{
++			name:            "Serve static file",
++			path:            "/static",
++			requestPath:     "/static/example.txt",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "1",
++		},
++		{
++			name:            "Path with trailing slash",
++			path:            "/static/",
++			requestPath:     "/static/example.txt",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "1",
++		},
++		{
++			name:            "Root path",
++			path:            "/",
++			requestPath:     "/example.txt",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "1",
++		},
++		{
++			name:           "Pass through non-matching path",
++			path:           "/static/",
++			requestPath:    "/other/path",
++			expectedStatus: http.StatusAlreadyReported,
++		},
++		{
++			name:           "Not exist file",
++			path:           "/assets",
++			requestPath:    "/assets/not-exist.txt",
++			expectedStatus: http.StatusAlreadyReported,
++		},
++		{
++			name:           "Not exist file in root",
++			path:           "/",
++			requestPath:    "/not-exist.txt",
++			expectedStatus: http.StatusAlreadyReported,
++		},
++		{
++			name:           "websocket request",
++			path:           "/",
++			requestPath:    "/ws",
++			expectedStatus: http.StatusAlreadyReported,
++		},
++
++		// http.FileServer redirects any request ending in "/index.html"
++		// to the same path, without the final "index.html".
++		{
++			name:           "Serve index.html",
++			path:           "/static",
++			requestPath:    "/static/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:           "Serve index.html with path with trailing slash",
++			path:           "/static/",
++			requestPath:    "/static/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:           "Serve index.html in a nested directory",
++			path:           "/static",
++			requestPath:    "/static/nested/index.html",
++			expectedStatus: http.StatusMovedPermanently,
++		},
++		{
++			name:            "Request index.html indirectly",
++			path:            "/static",
++			requestPath:     "/static/",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "hello",
++		},
++		{
++			name:            "Request index.html in a nested directory indirectly",
++			path:            "/static",
++			requestPath:     "/static/nested/",
++			expectedStatus:  http.StatusOK,
++			expectedContent: "hello",
++		},
++	}
++
++	subFS, err := fs.Sub(testdataFS, "testdata")
++	assert.Nil(t, err)
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			middleware := Middleware(tt.path, http.FS(subFS))
++			nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.WriteHeader(http.StatusAlreadyReported)
++			})
++
++			handlerToTest := middleware(nextHandler)
++
++			for i := 0; i < 2; i++ {
++				req := httptest.NewRequest(http.MethodGet, tt.requestPath, nil)
++				rr := httptest.NewRecorder()
++
++				handlerToTest.ServeHTTP(rr, req)
++
++				assert.Equal(t, tt.expectedStatus, rr.Code)
++				if len(tt.expectedContent) > 0 {
++					assert.Equal(t, tt.expectedContent, rr.Body.String())
++				}
++			}
++		})
++	}
++}
++
+ func TestEnsureTrailingSlash(t *testing.T) {
+ 	tests := []struct {
+ 		input    string
+diff --git a/rest/internal/fileserver/testdata/index.html b/rest/internal/fileserver/testdata/index.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0
+--- /dev/null
++++ b/rest/internal/fileserver/testdata/index.html
+@@ -0,0 +1 @@
++hello
+\ No newline at end of file
+diff --git a/rest/internal/fileserver/testdata/nested/index.html b/rest/internal/fileserver/testdata/nested/index.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0
+--- /dev/null
++++ b/rest/internal/fileserver/testdata/nested/index.html
+@@ -0,0 +1 @@
++hello
+\ No newline at end of file
+diff --git a/tools/goctl/api/swagger/annotation_test.go b/tools/goctl/api/swagger/annotation_test.go
+index 9278bfdb0a3789f051cfa9478e36fbdca326a7a9..872d656400049e9da72cbabcf0b2ff3752d23d92 100644
+--- a/tools/goctl/api/swagger/annotation_test.go
++++ b/tools/goctl/api/swagger/annotation_test.go
+@@ -42,7 +42,7 @@ func Test_getListFromInfoOrDefault(t *testing.T) {
+ 		"empty": `""`,
+ 	}
+ 
+-	assert.Equal(t, []string{"a", "b", "c"}, getListFromInfoOrDefault(properties, "list", []string{"default"}))
++	assert.Equal(t, []string{"a", " b", " c"}, getListFromInfoOrDefault(properties, "list", []string{"default"}))
+ 	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(properties, "empty", []string{"default"}))
+ 	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(properties, "missing", []string{"default"}))
+ 	assert.Equal(t, []string{"default"}, getListFromInfoOrDefault(nil, "nil", []string{"default"}))
+diff --git a/tools/goctl/api/swagger/contenttype_test.go b/tools/goctl/api/swagger/contenttype_test.go
+index 3cc08342c382a4d1d5044b9fa264e3052a9bbc18..7d9586fc2b3de3c9c62eec2f15b4762b8004951c 100644
+--- a/tools/goctl/api/swagger/contenttype_test.go
++++ b/tools/goctl/api/swagger/contenttype_test.go
+@@ -61,7 +61,7 @@ func TestConsumesFromTypeOrDef(t *testing.T) {
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			result := consumesFromTypeOrDef(tt.method, tt.tp)
++			result := consumesFromTypeOrDef(testingContext(t), tt.method, tt.tp)
+ 			assert.Equal(t, tt.expected, result)
+ 		})
+ 	}
+diff --git a/tools/goctl/api/swagger/options_test.go b/tools/goctl/api/swagger/options_test.go
+index 20abca0095c8e4eb387a056235f2c24367f20904..f915bddadeba59e0b645f4631b01afc6f57e1e22 100644
+--- a/tools/goctl/api/swagger/options_test.go
++++ b/tools/goctl/api/swagger/options_test.go
+@@ -161,7 +161,7 @@ func TestDefValueFromOptions(t *testing.T) {
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			result := defValueFromOptions(tt.options, tt.apiType)
++			result := defValueFromOptions(testingContext(t), tt.options, tt.apiType)
+ 			assert.Equal(t, tt.expected, result)
+ 		})
+ 	}
+@@ -202,7 +202,7 @@ func TestExampleValueFromOptions(t *testing.T) {
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			exampleValueFromOptions(tt.options, tt.apiType)
++			exampleValueFromOptions(testingContext(t), tt.options, tt.apiType)
+ 		})
+ 	}
+ }
+@@ -247,7 +247,7 @@ func TestValueFromOptions(t *testing.T) {
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			result := valueFromOptions(tt.options, tt.key, tt.tp)
++			result := valueFromOptions(testingContext(t), tt.options, tt.key, tt.tp)
+ 			assert.Equal(t, tt.expected, result)
+ 		})
+ 	}
+diff --git a/tools/goctl/api/swagger/swagger_test.go b/tools/goctl/api/swagger/swagger_test.go
+index 902337fbe35e4ce2d57db7b3a1346fb1f2668496..d9fa47a956a5490032f41a56ad11358670a7cb0a 100644
+--- a/tools/goctl/api/swagger/swagger_test.go
++++ b/tools/goctl/api/swagger/swagger_test.go
+@@ -19,7 +19,7 @@ func Test_pathVariable2SwaggerVariable(t *testing.T) {
+ 	}
+ 
+ 	for _, tc := range testCases {
+-		result := pathVariable2SwaggerVariable(tc.input)
++		result := pathVariable2SwaggerVariable(testingContext(t), tc.input)
+ 		assert.Equal(t, tc.expected, result)
+ 	}
+ }
+diff --git a/tools/goctl/pkg/parser/api/parser/parser_test.go b/tools/goctl/pkg/parser/api/parser/parser_test.go
+index 4d1cd9f6157a287b17ad16ee7b1051a0aee020fb..5f892eb0c3bcc9266e90ce6805ef642b606f3455 100644
+--- a/tools/goctl/pkg/parser/api/parser/parser_test.go
++++ b/tools/goctl/pkg/parser/api/parser/parser_test.go
+@@ -130,6 +130,8 @@ func TestParser_Parse_infoStmt(t *testing.T) {
+ 			"author":  `"type author here"`,
+ 			"email":   `"type email here"`,
+ 			"version": `"type version here"`,
++			"enable": `true`,
++			"disable": `false`,
+ 		}
+ 		p := New("foo.api", infoTestAPI)
+ 		result := p.Parse()
+@@ -760,11 +762,6 @@ func TestParser_Parse_service(t *testing.T) {
+ 								}),
+ 							},
+ 							Request: &ast.BodyStmt{
+-								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+-								RParen: ast.NewTokenNode(token.Token{Type: token.RPAREN, Text: ")"}),
+-							},
+-							Returns: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "returns"}),
+-							Response: &ast.BodyStmt{
+ 								LParen: ast.NewTokenNode(token.Token{Type: token.LPAREN, Text: "("}),
+ 								Body: &ast.BodyExpr{
+ 									Value: ast.NewTokenNode(token.Token{Type: token.IDENT, Text: "Foo"}),
+@@ -1031,6 +1028,7 @@ func TestParser_Parse_pathItem(t *testing.T) {
+ 			{input: "1", expected: "1"},
+ 			{input: "11", expected: "11"},
+ 		}
++
+ 		for _, v := range testData {
+ 			p := New("foo.api", v.input)
+ 			ok := p.nextToken()
+@@ -1066,6 +1064,38 @@ func TestParser_Parse_pathItem(t *testing.T) {
+ 	})
+ }
+ 
++func TestParser_Parse_pathItem_WithDot(t *testing.T) {
++	t.Run("valid with dots", func(t *testing.T) {
++		var testData = []struct {
++			input    string
++			expected string
++		}{
++			{input: "file.php", expected: "file.php"},
++			{input: "api_jsonrpc.php", expected: "api_jsonrpc.php"},
++			{input: "index.html", expected: "index.html"},
++			{input: "data.json", expected: "data.json"},
++			{input: "style.css", expected: "style.css"},
++			{input: "script.js", expected: "script.js"},
++			{input: "document.pdf", expected: "document.pdf"},
++			{input: "image.png", expected: "image.png"},
++			{input: "api.v1", expected: "api.v1"},
++			{input: "resource.with.multiple.dots", expected: "resource.with.multiple.dots"},
++		}
++
++		for _, v := range testData {
++			p := New("foo.api", v.input)
++			ok := p.nextToken()
++			assert.True(t, ok)
++			tokens := p.parsePathItem()
++			var expected []string
++			for _, tok := range tokens {
++				expected = append(expected, tok.Text)
++			}
++			assert.Equal(t, strings.Join(expected, ""), v.expected)
++		}
++	})
++}
++
+ func TestParser_Parse_parseTypeStmt(t *testing.T) {
+ 	assertEqual := func(t *testing.T, expected, actual ast.Stmt) {
+ 		if expected == nil {
+@@ -1399,6 +1429,7 @@ func TestParser_Parse_parseTypeStmt(t *testing.T) {
+ 			assertEqual(t, val.expected, one)
+ 		}
+ 	})
++
+ 	t.Run("parseTypeGroupStmt", func(t *testing.T) {
+ 		var testData = []struct {
+ 			input    string
+@@ -1472,6 +1503,7 @@ func TestParser_Parse_parseTypeStmt(t *testing.T) {
+ 				},
+ 			},
+ 		}
++
+ 		for _, val := range testData {
+ 			p := New("test.api", val.input)
+ 			result := p.Parse()
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/info_test.api b/tools/goctl/pkg/parser/api/parser/testdata/info_test.api
+index 0e543a29876681ce15c5c8aa397576a9940dffca..6a06c8bac58ec6aa367e573d998ec898ea2de41b 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/info_test.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/info_test.api
+@@ -4,4 +4,6 @@ info(
+     author: "type author here"
+     email: "type email here"
+     version: "type version here"
++    enable: true
++    disable: false
+ )
+\ No newline at end of file
+diff --git a/tools/goctl/pkg/parser/api/parser/testdata/test.api b/tools/goctl/pkg/parser/api/parser/testdata/test.api
+index ea5017dc676aacd0c07f787ec01a513e2c39de6c..02faed656cfce313cad897bac43f3d75771b0b73 100644
+--- a/tools/goctl/pkg/parser/api/parser/testdata/test.api
++++ b/tools/goctl/pkg/parser/api/parser/testdata/test.api
+@@ -10,6 +10,8 @@ info ( // info stmt
+     author:  "type author here"
+     email:   "type email here"
+     version: "type version here"
++    enable: true
++    disable: false
+ )
+ 
+ type AliasInt int
+diff --git a/tools/goctl/util/stringx/string_test.go b/tools/goctl/util/stringx/string_test.go
+index 1ed1ee7c0d57a469f31f011c8e3e5fd200341f72..346eb4e9af75e61021bcd138fecf01f7995785a3 100644
+--- a/tools/goctl/util/stringx/string_test.go
++++ b/tools/goctl/util/stringx/string_test.go
+@@ -192,3 +192,131 @@ func TestUntitle(t *testing.T) {
+ 		assert.Equal(t, c.want, ret)
+ 	}
+ }
++
++func TestContainsAny(t *testing.T) {
++	type args struct {
++		s     string
++		runes []rune
++	}
++	tests := []struct {
++		name string
++		args args
++		want bool
++	}{
++		{
++			name: "runes is empty",
++			args: args{
++				s:     "test",
++				runes: []rune{},
++			},
++			want: true,
++		},
++		{
++			name: "s is empty and runes is not empty",
++			args: args{
++				s:     "",
++				runes: []rune{'a', 'b', 'c'},
++			},
++			want: false,
++		},
++		{
++			name: "s contains runes",
++			args: args{
++				s:     "hello",
++				runes: []rune{'e', 'f'},
++			},
++			want: true,
++		},
++		{
++			name: "s does not contain runes",
++			args: args{
++				s:     "hello",
++				runes: []rune{'x', 'y'},
++			},
++			want: false,
++		},
++		{
++			name: "s and runes both have one matching character",
++			args: args{
++				s:     "a",
++				runes: []rune{'a'},
++			},
++			want: true,
++		},
++		{
++			name: "s and runes both have one non-matching character",
++			args: args{
++				s:     "a",
++				runes: []rune{'b'},
++			},
++			want: false,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			assert.Equalf(t, tt.want, ContainsAny(tt.args.s, tt.args.runes...), "ContainsAny(%v, %v)", tt.args.s, tt.args.runes)
++		})
++	}
++}
++
++func TestContainsWhiteSpace(t *testing.T) {
++	type args struct {
++		s string
++	}
++	tests := []struct {
++		name string
++		args args
++		want bool
++	}{
++		{
++			name: "contains space",
++			args: args{s: "hello world"},
++			want: true,
++		},
++		{
++			name: "contains newline",
++			args: args{s: "hello\nworld"},
++			want: true,
++		},
++		{
++			name: "contains tab",
++			args: args{s: "hello\tworld"},
++			want: true,
++		},
++		{
++			name: "contains form feed",
++			args: args{s: "hello\fworld"},
++			want: true,
++		},
++		{
++			name: "contains vertical tab",
++			args: args{s: "hello\vworld"},
++			want: true,
++		},
++		{
++			name: "no whitespace",
++			args: args{s: "helloworld"},
++			want: false,
++		},
++		{
++			name: "empty string",
++			args: args{s: ""},
++			want: false,
++		},
++		{
++			name: "only whitespace",
++			args: args{s: "  \t\n\f\v"},
++			want: true,
++		},
++		{
++			name: "contains non-standard whitespace",
++			args: args{s: "hello\u00A0world"},
++			want: false,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			assert.Equalf(t, tt.want, ContainsWhiteSpace(tt.args.s), "ContainsWhiteSpace(%v)", tt.args.s)
++		})
++	}
++}
+diff --git a/zrpc/resolver/internal/directbuilder_test.go b/zrpc/resolver/internal/directbuilder_test.go
+index b602ccdd2c205ce2cbeec50c096ca5d249c5b09f..011c53e1ce2af9fcb02438b69f3e30c18e3b8c7c 100644
+--- a/zrpc/resolver/internal/directbuilder_test.go
++++ b/zrpc/resolver/internal/directbuilder_test.go
+@@ -10,7 +10,6 @@ import (
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/zeromicro/go-zero/core/lang"
+-	"github.com/zeromicro/go-zero/core/mathx"
+ 	"google.golang.org/grpc/resolver"
+ )
+ 
+@@ -47,7 +46,7 @@ func TestDirectBuilder_Build(t *testing.T) {
+ 			}, cc, resolver.BuildOptions{})
+ 			assert.NoError(t, err)
+ 
+-			size := mathx.MinInt(test, subsetSize)
++			size := min(test, subsetSize)
+ 			assert.Equal(t, size, len(cc.state.Addresses))
+ 			m := make(map[string]lang.PlaceholderType)
+ 			for _, each := range cc.state.Addresses {
