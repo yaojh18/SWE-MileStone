@@ -1,0 +1,113 @@
+# E2E Evaluation Default Configuration
+# This file is copied to workspace_root on first run if no config exists.
+# Modify the copy in workspace_root to customize settings for your project.
+
+# DAG unlock configuration - controls how milestones are unlocked
+dag_unlock:
+  # Early unblock mode - if true, milestones are unlocked immediately after submission
+  # without waiting for test evaluation results. eval_status still reflects actual test results.
+  #
+  # true: DAG unlocks immediately on submission (fast iteration)
+  # false: DAG waits for test evaluation, uses strict_threshold to determine pass/fail
+  early_unblock: true
+
+  # Controls how weak dependencies affect milestone availability
+  #
+  # false (default): Weak dependencies block until dependency completes OR fails
+  #   - A (depends weakly on B): blocked while B is pending, available when B done
+  #   - This ensures orderly execution based on dependency structure
+  #
+  # true: Weak dependencies never block
+  #   - A (depends weakly on B): available immediately regardless of B's status
+  #   - Useful for parallel execution where order doesn't matter
+  #
+  # Note: Strong dependencies ALWAYS block until the dependency passes.
+  #       If a strong dependency fails, dependent milestones are skipped.
+  ignore_weak_dependencies: true
+
+  # Strict threshold for DAG resolution (only used when early_unblock=false)
+  # Determines whether a milestone passes and unblocks downstream milestones
+  strict_threshold:
+    # Minimum ratio of fail_to_pass tests that must pass (1.0 = 100%)
+    fail_to_pass: 1.0
+
+    # Minimum ratio of pass_to_pass tests that must pass (1.0 = no regressions allowed)
+    pass_to_pass: 1.0
+
+    # Minimum ratio of none_to_pass tests that must pass (1.0 = 100%)
+    none_to_pass: 1.0
+
+# Retry and timing configuration
+retry_and_timing:
+  # Wait time (seconds) for tag hash to stabilize before starting evaluation
+  # This helps avoid starting evaluation while the agent is still making changes.
+  debounce_seconds: 120
+
+  # Maximum wait time (seconds) even if hash keeps changing
+  # This prevents infinite waiting if the agent keeps making changes.
+  max_debounce_wait: 360
+
+  # Maximum number of retry attempts when tag changes after evaluation starts
+  max_retries: 2
+
+  # Maximum wait time (seconds) for pending evaluations to complete
+  # This includes debounce time + actual evaluation time.
+  evaluation_timeout: 3600
+
+  # Maximum consecutive recovery attempts without progress before giving up
+  # Progress = new milestone completed, submitted, or failed
+  max_no_progress_attempts: 3
+
+  # Wait time (seconds) before sending recovery message after agent failure
+  # This gives the API time to recover from rate limits or overload errors.
+  recovery_wait_seconds: 60
+
+  # Timeout (seconds) for one recover/resume message execution.
+  # Keep this below the full agent timeout to avoid recover-path "hangs".
+  recover_message_timeout_seconds: 18000
+
+  # Persisted no-progress resume policy (stored in trial_root/resume_retry_state.json).
+  #
+  # Counter is incremented ONCE per worker invocation that stops with
+  # stopped_by_no_progress_limit=true. The *inner* max_no_progress_attempts
+  # (=3) already retries 3 times with the same session jsonl before stopping
+  # the worker, so each outer counter bump represents 3 failed inner
+  # attempts. Default 3 → the policy only rotates after 9 total inner
+  # attempts on the same jsonl, maximizing agent context continuity across
+  # transient stops (network blips, flaky pause_turn, short rate-limit
+  # windows). Lower toward 1 only if your model is context-fragile and
+  # same-session retries are demonstrably futile (e.g. kimi-k2.6 with a
+  # 3MB jsonl that always pause_turn's on the first request, no matter
+  # how many times you retry).
+  # - start_new_session: clear persisted session_id on the next resume and
+  #   continue with a fresh agent session against the same trial dir +
+  #   container. git tags and /testbed work survive; only the claude
+  #   conversation history is reset. Best for operational runs where the
+  #   goal is completion and the old jsonl has grown past the model's
+  #   context window.
+  # - exit: stop immediately. Safer for reproducibility studies — don't mask
+  #   model incapability with infinite session rotation.
+  resume_no_progress_retry_limit: 3
+  resume_no_progress_policy: start_new_session
+
+  # Within a single worker invocation, when the initial `claude --resume <id>`
+  # subprocess fails for a generic reason (non-zero exit, no fatal/auth/rate-
+  # limit/invalid-session signal), retry up to this many extra times before
+  # invalidating the session and starting fresh. Sleeps `recovery_wait_seconds`
+  # between attempts. Helps recover from TCP wedges and externally-killed
+  # claude processes where the session itself is healthy. Total attempts =
+  # 1 + this. Set to 0 for legacy "one shot then fresh" behavior.
+  resume_subprocess_retry_limit: 3
+
+  # Transient server-overload (HTTP 529) handling, distinct from a genuine quota
+  # rate-limit. A 529 with no parseable reset time triggers a fast EXPONENTIAL
+  # backoff retry (base → cap, doubling, ±20% jitter) instead of the rate-limit
+  # long-sleep. Genuine quotas (a real parsed reset time) still long-sleep.
+  # The harness gives up GRACEFULLY — preserving container, /testbed git tags,
+  # session jsonl and DAG state, resumable via `run_all.py --repos X` — only
+  # after `overload_giveup_seconds` of CONTINUOUS backoff with no successful
+  # turn in between (the accumulator resets to 0 on any successful agent turn).
+  # These are the built-in defaults (read via getattr); uncomment to override.
+  # overload_backoff_base_seconds: 20    # first backoff delay
+  # overload_backoff_cap_seconds: 300    # max single backoff (5 min)
+  # overload_giveup_seconds: 3600        # continuous-overload budget before ENDPOINT_UNAVAILABLE give-up (1h)

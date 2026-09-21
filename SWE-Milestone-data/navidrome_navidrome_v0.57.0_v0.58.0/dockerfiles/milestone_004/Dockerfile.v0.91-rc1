@@ -1,0 +1,42 @@
+# v0.91-rc1 incremental patch — milestone_004
+#
+# Pathology (GT-END census, in-image): the v0.9 tags bake `//go:build ignore`
+# onto 5 tests/mock_*.go files (vintage masking), but core/mock_library_service.go
+# (a NON-test file in package core) still references tests.MockLibraryRepo.
+# The masking closure is incomplete: core (non-test) breaks -> `go build .`
+# gate fails -> the evaluator SILENTLY falls back to the START tag, so END was
+# never graded (incl. the 4 graded F2P in persistence/adapters-taglib).
+#
+# Fix: complete the closure — mask core/mock_library_service.go the same way.
+# Its only consumers at this island vintage are test files that the original
+# Dockerfile already masked. No graded test is touched (m004 classification has
+# zero tests from this file; verified against test_results/).
+#
+# Build:  docker build -f Dockerfile.v0.91-rc1 \
+#           -t navidrome_navidrome_v0.57.0_v0.58.0/milestone_004:v0.91-rc1 .
+FROM navidrome_navidrome_v0.57.0_v0.58.0/milestone_004:v0.9
+
+RUN git config --global user.email "env-patch@localhost" && \
+    git config --global user.name "ENV-PATCH-v0.91"
+
+# ---- Complete the mask closure + cmd vintage stitch on END state ----
+# (second layer, caught by the verify teeth: cmd/wire_gen.go calls the OLD
+#  1-arg metrics.GetInstance while core/metrics here is the plugin-aware
+#  2-arg vintage — same stitch class as sub-03/sub-04)
+RUN cd /testbed && git checkout --force milestone-milestone_004-end && git clean -fd && \
+    head -1 core/mock_library_service.go | grep -qv "go:build ignore" && \
+    sed -i '1i//go:build ignore' core/mock_library_service.go && \
+    grep -c "metrics.GetInstance(dataStore)" cmd/wire_gen.go | grep -qx 3 && \
+    sed -i 's/metrics\.GetInstance(dataStore)/metrics.GetInstance(dataStore, nil)/g' cmd/wire_gen.go && \
+    git add -A && \
+    git commit -m "[ENV-PATCH-v0.91] mask core/mock_library_service.go (ignore-set closure) + stitch cmd GetInstance arity to vintage" && \
+    git tag -f milestone-milestone_004-end HEAD
+
+# ---- Verify WITH TEETH: gate parity + graded-package test-binary compile ----
+RUN cd /testbed && git checkout --force milestone-milestone_004-end && git clean -fd && \
+    go build -tags=netgo . && \
+    go test -count=1 -run '^$' -tags netgo ./persistence/ ./adapters/taglib/ ./core/ && \
+    echo "VERIFY OK: END gate green + persistence/taglib/core test binaries compile"
+
+# ---- Restore default state (START), matching the original image convention ----
+RUN cd /testbed && git checkout --force milestone-milestone_004-start && git clean -fd

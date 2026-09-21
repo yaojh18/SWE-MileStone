@@ -1,0 +1,205 @@
+# Build on pre-configured base image
+FROM navidrome_navidrome_v0.57.0_v0.58.0/base:latest
+
+# Install Ginkgo CLI for spec-level test reporting
+RUN cd /testbed && go install github.com/onsi/ginkgo/v2/ginkgo@v2.23.4
+
+# Remove the original /testbed from base image and copy local testbed
+RUN rm -rf /testbed
+COPY . /testbed/
+
+# Set GOTOOLCHAIN to auto to allow Go to download the required version
+ENV GOTOOLCHAIN=auto
+
+# Configure git identity for commits
+RUN git config --global user.email "env-patch@testbed.local" && \
+    git config --global user.name "ENV Patch"
+
+# Create surgical fix Python script
+RUN cat > /tmp/surgical_fix.py << 'PYTHON_SCRIPT'
+#!/usr/bin/env python3
+"""
+Surgical fix script: Comment out specific functions that cause compilation errors.
+Principle: Always do minimal fixes - comment out entire functions, not single lines.
+"""
+import re
+import sys
+
+def comment_out_ginkgo_it_block(content, it_description):
+    """Comment out a specific Ginkgo It block by its description."""
+    # Match It("description", func() { ... })
+    # Use non-greedy matching and handle nested braces
+    pattern = rf'(\t+It\("{re.escape(it_description)}"[^{{]*\{{)'
+
+    match = re.search(pattern, content)
+    if not match:
+        print(f"Warning: It block '{it_description}' not found")
+        return content
+
+    start_pos = match.start()
+    indent = match.group(1).count('\t') - 1  # Get indentation level
+
+    # Find the matching closing brace
+    brace_count = 0
+    in_block = False
+    end_pos = start_pos
+
+    for i, char in enumerate(content[start_pos:], start_pos):
+        if char == '{':
+            brace_count += 1
+            in_block = True
+        elif char == '}':
+            brace_count -= 1
+            if in_block and brace_count == 0:
+                # Find the closing })
+                end_pos = i + 1
+                # Check for trailing )
+                remaining = content[end_pos:end_pos+10]
+                if remaining.lstrip().startswith(')'):
+                    end_pos = end_pos + remaining.index(')') + 1
+                break
+
+    if end_pos <= start_pos:
+        print(f"Warning: Could not find end of It block '{it_description}'")
+        return content
+
+    block = content[start_pos:end_pos]
+    commented = f'/* [ENV-PATCH] Commented out - compilation error\n{block}\n*/'
+
+    return content[:start_pos] + commented + content[end_pos:]
+
+def comment_out_ginkgo_describe_block(content, describe_description):
+    """Comment out a specific Ginkgo Describe block by its description."""
+    pattern = rf'(\t+Describe\("{re.escape(describe_description)}"[^{{]*\{{)'
+
+    match = re.search(pattern, content)
+    if not match:
+        print(f"Warning: Describe block '{describe_description}' not found")
+        return content
+
+    start_pos = match.start()
+
+    # Find the matching closing brace
+    brace_count = 0
+    in_block = False
+    end_pos = start_pos
+
+    for i, char in enumerate(content[start_pos:], start_pos):
+        if char == '{':
+            brace_count += 1
+            in_block = True
+        elif char == '}':
+            brace_count -= 1
+            if in_block and brace_count == 0:
+                end_pos = i + 1
+                remaining = content[end_pos:end_pos+10]
+                if remaining.lstrip().startswith(')'):
+                    end_pos = end_pos + remaining.index(')') + 1
+                break
+
+    if end_pos <= start_pos:
+        print(f"Warning: Could not find end of Describe block '{describe_description}'")
+        return content
+
+    block = content[start_pos:end_pos]
+    commented = f'/* [ENV-PATCH] Commented out - compilation error\n{block}\n*/'
+
+    return content[:start_pos] + commented + content[end_pos:]
+
+def fix_agents_plugin_test(content):
+    """Comment out It blocks with enabledAgents[0].name errors."""
+    it_blocks_to_comment = [
+        "should include ONLY local agent when no config is specified",
+        "should NOT include plugin agents when no config is specified",
+        "should include plugin agents in the enabled agents list ONLY when explicitly configured",
+        "should only include configured plugin agents when config is specified",
+    ]
+
+    for it_desc in it_blocks_to_comment:
+        content = comment_out_ginkgo_it_block(content, it_desc)
+
+    return content
+
+def fix_mediafile_repository_test(content):
+    """Comment out Describe('Search', ...) block with mr.Search signature errors."""
+    return comment_out_ginkgo_describe_block(content, "Search")
+
+def process_file(filepath, fix_func):
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+        fixed_content = fix_func(content)
+        with open(filepath, 'w') as f:
+            f.write(fixed_content)
+        print(f"Fixed: {filepath}")
+        return True
+    except Exception as e:
+        print(f"Error fixing {filepath}: {e}")
+        return False
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python surgical_fix.py <action> <filepath>")
+        sys.exit(1)
+
+    action = sys.argv[1]
+    filepath = sys.argv[2]
+
+    fix_funcs = {
+        "agents_plugin_test": fix_agents_plugin_test,
+        "mediafile_repo_test": fix_mediafile_repository_test,
+    }
+
+    if action not in fix_funcs:
+        print(f"Unknown action: {action}")
+        sys.exit(1)
+
+    if not process_file(filepath, fix_funcs[action]):
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+PYTHON_SCRIPT
+
+# Apply fixes to START state
+RUN cd /testbed && git checkout milestone-milestone_003_sub-02-start && \
+    # === Source code fixes ===
+    # Fix core/playlists.go: AddTracks -> AddMediaFilesByID
+    sed -i 's/pls\.AddTracks/pls.AddMediaFilesByID/g' core/playlists.go && \
+    # === Test file fixes: comment out specific functions ===
+    python3 /tmp/surgical_fix.py agents_plugin_test core/agents/agents_plugin_test.go && \
+    python3 /tmp/surgical_fix.py mediafile_repo_test persistence/mediafile_repository_test.go && \
+    # === Build plugins test data (CRITICAL for plugins tests) ===
+    echo "[ENV-PATCH] Building plugins testdata for START state..." && \
+    cd plugins/testdata && \
+    make clean && make && \
+    cd /testbed && \
+    # === Commit changes ===
+    git add -A && \
+    git commit -m "[ENV-PATCH] Fix compilation errors and build plugins testdata" && \
+    git tag -f milestone-milestone_003_sub-02-start HEAD
+
+# Apply fixes to END state
+RUN cd /testbed && git checkout milestone-milestone_003_sub-02-end && \
+    # === Source code fixes ===
+    # Fix core/playlists.go: AddTracks -> AddMediaFilesByID (if still needed)
+    sed -i 's/pls\.AddTracks/pls.AddMediaFilesByID/g' core/playlists.go 2>/dev/null || true && \
+    # === Test file fixes: comment out specific functions ===
+    python3 /tmp/surgical_fix.py agents_plugin_test core/agents/agents_plugin_test.go && \
+    python3 /tmp/surgical_fix.py mediafile_repo_test persistence/mediafile_repository_test.go && \
+    # === Build plugins test data (CRITICAL for plugins tests) ===
+    echo "[ENV-PATCH] Building plugins testdata for END state..." && \
+    cd plugins/testdata && \
+    make clean && make && \
+    cd /testbed && \
+    # === Commit changes ===
+    git add -A && \
+    git commit -m "[ENV-PATCH] Fix compilation errors and build plugins testdata" && \
+    git tag -f milestone-milestone_003_sub-02-end HEAD
+
+# Set default state to START
+RUN cd /testbed && git checkout milestone-milestone_003_sub-02-start
+
+
+
+
